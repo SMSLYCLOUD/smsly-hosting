@@ -13,152 +13,157 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name="ServiceMetric",
-            fields=[
-                ("created_at", models.DateTimeField(auto_now_add=True)),
-                ("updated_at", models.DateTimeField(auto_now=True)),
-                (
-                    "id",
-                    models.UUIDField(
-                        default=uuid.uuid4,
-                        editable=False,
-                        primary_key=True,
-                        serialize=False,
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+            migrations.CreateModel(
+                name="ServiceMetric",
+                fields=[
+                    ("created_at", models.DateTimeField(auto_now_add=True)),
+                    ("updated_at", models.DateTimeField(auto_now=True)),
+                    (
+                        "id",
+                        models.UUIDField(
+                            default=uuid.uuid4,
+                            editable=False,
+                            primary_key=True,
+                            serialize=False,
+                        ),
                     ),
-                ),
-                (
-                    "cpu_usage",
-                    models.DecimalField(
-                        decimal_places=4, help_text="CPU cores used", max_digits=10
+                    (
+                        "cpu_usage",
+                        models.DecimalField(
+                            decimal_places=4, help_text="CPU cores used", max_digits=10
+                        ),
                     ),
-                ),
-                (
-                    "cpu_limit",
-                    models.DecimalField(
-                        decimal_places=4,
-                        default=1.0,
-                        help_text="CPU cores allocated",
-                        max_digits=10,
+                    (
+                        "cpu_limit",
+                        models.DecimalField(
+                            decimal_places=4,
+                            default=1.0,
+                            help_text="CPU cores allocated",
+                            max_digits=10,
+                        ),
                     ),
-                ),
-                ("memory_usage", models.IntegerField(help_text="Memory used in MB")),
-                (
-                    "memory_limit",
-                    models.IntegerField(
-                        default=512, help_text="Memory allocated in MB"
+                    ("memory_usage", models.IntegerField(help_text="Memory used in MB")),
+                    (
+                        "memory_limit",
+                        models.IntegerField(
+                            default=512, help_text="Memory allocated in MB"
+                        ),
                     ),
-                ),
-                (
-                    "network_rx_bytes",
-                    models.BigIntegerField(
-                        default=0, help_text="Network bytes received"
+                    (
+                        "network_rx_bytes",
+                        models.BigIntegerField(
+                            default=0, help_text="Network bytes received"
+                        ),
                     ),
-                ),
-                (
-                    "network_tx_bytes",
-                    models.BigIntegerField(default=0, help_text="Network bytes sent"),
-                ),
-                (
-                    "disk_read_bytes",
-                    models.BigIntegerField(default=0, help_text="Disk bytes read"),
-                ),
-                (
-                    "disk_write_bytes",
-                    models.BigIntegerField(default=0, help_text="Disk bytes written"),
-                ),
-                ("timestamp", models.DateTimeField(db_index=True)),
-                (
-                    "service",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE,
-                        related_name="metrics",
-                        to="deployments.service",
+                    (
+                        "network_tx_bytes",
+                        models.BigIntegerField(default=0, help_text="Network bytes sent"),
                     ),
-                ),
-            ],
-            options={
-                "db_table": "deployments_servicemetric",
-                "ordering": ["-timestamp"],
-                "indexes": [
-                    models.Index(
-                        fields=["service", "-timestamp"],
-                        name="deployments_service_d8ff01_idx",
-                    )
-                ],
-            },
-        ),
-        migrations.CreateModel(
-            name="ServiceReplica",
-            fields=[
-                (
-                    "id",
-                    models.UUIDField(
-                        default=uuid.uuid4, primary_key=True, serialize=False
+                    (
+                        "disk_read_bytes",
+                        models.BigIntegerField(default=0, help_text="Disk bytes read"),
                     ),
-                ),
-                ("container_name", models.CharField(max_length=255)),
-                (
-                    "container_id",
-                    models.CharField(blank=True, default="", max_length=255),
-                ),
-                (
-                    "status",
-                    models.CharField(
-                        choices=[
-                            ("SPAWNING", "Spawning"),
-                            ("RUNNING", "Running"),
-                            ("DRAINING", "Draining"),
-                            ("DESTROYING", "Destroying"),
-                            ("DESTROYED", "Destroyed"),
-                        ],
-                        default="SPAWNING",
-                        max_length=20,
+                    (
+                        "disk_write_bytes",
+                        models.BigIntegerField(default=0, help_text="Disk bytes written"),
                     ),
-                ),
-                (
-                    "metrics_snapshot",
-                    models.JSONField(
-                        default=dict, help_text="Last known CPU/mem from Prometheus"
-                    ),
-                ),
-                (
-                    "spawn_reason",
-                    models.CharField(blank=True, default="", max_length=500),
-                ),
-                ("created_at", models.DateTimeField(auto_now_add=True)),
-                ("destroyed_at", models.DateTimeField(blank=True, null=True)),
-                (
-                    "node",
-                    models.ForeignKey(
-                        help_text="The remote node where this replica runs",
-                        null=True,
-                        on_delete=django.db.models.deletion.SET_NULL,
-                        related_name="hosted_replicas",
-                        to="deployments.managedserver",
-                    ),
-                ),
-                (
-                    "service",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE,
-                        related_name="replicas",
-                        to="deployments.service",
-                    ),
-                ),
-            ],
-            options={
-                "db_table": "deployments_servicereplica",
-                "ordering": ["-created_at"],
-                "indexes": [
-                    models.Index(
-                        fields=["service", "status"],
-                        name="deployments_service_8a4250_idx",
-                    ),
-                    models.Index(
-                        fields=["node", "status"], name="deployments_node_id_c29f06_idx"
+                    ("timestamp", models.DateTimeField(db_index=True)),
+                    (
+                        "service",
+                        models.ForeignKey(
+                            on_delete=django.db.models.deletion.CASCADE,
+                            related_name="metrics",
+                            to="deployments.service",
+                        ),
                     ),
                 ],
-            },
+                options={
+                    "db_table": "deployments_servicemetric",
+                    "ordering": ["-timestamp"],
+                    "indexes": [
+                        models.Index(
+                            fields=["service", "-timestamp"],
+                            name="deployments_service_d8ff01_idx",
+                        )
+                    ],
+                },
+            ),
+            migrations.CreateModel(
+                name="ServiceReplica",
+                fields=[
+                    (
+                        "id",
+                        models.UUIDField(
+                            default=uuid.uuid4, primary_key=True, serialize=False
+                        ),
+                    ),
+                    ("container_name", models.CharField(max_length=255)),
+                    (
+                        "container_id",
+                        models.CharField(blank=True, default="", max_length=255),
+                    ),
+                    (
+                        "status",
+                        models.CharField(
+                            choices=[
+                                ("SPAWNING", "Spawning"),
+                                ("RUNNING", "Running"),
+                                ("DRAINING", "Draining"),
+                                ("DESTROYING", "Destroying"),
+                                ("DESTROYED", "Destroyed"),
+                            ],
+                            default="SPAWNING",
+                            max_length=20,
+                        ),
+                    ),
+                    (
+                        "metrics_snapshot",
+                        models.JSONField(
+                            default=dict, help_text="Last known CPU/mem from Prometheus"
+                        ),
+                    ),
+                    (
+                        "spawn_reason",
+                        models.CharField(blank=True, default="", max_length=500),
+                    ),
+                    ("created_at", models.DateTimeField(auto_now_add=True)),
+                    ("destroyed_at", models.DateTimeField(blank=True, null=True)),
+                    (
+                        "node",
+                        models.ForeignKey(
+                            help_text="The remote node where this replica runs",
+                            null=True,
+                            on_delete=django.db.models.deletion.SET_NULL,
+                            related_name="hosted_replicas",
+                            to="deployments.managedserver",
+                        ),
+                    ),
+                    (
+                        "service",
+                        models.ForeignKey(
+                            on_delete=django.db.models.deletion.CASCADE,
+                            related_name="replicas",
+                            to="deployments.service",
+                        ),
+                    ),
+                ],
+                options={
+                    "db_table": "deployments_servicereplica",
+                    "ordering": ["-created_at"],
+                    "indexes": [
+                        models.Index(
+                            fields=["service", "status"],
+                            name="deployments_service_8a4250_idx",
+                        ),
+                        models.Index(
+                            fields=["node", "status"], name="deployments_node_id_c29f06_idx"
+                        ),
+                    ],
+                },
+            ),
+            ],
+            database_operations=[],
         ),
     ]

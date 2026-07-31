@@ -24,24 +24,33 @@ class Migration(migrations.Migration):
             model_name="auditlog",
             name="user",
         ),
-        migrations.DeleteModel(
-            name="BackupEncryptionKey",
-        ),
-        migrations.RemoveField(
-            model_name="backupschedule",
-            name="service",
-        ),
-        migrations.RemoveField(
-            model_name="cloudstoragedestination",
-            name="service",
-        ),
-        migrations.RemoveField(
-            model_name="servicesnapshot",
-            name="cloud_destination",
-        ),
-        migrations.RemoveField(
-            model_name="servicebackup",
-            name="cloud_destination",
+        # Models moved to the cloud/autoscaler apps keep their physical
+        # deployments_* tables (same db_table). Remove them from this app's
+        # state only — the new-app migrations (cloud.0003, autoscaler.0003)
+        # re-add them to state without touching the database.
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.DeleteModel(
+                    name="BackupEncryptionKey",
+                ),
+                migrations.RemoveField(
+                    model_name="backupschedule",
+                    name="service",
+                ),
+                migrations.RemoveField(
+                    model_name="cloudstoragedestination",
+                    name="service",
+                ),
+                migrations.RemoveField(
+                    model_name="servicesnapshot",
+                    name="cloud_destination",
+                ),
+                migrations.RemoveField(
+                    model_name="servicebackup",
+                    name="cloud_destination",
+                ),
+            ],
+            database_operations=[],
         ),
         migrations.AlterField(
             model_name="cronjob",
@@ -55,17 +64,22 @@ class Migration(migrations.Migration):
                 to="cloud.cloudstoragedestination",
             ),
         ),
-        migrations.RemoveField(
-            model_name="serverbackup",
-            name="cloud_destination",
-        ),
-        migrations.RemoveField(
-            model_name="githubappinstallation",
-            name="organization",
-        ),
-        migrations.RemoveField(
-            model_name="githubappinstallation",
-            name="user",
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.RemoveField(
+                    model_name="serverbackup",
+                    name="cloud_destination",
+                ),
+                migrations.RemoveField(
+                    model_name="githubappinstallation",
+                    name="organization",
+                ),
+                migrations.RemoveField(
+                    model_name="githubappinstallation",
+                    name="user",
+                ),
+            ],
+            database_operations=[],
         ),
         migrations.AlterUniqueTogether(
             name="projectmember",
@@ -89,13 +103,18 @@ class Migration(migrations.Migration):
                 to="cloud.serverbackup",
             ),
         ),
-        migrations.RemoveField(
-            model_name="servicebackup",
-            name="created_by",
-        ),
-        migrations.RemoveField(
-            model_name="servicebackup",
-            name="service",
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.RemoveField(
+                    model_name="servicebackup",
+                    name="created_by",
+                ),
+                migrations.RemoveField(
+                    model_name="servicebackup",
+                    name="service",
+                ),
+            ],
+            database_operations=[],
         ),
         migrations.AlterField(
             model_name="servertransfer",
@@ -107,33 +126,38 @@ class Migration(migrations.Migration):
                 to="cloud.servicebackup",
             ),
         ),
-        migrations.RemoveField(
-            model_name="servicemetric",
-            name="service",
-        ),
-        migrations.RemoveField(
-            model_name="servicereplica",
-            name="node",
-        ),
-        migrations.RemoveField(
-            model_name="servicereplica",
-            name="service",
-        ),
-        migrations.RemoveField(
-            model_name="servicesnapshot",
-            name="created_by",
-        ),
-        migrations.RemoveField(
-            model_name="servicesnapshot",
-            name="parent_snapshot",
-        ),
-        migrations.RemoveField(
-            model_name="servicesnapshot",
-            name="service",
-        ),
-        migrations.RemoveField(
-            model_name="snapshotschedule",
-            name="service",
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.RemoveField(
+                    model_name="servicemetric",
+                    name="service",
+                ),
+                migrations.RemoveField(
+                    model_name="servicereplica",
+                    name="node",
+                ),
+                migrations.RemoveField(
+                    model_name="servicereplica",
+                    name="service",
+                ),
+                migrations.RemoveField(
+                    model_name="servicesnapshot",
+                    name="created_by",
+                ),
+                migrations.RemoveField(
+                    model_name="servicesnapshot",
+                    name="parent_snapshot",
+                ),
+                migrations.RemoveField(
+                    model_name="servicesnapshot",
+                    name="service",
+                ),
+                migrations.RemoveField(
+                    model_name="snapshotschedule",
+                    name="service",
+                ),
+            ],
+            database_operations=[],
         ),
         migrations.DeleteModel(
             name="WebhookDelivery",
@@ -152,34 +176,44 @@ class Migration(migrations.Migration):
         migrations.DeleteModel(
             name="AuditLog",
         ),
-        migrations.DeleteModel(
-            name="BackupSchedule",
-        ),
-        migrations.DeleteModel(
-            name="CloudStorageDestination",
-        ),
-        migrations.DeleteModel(
-            name="GitHubAppInstallation",
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.DeleteModel(
+                    name="BackupSchedule",
+                ),
+                migrations.DeleteModel(
+                    name="CloudStorageDestination",
+                ),
+                migrations.DeleteModel(
+                    name="GitHubAppInstallation",
+                ),
+            ],
+            database_operations=[],
         ),
         migrations.DeleteModel(
             name="ProjectMember",
         ),
-        migrations.DeleteModel(
-            name="ServerBackup",
-        ),
-        migrations.DeleteModel(
-            name="ServiceBackup",
-        ),
-        migrations.DeleteModel(
-            name="ServiceMetric",
-        ),
-        migrations.DeleteModel(
-            name="ServiceReplica",
-        ),
-        migrations.DeleteModel(
-            name="ServiceSnapshot",
-        ),
-        migrations.DeleteModel(
-            name="SnapshotSchedule",
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.DeleteModel(
+                    name="ServerBackup",
+                ),
+                migrations.DeleteModel(
+                    name="ServiceBackup",
+                ),
+                migrations.DeleteModel(
+                    name="ServiceMetric",
+                ),
+                migrations.DeleteModel(
+                    name="ServiceReplica",
+                ),
+                migrations.DeleteModel(
+                    name="ServiceSnapshot",
+                ),
+                migrations.DeleteModel(
+                    name="SnapshotSchedule",
+                ),
+            ],
+            database_operations=[],
         ),
     ]
