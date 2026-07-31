@@ -241,7 +241,7 @@ services:
           > /tmp/sentinel.conf
         if [ -n "$$SENTINEL_PASSWORD" ]; then
           echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
-          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-pass $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
         fi
         exec redis-sentinel /tmp/sentinel.conf
     depends_on:
@@ -291,7 +291,7 @@ services:
           > /tmp/sentinel.conf
         if [ -n "$$SENTINEL_PASSWORD" ]; then
           echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
-          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-pass $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
         fi
         exec redis-sentinel /tmp/sentinel.conf
     depends_on:
@@ -341,7 +341,7 @@ services:
           > /tmp/sentinel.conf
         if [ -n "$$SENTINEL_PASSWORD" ]; then
           echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
-          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-pass $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
         fi
         exec redis-sentinel /tmp/sentinel.conf
     depends_on:
