@@ -249,7 +249,7 @@ safe_update_rollback() {
     done
     
     # Ensure the database is up before restoring into it.
-    docker compose -f "$COMPOSE_FILE" up -d --wait --no-deps postgres-primary \
+    docker compose -f "$COMPOSE_FILE" up -d --wait --no-deps db \
         || _warn "Could not ensure postgres-primary is running"
 
     # Stop any app containers left from the failed attempt so the --clean dump

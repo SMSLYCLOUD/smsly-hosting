@@ -66,7 +66,7 @@ fi
 # Check new container exists — if not, start the HA stack and wait for it
 if ! docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER"; then
     echo -e "${YELLOW}⚠ $NEW_DB_CONTAINER is not running — starting HA stack...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d postgres-primary postgres-replica 
+    docker compose -f "$COMPOSE_FILE" up -d db postgres-replica 
     echo -e "  → Waiting for postgres-primary to become healthy..."
     for _i in $(seq 1 30); do
         if docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER" && \

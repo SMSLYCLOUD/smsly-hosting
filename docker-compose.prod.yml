@@ -1,6 +1,8 @@
 services:
   # ── PostgreSQL HA (primary + replica) ──────────────────────────────────
-  postgres-primary:
+  # Service is named `db` for backwards compat with scripts; container name
+  # and network alias keep `postgres-primary` resolvable for HA configs.
+  db:
     security_opt:
       - apparmor:docker-default
     image: postgres:16-alpine
@@ -44,7 +46,9 @@ services:
     labels:
     - managed_by=smsly-hosting
     networks:
-    - smsly-net
+      smsly-net:
+        aliases:
+        - postgres-primary
     deploy:
       resources:
         reservations:
@@ -76,7 +80,7 @@ services:
         fi
         exec docker-entrypoint.sh postgres -c hot_standby=on -c max_connections=300
     depends_on:
-      postgres-primary:
+      db:
         condition: service_healthy
     healthcheck:
       test:
@@ -112,7 +116,7 @@ services:
       PGCAT_ADMIN_PASSWORD: ${PGCAT_ADMIN_PASSWORD:?PGCAT_ADMIN_PASSWORD must be set in .env}
       DB_REPLICA_HOSTS: ${DB_REPLICA_HOSTS:-postgres-replica:5432}
     depends_on:
-      postgres-primary:
+      db:
         condition: service_healthy
     healthcheck:
       test:

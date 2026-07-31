@@ -239,12 +239,7 @@ get_pgcat_if_exists() {
 }
 
 get_db_service() {
-    local ct="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if [ -f "$ct" ] && grep -q "^  *pgcat:" "$ct" ; then
-        echo "postgres-primary"
-    else
-        echo "db"
-    fi
+    echo "db"
 }
 
 get_redis_service() {
