@@ -495,8 +495,10 @@ services:
 
   backend:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
+    cap_add:
+      - SETGID
+      - SETUID
     cap_drop:
       - ALL
     build:
