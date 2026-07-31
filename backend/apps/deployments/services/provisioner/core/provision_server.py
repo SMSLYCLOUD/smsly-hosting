@@ -19,7 +19,7 @@ from apps.deployments.constants import TASK_TIME_LIMIT_PROVISION
 from apps.deployments.models.servers import ManagedServer
 
 from .docker_mirror import _ensure_docker_mirror, _stop_docker_mirror
-from .helpers import (
+from ..helpers import (
     PROVISION_TIMEOUT_SECONDS,
     _append_log,
     _build_local_source_bundle,
@@ -36,7 +36,7 @@ from .helpers import (
     server_connection_mode,
     server_install_mode,
 )
-from .provisioning_resources import _ProvisioningResources
+from ..provisioning_resources import _ProvisioningResources
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
     _append_log(server, "🚀 Starting Grid provisioning...")
     _append_log(server, f"📡 Connecting to {server.ssh_user}@{server.host}:{server.ssh_port}")
 
-    from .helpers import (
+    from ..helpers import (
         _get_ssh_client,
         _harden_master_firewall,
         _harden_node_ssh,

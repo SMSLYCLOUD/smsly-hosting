@@ -7,7 +7,7 @@ from django.utils import timezone
 from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
 from apps.deployments.models.servers import ManagedServer
 
-from .helpers import PROVISION_TIMEOUT_SECONDS, _append_log
+from ..helpers import PROVISION_TIMEOUT_SECONDS, _append_log
 
 logger = logging.getLogger(__name__)
 
