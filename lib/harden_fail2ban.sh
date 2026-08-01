@@ -34,7 +34,10 @@ maxretry = 3
 JAIL_EOF
     # Enable Caddy jails when Caddy logs are available
     if [ -d /var/log/caddy ] || docker volume ls --format '{{.Name}}'  | grep -q caddy_logs; then
-        cat <<'CADDY_JAIL_EOF' >> /etc/fail2ban/jail.local
+        # Never duplicate the sections: fail2ban aborts on a repeated
+        # [caddy-auth], and every install/update run would otherwise append.
+        if ! grep -q '^\[caddy-auth\]' /etc/fail2ban/jail.local 2>/dev/null; then
+            cat <<'CADDY_JAIL_EOF' >> /etc/fail2ban/jail.local
 
 [caddy-auth]
 enabled = true
@@ -53,6 +56,7 @@ findtime = 300
 maxretry = 300
 bantime = 600
 CADDY_JAIL_EOF
+        fi
     fi
     # Caddy auth filter (JSON access log — 401/403 responses)
     [ -f /etc/fail2ban/filter.d/caddy-auth.conf ] || cat <<'FILTER_EOF' > /etc/fail2ban/filter.d/caddy-auth.conf
