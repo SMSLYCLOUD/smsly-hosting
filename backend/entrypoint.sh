@@ -898,11 +898,10 @@ fi
 
 if [ "${1:-}" = "celery" ] && [ "${4:-}" = "beat" ] || echo "$*" | grep -q "celery.*beat"; then
 
-
-
-    rm -f /app/celerybeat.pid
-
-
+    # Best-effort cleanup: with `set -e` a failure here (e.g. EACCES on the
+    # containerd overlay snapshot) would abort startup entirely. Celery
+    # tolerates a stale pidfile (dead pid), so this must never be fatal.
+    rm -f /app/celerybeat.pid || true
 
 fi
 
