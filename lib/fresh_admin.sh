@@ -79,21 +79,23 @@ fi
 
     # ─── Generate Recovery Phrase ─────────────────────────────────────────
     echo -e "${BLUE}  → Generating 12-word recovery phrase...${NC}"
+    # Call the service functions directly instead of the HTTP view: the view
+    # is DRF-authenticated (@permission_classes([IsAuthenticated])) and 401s
+    # when invoked with a RequestFactory request, so the phrase was never
+    # written on fresh installs. This mirrors exactly what the view does.
     RECOVERY_PHRASE="$(timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.core.views.recovery import recovery_phrase_generate
-from django.test.client import RequestFactory
-factory = RequestFactory()
-request = factory.get('/api/v1/auth/recovery/generate/')
-request.user = __import__('django').contrib.auth.get_user_model().objects.filter(is_superuser=True).first()
-from django.contrib.sessions.middleware import SessionMiddleware
-from django.middleware.csrf import CsrfViewMiddleware
-# Minimal request setup for the view to work
-response = recovery_phrase_generate(request)
 import json
-print(json.dumps(response.data))
+from apps.deployments.models.core import PlatformConfig
+from apps.core.services.recovery import generate_recovery_phrase, generate_recovery_salt, hash_recovery_phrase
+config = PlatformConfig.load()
+phrase = generate_recovery_phrase()
+salt = generate_recovery_salt()
+config.recovery_phrase_hash = json.dumps({'hash': hash_recovery_phrase(phrase, salt), 'salt': salt})
+config.save(update_fields=['recovery_phrase_hash'])
+print(' '.join(phrase))
 "  < /dev/null | tail -1 || true)"
     if [ -n "$RECOVERY_PHRASE" ]; then
-        RECOVERY_PHRASE_TEXT="$(printf '%s' "$RECOVERY_PHRASE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phrase',''))"  || true)"
+        RECOVERY_PHRASE_TEXT="$(printf '%s' "$RECOVERY_PHRASE" | python3 -c "import sys; s=sys.stdin.read().strip(); print(s if len(s.split()) == 12 else '')"  || true)"
         if [ -n "$RECOVERY_PHRASE_TEXT" ]; then
             echo -e "${GREEN}  ✓ Recovery phrase generated${NC}"
             echo -e "$RECOVERY_PHRASE_TEXT" > "$INSTALL_DIR/.recovery_phrase"
