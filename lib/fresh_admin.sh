@@ -80,7 +80,7 @@ fi
     # ─── Generate Recovery Phrase ─────────────────────────────────────────
     echo -e "${BLUE}  → Generating 12-word recovery phrase...${NC}"
     RECOVERY_PHRASE="$(timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.views_recovery import recovery_phrase_generate
+from apps.core.views.recovery import recovery_phrase_generate
 from django.test.client import RequestFactory
 factory = RequestFactory()
 request = factory.get('/api/v1/auth/recovery/generate/')
