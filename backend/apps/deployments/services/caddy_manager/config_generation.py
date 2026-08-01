@@ -556,7 +556,7 @@ def generate_caddyfile(config) -> str:
     handle /ws/* {{
         reverse_proxy backend:8000
     }}
-    handle /health {{
+    handle /health* {{
         reverse_proxy backend:8000
     }}
     handle /admin/* {{
@@ -690,7 +690,7 @@ def generate_caddyfile(config) -> str:
     handle /ws/* {
         reverse_proxy backend:8000
     }
-    handle /health {
+    handle /health* {
         reverse_proxy backend:8000
     }
     handle /admin/* {
