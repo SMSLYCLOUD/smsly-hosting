@@ -66,39 +66,46 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
         try:
             os.chmod(CADDY_CONFIG_DIR, 0o775)
-            probe = os.path.join(CADDY_CONFIG_DIR, ".perm_probe")
+        except (OSError, PermissionError) as chmod_exc:
+            logger.warning("chmod on %s failed (%s) — continuing with probe", CADDY_CONFIG_DIR, chmod_exc)
+        probe = os.path.join(CADDY_CONFIG_DIR, ".perm_probe")
+        try:
             with open(probe, "w") as f:
                 f.write("ok")
             os.remove(probe)
-        except (OSError, PermissionError) as chmod_exc:
+        except (OSError, PermissionError) as probe_exc:
             try:
-                CADDY_UID = int(os.environ.get("CADDY_UID", "1000"))
                 CADDY_GID = int(os.environ.get("CADDY_GID", "1000"))
                 if hasattr(os, "chown"):
-                    os.chown(CADDY_CONFIG_DIR, CADDY_UID, CADDY_GID)
+                    os.chown(CADDY_CONFIG_DIR, os.getuid(), CADDY_GID)
                 else:
                     logger.warning(
                         "os.chown unavailable on this platform; skipping ownership "
-                        "change for %s (uid=%s gid=%s)",
-                        CADDY_CONFIG_DIR, CADDY_UID, CADDY_GID,
+                        "change for %s (owner=%s gid=%s)",
+                        CADDY_CONFIG_DIR, os.getuid(), CADDY_GID,
                     )
                 os.chmod(CADDY_CONFIG_DIR, 0o775)
                 logger.warning(
                     "Self-healed caddy-config dir ownership to uid=%s gid=%s "
-                    "(previous chmod failed: %s)",
-                    CADDY_UID, CADDY_GID, chmod_exc,
+                    "(previous probe failed: %s)",
+                    os.getuid(), CADDY_GID, probe_exc,
                 )
             except (OSError, PermissionError, ValueError) as chown_exc:
                 raise PermissionError(
                     f"Cannot write to {CADDY_CONFIG_DIR}. "
-                    "Fix host permissions: sudo chown -R 1000:1000 "
+                    "Fix host permissions: sudo chown -R 0:1000 "
                     f"{CADDY_CONFIG_DIR} && sudo chmod 775 {CADDY_CONFIG_DIR}. "
-                    f"chmod_error={chmod_exc} chown_error={chown_exc}"
+                    f"probe_error={probe_exc} chown_error={chown_exc}"
                 )
 
-        with open(CADDY_FILE_PATH, "w", encoding="utf-8") as handle:
+        tmp_path = os.path.join(CADDY_CONFIG_DIR, ".Caddyfile.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as handle:
             handle.write(content)
-        os.chmod(CADDY_FILE_PATH, 0o664)
+        os.replace(tmp_path, CADDY_FILE_PATH)
+        try:
+            os.chmod(CADDY_FILE_PATH, 0o664)
+        except (OSError, PermissionError) as chmod_exc:
+            logger.warning("chmod on %s failed (%s) — continuing", CADDY_FILE_PATH, chmod_exc)
 
         if cloudflare_token:
             os.chmod(CADDY_CONFIG_DIR, 0o775)
@@ -168,7 +175,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         result["message"] = f"Failed to apply Caddyfile: {exc}"
         if isinstance(exc, PermissionError):
             result["message"] = str(result["message"]) + (
-                " | Fix host dir perms: sudo chown -R 1000:1000 /opt/smsly-hosting/caddy-config "
+                " | Fix host dir perms: sudo chown -R 0:1000 /opt/smsly-hosting/caddy-config "
                 "&& sudo chmod 775 /opt/smsly-hosting/caddy-config"
             )
         logger.error("Failed to write Caddyfile: %s", exc)

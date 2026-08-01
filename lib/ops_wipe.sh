@@ -89,9 +89,11 @@ fix_env_permissions() {
     mode="$(stat -c '%a' "$env_file"  || echo "?")"
     echo -e "${GREEN}  ✓ .env permissions: $mode owner=$owner${NC}"
 
-    # Also fix caddy-config directory for good measure
+    # Also fix caddy-config directory for good measure.
+    # Owner root (backend writes config as cap-dropped root), group 1000
+    # (caddy container uid 1000 reads it).
     if [ -d "$INSTALL_DIR/caddy-config" ]; then
-        chown -R 1000:1000 "$INSTALL_DIR/caddy-config"  || true
+        chown -R 0:1000 "$INSTALL_DIR/caddy-config"  || true
         chmod -R u+rwX,g+rwX "$INSTALL_DIR/caddy-config"  || true
         echo -e "${GREEN}  ✓ caddy-config permissions fixed${NC}"
     fi

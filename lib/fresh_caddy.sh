@@ -6,11 +6,14 @@ if should_manage_caddy; then
 if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ "$RECOVER_MODE" = "true" ]; then
     echo -e "\n${YELLOW}[7/9] Setting up Dockerized Caddy Proxy...${NC}"
 
-    # Ensure caddy-config directory exists and has correct permissions
-    # Caddy container runs as uid 1000 (nextjs user); group-read access is
-    # required so the container can write runtime state (tls certs, reload flag).
+    # Ensure caddy-config directory exists and has correct permissions.
+    # Owner is root (uid 0) because the backend/celery containers run as root
+    # with CapDrop=[ALL] — they need OWNER write access to regenerate the
+    # Caddyfile at runtime (chown/chmod fail without CAP_FOWNER/CAP_CHOWN).
+    # Group is 1000 so the caddy container (uid 1000) keeps read/write access
+    # to runtime state (tls certs, reload flag) via setgid-inherited files.
     mkdir -p /opt/smsly-hosting/caddy-config
-    chown 1000:1000 /opt/smsly-hosting/caddy-config
+    chown 0:1000 /opt/smsly-hosting/caddy-config
     chmod 2775 /opt/smsly-hosting/caddy-config
     # Caddy access logs (read by fail2ban on host)
     mkdir -p /opt/smsly-hosting/caddy-logs
@@ -26,7 +29,7 @@ if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ 
     respond "System initializing... Please refresh in 30 seconds." 200
 }
 EOF
-        chown 1000:1000 /opt/smsly-hosting/caddy-config/Caddyfile
+        chown 0:1000 /opt/smsly-hosting/caddy-config/Caddyfile
         chmod 664 /opt/smsly-hosting/caddy-config/Caddyfile
     fi
 
