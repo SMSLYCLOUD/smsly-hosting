@@ -66,5 +66,7 @@ _harden_container_runtime_verify() {
         fi
     fi
 
-    return "$found"
+    # `found` is a 0/1 FLAG, not an exit code — returning it turns a successful
+    # gVisor/Kata install into a FAILED security check (found=1 -> return 1).
+    return 0
 }

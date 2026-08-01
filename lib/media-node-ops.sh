@@ -93,7 +93,7 @@ media_health() {
         echo -e "    ${GREEN}✓${NC} Management daemon: healthy"
     else
         echo -e "    ${RED}✗${NC} Management daemon: unreachable"
-        ((failures++))
+        failures=$((failures + 1))
     fi
 
     # Check LiveKit
@@ -101,7 +101,7 @@ media_health() {
         echo -e "    ${GREEN}✓${NC} LiveKit: running"
     else
         echo -e "    ${RED}✗${NC} LiveKit: not running"
-        ((failures++))
+        failures=$((failures + 1))
     fi
 
     # Check FreeSWITCH
@@ -116,7 +116,7 @@ media_health() {
         echo -e "    ${GREEN}✓${NC} RTPEngine: running"
     else
         echo -e "    ${RED}✗${NC} RTPEngine: not running"
-        ((failures++))
+        failures=$((failures + 1))
     fi
 
     # Check PostgreSQL
@@ -124,7 +124,7 @@ media_health() {
         echo -e "    ${GREEN}✓${NC} PostgreSQL: running"
     else
         echo -e "    ${RED}✗${NC} PostgreSQL: not running"
-        ((failures++))
+        failures=$((failures + 1))
     fi
 
     # Check Redis
@@ -132,7 +132,7 @@ media_health() {
         echo -e "    ${GREEN}✓${NC} Redis: running"
     else
         echo -e "    ${RED}✗${NC} Redis: not running"
-        ((failures++))
+        failures=$((failures + 1))
     fi
 
     if [ "$failures" -gt 0 ]; then

@@ -24,6 +24,12 @@ _harden_infisical_bootstrap() {
 }
 
 _harden_infisical_verify() {
+    # Optional layer: the bootstrap skips when lib/infisical.sh is absent —
+    # the verify must skip too, or every install reports a phantom failure.
+    local infisical_script="${INSTALL_DIR:-/opt/smsly-hosting}/lib/infisical.sh"
+    if [ ! -f "$infisical_script" ]; then
+        return 0
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if docker ps --format '{{.Names}}'  | grep -q "smsly-infisical"; then
         _harden_log ok "Infisical running"

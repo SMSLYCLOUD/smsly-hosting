@@ -361,7 +361,7 @@ verify_media_services() {
             echo -e "  ${GREEN}✓${NC} ${name}"
         else
             echo -e "  ${RED}✗${NC} ${name}"
-            ((failures++))
+            failures=$((failures + 1))
         fi
     done
 
