@@ -325,7 +325,11 @@ resolve_container_target() {
 
     [ -z "$target" ] && return 0
 
-    if timeout -k 5 10 docker container inspect "$target" ; then
+    # NOTE: the existence probe MUST NOT write to stdout — callers capture the
+    # function's output in $(...) and pass it straight to `docker inspect`;
+    # a bare `docker inspect` here would embed the full JSON in the resolved
+    # target and make every caller fail with "error: no such object: [ ... ]".
+    if timeout -k 5 10 docker container inspect "$target" >/dev/null 2>&1 ; then
         echo "$target"
         return 0
     fi
