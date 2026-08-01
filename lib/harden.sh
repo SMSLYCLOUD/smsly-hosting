@@ -53,17 +53,32 @@ harden_security_verify() {
 
     local failures=0 checks=0
 
-    _harden_fail2ban_verify   || { ((failures++)); true; }; ((checks++))
-    _harden_ufw_verify        || { ((failures++)); true; }; ((checks++))
-    _harden_apparmor_verify   || { ((failures++)); true; }; ((checks++))
-    _harden_auditd_verify     || { ((failures++)); true; }; ((checks++))
-    _harden_kernel_verify     || { ((failures++)); true; }; ((checks++))
-    _harden_docker_daemon_verify || { ((failures++)); true; }; ((checks++))
-    _harden_crowdsec_verify   || { ((failures++)); true; }; ((checks++))
-    _harden_falco_verify      || { ((failures++)); true; }; ((checks++))
-    _harden_container_runtime_verify || { ((failures++)); true; }; ((checks++))
-    _harden_trivy_verify      || { ((failures++)); true; }; ((checks++))
-    _harden_infisical_verify   || { ((failures++)); true; }; ((checks++))
+    # NOTE: never use standalone `((checks++))` here — when the counter is 0
+    # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
+    # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
+    # install dies silently after the first check.
+    if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_falco_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
 
     local passed=$((checks - failures))
     echo ""
