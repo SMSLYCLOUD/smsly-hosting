@@ -518,7 +518,7 @@ fix_permissions() {
     chown root:1000 "$env_file"  || true
     chmod 664 "$env_file"  || true
     # Also fix caddy-config if it exists (for shared volumes with master)
-    [ -d "$INSTALL_DIR/caddy-config" ] && chown -R 1000:1000 "$INSTALL_DIR/caddy-config"  || true
+    [ -d "$INSTALL_DIR/caddy-config" ] && chown -R 0:1000 "$INSTALL_DIR/caddy-config"  || true
 }
 
 pull_latest_code() {

@@ -96,7 +96,7 @@ echo ""
 # ──────────────────────────────────────────
 if [ -d "$INSTALL_DIR/caddy-config" ]; then
     echo -e "${BLUE}Fixing caddy-config directory:${NC}"
-    chown -R 1000:1000 "$INSTALL_DIR/caddy-config"  || sudo chown -R 1000:1000 "$INSTALL_DIR/caddy-config"
+    chown -R 0:1000 "$INSTALL_DIR/caddy-config"  || sudo chown -R 0:1000 "$INSTALL_DIR/caddy-config"
     chmod -R u+rwX,g+rwX "$INSTALL_DIR/caddy-config"  || true
     echo -e "  ${GREEN}✓${NC} caddy-config permissions fixed"
     echo ""
