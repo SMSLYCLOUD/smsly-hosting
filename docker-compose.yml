@@ -110,6 +110,15 @@ services:
       - apparmor:docker-default
     cap_drop:
       - ALL
+    # entrypoint.sh must `su` from root to UID 1000 (smsly) to start gunicorn/celery.
+    # cap_drop ALL strips CAP_SETGID/SETUID, making that drop impossible (container
+    # crashes at startup). Keep the drop but restore only the bits the entrypoint needs.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -152,6 +161,15 @@ services:
       - apparmor:docker-default
     cap_drop:
       - ALL
+    # entrypoint.sh must `su` from root to UID 1000 (smsly) to start gunicorn/celery.
+    # cap_drop ALL strips CAP_SETGID/SETUID, making that drop impossible (container
+    # crashes at startup). Keep the drop but restore only the bits the entrypoint needs.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -201,6 +219,15 @@ services:
       - apparmor:docker-default
     cap_drop:
       - ALL
+    # entrypoint.sh must `su` from root to UID 1000 (smsly) to start gunicorn/celery.
+    # cap_drop ALL strips CAP_SETGID/SETUID, making that drop impossible (container
+    # crashes at startup). Keep the drop but restore only the bits the entrypoint needs.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -250,12 +277,12 @@ services:
       - "127.0.0.1:5432:5432" # Required for Lite Agents
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smsly_admin}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -329,6 +356,15 @@ services:
       - apparmor:docker-default
     cap_drop:
       - ALL
+    # entrypoint.sh must `su` from root to UID 1000 (smsly) to start gunicorn/celery.
+    # cap_drop ALL strips CAP_SETGID/SETUID, making that drop impossible (container
+    # crashes at startup). Keep the drop but restore only the bits the entrypoint needs.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     build: ./backend
     image: smsly-hosting-backend:latest
     restart: unless-stopped
@@ -357,7 +393,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
-      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - DOCKER_HOST=tcp://socket-proxy:2375
@@ -398,6 +434,15 @@ services:
       - apparmor:docker-default
     cap_drop:
       - ALL
+    # entrypoint.sh must `su` from root to UID 1000 (smsly) to start gunicorn/celery.
+    # cap_drop ALL strips CAP_SETGID/SETUID, making that drop impossible (container
+    # crashes at startup). Keep the drop but restore only the bits the entrypoint needs.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     build: ./backend
     image: smsly-hosting-backend:latest
     restart: unless-stopped
@@ -412,7 +457,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
-      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
