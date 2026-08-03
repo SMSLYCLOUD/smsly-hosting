@@ -55,30 +55,6 @@ echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 apt_run apt-get update -qq
 apt_run apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils apache2-utils fail2ban apparmor-utils
 
-# ─── Security: bootstrap (fire-and-forget) ──────────────────────────────
-if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
-    source "$INSTALL_DIR/lib/harden.sh"
-    harden_security_bootstrap
-else
-    # Minimal fallback: basic Fail2ban SSH protection
-    cat << 'EOF' > /etc/fail2ban/jail.local
-[DEFAULT]
-bantime = 10m
-findtime = 10m
-maxretry = 5
-
-[sshd]
-enabled = true
-port = ssh
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 3
-EOF
-    systemctl enable fail2ban  || true
-    systemctl restart fail2ban  &
-    echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
-fi
-
 # Install Docker if missing
 if ! command -v docker ; then
     echo -e "${BLUE}  → Installing Docker...${NC}"
@@ -126,6 +102,32 @@ fi
 
 # Ensure security tools (Trivy and Cosign) are installed for image scanning
 ensure_security_tools || true
+
+# ─── Security: bootstrap (fire-and-forget) ──────────────────────────────
+# Runs AFTER Docker is installed so docker-compose-based hardening layers
+# (falco, crowdsec, gVisor, docker daemon config) can actually start.
+if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
+    source "$INSTALL_DIR/lib/harden.sh"
+    harden_security_bootstrap
+else
+    # Minimal fallback: basic Fail2ban SSH protection
+    cat << 'EOF' > /etc/fail2ban/jail.local
+[DEFAULT]
+bantime = 10m
+findtime = 10m
+maxretry = 5
+
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 3
+EOF
+    systemctl enable fail2ban  || true
+    systemctl restart fail2ban  &
+    echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
+fi
 
 
 # Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get

@@ -11200,7 +11200,57 @@ echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 apt_run apt-get update -qq
 apt_run apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils apache2-utils fail2ban apparmor-utils
 
+# Install Docker if missing
+if ! command -v docker ; then
+    echo -e "${BLUE}  → Installing Docker...${NC}"
+    mkdir -m 0755 -p /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
+    apt_run apt-get update -qq
+    apt_run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    systemctl enable docker || echo -e "${YELLOW}    ⚠ docker.service enable failed${NC}"
+    systemctl start docker || echo -e "${YELLOW}    ⚠ docker.service start failed${NC}"
+    if ! timeout 30 docker info ; then
+        echo -e "${RED}  ✗ Docker daemon failed to start. Check 'systemctl status docker' and kernel modules.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}  ✓ Docker installed and running${NC}"
+else
+    echo -e "${GREEN}  ✓ Docker already installed ($(docker --version | head -c 40))${NC}"
+fi
+
+# Create smsly system user for container file ownership
+id smsly  || useradd -r -s /usr/sbin/nologin -u 1000 smsly  || true
+
+# Ensure docker compose is available
+if ! docker compose version ; then
+    echo -e "${BLUE}  → Installing Docker Compose plugin...${NC}"
+    apt_run apt-get install -y docker-compose-plugin || true
+fi
+# Fallback to docker-compose v1 if plugin still not available
+if ! docker compose version ; then
+    if command -v docker-compose ; then
+        echo -e "${YELLOW}  ⚠ docker compose plugin not available; falling back to docker-compose v1${NC}"
+        docker_compose() { docker-compose "$@"; }
+    else
+        echo -e "${RED}  ✗ Neither 'docker compose' nor 'docker-compose' found. Install Docker Compose.${NC}"
+        exit 1
+    fi
+fi
+
+# Apply mirror config if applicable (Only if docker is now present)
+if command -v docker ; then
+    configure_docker_mirror
+fi
+
+# Ensure security tools (Trivy and Cosign) are installed for image scanning
+ensure_security_tools || true
+
 # ─── Security: bootstrap (fire-and-forget) ──────────────────────────────
+# Runs AFTER Docker is installed so docker-compose-based hardening layers
+# (falco, crowdsec, gVisor, docker daemon config) can actually start.
 if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
 # --- lib/harden.sh ---
 #!/bin/bash
@@ -11909,54 +11959,6 @@ EOF
     systemctl restart fail2ban  &
     echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
 fi
-
-# Install Docker if missing
-if ! command -v docker ; then
-    echo -e "${BLUE}  → Installing Docker...${NC}"
-    mkdir -m 0755 -p /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
-    apt_run apt-get update -qq
-    apt_run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-    systemctl enable docker || echo -e "${YELLOW}    ⚠ docker.service enable failed${NC}"
-    systemctl start docker || echo -e "${YELLOW}    ⚠ docker.service start failed${NC}"
-    if ! timeout 30 docker info ; then
-        echo -e "${RED}  ✗ Docker daemon failed to start. Check 'systemctl status docker' and kernel modules.${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}  ✓ Docker installed and running${NC}"
-else
-    echo -e "${GREEN}  ✓ Docker already installed ($(docker --version | head -c 40))${NC}"
-fi
-
-# Create smsly system user for container file ownership
-id smsly  || useradd -r -s /usr/sbin/nologin -u 1000 smsly  || true
-
-# Ensure docker compose is available
-if ! docker compose version ; then
-    echo -e "${BLUE}  → Installing Docker Compose plugin...${NC}"
-    apt_run apt-get install -y docker-compose-plugin || true
-fi
-# Fallback to docker-compose v1 if plugin still not available
-if ! docker compose version ; then
-    if command -v docker-compose ; then
-        echo -e "${YELLOW}  ⚠ docker compose plugin not available; falling back to docker-compose v1${NC}"
-        docker_compose() { docker-compose "$@"; }
-    else
-        echo -e "${RED}  ✗ Neither 'docker compose' nor 'docker-compose' found. Install Docker Compose.${NC}"
-        exit 1
-    fi
-fi
-
-# Apply mirror config if applicable (Only if docker is now present)
-if command -v docker ; then
-    configure_docker_mirror
-fi
-
-# Ensure security tools (Trivy and Cosign) are installed for image scanning
-ensure_security_tools || true
 
 
 # Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get
