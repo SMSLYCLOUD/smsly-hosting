@@ -394,7 +394,7 @@ services:
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
       - DATABASE_URL=postgres://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
-      - REDIS_HOST=redis
+      - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=6379
       - DOCKER_HOST=tcp://socket-proxy:2375
       - APT_CACHE_HOST=http://apt-cacher:3142
@@ -458,7 +458,7 @@ services:
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
       - DATABASE_URL=postgres://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
-      - REDIS_HOST=redis
+      - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       # CELERY_ prefix is required for celery-redbeat to pick it up
