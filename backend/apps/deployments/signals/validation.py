@@ -86,7 +86,8 @@ def _is_private_or_internal_ip(host: str) -> bool:
 
 
 @receiver(pre_save, sender=ManagedServer)
-def validate_managed_server_host_pre_save(_sender, instance, **kwargs):
+def validate_managed_server_host_pre_save(sender, instance, **kwargs):
+    del sender
     host = getattr(instance, "host", None)
     if host is None:
         return

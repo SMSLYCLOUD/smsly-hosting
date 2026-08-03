@@ -879,7 +879,7 @@ services:
           memory: ${FRONTEND_MEMORY_LIMIT:-1G}
     labels:
     - traefik.enable=true
-    - traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) || Host(`${PUBLIC_IP}`) || Host(`localhost`) || Host(`127.0.0.1`)
+    - traefik.http.routers.frontend.rule=Host(`${DOMAIN:-localhost}`) || Host(`${PUBLIC_IP:-127.0.0.1}`) || Host(`localhost`) || Host(`127.0.0.1`)
     - traefik.http.routers.frontend.entrypoints=web
     - traefik.http.routers.frontend.priority=5
     - traefik.http.services.frontend.loadbalancer.server.port=3000
@@ -1316,7 +1316,7 @@ services:
       - "443:443"
     environment:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
-      - DOMAIN=${DOMAIN}
+      - DOMAIN=${DOMAIN:-localhost}
     volumes:
       - ./caddy-config:/etc/caddy:z
       - caddy_config:/config

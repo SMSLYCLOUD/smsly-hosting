@@ -75,7 +75,7 @@ EOF
 # A DRF token may exist from initial admin setup but won't work for inter-node.
 echo -e "${BLUE}  → Ensuring Inter-Node API Token...${NC}"
 HAS_API_TOKEN=$(timeout -k 5 120 docker exec "$BACKEND_CONTAINER" python manage.py shell -c "
-from apps.deployments.api_token_auth import APIToken; print('yes' if APIToken.objects.filter(is_active=True).exists() else 'no')
+from apps.core.models.api_token import APIToken; print('yes' if APIToken.objects.filter(is_active=True).exists() else 'no')
 "  | tr -d '\r' | tail -1)
 if [ "$HAS_API_TOKEN" = "yes" ]; then
     echo -e "${GREEN}  ✅ Inter-Node API Token exists.${NC}"
@@ -83,7 +83,7 @@ else
     echo -e "${YELLOW}  → Creating Inter-Node API Token...${NC}"
     TOKEN_OUTPUT=$(timeout -k 5 120 docker exec "$BACKEND_CONTAINER" python manage.py shell -c "
 from django.contrib.auth import get_user_model
-from apps.deployments.api_token_auth import APIToken
+from apps.core.models.api_token import APIToken
 admin = get_user_model().objects.filter(is_superuser=True).first()
 if admin:
     token, raw = APIToken.create_token(admin, name='Inter-Node Access')

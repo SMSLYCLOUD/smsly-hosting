@@ -980,7 +980,7 @@ services:
     - "443:443"
     environment:
     - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
-    - DOMAIN=${DOMAIN}
+    - DOMAIN=${DOMAIN:-localhost}
     volumes:
     # Caddyfile — written by the backend into the bind-mounted
     # ./caddy-config/Caddyfile at runtime, plus the safety seed

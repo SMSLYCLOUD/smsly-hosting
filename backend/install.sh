@@ -12950,9 +12950,19 @@ sleep 5
     fi
 
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
-    # Fix volume ownership — Docker creates named volumes as root
+    # Fix volume ownership — Docker creates named volumes as root.
+    # NOTE: `docker compose exec --user root backend chown` cannot work here:
+    # the backend container runs with CapDrop=[ALL], so even uid 0 cannot
+    # chown (no CAP_CHOWN). Run chown host-side via a throwaway alpine
+    # container instead.
     echo -e "${BLUE}    ↳ Fixing volume ownership...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups < /dev/null || echo -e "${YELLOW}    ⚠ Volume ownership fix failed${NC}"
+    _vol_json="$(docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null || true)"
+    for _vkey in static_volume media_volume backups_data; do
+        _vol_name="$(printf '%s' "$_vol_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('volumes',{}).get('$_vkey',{}).get('name',''))" 2>/dev/null || true)"
+        if [ -n "$_vol_name" ] && docker volume inspect "$_vol_name" >/dev/null 2>&1; then
+            timeout 90 docker run --rm -v "$_vol_name":/data alpine chown -R 1000:1000 /data || echo -e "${YELLOW}    ⚠ Volume ownership fix failed for $_vol_name${NC}"
+        fi
+    done
     echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
     timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput < /dev/null || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 

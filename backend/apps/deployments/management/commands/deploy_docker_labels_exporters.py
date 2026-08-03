@@ -31,6 +31,8 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        from django.db import connection
+
         from apps.deployments.models.core import ManagedServer
         from apps.autoscaler.services.prometheus_targets import (
             deploy_cadvisor_on_node,
@@ -39,6 +41,17 @@ class Command(BaseCommand):
             deploy_promtail_on_node,
             write_docker_labels_targets,
         )
+
+        # The install pipeline may invoke this before migrations have been
+        # applied (relation does not exist). Fail soft instead of crashing.
+        if ManagedServer._meta.db_table not in connection.introspection.table_names():
+            self.stdout.write(
+                self.style.WARNING(
+                    "Skipped: migrations not applied yet "
+                    f"({ManagedServer._meta.db_table} does not exist)"
+                )
+            )
+            return
 
         node_filter = options.get("node", "")
         force = options.get("force", False)
