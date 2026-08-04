@@ -19,7 +19,12 @@ class ResourceAlertViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        qs = ResourceAlert.objects.filter(service__owner=self.request.user, acknowledged=False).order_by('-created_at')
+        from django.db.models import Q
+        user = self.request.user
+        qs = ResourceAlert.objects.filter(
+            Q(service__owner=user) | Q(service__project__team__members__user=user),
+            acknowledged=False,
+        ).select_related('service').distinct().order_by('-created_at')
         service_id = self.request.query_params.get('service')
         if service_id:
             qs = qs.filter(service_id=service_id)
@@ -90,33 +95,24 @@ class NotificationChannelViewSet(viewsets.ModelViewSet):
                     recipient_list=[channel.target],
                     fail_silently=False,
                 )
-            elif channel.channel_type == 'slack':
-                import json
-                import urllib.request
-                payload = json.dumps({
-                    'text': ':white_check_mark: *SMSLY Test Alert*\nThis is a test notification from your SMSLY hosting platform.'
-                }).encode()
-                req = urllib.request.Request(
-                    channel.target,
-                    data=payload,
-                    headers={'Content-Type': 'application/json'},
-                    method='POST',
-                )
-                urllib.request.urlopen(req, timeout=10)
-            elif channel.channel_type == 'webhook':
-                import json
-                import urllib.request
-                payload = json.dumps({
-                    'event': 'test',
-                    'message': 'SMSLY test alert notification',
-                }).encode()
-                req = urllib.request.Request(
-                    channel.target,
-                    data=payload,
-                    headers={'Content-Type': 'application/json'},
-                    method='POST',
-                )
-                urllib.request.urlopen(req, timeout=10)
+            elif channel.channel_type in ('slack', 'webhook'):
+                # Route through the same SSRF-guarded webhook path used for
+                # real dispatches (host allowlist + DNS checks + validate_ssrf).
+                from ..webhooks import _post_notification
+                if channel.channel_type == 'slack':
+                    payload = {
+                        'text': ':white_check_mark: *SMSLY Test Alert*\nThis is a test notification from your SMSLY hosting platform.'
+                    }
+                else:
+                    payload = {
+                        'event': 'test',
+                        'message': 'SMSLY test alert notification',
+                    }
+                ok = _post_notification(channel.target, payload, provider=channel.channel_type)
+                if not ok:
+                    return Response(
+                        {'error': 'Webhook target rejected or unreachable. Only http(s) URLs on the Slack/Discord allowlist are permitted.'},
+                        status=status.HTTP_400_BAD_REQUEST)
             elif channel.channel_type == 'sms':
                 return Response(
                     {'error': 'SMS test not yet implemented. Configure the SMSLY SMS API in platform settings.'},

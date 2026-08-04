@@ -147,6 +147,7 @@ app.conf.task_routes = {
     'apps.core.tasks.metrics.collect_metrics_task': {'queue': 'deploy'},
     'apps.core.tasks.metrics.cleanup_build_cache_task': {'queue': 'deploy'},
     'apps.core.tasks.alerts.scan_running_containers_logs_task': {'queue': 'deploy'},
+    'apps.notifications.tasks.evaluate_alert_rules_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.create_service_backup_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.create_server_backup_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.restore_service_backup_task': {'queue': 'deploy'},
@@ -310,6 +311,12 @@ app.conf.beat_schedule = {
     # Scan running containers for errors every 5 minutes
     'scan-running-containers-logs-every-5m': {
         'task': 'apps.core.tasks.alerts.scan_running_containers_logs_task',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Evaluate platform alert rules every 5 minutes
+    'evaluate-alert-rules-every-5m': {
+        'task': 'apps.notifications.tasks.evaluate_alert_rules_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },

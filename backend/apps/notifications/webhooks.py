@@ -21,6 +21,21 @@ _ALLOWED_NOTIFICATION_HOSTS = frozenset({
 
 _MAX_BODY_BYTES = 64 * 1024
 _DEFAULT_REQUEST_TIMEOUT = 5.0
+# Headroom for the JSON envelope so a truncated body never re-crosses
+# the byte cap after serialization.
+_JSON_ENVELOPE_HEADROOM = 1024
+
+
+def _truncate_body(body: str) -> str:
+    """Truncate a body to fit under the byte cap without splitting UTF-8."""
+    max_message_bytes = _MAX_BODY_BYTES - _JSON_ENVELOPE_HEADROOM
+    encoded = body.encode('utf-8')
+    if len(encoded) <= max_message_bytes:
+        return body
+    logger.warning(
+        "Notification body exceeds %d bytes; truncating", _MAX_BODY_BYTES
+    )
+    return encoded[:max_message_bytes].decode('utf-8', errors='ignore')
 
 
 def _get_request_timeout() -> float:
@@ -164,11 +179,7 @@ def send_slack_notification(message: str, webhook_url: str | None = None, user=N
     if not url:
         return
 
-    body = str(message)
-    if len(body.encode('utf-8')) > _MAX_BODY_BYTES:
-        logger.warning("Slack notification body exceeds %d bytes; truncating",
-                       _MAX_BODY_BYTES)
-        body = body[:_MAX_BODY_BYTES]
+    body = _truncate_body(str(message))
 
     _post_notification(
         url,
@@ -184,11 +195,7 @@ def send_discord_notification(message: str, webhook_url: str | None = None, user
     if not url:
         return
 
-    body = str(message)
-    if len(body.encode('utf-8')) > _MAX_BODY_BYTES:
-        logger.warning("Discord notification body exceeds %d bytes; truncating",
-                       _MAX_BODY_BYTES)
-        body = body[:_MAX_BODY_BYTES]
+    body = _truncate_body(str(message))
 
     _post_notification(
         url,

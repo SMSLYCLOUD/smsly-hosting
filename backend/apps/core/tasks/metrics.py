@@ -200,7 +200,11 @@ def _check_metric_thresholds(service, stats, now):
             cache.set(cache_key, 1, 3600)  # 1 hour dedup
 
             notify_health_alert.delay(
-                str(service.id),
+                service.owner_id,
+                service.name,
+                'resource',
+                current_value=round(max(cpu, mem_mb), 1),
+                threshold=90.0,
                 severity='WARNING',
                 message='; '.join(alerts),
             )

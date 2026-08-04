@@ -27,18 +27,20 @@ Usage:
 
 import hashlib
 import hmac
+import html
 import json
 import logging
+import operator
 import os
 import time
 
 import requests
 from celery import shared_task
 
-from apps.deployments.constants import RETRY_DELAY_FAST, TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_TRIVIAL
+from apps.deployments.constants import RETRY_DELAY_FAST, TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_STANDARD, TASK_TIME_LIMIT_TRIVIAL
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.mail import EmailMultiAlternatives
+from django.core.mail import EmailMultiAlternatives, send_mail
 from django.utils import timezone
 
 from apps.deployments.utils import log_event
@@ -102,8 +104,8 @@ def _dispatch_email(user, title: str, message: str, metadata: dict) -> dict:
     try:
         html_body = (
             f"<html><body>"
-            f"<h2 style='font-family:sans-serif'>{title}</h2>"
-            f"<p style='font-family:sans-serif;color:#555'>{message}</p>"
+            f"<h2 style='font-family:sans-serif'>{html.escape(title)}</h2>"
+            f"<p style='font-family:sans-serif;color:#555'>{html.escape(message)}</p>"
             f"<hr/><p style='font-family:sans-serif;font-size:12px;color:#999'>"
             f"Grid by SMSLY | {timezone.now().strftime('%Y-%m-%d %H:%M UTC')}"
             f"</p></body></html>"
@@ -517,20 +519,23 @@ def notify_deploy_event(user_id: int, service_name: str, status: str, commit_has
 
 
 @shared_task(name='notifications.notify_health_alert', queue='fast', soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
-def notify_health_alert(user_id: int, service_name: str, metric: str, current_value: float, threshold: float, severity: str = 'WARNING'):
+def notify_health_alert(user_id: int, service_name: str, metric: str, current_value: float, threshold: float, severity: str = 'WARNING', message: str = ''):
     """Fire a resource/health alert notification for a service owner."""
     severity_emoji = {'INFO': 'ℹ️', 'WARNING': '⚠️', 'CRITICAL': '🚨'}.get(severity, '⚠️')
     title = f"{severity_emoji} {severity}: {service_name} — {metric.upper()} Alert"
-    message = (
-        f"Service '{service_name}' has triggered a {severity.lower()} alert.\n"
-        f"Metric: {metric.upper()}\n"
-        f"Current: {current_value:.1f}% | Threshold: {threshold:.1f}%"
-    )
+    if message:
+        body = message
+    else:
+        body = (
+            f"Service '{service_name}' has triggered a {severity.lower()} alert.\n"
+            f"Metric: {metric.upper()}\n"
+            f"Current: {current_value:.1f}% | Threshold: {threshold:.1f}%"
+        )
     dispatch_notification.delay(
         event_type='health_alert',
         user_id=user_id,
         title=title,
-        message=message,
+        message=body,
         metadata={
             'service': service_name,
             'metric': metric,
@@ -624,3 +629,205 @@ def notify_replication_issue(
             'lag_bytes': lag_bytes,
         },
     )
+
+
+# ── Alert Rule Evaluation ────────────────────────────────────────────────────
+
+_RULE_OPERATORS = {
+    '>': operator.gt,
+    '>=': operator.ge,
+    '<': operator.lt,
+    '<=': operator.le,
+    '==': operator.eq,
+    '!=': operator.ne,
+}
+
+# Metric types backed by ServiceMetric data. 'disk', 'status',
+# 'response_time', and 'error_rate' have no metric source yet.
+_RULE_METRICS_WITH_DATA = {'cpu', 'memory'}
+
+
+def _rule_metric_value(metric_row, metric_type: str):
+    """Map a ServiceMetric row to the rule's threshold scale (percent)."""
+    if metric_type == 'cpu':
+        if float(metric_row.cpu_limit or 0) <= 0:
+            return None
+        return metric_row.cpu_percent
+    if metric_type == 'memory':
+        if float(metric_row.memory_limit or 0) <= 0:
+            return None
+        return metric_row.memory_percent
+    return None
+
+
+def _render_rule_message(rule, value: float, service) -> str:
+    template = (rule.message_template or '').strip()
+    if template:
+        try:
+            return template.format(
+                metric=rule.metric,
+                value=f"{value:.1f}",
+                threshold=rule.threshold,
+                service=service.name,
+            )
+        except (KeyError, IndexError, ValueError) as exc:
+            logger.warning("Alert rule %s message template invalid: %s", rule.id, exc)
+    return (
+        f"Alert rule '{rule.name}' triggered for service '{service.name}': "
+        f"{rule.metric} {rule.operator} {rule.threshold} (current: {value:.1f})."
+    )
+
+
+def _dispatch_rule_channel(channel, message: str) -> None:
+    """Deliver an alert-rule notification through a NotificationChannel."""
+    try:
+        if channel.channel_type == 'email':
+            from apps.deployments.models import PlatformConfig
+            config = PlatformConfig.load()
+            if not config.smtp_host or not config.smtp_from_email:
+                logger.warning(
+                    "Alert rule channel %s: SMTP not configured; skipping email to %s",
+                    channel.id,
+                    channel.target,
+                )
+                return
+            send_mail(
+                subject='[SMSLY] Alert Rule Notification',
+                message=message,
+                from_email=f"{config.smtp_from_name} <{config.smtp_from_email}>",
+                recipient_list=[channel.target],
+                fail_silently=False,
+            )
+        elif channel.channel_type in ('slack', 'webhook'):
+            from apps.notifications.webhooks import _post_notification
+            ok = _post_notification(channel.target, {'text': message}, provider=channel.channel_type)
+            if not ok:
+                logger.warning("Alert rule channel %s: webhook delivery rejected", channel.id)
+        elif channel.channel_type == 'sms':
+            sms_api_url = os.environ.get('SMSLY_SMS_API_URL', '')
+            if not sms_api_url:
+                logger.warning(
+                    "Alert rule channel %s: SMSLY_SMS_API_URL not configured",
+                    channel.id,
+                )
+                return
+            payload = {
+                'to': channel.target,
+                'message': message[:160],
+                'source': 'grid-hosting',
+                'event_type': 'alert_rule',
+                'user_id': '',
+            }
+            headers = _build_hmac_headers(payload)
+            response = requests.post(
+                f"{sms_api_url.rstrip('/')}/api/v1/send/",
+                json=payload,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+    except Exception as exc:
+        logger.warning(
+            "Alert rule channel %s (%s) dispatch failed: %s",
+            channel.id,
+            channel.channel_type,
+            exc,
+        )
+
+
+def _fire_alert_rule(rule, service, value: float) -> None:
+    """Create the ResourceAlert record, respect cooldown, then dispatch."""
+    from django.core.cache import cache
+    from apps.notifications.models import ResourceAlert
+
+    cache_key = f"alert_rule_cooldown:{rule.id}:{service.id}"
+    if cache.get(cache_key):
+        return
+    cache.set(cache_key, 1, timeout=max(60, rule.cooldown_minutes * 60))
+
+    message = _render_rule_message(rule, value, service)
+    try:
+        ResourceAlert.objects.create(
+            service=service,
+            severity=rule.severity.upper(),
+            metric=rule.metric,
+            threshold=rule.threshold,
+            current_value=value,
+            message=message,
+        )
+    except Exception as exc:
+        logger.warning("Failed to persist ResourceAlert for rule %s: %s", rule.id, exc)
+
+    channels = list(rule.channels.filter(enabled=True))
+    if channels:
+        for channel in channels:
+            _dispatch_rule_channel(channel, message)
+        return
+
+    if getattr(service, 'owner_id', None):
+        dispatch_notification.delay(
+            event_type='health_alert',
+            user_id=service.owner_id,
+            title=f"Alert: {rule.name} — {service.name}",
+            message=message,
+            metadata={
+                'service': service.name,
+                'metric': rule.metric,
+                'rule': rule.name,
+                'current_value': value,
+                'threshold': rule.threshold,
+                'severity': rule.severity,
+            },
+        )
+
+
+@shared_task(name='apps.notifications.tasks.evaluate_alert_rules_task', soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def evaluate_alert_rules_task() -> dict:
+    """
+    Evaluate enabled AlertRules against recent ServiceMetric rows.
+
+    For every (rule, service) pair whose latest metric breaches the rule
+    threshold, creates a ResourceAlert and notifies the rule's channels
+    (or the service owner's preferences when the rule has no channels).
+    Cooldown is enforced per (rule, service) via cache.
+    """
+    from apps.autoscaler.models.metrics import ServiceMetric
+    from apps.deployments.models import Service
+    from apps.notifications.models import AlertRule
+
+    rules = [r for r in AlertRule.objects.filter(enabled=True) if r.metric in _RULE_METRICS_WITH_DATA]
+    if not rules:
+        return {'evaluated': 0, 'fired': 0}
+
+    cutoff = timezone.now() - timezone.timedelta(minutes=15)
+    latest_by_service: dict = {}
+    for row in ServiceMetric.objects.filter(timestamp__gte=cutoff).order_by('service_id', '-timestamp'):
+        if row.service_id not in latest_by_service:
+            latest_by_service[row.service_id] = row
+
+    if not latest_by_service:
+        return {'evaluated': 0, 'fired': 0}
+
+    services = {
+        s.id: s
+        for s in Service.objects.filter(id__in=list(latest_by_service.keys())).only('id', 'name', 'owner_id')
+    }
+
+    fired = 0
+    for rule in rules:
+        operator_fn = _RULE_OPERATORS.get(rule.operator)
+        if operator_fn is None:
+            continue
+        for service_id, metric_row in latest_by_service.items():
+            service = services.get(service_id)
+            if service is None:
+                continue
+            value = _rule_metric_value(metric_row, rule.metric)
+            if value is None:
+                continue
+            if operator_fn(value, rule.threshold):
+                _fire_alert_rule(rule, service, value)
+                fired += 1
+
+    logger.info("Alert rule evaluation complete: %d rule(s) fired", fired)
+    return {'evaluated': len(rules) * len(latest_by_service), 'fired': fired}
