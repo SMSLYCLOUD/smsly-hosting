@@ -10,8 +10,14 @@ from apps.billing.services.stripe import StripeService
 
 
 @transaction.atomic
-def _activate_paid_plan(*, user, plan: str):
-    """Activate a paid plan for a user."""
+def _activate_paid_plan(*, user, plan: str, extend_period: bool = True):
+    """Activate a paid plan for a user.
+
+    ``extend_period`` controls period semantics: non-Stripe providers stack
+    renewal periods onto any future current_period_end (default True).
+    Stripe remains source-of-truth for its own periods, so Stripe callers
+    pass extend_period=False to leave current_period_end untouched.
+    """
     plan = (plan or "").upper().strip()
     if plan not in {
         BillingAccount.Plan.HOBBY,
@@ -30,12 +36,13 @@ def _activate_paid_plan(*, user, plan: str):
 
     if plan == BillingAccount.Plan.PRO:
         account.subscription_status = BillingAccount.SubscriptionStatus.ACTIVE
-        from apps.deployments.models.core import PlatformConfig
-        days = int(PlatformConfig.get_config_value('billing_pro_period_days', '30') or 30)
-        base = account.current_period_end \
-            if account.current_period_end and account.current_period_end > timezone.now() \
-            else timezone.now()
-        account.current_period_end = base + timedelta(days=days)
+        if extend_period:
+            from apps.deployments.models.core import PlatformConfig
+            days = int(PlatformConfig.get_config_value('billing_pro_period_days', '30') or 30)
+            base = account.current_period_end \
+                if account.current_period_end and account.current_period_end > timezone.now() \
+                else timezone.now()
+            account.current_period_end = base + timedelta(days=days)
     elif plan == BillingAccount.Plan.HOBBY:
         account.subscription_status = BillingAccount.SubscriptionStatus.NONE
         account.current_period_end = None
@@ -68,3 +75,31 @@ def _activate_paid_plan(*, user, plan: str):
         # Don't fail the transaction just because licensing failed (it can be retried)
         import logging
         logging.getLogger(__name__).error(f"Failed to update platform license after payment: {e}")
+
+    # Keep UserSubscription in sync so the monthly invoice generator has data.
+    try:
+        from apps.billing.models import PricingPlan, UserSubscription
+        if plan == BillingAccount.Plan.HOBBY:
+            UserSubscription.objects.filter(user=user, status='ACTIVE').update(status='CANCELLED')
+        else:
+            pricing_plan = (
+                PricingPlan.objects.filter(slug__iexact=plan.lower()).first()
+                or PricingPlan.objects.filter(name__iexact=plan.title()).first()
+            )
+            if pricing_plan is not None:
+                period_end = account.current_period_end
+                UserSubscription.objects.update_or_create(
+                    user=user,
+                    defaults={
+                        'plan': pricing_plan,
+                        'status': 'ACTIVE',
+                        'billing_cycle': 'MONTHLY',
+                        'current_period_start': period_end - timedelta(days=30)
+                        if period_end else timezone.now(),
+                        'current_period_end': period_end
+                        or (timezone.now() + timedelta(days=30)),
+                    },
+                )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to sync UserSubscription after payment: {e}")

@@ -151,9 +151,9 @@ class BillingSummaryView(GenericAPIView):
             .values_list('service_id', 'total')
         )
         service_cpu = dict(
-            UsageRecord.objects.filter(service__owner=user, resource_type='cpu_hours')
+            UsageRecord.objects.filter(service__owner=user)
             .values('service_id')
-            .annotate(s=Sum('quantity'))
+            .annotate(s=Sum('cpu_cores'))
             .values_list('service_id', 's')
         )
         for service in user.services.all():
@@ -402,8 +402,15 @@ class StripeWebhookView(GenericAPIView):
                                 BillingAccount.Plan.ENTERPRISE,
                             }:
                                 account.plan = plan
-                            account.save(update_fields=["stripe_subscription_id", "plan"])
+                            period_end_ts = obj.get("current_period_end")
+                            if isinstance(period_end_ts, int):
+                                account.current_period_end = timezone.datetime.fromtimestamp(
+                                    period_end_ts, tz=timezone.get_current_timezone()
+                                )
+                            account.save(update_fields=["stripe_subscription_id", "plan", "current_period_end"])
                             StripeService.sync_subscription_from_stripe(account)
+                            if plan in {BillingAccount.Plan.PRO, BillingAccount.Plan.ENTERPRISE}:
+                                _activate_paid_plan(user=account.user, plan=plan, extend_period=False)
 
             elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
                 subscription_id = obj.get("id")

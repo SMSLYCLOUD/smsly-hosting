@@ -65,6 +65,11 @@ def generate_monthly_invoices() -> None:
             period_end = sub.current_period_end
             period_start = sub.current_period_start
 
+            # Skip if an invoice for this billing period already exists
+            # (keeps re-runs and beat catch-ups idempotent).
+            if Invoice.objects.filter(subscription=sub, period_start=period_start).exists():
+                continue
+
             # Skip if not yet due
             if period_end > now:
                 continue
@@ -129,10 +134,30 @@ def send_payment_reminders() -> None:
         if overdue_count:
             logger.info("Marked %d invoices OVERDUE.", overdue_count)
 
-        overdue_invoices = Invoice.objects.filter(status='OVERDUE')
+        # Send at most one reminder per invoice per day.
+        from django.core.cache import cache
+        from apps.notifications.tasks import dispatch_notification
+
+        overdue_invoices = Invoice.objects.filter(status='OVERDUE').select_related('user')
+        sent = 0
         for invoice in overdue_invoices:
-            # Here we would send email
-            logger.info("Sending reminder for overdue invoice %s", invoice.id)
+            cache_key = f"billing_reminder:{invoice.id}:{now.strftime('%Y%m%d')}"
+            if cache.get(cache_key):
+                continue
+            dispatch_notification.delay(
+                event_type='billing_due',
+                user_id=invoice.user_id,
+                title='Payment overdue',
+                message=(
+                    f"Invoice {invoice.id} for {invoice.total} is now overdue. "
+                    "Please make a payment as soon as possible."
+                ),
+                metadata={'invoice_id': str(invoice.id)},
+            )
+            cache.set(cache_key, 1, 86400)
+            sent += 1
+        if sent:
+            logger.info("Sent %d payment reminders.", sent)
     except Exception as e:
         logger.error("Error sending payment reminders: %s", e)
 
@@ -176,6 +201,10 @@ def aggregate_daily_revenue() -> None:
 def calculate_infrastructure_costs() -> None:
     """Run daily — pull costs from cloud provider APIs."""
     yesterday = timezone.now().date() - timedelta(days=1)
+
+    # Skip if already snapshotted for this date (prevents duplicate rows).
+    if InfrastructureCost.objects.filter(date=yesterday, cost_type='VPS').exists():
+        return
 
     # Placeholder: estimate cost based on active resources * cost
     # $5/month per service (approx $0.16/day)

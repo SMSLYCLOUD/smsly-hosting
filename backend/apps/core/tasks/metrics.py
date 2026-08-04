@@ -136,20 +136,6 @@ def collect_metrics_task() -> None:
         # Check resource thresholds and fire alerts
         _check_metric_thresholds(service, stats, now)
 
-        # Record usage for billing
-        try:
-            from apps.billing.services.metering import UsageMeter
-            meter = UsageMeter()
-            cpu_limit = float(stats.get('cpu_limit') or 1.0)
-            cpu_usage = float(stats.get('cpu_usage') or 0.0)
-            cpu_pct = (cpu_usage / cpu_limit * 100.0) if cpu_limit > 0 else 0.0
-            mem_mb = float(stats.get('memory_usage') or 0.0)
-            if cpu_pct > 0:
-                meter.record_usage(service.owner, 'cpu_hours', cpu_pct / 100, timestamp=now)
-            if mem_mb > 0:
-                meter.record_usage(service.owner, 'memory_gb_hours', mem_mb / 1024, timestamp=now)
-        except Exception as exc:
-            logger.debug("Failed to record billing usage for %s: %s", service.name, exc)
     cutoff = now - timezone.timedelta(days=7)
     deleted, _ = ServiceMetric.objects.filter(timestamp__lt=cutoff).delete()
     if deleted:
