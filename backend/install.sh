@@ -3328,8 +3328,12 @@ _harden_crowdsec_bootstrap() {
         return 0  # already up
     fi
     # Blocking start — wait for container to be healthy
+    # The harden bootstrap may run before fresh_config has generated .env,
+    # so only pass --env-file when the file exists.
+    local env_args=()
+    [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     docker compose \
-        --env-file "$INSTALL_DIR/.env" \
+        "${env_args[@]}" \
         -f "$COMPOSE_FILE" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
@@ -3371,6 +3375,10 @@ _harden_falco_bootstrap() {
     # so only pass --env-file when the file exists (compose file needs no vars).
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    # smsly-net is declared external in the falco compose file but is only
+    # created during stack deploy (fresh_deploy.sh) — the harden bootstrap
+    # runs earlier, so create it here if missing.
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
     docker compose \
         "${env_args[@]}" \
         -f "$compose_file" \
@@ -7834,8 +7842,12 @@ _harden_crowdsec_bootstrap() {
         return 0  # already up
     fi
     # Blocking start — wait for container to be healthy
+    # The harden bootstrap may run before fresh_config has generated .env,
+    # so only pass --env-file when the file exists.
+    local env_args=()
+    [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     docker compose \
-        --env-file "$INSTALL_DIR/.env" \
+        "${env_args[@]}" \
         -f "$COMPOSE_FILE" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
@@ -7877,6 +7889,10 @@ _harden_falco_bootstrap() {
     # so only pass --env-file when the file exists (compose file needs no vars).
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    # smsly-net is declared external in the falco compose file but is only
+    # created during stack deploy (fresh_deploy.sh) — the harden bootstrap
+    # runs earlier, so create it here if missing.
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
     docker compose \
         "${env_args[@]}" \
         -f "$compose_file" \
@@ -8747,8 +8763,12 @@ _harden_crowdsec_bootstrap() {
         return 0  # already up
     fi
     # Blocking start — wait for container to be healthy
+    # The harden bootstrap may run before fresh_config has generated .env,
+    # so only pass --env-file when the file exists.
+    local env_args=()
+    [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     docker compose \
-        --env-file "$INSTALL_DIR/.env" \
+        "${env_args[@]}" \
         -f "$COMPOSE_FILE" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
@@ -8790,6 +8810,10 @@ _harden_falco_bootstrap() {
     # so only pass --env-file when the file exists (compose file needs no vars).
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    # smsly-net is declared external in the falco compose file but is only
+    # created during stack deploy (fresh_deploy.sh) — the harden bootstrap
+    # runs earlier, so create it here if missing.
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
     docker compose \
         "${env_args[@]}" \
         -f "$compose_file" \
@@ -11648,8 +11672,12 @@ _harden_crowdsec_bootstrap() {
         return 0  # already up
     fi
     # Blocking start — wait for container to be healthy
+    # The harden bootstrap may run before fresh_config has generated .env,
+    # so only pass --env-file when the file exists.
+    local env_args=()
+    [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     docker compose \
-        --env-file "$INSTALL_DIR/.env" \
+        "${env_args[@]}" \
         -f "$COMPOSE_FILE" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
@@ -11691,6 +11719,10 @@ _harden_falco_bootstrap() {
     # so only pass --env-file when the file exists (compose file needs no vars).
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    # smsly-net is declared external in the falco compose file but is only
+    # created during stack deploy (fresh_deploy.sh) — the harden bootstrap
+    # runs earlier, so create it here if missing.
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
     docker compose \
         "${env_args[@]}" \
         -f "$compose_file" \

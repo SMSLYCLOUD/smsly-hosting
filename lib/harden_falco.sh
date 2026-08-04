@@ -10,6 +10,10 @@ _harden_falco_bootstrap() {
     # so only pass --env-file when the file exists (compose file needs no vars).
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    # smsly-net is declared external in the falco compose file but is only
+    # created during stack deploy (fresh_deploy.sh) — the harden bootstrap
+    # runs earlier, so create it here if missing.
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
     docker compose \
         "${env_args[@]}" \
         -f "$compose_file" \

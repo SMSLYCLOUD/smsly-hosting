@@ -8,8 +8,12 @@ _harden_crowdsec_bootstrap() {
         return 0  # already up
     fi
     # Blocking start — wait for container to be healthy
+    # The harden bootstrap may run before fresh_config has generated .env,
+    # so only pass --env-file when the file exists.
+    local env_args=()
+    [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     docker compose \
-        --env-file "$INSTALL_DIR/.env" \
+        "${env_args[@]}" \
         -f "$COMPOSE_FILE" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
