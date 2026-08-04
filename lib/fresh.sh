@@ -33,4 +33,7 @@ source "$SCRIPT_DIR/fresh_caddy.sh"
 source "$SCRIPT_DIR/fresh_hardening.sh"
 source "$SCRIPT_DIR/fresh_verify.sh"
 
-return 0
+# Valid when fresh.sh is sourced from install.sh (repo layout). The
+# self-contained installer inlines this content into the top-level script,
+# where `return` is illegal — fall back to exit 0 there.
+return 0 2>/dev/null || exit 0

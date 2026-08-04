@@ -5,9 +5,13 @@ _harden_falco_bootstrap() {
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
 
-    # Blocking start — always recreate so config changes take effect
+    # Blocking start — always recreate so config changes take effect.
+    # The harden bootstrap may run before fresh_config has generated .env,
+    # so only pass --env-file when the file exists (compose file needs no vars).
+    local env_args=()
+    [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     docker compose \
-        --env-file "$INSTALL_DIR/.env" \
+        "${env_args[@]}" \
         -f "$compose_file" \
         up -d --force-recreate --pull always || echo -e "${YELLOW}    ⚠ falco docker compose up failed${NC}"
     for _i in $(seq 1 15); do
