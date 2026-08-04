@@ -51,9 +51,11 @@ class ScalingViewSet(viewsets.GenericViewSet):
         """
         from apps.autoscaler.engine.pipeline import analyze_only
         if request.user.is_superuser:
-            service = Service.objects.get(id=pk)
+            service = get_object_or_404(Service, id=pk)
         else:
-            service = Service.objects.get(get_team_q_filter(request.user, request=request), id=pk)
+            service = get_object_or_404(
+                Service, get_team_q_filter(request.user, request=request), id=pk
+            )
         result = analyze_only(service)
         return Response(result)
 
@@ -78,9 +80,11 @@ class ScalingViewSet(viewsets.GenericViewSet):
     def spawn(self, request, pk=None):
         """Manually spawn a replica on the best available node."""
         if request.user.is_superuser:
-            service = Service.objects.get(id=pk)
+            service = get_object_or_404(Service, id=pk)
         else:
-            service = Service.objects.get(get_team_q_filter(request.user, request=request), id=pk)
+            service = get_object_or_404(
+                Service, get_team_q_filter(request.user, request=request), id=pk
+            )
 
         allow_control_plane = getattr(
             settings, 'GRID_ALLOW_CONTROL_PLANE_WORKLOADS',
@@ -141,11 +145,12 @@ class ScalingViewSet(viewsets.GenericViewSet):
         if not replica_id:
             return Response({'error': '?id=UUID required'}, status=400)
         if request.user.is_superuser:
-            replica = ServiceReplica.objects.get(
-                id=replica_id, status='RUNNING',
+            replica = get_object_or_404(
+                ServiceReplica, id=replica_id, status='RUNNING',
             )
         else:
-            replica = ServiceReplica.objects.get(
+            replica = get_object_or_404(
+                ServiceReplica,
                 get_team_q_filter(request.user, prefix='service__', request=request),
                 id=replica_id, status='RUNNING',
             )

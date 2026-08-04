@@ -235,7 +235,7 @@ class MetricsAdapter:
             }
 
         try:
-            from .tasks_metrics import _collect_container_stats
+            from apps.core.tasks.metrics import _collect_container_stats
             stats = _collect_container_stats(str(container_id))
         except Exception:
             stats = None

@@ -195,9 +195,14 @@ class MetricsViewSet(viewsets.GenericViewSet):
 
         try:
             service = self.queryset.get(pk=service_pk)
-            # Check permission
-            if (not request.user.is_superuser) and service.owner != request.user:
-                return Response(status=status.HTTP_403_FORBIDDEN)
+            # Check permission: superuser, owner, or team member.
+            if not request.user.is_superuser:
+                from apps.teams.permissions import get_team_q_filter
+                allowed = Service.objects.filter(
+                    get_team_q_filter(request.user, request=request), id=service.id
+                ).exists()
+                if not allowed:
+                    return Response(status=status.HTTP_403_FORBIDDEN)
 
             duration = request.query_params.get('duration', '1h')
 
