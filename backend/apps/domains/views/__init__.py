@@ -80,14 +80,18 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
         ).select_related('service').distinct().order_by('-created_at')
 
     def create(self, request, *args, **kwargs):
+        from ..utils import normalize_domain
         from apps.deployments.models.core import Service
-        domain_name = (request.data.get('name') or request.data.get('domain_name') or '').strip().lower()
-        service_id = request.data.get('service') or request.data.get('service_id')
-        if not domain_name:
+        try:
+            domain_name = normalize_domain(
+                request.data.get('name') or request.data.get('domain_name') or ''
+            )
+        except ValueError as exc:
             return Response(
-                {'error': 'Domain name is required.'},
+                {'error': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        service_id = request.data.get('service') or request.data.get('service_id')
         if not service_id:
             return Response(
                 {'error': 'A target service is required.'},
@@ -111,7 +115,6 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
                 defaults={'service': service, 'status': DomainStatus.PENDING},
             )
         except IntegrityError:
-            Domain.objects.filter(domain_name=domain_name).first()
             return Response(
                 {'error': f'Domain {domain_name} is already registered.'},
                 status=status.HTTP_409_CONFLICT,
@@ -144,5 +147,20 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
                         | Q(project__team__members__user=request.user),
                     ).exists()))):
             raise PermissionDenied("You do not have access to this domain.")
+        domain_name = instance.domain_name
+        service = instance.service
         instance.delete()
+        if service and service.custom_domains:
+            domains = [
+                d for d in service.custom_domains
+                if isinstance(d, str) and d.strip() and d != domain_name
+            ]
+            if len(domains) != len(service.custom_domains):
+                service.custom_domains = domains
+                service.save(update_fields=['custom_domains'])
+        try:
+            from ..tasks import _trigger_caddy_reload
+            _trigger_caddy_reload()
+        except Exception as exc:
+            logger.warning("Failed to reload Caddy after domain removal: %s", exc)
         return Response(status=status.HTTP_204_NO_CONTENT)
