@@ -41,7 +41,7 @@
 SSH into your server as root and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/backend/install.sh -o /tmp/install.sh
 sudo bash /tmp/install.sh
 ```
 
@@ -59,7 +59,7 @@ sudo bash /tmp/install.sh --rust
 If you're automating installation (CI or one-line SSH), you can run SSL mode non-interactively:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh && \
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/backend/install.sh -o /tmp/install.sh && \
 sudo USE_SSL=true DOMAIN=your-domain.com ACME_EMAIL=admin@your-domain.com SKIP_SCREEN=1 bash /tmp/install.sh
 ```
 

@@ -705,4 +705,14 @@ fi
 # =============================================================================
 # FRESH INSTALL (fallthrough)
 # =============================================================================
+# Prefer the regenerated, tested, self-contained backend/install.sh when it is
+# co-located (full repo checkout). A standalone curl'd install.sh has no
+# backend/install.sh next to it and falls back to lib/ bootstrap + fresh.sh.
+# The basename guard prevents recursion: backend/install.sh is generated from
+# this file, so it carries the same delegation block — running from it must
+# fall through to the inlined fresh.sh below.
+if [ -f "$SCRIPT_DIR/backend/install.sh" ] && [ "$(basename "$SCRIPT_PATH")" != "backend/install.sh" ]; then
+    echo -e "${BLUE}  → Delegating fresh install to self-contained backend/install.sh${NC}"
+    exec bash "$SCRIPT_DIR/backend/install.sh" "$@"
+fi
 source "$LIB_DIR/fresh.sh"

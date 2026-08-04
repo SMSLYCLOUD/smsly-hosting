@@ -85,7 +85,7 @@ Works on AWS, Azure, GCP, or bare metal. Air-gapped deployments supported.
 ### Quick Install (Fresh Ubuntu VPS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/master/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/master/backend/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh
 ```
 
 The installer prompts you to choose:

@@ -95,7 +95,7 @@ CORS_ALLOW_ALL=False
 The universal installer provisions **Caddy** and configures automatic Let's Encrypt SSL.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/backend/install.sh -o /tmp/install.sh
 sudo USE_SSL=true DOMAIN=cloud.smsly.cloud ACME_EMAIL=admin@smsly.cloud bash /tmp/install.sh
 ```
 
