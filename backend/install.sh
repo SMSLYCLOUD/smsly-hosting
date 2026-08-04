@@ -934,13 +934,13 @@ ensure_infrastructure_permissions() {
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
 
     if command -v docker ; then
-        _vol_match="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)backups_data$' | head -n1)"
-        for vol in ${_vol_match:-backups_data}; do
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data)$')"
+        for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
-                echo -e "${YELLOW}     ⚠ backups_data volume not found — skipping chown${NC}"
+                echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
             fi
         done
     fi
@@ -2232,13 +2232,13 @@ ensure_infrastructure_permissions() {
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
 
     if command -v docker ; then
-        _vol_match="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)backups_data$' | head -n1)"
-        for vol in ${_vol_match:-backups_data}; do
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data)$')"
+        for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
-                echo -e "${YELLOW}     ⚠ backups_data volume not found — skipping chown${NC}"
+                echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
             fi
         done
     fi
@@ -13223,6 +13223,17 @@ EOF
         exit 1
     fi
     docker compose -f "$COMPOSE_FILE" up -d --no-deps caddy
+
+    # The Caddy container runs as uid 1000 (see infrastructure/caddy/Dockerfile).
+    # If the stack was started earlier with the stock caddy image (root), ACME
+    # state files in the caddy_data volume are root-owned and the uid-1000
+    # process silently fails cert issuance ("permission denied" on lock files).
+    # Chown after start so the final image's user can read/write its ACME state.
+    if command -v docker && docker volume inspect smsly-hosting_caddy_data >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Ensuring caddy_data volume is writable by caddy (uid 1000)...${NC}"
+        docker run --rm -v smsly-hosting_caddy_data:/data alpine chown -R 1000:1000 /data  || \
+            echo -e "${YELLOW}    ⚠ Could not chown caddy_data volume — cert issuance may fail later${NC}"
+    fi
 
     # ACME staging validation — verify Let's Encrypt can reach this server before going live
     if [ "${DOMAIN:-}" ] && [ "$USE_SSL" = "true" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then

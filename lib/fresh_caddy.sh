@@ -44,6 +44,17 @@ EOF
     fi
     docker compose -f "$COMPOSE_FILE" up -d --no-deps caddy
 
+    # The Caddy container runs as uid 1000 (see infrastructure/caddy/Dockerfile).
+    # If the stack was started earlier with the stock caddy image (root), ACME
+    # state files in the caddy_data volume are root-owned and the uid-1000
+    # process silently fails cert issuance ("permission denied" on lock files).
+    # Chown after start so the final image's user can read/write its ACME state.
+    if command -v docker && docker volume inspect smsly-hosting_caddy_data >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Ensuring caddy_data volume is writable by caddy (uid 1000)...${NC}"
+        docker run --rm -v smsly-hosting_caddy_data:/data alpine chown -R 1000:1000 /data  || \
+            echo -e "${YELLOW}    ⚠ Could not chown caddy_data volume — cert issuance may fail later${NC}"
+    fi
+
     # ACME staging validation — verify Let's Encrypt can reach this server before going live
     if [ "${DOMAIN:-}" ] && [ "$USE_SSL" = "true" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         echo -e "${BLUE}  → Running ACME staging validation for $DOMAIN...${NC}"

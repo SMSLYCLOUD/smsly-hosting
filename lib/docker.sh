@@ -284,13 +284,13 @@ ensure_infrastructure_permissions() {
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
 
     if command -v docker ; then
-        _vol_match="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)backups_data$' | head -n1)"
-        for vol in ${_vol_match:-backups_data}; do
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data)$')"
+        for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
-                echo -e "${YELLOW}     ⚠ backups_data volume not found — skipping chown${NC}"
+                echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
             fi
         done
     fi
