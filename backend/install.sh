@@ -10832,11 +10832,11 @@ export PATH="/usr/local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ ! -f "$SCRIPT_DIR/state.sh" ]; then
-    echo "ERROR: state.sh not found at $SCRIPT_DIR/state.sh" >&2
-    exit 1
-fi
-
+# When running from the repo layout, fresh.sh lives in lib/ next to state.sh.
+# When running from the regenerated self-contained installer (backend/install.sh)
+# the state.sh content is inlined at this exact line by the regen pipeline, so
+# the file itself will not exist. The source line must stay in its canonical
+# form (no redirects) for the inliner to recognize and replace it.
 # --- lib/state.sh ---
 # ─── Installation State Machine ──────────────────────────────────────────────
 STATE_FILE="/opt/smsly-hosting/.smsly_install_state"
