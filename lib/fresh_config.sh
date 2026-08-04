@@ -483,6 +483,12 @@ EOF
         exit 1
     fi
 fi
+# Sync the backup so rollback doesn't restore a stale/empty .env.backup (e.g.
+# when the harden phase created a stub .env with only CONTAINER_RUNTIME before
+# config_generated backfilled the real secrets into it).
+if [ -f "$INSTALL_DIR/.env" ]; then
+    cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup"
+fi
     set_checkpoint "config_generated"
 fi
 if [ -f "$INSTALL_DIR/.env" ]; then

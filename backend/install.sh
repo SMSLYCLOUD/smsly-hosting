@@ -11178,24 +11178,42 @@ done
 echo -e "${BLUE}  → Cleaning up previous SMSLY installation artifacts...${NC}"
 
 # Stop and remove stale smsly-hosting platform containers (NOT user-deployed services)
+# ALSO clean the HA cluster containers (smsly-postgres-*, smsly-redis-*) — they use
+# container_name and are not matched by the smsly-hosting- prefix. If they survive,
+# their stale volumes stay attached and can't be removed (or worse, keep old DB
+# passwords that a fresh install's newly generated secrets can never match).
 SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting-" -q  || true)
+SMSLY_CONTAINERS="$SMSLY_CONTAINERS $(docker ps -a --filter "name=smsly-postgres" -q  || true)"
+SMSLY_CONTAINERS="$SMSLY_CONTAINERS $(docker ps -a --filter "name=smsly-redis" -q  || true)"
+SMSLY_CONTAINERS=$(echo "$SMSLY_CONTAINERS" | tr ' ' '\n' | sort -u | grep -v '^$')
 if [ -n "$SMSLY_CONTAINERS" ]; then
-    echo -e "${YELLOW}  → Stopping smsly-hosting platform container(s)...${NC}"
+    echo -e "${YELLOW}  → Stopping stale smsly platform container(s)...${NC}"
     docker stop $SMSLY_CONTAINERS  || true
     docker rm -f $SMSLY_CONTAINERS  || true
 fi
 
 # Remove stale Docker volumes (postgres data with old passwords, etc.)
+# A true fresh install (no real .env) generates NEW secrets, so preserving old
+# volumes guarantees DB auth failures. Only preserve volumes when a real .env
+# (with secrets) exists so the reused .env secrets match the preserved data.
 SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly" -q  || true)
 if [ -n "$SMSLY_VOLUMES" ]; then
-    if [ "${SMSLY_ALLOW_DESTRUCTIVE_FRESH:-0}" = "1" ]; then
-        echo -e "${YELLOW}  → Removing stale SMSLY volumes (SMSLY_ALLOW_DESTRUCTIVE_FRESH=1)...${NC}"
+    _env_has_secrets=false
+    if [ -f "$INSTALL_DIR/.env" ] && grep -qE '^(POSTGRES_PASSWORD|SECRET_KEY)=' "$INSTALL_DIR/.env" 2>/dev/null; then
+        _env_has_secrets=true
+    fi
+    if [ "${SMSLY_ALLOW_DESTRUCTIVE_FRESH:-0}" = "1" ] || [ "$_env_has_secrets" = "false" ]; then
+        if [ "${SMSLY_ALLOW_DESTRUCTIVE_FRESH:-0}" = "1" ]; then
+            echo -e "${YELLOW}  → Removing stale SMSLY volumes (SMSLY_ALLOW_DESTRUCTIVE_FRESH=1)...${NC}"
+        else
+            echo -e "${YELLOW}  → Removing stale SMSLY volumes (no existing .env secrets — new install)${NC}"
+        fi
         for vol in $SMSLY_VOLUMES; do
             docker volume rm "$vol"  || true
         done
     else
-        echo -e "${YELLOW}  ⚠ Existing SMSLY volumes detected; preserving data by default.${NC}"
-        echo -e "${YELLOW}    Use --wipe for full reset, or set SMSLY_ALLOW_DESTRUCTIVE_FRESH=1 to delete volumes in fresh install.${NC}"
+        echo -e "${YELLOW}  ⚠ Existing SMSLY volumes detected; preserving data (existing .env will be reused).${NC}"
+        echo -e "${YELLOW}    Use --wipe or SMSLY_ALLOW_DESTRUCTIVE_FRESH=1 to force removal.${NC}"
     fi
 fi
 
@@ -12541,6 +12559,12 @@ EOF
         rm -f "$ENV_TMP"
         exit 1
     fi
+fi
+# Sync the backup so rollback doesn't restore a stale/empty .env.backup (e.g.
+# when the harden phase created a stub .env with only CONTAINER_RUNTIME before
+# config_generated backfilled the real secrets into it).
+if [ -f "$INSTALL_DIR/.env" ]; then
+    cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup"
 fi
     set_checkpoint "config_generated"
 fi
