@@ -175,7 +175,7 @@ def _drop_server_db_user(server):
 
 def _cleanup_server_dns_record(server):
     from ..models.core import PlatformConfig
-    from ..services.dns import delete_dns_record
+    from apps.domains.services.dns import delete_dns_record
     config = PlatformConfig.load()
     cf_token = config.cloudflare_api_token
     root_domain = config.domain

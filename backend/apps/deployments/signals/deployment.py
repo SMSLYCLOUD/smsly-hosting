@@ -39,13 +39,31 @@ def sync_service_status_on_deployment_change(_sender, instance, created, **kwarg
     except Exception as exc:
         logging.getLogger(__name__).debug("smsly metric emission failed: %s", exc)
 
+    # The deletion lifecycle owns Service.status — never let a stray
+    # Deployment save flip a service out of (or past) a deletion state,
+    # or recover_stalled_deletions will never find it again.
+    if service.status in (
+        Service.Status.DELETION_PENDING,
+        Service.Status.DELETION_FAILED,
+        Service.Status.DELETED,
+    ):
+        return
+
+    # Status recompute + broadcast + audit on every save is expensive;
+    # only run when the deployment's status field changed.
+    update_fields = kwargs.get('update_fields')
+    if update_fields is not None and 'status' not in update_fields:
+        return
+
     latest_deployment = service.deployments.order_by('-created_at').first()
 
     if latest_deployment:
         if latest_deployment.status == Deployment.Status.ACTIVE:
             new_status = Service.Status.ACTIVE
         elif latest_deployment.status == Deployment.Status.FAILED:
-            new_status = Service.Status.ACTIVE
+            # A failed deploy does not prove the service is serving —
+            # don't fabricate ACTIVE.
+            new_status = Service.Status.UNKNOWN
         elif latest_deployment.status in [
             Deployment.Status.QUEUED,
             Deployment.Status.BUILDING,
@@ -53,7 +71,8 @@ def sync_service_status_on_deployment_change(_sender, instance, created, **kwarg
             Deployment.Status.REVIEW,
             Deployment.Status.HEALTH_CHECK,
         ]:
-            new_status = Service.Status.ACTIVE
+            # In-flight deploys leave the currently-running version up.
+            new_status = service.status
         else:
             new_status = service.status
     else:
