@@ -470,7 +470,7 @@ class SSHClient:
         # Try both 'docker compose' and 'docker-compose'
         quoted_path = shlex.quote(hosting_path)
         cmd = f"cd {quoted_path} && (docker compose exec -T backend python manage.py diagnose_nodes --fix || docker-compose exec -T backend python manage.py diagnose_nodes --fix)"
-        out, err, _code = self.exec_command(cmd)
+        out, err, _code = self.exec_command(cmd, timeout=600)
         return out + err
 
     def create_api_token(self, hosting_path):

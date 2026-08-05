@@ -127,6 +127,9 @@ app.conf.task_routes = {
     'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.restore_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.delete_addon_task': {'queue': 'deploy'},
+    'apps.addons.tasks.addon_health_check_all': {'queue': 'deploy'},
+    'apps.addons.tasks.addon_auto_vacuum': {'queue': 'deploy'},
+    'apps.addons.tasks.rotate_addon_credentials_task': {'queue': 'deploy'},
     'apps.deployments.tasks.execute_server_transfer_task': {'queue': 'deploy'},
     'apps.deployments.tasks.rollback_transfer_task': {'queue': 'deploy'},
     'apps.deployments.tasks.platform_update_task': {'queue': 'deploy'},
@@ -164,9 +167,6 @@ app.conf.task_routes = {
     'apps.deployments.tasks_bundles.restore_bundle_component_task': {'queue': 'deploy'},
     'apps.deployments.tasks.one_click_deploy_template_task': {'queue': 'deploy'},
     'apps.deployments.tasks.node_watchdog_task': {'queue': 'deploy'},
-    'apps.addons.tasks.addon_health_check_all': {'queue': 'deploy'},
-    'apps.addons.tasks.addon_auto_vacuum': {'queue': 'deploy'},
-    'apps.addons.tasks.rotate_addon_credentials_task': {'queue': 'deploy'},
     'apps.deployments.services.heartbeat_bus.persist_heartbeats_task': {'queue': 'fast'},
     'apps.cloud.services.ssl_monitor.check_ssl_certificates_task': {'queue': 'deploy'},
     'apps.deployments.tasks._post_deploy_monitor': {'queue': 'deploy'},
@@ -438,6 +438,19 @@ app.conf.beat_schedule = {
         'task': 'apps.core.tasks.traffic.resolve_traffic_geolocations',
         'schedule': 30.0,
         'options': {'expires': 30.0, 'queue': 'fast'},
+    },
+    # ── Addon Tasks ──────────────────────────────────────────────────────────
+    # Health-check all active addons every 5 minutes and dispatch alerts
+    'addon-health-check-all-every-5m': {
+        'task': 'apps.addons.tasks.addon_health_check_all',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Weekly VACUUM ANALYZE on all Postgres addons (Sunday 03:15 UTC)
+    'addon-auto-vacuum-weekly': {
+        'task': 'apps.addons.tasks.addon_auto_vacuum',
+        'schedule': crontab(minute=15, hour=3, day_of_week=0),
+        'options': {'expires': 86400.0},
     },
 }
 

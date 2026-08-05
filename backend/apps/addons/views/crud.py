@@ -24,6 +24,24 @@ from apps.deployments.models import Service
 logger = logging.getLogger(__name__)
 
 
+def _guard_delay(task_func, *args, **kwargs):
+    """Queue a Celery task, returning (ok, task_id).
+
+    If the broker is unreachable the task is NOT queued. Callers must return
+    a 503-style response instead of crashing with an unhandled 500.
+    """
+    try:
+        task = task_func.delay(*args, **kwargs)
+        return True, getattr(task, 'id', None)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.error(
+            "Failed to queue Celery task %s",
+            getattr(task_func, 'name', repr(task_func)),
+            exc_info=True,
+        )
+        return False, None
+
+
 class _ClosingFileResponse(FileResponse):
     """FileResponse that explicitly closes its underlying file when closed.
 
@@ -121,7 +139,12 @@ class AddonViewSet(viewsets.ModelViewSet):
         # Trigger async provisioning via Celery (uses Docker-native
         # provisioner)
         from ..tasks.crud import provision_addon_task
-        provision_addon_task.delay(addon_id=str(addon.id))
+        ok, _ = _guard_delay(provision_addon_task, addon_id=str(addon.id))
+        if not ok:
+            raise serializers.ValidationError(
+                "Addon created, but provisioning could not be queued. "
+                "Use 'reprovision' to retry."
+            )
 
 
     def destroy(self, request, *args, **kwargs):
@@ -145,11 +168,19 @@ class AddonViewSet(viewsets.ModelViewSet):
         instance.status = Addon.Status.DELETION_PENDING
         instance.save(update_fields=['status'])
 
-        delete_addon_task.delay(str(instance.id))
+        ok, _ = _guard_delay(delete_addon_task, str(instance.id))
+        if not ok:
+            instance.status = Addon.Status.DELETION_FAILED
+            instance.deletion_error = "Broker unavailable; deletion could not be queued"
+            instance.save(update_fields=['status', 'deletion_error'])
+            raise serializers.ValidationError(
+                "Deletion could not be queued. Retry using 'retry-delete'."
+            )
 
     @action(detail=True, methods=['post'], url_path='retry-delete')
     def retry_delete(self, request, pk=None):
         instance = self.get_object()
+        assert_can_delete(self.request.user, instance.service)
         from ..models import Addon
         if instance.status not in [Addon.Status.DELETION_FAILED, Addon.Status.DELETION_PENDING]:
             return Response({"error": "Addon is not in a failed or pending deletion state."}, status=status.HTTP_400_BAD_REQUEST)
@@ -157,7 +188,15 @@ class AddonViewSet(viewsets.ModelViewSet):
         instance.status = Addon.Status.DELETION_PENDING
         instance.save(update_fields=['status'])
         from ..tasks.crud import delete_addon_task
-        delete_addon_task.delay(str(instance.id))
+        ok, _ = _guard_delay(delete_addon_task, str(instance.id))
+        if not ok:
+            instance.status = Addon.Status.DELETION_FAILED
+            instance.deletion_error = "Broker unavailable; deletion could not be queued"
+            instance.save(update_fields=['status', 'deletion_error'])
+            return Response(
+                {"error": "Deletion could not be queued. Try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response({"message": "Retry cleanup initiated."}, status=status.HTTP_202_ACCEPTED)
 
@@ -171,7 +210,12 @@ class AddonViewSet(viewsets.ModelViewSet):
         # If public_domain changed, re-provision to update proxy labels
         if 'public_domain' in serializer.validated_data:
             from ..tasks.crud import provision_addon_task
-            provision_addon_task.delay(str(addon.id))
+            ok, _ = _guard_delay(provision_addon_task, str(addon.id))
+            if not ok:
+                raise serializers.ValidationError(
+                    "Domain saved, but re-provisioning could not be queued. "
+                    "Use 'reprovision' to retry."
+                )
 
     @action(detail=True, methods=['post'])
     def expose(self, request, pk=None):
@@ -190,7 +234,12 @@ class AddonViewSet(viewsets.ModelViewSet):
         addon.save(update_fields=['public_domain'])
 
         from ..tasks.crud import provision_addon_task
-        provision_addon_task.delay(str(addon.id))
+        ok, _ = _guard_delay(provision_addon_task, str(addon.id))
+        if not ok:
+            return Response(
+                {"error": "Domain saved, but provisioning could not be queued. Use 'reprovision' to retry."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response({'public_domain': generated_domain})
 
@@ -200,7 +249,12 @@ class AddonViewSet(viewsets.ModelViewSet):
         addon = self.get_object()
         assert_can_write(self.request.user, addon.service, action='reprovision addon')
         from ..tasks.crud import provision_addon_task
-        provision_addon_task.delay(str(addon.id))
+        ok, _ = _guard_delay(provision_addon_task, str(addon.id))
+        if not ok:
+            return Response(
+                {"error": "Re-provisioning could not be queued. Try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         return Response({'status': 'reprovision_started'})
 
     @action(detail=True, methods=['post'])
@@ -209,7 +263,12 @@ class AddonViewSet(viewsets.ModelViewSet):
         addon = self.get_object()
         assert_can_delete(self.request.user, addon.service)
         from ..tasks.crud import deprovision_addon_task
-        deprovision_addon_task.delay(addon_id=str(addon.id))
+        ok, _ = _guard_delay(deprovision_addon_task, addon_id=str(addon.id))
+        if not ok:
+            return Response(
+                {"error": "Deprovisioning could not be queued. Try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         return Response({'status': 'deprovisioning'},
                         status=status.HTTP_202_ACCEPTED)
 
@@ -312,14 +371,21 @@ class AddonViewSet(viewsets.ModelViewSet):
     def backup(self, request, pk=None):
         """Trigger a backup for this addon."""
         addon = self.get_object()
+        assert_can_write(self.request.user, addon.service, action='backup addon')
         from ..tasks.crud import backup_addon_task
-        task = backup_addon_task.delay(addon_id=str(addon.id))
-        return Response({'status': 'backup_started', 'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
+        ok, task_id = _guard_delay(backup_addon_task, addon_id=str(addon.id))
+        if not ok:
+            return Response(
+                {"error": "Backup could not be queued. Try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response({'status': 'backup_started', 'task_id': task_id}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         """Restore a backup to this addon."""
         addon = self.get_object()
+        assert_can_write(self.request.user, addon.service, action='restore addon')
         backup_id = request.data.get('backup_id')
         if not backup_id:
             return Response({'error': 'backup_id required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -330,8 +396,13 @@ class AddonViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Backup not found for this addon'}, status=status.HTTP_404_NOT_FOUND)
 
         from ..tasks.crud import restore_addon_task
-        task = restore_addon_task.delay(backup_id=backup_id)
-        return Response({'status': 'restore_started', 'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
+        ok, task_id = _guard_delay(restore_addon_task, backup_id=backup_id)
+        if not ok:
+            return Response(
+                {"error": "Restore could not be queued. Try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response({'status': 'restore_started', 'task_id': task_id}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['get'])
     def backups(self, request, pk=None):
@@ -379,6 +450,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def toggle_bucket_public(self, request, pk=None):
         """Toggle MinIO bucket public read access policy."""
         addon = self.get_object()
+        assert_can_write(self.request.user, addon.service, action='toggle bucket access')
 
         if addon.addon_type != 'MINIO':
             return Response({'error': 'Only MinIO addons support public bucket toggling.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -386,8 +458,11 @@ class AddonViewSet(viewsets.ModelViewSet):
         from apps.cloud.docker_client import get_docker_client
         is_public = request.data.get('is_public', False)
 
-        # The container name for an addon is its name
-        container_name = addon.name
+        # The container is always named smsly-addon-minio-<id>; the addon
+        # ``name`` is only a network alias. Try the canonical name first,
+        # then fall back to scanning for the addon UUID in container names
+        # (mirrors toggle_bucket_public_api's UUID discovery).
+        container_name = f"smsly-addon-minio-{addon.id}"
         bucket_name = "default-bucket"
 
         policy = "public" if is_public else "none"
@@ -395,11 +470,17 @@ class AddonViewSet(viewsets.ModelViewSet):
         try:
             client = get_docker_client()
             # Robust container lookup (handles platform/compose prefixes)
+            container = None
             try:
                 container = client.containers.get(container_name)
             except Exception:
-                # Fallback: search for containers containing the addon name
-                possible = client.containers.list(filters={"name": container_name})
+                addon_uuid = str(addon.id)
+                possible = [
+                    c for c in client.containers.list()
+                    if addon_uuid.lower() in c.name.lower()
+                ]
+                if not possible:
+                    possible = client.containers.list(filters={"name": container_name})
                 if possible:
                     container = possible[0]
                 else:
@@ -465,6 +546,21 @@ class AddonViewSet(viewsets.ModelViewSet):
 from rest_framework.decorators import api_view, permission_classes
 
 
+def _redact_connection_url(url: str) -> str:
+    """Mask the password component of a connection URL, keeping the key string-typed."""
+    if not url:
+        return ''
+    try:
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(url)
+        if parsed.password:
+            masked_netloc = parsed.netloc.replace(f":{parsed.password}@", ':*****@')
+            return urlunparse(parsed._replace(netloc=masked_netloc))
+    except Exception:
+        pass
+    return url
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def service_addons_unified(request, service_id) -> Response:
@@ -493,7 +589,8 @@ def service_addons_unified(request, service_id) -> Response:
             'name': addon.name,
             'addon_type': addon.addon_type,
             'status': addon.status,
-            'connection_url': addon.connection_url or '',
+            # Redacted: never leak DB credentials in a bulk list endpoint.
+            'connection_url': _redact_connection_url(addon.connection_url or ''),
             'public_domain': addon.public_domain or '',
             'created_at': addon.created_at.isoformat() if hasattr(addon, 'created_at') and addon.created_at else None,
         })
@@ -512,7 +609,7 @@ def service_addons_unified(request, service_id) -> Response:
                 'addon_type': f"BUNDLE_{bundle.name.upper()}",
                 'status': comp.status,
                 'source_type': comp.source_type,
-                'connection_url': comp.connection_url or '',
+                'connection_url': _redact_connection_url(comp.connection_url or ''),
                 'image': comp.image,
                 'repo': comp.repo,
                 'bundle_id': str(bundle.id),
@@ -559,7 +656,6 @@ def toggle_bucket_public_api(request, pk) -> Response:
         # or just reimplementing the core logic here for absolute safety
         from apps.cloud.docker_client import get_docker_client
         is_public = request.data.get('is_public', False)
-        container_name = addon.name
         bucket_name = "default-bucket"
         policy = "public" if is_public else "none"
 
@@ -567,27 +663,26 @@ def toggle_bucket_public_api(request, pk) -> Response:
         container = None
         addon_uuid = str(addon.id)
 
-        # ── UUID DISCOVERY: Search for the Addon ID in the container names ──
-        all_containers = client.containers.list()
-        if settings.DEBUG:
-            logger.info("Scanning %s containers for ID: %s", len(all_containers), addon_uuid)
-
-        for c in all_containers:
-            # Match by UUID (case-insensitive substring)
-            if addon_uuid.lower() in c.name.lower():
-                container = c
-            if settings.DEBUG:
-                logger.info("Found match by UUID in name: %s", c.name)
-                break
+        # Canonical container name first (matches the provisioner naming
+        # convention), then a UUID scan as a fallback. `addon.name` is only a
+        # network alias — never a container name.
+        try:
+            container = client.containers.get(f"smsly-addon-minio-{addon_uuid}")
+        except Exception:
+            container = None
 
         if not container:
-            # Fallback to name scan if UUID fails (legacy or different prefix)
-            container_name = addon.name
+            # ── UUID DISCOVERY: Search for the Addon ID in the container names ──
+            all_containers = client.containers.list()
+            if settings.DEBUG:
+                logger.info("Scanning %s containers for ID: %s", len(all_containers), addon_uuid)
+
             for c in all_containers:
-                if container_name.lower() in c.name.lower():
+                # Match by UUID (case-insensitive substring)
+                if addon_uuid.lower() in c.name.lower():
                     container = c
-                if settings.DEBUG:
-                    logger.info("Found match by legacy name fallback: %s", c.name)
+                    if settings.DEBUG:
+                        logger.info("Found match by UUID in name: %s", c.name)
                     break
 
         if not container:

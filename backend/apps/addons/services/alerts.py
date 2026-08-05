@@ -3,10 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 ADDON_ALERT_RULES = [
-    {'metric': 'connection_count', 'threshold': 90, 'percent_of_max': True,
-     'severity': 'warning', 'message': 'Approaching max connections'},
-    {'metric': 'disk_usage_percent', 'threshold': 85,
-     'severity': 'critical', 'message': 'Disk usage critically high'},
+    {'metric': 'connection_count', 'threshold': 90, 'severity': 'warning',
+     'message': 'Approaching max connections'},
     {'metric': 'memory_usage_percent', 'threshold': 90,
      'severity': 'warning', 'message': 'Memory pressure detected'},
 ]

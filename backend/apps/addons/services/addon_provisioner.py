@@ -73,50 +73,50 @@ class AddonProvisioner:
     }
 
     GENERIC_ADDONS_CONFIG = {
-        'MARIADB': {"image": "mariadb:10.11", "port": 3306, "env_url": "MARIADB_URL", "auth": True, "user_env": "MARIADB_USER", "pass_env": "MARIADB_PASSWORD", "db_env": "MARIADB_DATABASE", "root_pass_env": "MARIADB_ROOT_PASSWORD"},
-        'COCKROACHDB': {"image": "cockroachdb/cockroach:v23.1.10", "port": 26257, "dashboard_port": 8080, "env_url": "COCKROACHDB_URL", "command": ["start-single-node", "--insecure"], "auth": False},
-        'TIMESCALEDB': {"image": "timescale/timescaledb:latest-pg15", "port": 5432, "env_url": "DATABASE_URL", "auth": True, "user_env": "POSTGRES_USER", "pass_env": "POSTGRES_PASSWORD", "db_env": "POSTGRES_DB"},
-        'PERCONA': {"image": "percona:8.0", "port": 3306, "env_url": "MYSQL_URL", "auth": True, "user_env": "MYSQL_USER", "pass_env": "MYSQL_PASSWORD", "db_env": "MYSQL_DATABASE", "root_pass_env": "MYSQL_ROOT_PASSWORD"},
-        'VITESS': {"image": "vitess/lite:latest", "port": 15306, "dashboard_port": 15000, "env_url": "VITESS_URL", "auth": False},
-        'COUCHDB': {"image": "couchdb:3.3.3", "port": 5984, "env_url": "COUCHDB_URL", "auth": True, "user_env": "COUCHDB_USER", "pass_env": "COUCHDB_PASSWORD"},
+        'MARIADB': {"image": "mariadb:10.11", "port": 3306, "env_url": "MARIADB_URL", "auth": True, "user_env": "MARIADB_USER", "pass_env": "MARIADB_PASSWORD", "db_env": "MARIADB_DATABASE", "root_pass_env": "MARIADB_ROOT_PASSWORD", "data_dir": "/var/lib/mysql"},
+        'COCKROACHDB': {"image": "cockroachdb/cockroach:v23.1.10", "port": 26257, "dashboard_port": 8080, "env_url": "COCKROACHDB_URL", "command": ["start-single-node", "--insecure"], "auth": False, "data_dir": "/cockroach/cockroach-data"},
+        'TIMESCALEDB': {"image": "timescale/timescaledb:latest-pg15", "port": 5432, "env_url": "DATABASE_URL", "auth": True, "user_env": "POSTGRES_USER", "pass_env": "POSTGRES_PASSWORD", "db_env": "POSTGRES_DB", "data_dir": "/var/lib/postgresql/data"},
+        'PERCONA': {"image": "percona:8.0", "port": 3306, "env_url": "MYSQL_URL", "auth": True, "user_env": "MYSQL_USER", "pass_env": "MYSQL_PASSWORD", "db_env": "MYSQL_DATABASE", "root_pass_env": "MYSQL_ROOT_PASSWORD", "data_dir": "/var/lib/mysql"},
+        'VITESS': {"image": "vitess/lite:latest", "port": 15306, "dashboard_port": 15000, "env_url": "VITESS_URL", "auth": False, "data_dir": "/vt/vtdataroot"},
+        'COUCHDB': {"image": "couchdb:3.3.3", "port": 5984, "env_url": "COUCHDB_URL", "auth": True, "user_env": "COUCHDB_USER", "pass_env": "COUCHDB_PASSWORD", "data_dir": "/opt/couchdb/data"},
         'RETHINKDB': {"image": "rethinkdb:2.4", "port": 28015, "dashboard_port": 8080, "env_url": "RETHINKDB_URL", "auth": False},
-        'ARANGODB': {"image": "arangodb:3.11", "port": 8529, "env_url": "ARANGODB_URL", "auth": True, "root_pass_env": "ARANGO_ROOT_PASSWORD"},
+        'ARANGODB': {"image": "arangodb:3.11", "port": 8529, "env_url": "ARANGODB_URL", "auth": True, "root_pass_env": "ARANGO_ROOT_PASSWORD", "data_dir": "/var/lib/arangodb3"},
         'FERRETDB': {"image": "ghcr.io/ferretdb/ferretdb:latest", "port": 27017, "env_url": "MONGODB_URI", "auth": False},
-        'SURREALDB': {"image": "surrealdb/surrealdb:latest", "port": 8000, "env_url": "SURREALDB_URL", "command": ["start", "--user", "root", "--pass", "{password}"], "auth": True},
+        'SURREALDB': {"image": "surrealdb/surrealdb:latest", "port": 8000, "env_url": "SURREALDB_URL", "command": ["start"], "auth": True, "env": {"SURREAL_USER": "root", "SURREAL_PASS": "{password}"}},
         'MEMCACHED': {"image": "memcached:1.6-alpine", "port": 11211, "env_url": "MEMCACHED_URL", "auth": False},
         'KEYDB': {"image": "eqalpha/keydb:latest", "port": 6379, "env_url": "KEYDB_URL", "auth": True, "command": ["keydb-server", "--requirepass", "{password}"]},
         'VALKEY': {"image": "valkey/valkey:7.2", "port": 6379, "env_url": "VALKEY_URL", "auth": True, "command": ["valkey-server", "--requirepass", "{password}"]},
         'DRAGONFLYDB': {"image": "docker.dragonflydb.io/dragonflydb/dragonfly:latest", "port": 6379, "env_url": "DRAGONFLY_URL", "auth": True, "command": ["dragonfly", "--requirepass", "{password}"]},
-        'ETCD': {"image": "bitnami/etcd:3.5", "port": 2379, "env_url": "ETCD_URL", "auth": False, "env": {"ALLOW_NONE_AUTHENTICATION": "yes"}},
-        'CLICKHOUSE': {"image": "clickhouse/clickhouse-server:23.8", "port": 8123, "env_url": "CLICKHOUSE_URL", "auth": True, "user_env": "CLICKHOUSE_USER", "pass_env": "CLICKHOUSE_PASSWORD"},
-        'CASSANDRA': {"image": "cassandra:4.1", "port": 9042, "env_url": "CASSANDRA_URL", "auth": False},
-        'SCYLLADB': {"image": "scylladb/scylla:5.2.0", "port": 9042, "env_url": "SCYLLADB_URL", "auth": False},
+        'ETCD': {"image": "bitnami/etcd:3.5", "port": 2379, "env_url": "ETCD_URL", "auth": False, "env": {"ALLOW_NONE_AUTHENTICATION": "yes"}, "data_dir": "/bitnami/etcd/data"},
+        'CLICKHOUSE': {"image": "clickhouse/clickhouse-server:23.8", "port": 8123, "env_url": "CLICKHOUSE_URL", "auth": True, "user_env": "CLICKHOUSE_USER", "pass_env": "CLICKHOUSE_PASSWORD", "data_dir": "/var/lib/clickhouse"},
+        'CASSANDRA': {"image": "cassandra:4.1", "port": 9042, "env_url": "CASSANDRA_URL", "auth": False, "data_dir": "/var/lib/cassandra"},
+        'SCYLLADB': {"image": "scylladb/scylla:5.2.0", "port": 9042, "env_url": "SCYLLADB_URL", "auth": False, "data_dir": "/var/lib/scylla"},
         'NEO4J': {"image": "neo4j:5.12.0", "port": 7687, "dashboard_port": 7474, "env_url": "NEO4J_URL", "auth": True, "env": {"NEO4J_AUTH": "neo4j/{password}"}},
-        'DGRAPH': {"image": "dgraph/standalone:v23.0.0", "port": 8080, "env_url": "DGRAPH_URL", "auth": False},
-        'WEAVIATE': {"image": "semitechnologies/weaviate:1.21.2", "port": 8080, "env_url": "WEAVIATE_URL", "auth": False, "env": {"AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true", "PERSISTENCE_DATA_PATH": "/var/lib/weaviate"}},
-        'MILVUS': {"image": "milvusdb/milvus:v2.3.1", "port": 19530, "env_url": "MILVUS_URL", "auth": False, "command": ["milvus", "run", "standalone"]},
+        'DGRAPH': {"image": "dgraph/standalone:v23.0.0", "port": 8080, "env_url": "DGRAPH_URL", "auth": False, "data_dir": "/dgraph"},
+        'WEAVIATE': {"image": "semitechnologies/weaviate:1.21.2", "port": 8080, "env_url": "WEAVIATE_URL", "auth": False, "env": {"AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true", "PERSISTENCE_DATA_PATH": "/var/lib/weaviate"}, "data_dir": "/var/lib/weaviate"},
+        'MILVUS': {"image": "milvusdb/milvus:v2.3.1", "port": 19530, "env_url": "MILVUS_URL", "auth": False, "command": ["milvus", "run", "standalone"], "data_dir": "/var/lib/milvus"},
         'CHROMADB': {"image": "chromadb/chroma:0.4.14", "port": 8000, "env_url": "CHROMADB_URL", "auth": False},
-        'OPENSEARCH': {"image": "opensearchproject/opensearch:2.11.0", "port": 9200, "env_url": "OPENSEARCH_URL", "auth": True, "env": {"discovery.type": "single-node", "OPENSEARCH_INITIAL_ADMIN_PASSWORD": "{password}"}},
-        'MEILISEARCH': {"image": "getmeili/meilisearch:v1.4.0", "port": 7700, "env_url": "MEILISEARCH_URL", "auth": True, "pass_env": "MEILI_MASTER_KEY"},
-        'TYPESENSE': {"image": "typesense/typesense:0.25.1", "port": 8108, "env_url": "TYPESENSE_URL", "auth": True, "pass_env": "TYPESENSE_API_KEY", "command": ["--data-dir", "/data", "--api-key", "{password}"]},
-        'SOLR': {"image": "solr:9.3", "port": 8983, "env_url": "SOLR_URL", "auth": False},
-        'KAFKA': {"image": "bitnami/kafka:3.5.1", "port": 9092, "env_url": "KAFKA_URL", "auth": False, "health_timeout": 120, "ready_timeout": 120, "ready_cmd": "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1", "env": {"KAFKA_ENABLE_KRAFT": "yes", "KAFKA_CFG_PROCESS_ROLES": "broker,controller", "KAFKA_CFG_CONTROLLER_LISTENER_NAMES": "CONTROLLER", "KAFKA_CFG_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093", "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT", "KAFKA_CFG_ADVERTISED_LISTENERS": "PLAINTEXT://{hostname}:9092", "KAFKA_CFG_CONTROLLER_QUORUM_VOTERS": "1@{hostname}:9093", "KAFKA_CFG_INTER_BROKER_LISTENER_NAME": "PLAINTEXT", "ALLOW_PLAINTEXT_LISTENER": "yes", "KAFKA_KRAFT_CLUSTER_ID": "{cluster_id}", "KAFKA_BROKER_ID": "1"}},
+        'OPENSEARCH': {"image": "opensearchproject/opensearch:2.11.0", "port": 9200, "env_url": "OPENSEARCH_URL", "auth": True, "env": {"discovery.type": "single-node", "OPENSEARCH_INITIAL_ADMIN_PASSWORD": "{password}"}, "data_dir": "/usr/share/opensearch/data"},
+        'MEILISEARCH': {"image": "getmeili/meilisearch:v1.4.0", "port": 7700, "env_url": "MEILISEARCH_URL", "auth": True, "pass_env": "MEILI_MASTER_KEY", "data_dir": "/meili_data"},
+        'TYPESENSE': {"image": "typesense/typesense:0.25.1", "port": 8108, "env_url": "TYPESENSE_URL", "auth": True, "pass_env": "TYPESENSE_API_KEY", "command": ["--data-dir", "/data"]},
+        'SOLR': {"image": "solr:9.3", "port": 8983, "env_url": "SOLR_URL", "auth": False, "data_dir": "/var/solr"},
+        'KAFKA': {"image": "bitnami/kafka:3.5.1", "port": 9092, "env_url": "KAFKA_URL", "auth": False, "health_timeout": 120, "ready_timeout": 120, "ready_cmd": "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1", "env": {"KAFKA_ENABLE_KRAFT": "yes", "KAFKA_CFG_PROCESS_ROLES": "broker,controller", "KAFKA_CFG_CONTROLLER_LISTENER_NAMES": "CONTROLLER", "KAFKA_CFG_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093", "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT", "KAFKA_CFG_ADVERTISED_LISTENERS": "PLAINTEXT://{hostname}:9092", "KAFKA_CFG_CONTROLLER_QUORUM_VOTERS": "1@{hostname}:9093", "KAFKA_CFG_INTER_BROKER_LISTENER_NAME": "PLAINTEXT", "ALLOW_PLAINTEXT_LISTENER": "yes", "KAFKA_KRAFT_CLUSTER_ID": "{cluster_id}", "KAFKA_BROKER_ID": "1"}, "data_dir": "/bitnami/kafka"},
         'NATS': {"image": "nats:2.9.22-alpine", "port": 4222, "env_url": "NATS_URL", "auth": False},
-        'REDPANDA': {"image": "redpandadata/redpanda:v23.2.14", "port": 9092, "env_url": "REDPANDA_URL", "auth": False, "command": ["redpanda", "start", "--overprovisioned", "--smp", "1", "--memory", "1G", "--reserve-memory", "0M", "--node-id", "0", "--check=false"]},
-        'PULSAR': {"image": "apachepulsar/pulsar:3.1.0", "port": 6650, "env_url": "PULSAR_URL", "auth": False, "command": ["bin/pulsar", "standalone"]},
-        'ACTIVEMQ': {"image": "apache/activemq-classic:5.18.3", "port": 61616, "dashboard_port": 8161, "env_url": "ACTIVEMQ_URL", "auth": True, "env": {"ACTIVEMQ_ADMIN_LOGIN": "admin", "ACTIVEMQ_ADMIN_PASSWORD": "{password}"}},
+        'REDPANDA': {"image": "redpandadata/redpanda:v23.2.14", "port": 9092, "env_url": "REDPANDA_URL", "auth": False, "command": ["redpanda", "start", "--overprovisioned", "--smp", "1", "--memory", "1G", "--reserve-memory", "0M", "--node-id", "0", "--check=false"], "data_dir": "/var/lib/redpanda/data"},
+        'PULSAR': {"image": "apachepulsar/pulsar:3.1.0", "port": 6650, "env_url": "PULSAR_URL", "auth": False, "command": ["bin/pulsar", "standalone"], "data_dir": "/pulsar/data"},
+        'ACTIVEMQ': {"image": "apache/activemq-classic:5.18.3", "port": 61616, "dashboard_port": 8161, "env_url": "ACTIVEMQ_URL", "auth": True, "env": {"ACTIVEMQ_ADMIN_LOGIN": "admin", "ACTIVEMQ_ADMIN_PASSWORD": "{password}"}, "data_dir": "/opt/apache-activemq/data"},
         'SEAWEEDFS': {"image": "chrislusf/seaweedfs:3.59", "port": 8888, "env_url": "SEAWEEDFS_URL", "auth": False, "command": ["server", "-dir=/data", "-s3"]},
-        'INFLUXDB': {"image": "influxdb:2.7-alpine", "port": 8086, "env_url": "INFLUXDB_URL", "auth": True, "env": {"DOCKER_INFLUXDB_INIT_MODE": "setup", "DOCKER_INFLUXDB_INIT_USERNAME": "admin", "DOCKER_INFLUXDB_INIT_PASSWORD": "{password}", "DOCKER_INFLUXDB_INIT_ORG": "myorg", "DOCKER_INFLUXDB_INIT_BUCKET": "mybucket"}},
-        'QUESTDB': {"image": "questdb/questdb:7.3.1", "port": 9000, "env_url": "QUESTDB_URL", "auth": False},
-        'VICTORIAMETRICS': {"image": "victoriametrics/victoria-metrics:v1.93.4", "port": 8428, "env_url": "VICTORIAMETRICS_URL", "auth": False},
-        'PROMETHEUS': {"image": "prom/prometheus:v2.47.0", "port": 9090, "env_url": "PROMETHEUS_URL", "auth": False},
-        'GRAFANA': {"image": "grafana/grafana:10.1.5", "port": 3000, "env_url": "GRAFANA_URL", "auth": True, "env": {"GF_SECURITY_ADMIN_PASSWORD": "{password}"}},
-        'JAEGER': {"image": "jaegertracing/all-in-one:1.49", "port": 16686, "env_url": "JAEGER_URL", "auth": False},
-        'N8N': {"image": "n8nio/n8n:1.8.0", "port": 5678, "env_url": "N8N_URL", "auth": True, "env": {"N8N_BASIC_AUTH_ACTIVE": "true", "N8N_BASIC_AUTH_USER": "admin", "N8N_BASIC_AUTH_PASSWORD": "{password}"}},
+        'INFLUXDB': {"image": "influxdb:2.7-alpine", "port": 8086, "env_url": "INFLUXDB_URL", "auth": True, "env": {"DOCKER_INFLUXDB_INIT_MODE": "setup", "DOCKER_INFLUXDB_INIT_USERNAME": "admin", "DOCKER_INFLUXDB_INIT_PASSWORD": "{password}", "DOCKER_INFLUXDB_INIT_ORG": "myorg", "DOCKER_INFLUXDB_INIT_BUCKET": "mybucket"}, "data_dir": "/var/lib/influxdb2"},
+        'QUESTDB': {"image": "questdb/questdb:7.3.1", "port": 9000, "env_url": "QUESTDB_URL", "auth": False, "data_dir": "/var/lib/questdb"},
+        'VICTORIAMETRICS': {"image": "victoriametrics/victoria-metrics:v1.93.4", "port": 8428, "env_url": "VICTORIAMETRICS_URL", "auth": False, "data_dir": "/victoria-metrics-data"},
+        'PROMETHEUS': {"image": "prom/prometheus:v2.47.0", "port": 9090, "env_url": "PROMETHEUS_URL", "auth": False, "data_dir": "/prometheus"},
+        'GRAFANA': {"image": "grafana/grafana:10.1.5", "port": 3000, "env_url": "GRAFANA_URL", "auth": True, "env": {"GF_SECURITY_ADMIN_PASSWORD": "{password}"}, "data_dir": "/var/lib/grafana"},
+        'JAEGER': {"image": "jaegertracing/all-in-one:1.49", "port": 16686, "env_url": "JAEGER_URL", "auth": False, "data_dir": "/badger"},
+        'N8N': {"image": "n8nio/n8n:1.8.0", "port": 5678, "env_url": "N8N_URL", "auth": True, "env": {"N8N_BASIC_AUTH_ACTIVE": "true", "N8N_BASIC_AUTH_USER": "admin", "N8N_BASIC_AUTH_PASSWORD": "{password}"}, "data_dir": "/home/node/.n8n"},
         'TEMPORAL': {"image": "temporalio/auto-setup:1.22.1", "port": 7233, "dashboard_port": 8080, "env_url": "TEMPORAL_URL", "auth": False},
         'VAULT': {"image": "hashicorp/vault:1.15", "port": 8200, "env_url": "VAULT_URL", "auth": True, "env": {"VAULT_DEV_ROOT_TOKEN_ID": "{password}", "VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200"}},
-        'CONSUL': {"image": "hashicorp/consul:1.16", "port": 8500, "env_url": "CONSUL_URL", "auth": False, "command": ["agent", "-dev", "-client", "0.0.0.0"]},
-        'KEYCLOAK': {"image": "quay.io/keycloak/keycloak:22.0.4", "port": 8080, "env_url": "KEYCLOAK_URL", "auth": True, "env": {"KEYCLOAK_ADMIN": "admin", "KEYCLOAK_ADMIN_PASSWORD": "{password}"}, "command": ["start-dev"]},
+        'CONSUL': {"image": "hashicorp/consul:1.16", "port": 8500, "env_url": "CONSUL_URL", "auth": False, "command": ["agent", "-dev", "-client", "0.0.0.0"], "data_dir": "/consul/data"},
+        'KEYCLOAK': {"image": "quay.io/keycloak/keycloak:22.0.4", "port": 8080, "env_url": "KEYCLOAK_URL", "auth": True, "env": {"KEYCLOAK_ADMIN": "admin", "KEYCLOAK_ADMIN_PASSWORD": "{password}"}, "command": ["start-dev"], "data_dir": "/opt/keycloak/data"},
     }
 
     def __init__(self):
@@ -172,14 +172,16 @@ class AddonProvisioner:
             inspect_proc = subprocess.run(
                 ['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}', container_name],
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=30,
             )
 
             # Get the network ID of the proxy network
             network_id_proc = subprocess.run(
                 ['docker', 'network', 'inspect', '-f', '{{.Id}}', self.proxy_network_name],
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=30,
             )
 
             if network_id_proc.returncode == 0:
@@ -189,7 +191,8 @@ class AddonProvisioner:
                         ['docker', 'network', 'connect', self.proxy_network_name, container_name],
                         capture_output=True,
                         text=True,
-                        check=False
+                        check=False,
+                        timeout=30,
                     )
                     if result.returncode != 0:
                         logger.error(
@@ -228,7 +231,7 @@ class AddonProvisioner:
             # Verify the network actually exists on this Docker daemon
             inspect = subprocess.run(
                 ['docker', 'network', 'inspect', network_name],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=30,
             )
             if inspect.returncode != 0:
                 return
@@ -236,16 +239,16 @@ class AddonProvisioner:
             # Check if already connected
             ct_inspect = subprocess.run(
                 ['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}', container_name],
-                capture_output=True, text=True,
+                capture_output=True, text=True, timeout=30,
             )
             net_id = subprocess.run(
                 ['docker', 'network', 'inspect', '-f', '{{.Id}}', network_name],
-                capture_output=True, text=True,
+                capture_output=True, text=True, timeout=30,
             )
             if net_id.returncode == 0 and net_id.stdout.strip() not in ct_inspect.stdout:
                 result = subprocess.run(
                     ['docker', 'network', 'connect', '--alias', alias, network_name, container_name],
-                    capture_output=True, text=True, check=False,
+                    capture_output=True, text=True, check=False, timeout=30,
                 )
                 if result.returncode != 0:
                     raise RuntimeError(
@@ -272,6 +275,7 @@ class AddonProvisioner:
                 ['docker', 'inspect', '-f', '{{.Id}} {{.State.Running}}', container_name],
                 capture_output=True,
                 text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 return None, False
@@ -292,6 +296,7 @@ class AddonProvisioner:
                 ['docker', 'start', container_name],
                 capture_output=True,
                 text=True,
+                timeout=60,
             )
             return result.returncode == 0
         except Exception:
@@ -324,13 +329,15 @@ class AddonProvisioner:
             result = subprocess.run(
                 ['docker', 'network', 'inspect', self.network_name],
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=30,
             )
             if result.returncode != 0:
                 create_result = subprocess.run(
                     ['docker', 'network', 'create', self.network_name],
                     capture_output=True,
                     text=True,
+                    timeout=30,
                 )
                 if create_result.returncode != 0:
                     raise RuntimeError(
@@ -344,13 +351,15 @@ class AddonProvisioner:
                 proxy_result = subprocess.run(
                     ['docker', 'network', 'inspect', self.proxy_network_name],
                     capture_output=True,
-                    text=True
+                    text=True,
+                    timeout=30,
                 )
                 if proxy_result.returncode != 0:
                     proxy_create = subprocess.run(
                         ['docker', 'network', 'create', self.proxy_network_name],
                         capture_output=True,
                         text=True,
+                        timeout=30,
                     )
                     if proxy_create.returncode != 0:
                         logger.warning(
@@ -377,7 +386,8 @@ class AddonProvisioner:
                 ['docker', 'ps', '-q'],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=30,
             )
             container_ids = result.stdout.strip().split()
             if not container_ids:
@@ -387,7 +397,8 @@ class AddonProvisioner:
                 ['docker', 'inspect', '--format', '{{range $p, $conf := .HostConfig.PortBindings}}{{range $conf}}{{.HostPort}} {{end}}{{end}}', *container_ids],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=60,
             )
 
             occupied = set()
@@ -469,6 +480,7 @@ class AddonProvisioner:
 
         # If the container already exists, never "re-provision" (which would rotate passwords).
         existing_cid, is_running = self._container_status(container_name)
+        host_port_for_recreate: int | None = None
 
         if existing_cid:
             cid: str = existing_cid
@@ -478,7 +490,8 @@ class AddonProvisioner:
                     ['docker', 'inspect', '-f', '{{json .Config.Labels}}', container_name],
                     capture_output=True,
                     text=True,
-                    check=False
+                    check=False,
+                    timeout=30,
                 )
                 if inspect_proc.returncode == 0 and inspect_proc.stdout:
                     import json
@@ -492,9 +505,14 @@ class AddonProvisioner:
                     # Volumes, passwords, and data will persist.
                     if current_rule_val != expected_rule_val:
                         logger.info(f"Public domain changed for {container_name}. Recreating container to update Traefik labels.")
-                        subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False)
+                        # Preserve the published host port (lite-agent addons
+                        # expose their port on the master) so the recreated
+                        # container keeps the existing connection URL valid.
+                        recreated_host_port = self._get_published_host_port(container_name)
+                        subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False, timeout=60)
                         existing_cid = None
                         cid = ""
+                        host_port_for_recreate = recreated_host_port
             except Exception as e:
                 logger.warning(f"Failed to inspect labels for {container_name}: {e}")
 
@@ -521,7 +539,8 @@ class AddonProvisioner:
                     ['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.Aliases}}{{end}}', container_name],
                     capture_output=True,
                     text=True,
-                    check=False
+                    check=False,
+                    timeout=30,
                 )
 
                 # If the alias is not found in the output, attempt to attach it.
@@ -531,13 +550,15 @@ class AddonProvisioner:
                         subprocess.run(
                             ['docker', 'network', 'disconnect', self.network_name, container_name],
                             capture_output=True,
-                            check=False
+                            check=False,
+                            timeout=30,
                         )
                         connect_result = subprocess.run(
                             ['docker', 'network', 'connect', '--alias', parsed_hostname, self.network_name, container_name],
                             capture_output=True,
                             text=True,
-                            check=False
+                            check=False,
+                            timeout=30,
                         )
                         if connect_result.returncode == 0:
                             break
@@ -611,10 +632,18 @@ class AddonProvisioner:
                     return cid, f"amqp://{user}:{password}@{hostname}:{port}//"
 
                 if addon_type == 'REDIS':
+                    try:
+                        password = self._get_container_env(container_name, 'REDIS_PASSWORD')
+                    except Exception:
+                        password = ''
+                    if password:
+                        return cid, f"redis://:{password}@{hostname}:{port}/0"
+                    # Legacy containers baked the password into the command line.
                     result = subprocess.run(
                         ['docker', 'inspect', '-f', '{{json .Config.Cmd}}', container_name],
                         capture_output=True,
                         text=True,
+                        timeout=30,
                     )
                     if result.returncode == 0 and (result.stdout or '').strip():
                         import json
@@ -672,9 +701,9 @@ class AddonProvisioner:
             if generic_config:
                 if generic_config.get('auth') and not password:
                     raise ValueError(f"Existing connection_url is missing a password for {addon_type}; refusing to reprovision.")
-                container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), hostname, cast(dict, generic_config), username=username, db_name=db_name, public_domain=public_domain)
+                container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), hostname, cast(dict, generic_config), username=username, db_name=db_name, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'MINIO':
-                container_id, _ = self._provision_minio(container_name, password, cast(int, port), hostname, username=username, public_domain=public_domain)
+                container_id, _ = self._provision_minio(container_name, password, cast(int, port), hostname, username=username, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'POSTGRES':
                 container_id, _ = self._provision_postgres(
                     container_name,
@@ -684,19 +713,20 @@ class AddonProvisioner:
                     db_user=username or None,
                     db_name=db_name or None,
                     public_domain=public_domain,
+                    host_port=host_port_for_recreate,
                 )
             elif addon_type == 'REDIS':
-                container_id, _ = self._provision_redis(container_name, password, cast(int, port), hostname, public_domain=public_domain)
+                container_id, _ = self._provision_redis(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'MYSQL':
-                container_id, _ = self._provision_mysql(container_name, password, cast(int, port), hostname, public_domain=public_domain)
+                container_id, _ = self._provision_mysql(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'MONGODB':
-                container_id, _ = self._provision_mongodb(container_name, password, cast(int, port), hostname, public_domain=public_domain)
+                container_id, _ = self._provision_mongodb(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'QDRANT':
-                container_id, _ = self._provision_qdrant(container_name, cast(int, port), hostname, public_domain=public_domain)
+                container_id, _ = self._provision_qdrant(container_name, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'ELASTICSEARCH':
-                container_id, _ = self._provision_elasticsearch(container_name, cast(int, port), hostname, public_domain=public_domain)
+                container_id, _ = self._provision_elasticsearch(container_name, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'RABBITMQ':
-                container_id, _ = self._provision_rabbitmq(container_name, password, cast(int, port), hostname, public_domain=public_domain)
+                container_id, _ = self._provision_rabbitmq(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             else:
                 raise ValueError(f"Unsupported addon type: {addon_type}")
 
@@ -774,23 +804,42 @@ class AddonProvisioner:
             # For this fix, we'll force a re-provision with the host port.
             try:
                 logger.info(f"Exposing {addon_type} on Master host port {host_port} for Lite Agent")
-                subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True)
+                subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, timeout=60)
 
                 # We need to call the internal provisioner again with the port mapping.
                 # Since we don't want to refactor everything yet, we'll do a quick manual run.
                 # This is a bit hacky but effective for this specific architectural bridge.
                 if addon_type == 'POSTGRES':
-                    container_id, _ = self._provision_postgres(container_name, password, cast(int, port), alias_name, host_port=host_port)
+                    container_id, _ = self._provision_postgres(container_name, password, cast(int, port), alias_name, host_port=host_port, public_domain=public_domain)
                 elif addon_type == 'REDIS':
-                    container_id, _ = self._provision_redis(container_name, password, cast(int, port), alias_name, host_port=host_port)
+                    container_id, _ = self._provision_redis(container_name, password, cast(int, port), alias_name, host_port=host_port, public_domain=public_domain)
+                elif addon_type == 'MYSQL':
+                    container_id, _ = self._provision_mysql(container_name, password, cast(int, port), alias_name, host_port=host_port, public_domain=public_domain)
+                elif addon_type == 'MONGODB':
+                    container_id, _ = self._provision_mongodb(container_name, password, cast(int, port), alias_name, host_port=host_port, public_domain=public_domain)
+                elif addon_type == 'RABBITMQ':
+                    container_id, _ = self._provision_rabbitmq(container_name, password, cast(int, port), alias_name, host_port=host_port, public_domain=public_domain)
+                elif addon_type == 'MINIO':
+                    container_id, _ = self._provision_minio(container_name, password, cast(int, port), alias_name, host_port=host_port, public_domain=public_domain)
+                elif addon_type == 'QDRANT':
+                    container_id, _ = self._provision_qdrant(container_name, cast(int, port), alias_name, host_port=host_port, public_domain=public_domain)
+                elif addon_type == 'ELASTICSEARCH':
+                    container_id, _ = self._provision_elasticsearch(container_name, cast(int, port), alias_name, host_port=host_port, public_domain=public_domain)
+                elif generic_config:
+                    container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), alias_name, cast(dict, generic_config), host_port=host_port, public_domain=public_domain)
                 else:
-                    # Fallback for others
-                    container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), alias_name, cast(dict, generic_config), host_port=host_port)
+                    raise ValueError(f"Unsupported addon type for lite-agent exposure: {addon_type}")
 
                 # Update URL to use Master IP and Host Port
                 from urllib.parse import urlparse, urlunparse
                 new_parsed = urlparse(connection_url)
-                new_netloc = f"{new_parsed.username}:{new_parsed.password}@{master_ip}:{host_port}" if new_parsed.password else f"{new_parsed.username}@{master_ip}:{host_port}"
+                if new_parsed.password:
+                    userinfo = f"{new_parsed.username}:{new_parsed.password}@" if new_parsed.username else f":{new_parsed.password}@"
+                elif new_parsed.username:
+                    userinfo = f"{new_parsed.username}@"
+                else:
+                    userinfo = ''
+                new_netloc = f"{userinfo}{master_ip}:{host_port}"
                 connection_url = urlunparse(new_parsed._replace(netloc=new_netloc))
 
             except Exception as e:
@@ -872,6 +921,92 @@ class AddonProvisioner:
             '--pids-limit', '1024',
         ]
 
+        # Secrets go into a remote --env-file (uploaded via SFTP) instead of
+        # `-e KEY=val` so passwords never appear in the remote process list.
+        env_vars: dict[str, str] = {}
+        remote_temp_files: list[str] = []
+
+        ssh = SSHClient(
+            ip=server.host,
+            key_content=server.ssh_key,
+            password=server.ssh_password,
+            user=server.ssh_user,
+            port=server.ssh_port,
+            wg_address=getattr(server, "wg_address", None),
+        )
+        ssh.connect()
+
+        # Idempotency (mirrors local provision()): the persisted URL is the
+        # source of truth for credentials. Never rotate the password or
+        # recreate a running container — doing so on every deploy would break
+        # every running service still holding the old credentials.
+        existing_url = str(getattr(addon, 'connection_url', '') or '').strip()
+        if existing_url:
+            try:
+                from urllib.parse import urlparse as _urlparse
+                existing_pw = _urlparse(existing_url).password
+            except Exception:
+                existing_pw = None
+            if existing_pw:
+                password = existing_pw
+
+            _, _, inspect_code = ssh.exec_command(
+                "docker inspect -f '{{.State.Running}}' "
+                f"{shlex.quote(container_name)} 2>/dev/null",
+                timeout=30,
+                raise_on_error=False,
+            )
+            if inspect_code == 0:
+                logger.info(
+                    "Remote addon %s already running on %s; skipping recreate",
+                    container_name, server.host,
+                )
+                return (
+                    str(getattr(addon, 'coolify_uuid', '') or '') or container_name,
+                    existing_url,
+                )
+
+        def _attach_env_file() -> None:
+            if not env_vars:
+                return
+            env_file_local = self._write_env_file(env_vars)
+            remote_env_path = f"/tmp/smsly-addon-env-{uuid.uuid4().hex}.env"
+            try:
+                ssh.upload_file(env_file_local, remote_env_path)
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(env_file_local)
+            remote_temp_files.append(remote_env_path)
+            cmd_parts.extend(['--env-file', remote_env_path])
+
+        def _write_remote_file(content: str, persist: bool = False,
+                               stable_name: str | None = None) -> str:
+            import tempfile as _tmp
+            fd, local_path = _tmp.mkstemp(prefix='smsly-addon-remote-', suffix='.conf', text=True)
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    f.write(content)
+                if persist:
+                    # Mounted into the container, so it must survive until the
+                    # container is removed (restarts re-read the bind mount).
+                    # Cleaned up in deprovision_remote.
+                    remote_path = f"/var/lib/smsly/addon-envs/{stable_name or uuid.uuid4().hex}.conf"
+                    ssh.exec_command(
+                        "mkdir -p /var/lib/smsly/addon-envs && chmod 700 /var/lib/smsly/addon-envs",
+                        timeout=15,
+                        raise_on_error=False,
+                    )
+                    ssh.upload_file(local_path, remote_path)
+                    ssh.exec_command(f"chmod 600 {shlex.quote(remote_path)}", timeout=10, raise_on_error=False)
+                    return remote_path
+                remote_path = f"/tmp/smsly-addon-{uuid.uuid4().hex}.conf"
+                ssh.upload_file(local_path, remote_path)
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(local_path)
+            remote_temp_files.append(remote_path)
+            return remote_path
+
         if addon_type == 'POSTGRES':
             safe_suffix = (
                 (alias_name or container_name)
@@ -879,30 +1014,39 @@ class AddonProvisioner:
             )[:63]
             db_user = safe_suffix
             db_name = safe_suffix
+            env_vars.update({
+                'POSTGRES_PASSWORD': password,
+                'POSTGRES_USER': db_user,
+                'POSTGRES_DB': db_name,
+            })
             cmd_parts.extend([
-                '-e', f'POSTGRES_PASSWORD={password}',
-                '-e', f'POSTGRES_USER={db_user}',
-                '-e', f'POSTGRES_DB={db_name}',
                 '-v', f'{container_name}-data:/var/lib/postgresql/data',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
+            _attach_env_file()
             cmd_parts.append(image)
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             hostname = alias_name or container_name
             connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
         elif addon_type == 'REDIS':
-            # Docker requires the image BEFORE the command. The previous
-            # order placed redis-server first, which Docker interpreted
-            # as the image name, producing "Unable to find image".
+            # Password via a mounted redis.conf (never on the command line).
+            # Persisted on the remote host (deleted in deprovision_remote)
+            # because Docker re-reads bind mounts on container restarts.
+            remote_conf_path = _write_remote_file(
+                f"requirepass {password}\n",
+                persist=True,
+                stable_name=f"{container_name}.conf",
+            )
             cmd_parts.extend([
                 '-v', f'{container_name}-data:/data',
+                '-v', f'{remote_conf_path}:/usr/local/etc/redis/redis.conf:ro',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
             cmd_parts.append(image)
-            cmd_parts.extend(['redis-server', '--requirepass', password])
+            cmd_parts.extend(['redis-server', '/usr/local/etc/redis/redis.conf'])
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             hostname = alias_name or container_name
             connection_url = f"redis://:{password}@{hostname}:{port}/0"
@@ -914,44 +1058,55 @@ class AddonProvisioner:
             )[:63]
             db_name = safe_suffix
             db_user = safe_suffix
+            env_vars.update({
+                'MYSQL_ROOT_PASSWORD': password,
+                'MYSQL_DATABASE': db_name,
+                'MYSQL_USER': db_user,
+                'MYSQL_PASSWORD': password,
+            })
             cmd_parts.extend([
-                '-e', f'MYSQL_ROOT_PASSWORD={password}',
-                '-e', f'MYSQL_DATABASE={db_name}',
-                '-e', f'MYSQL_USER={db_user}',
-                '-e', f'MYSQL_PASSWORD={password}',
                 '-v', f'{container_name}-data:/var/lib/mysql',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
+            _attach_env_file()
             cmd_parts.append(image)
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             hostname = alias_name or container_name
             connection_url = f"mysql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
         elif addon_type == 'MONGODB':
+            # Root user must match the local provisioner and backup/restore
+            # commands (mongodump/mongorestore --username=app_user).
+            env_vars.update({
+                'MONGO_INITDB_ROOT_USERNAME': 'app_user',
+                'MONGO_INITDB_ROOT_PASSWORD': password,
+            })
             cmd_parts.extend([
-                '-e', 'MONGO_INITDB_ROOT_USERNAME=admin',
-                '-e', f'MONGO_INITDB_ROOT_PASSWORD={password}',
                 '-v', f'{container_name}-data:/data/db',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
+            _attach_env_file()
             cmd_parts.append(image)
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             hostname = alias_name or container_name
-            connection_url = f"mongodb://admin:{password}@{hostname}:{port}/app_db?authSource=admin"
+            connection_url = f"mongodb://app_user:{password}@{hostname}:{port}/app_db?authSource=admin"
 
         elif addon_type == 'RABBITMQ':
             user = "appuser"
             vhost = "/"
+            env_vars.update({
+                'RABBITMQ_DEFAULT_USER': user,
+                'RABBITMQ_DEFAULT_PASS': password,
+                'RABBITMQ_DEFAULT_VHOST': vhost,
+            })
             cmd_parts.extend([
-                '-e', f'RABBITMQ_DEFAULT_USER={user}',
-                '-e', f'RABBITMQ_DEFAULT_PASS={password}',
-                '-e', f'RABBITMQ_DEFAULT_VHOST={vhost}',
                 '-v', f'{container_name}-data:/var/lib/rabbitmq',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
+            _attach_env_file()
             cmd_parts.append(image)
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             hostname = alias_name or container_name
@@ -959,13 +1114,16 @@ class AddonProvisioner:
 
         elif addon_type == 'MINIO':
             username = secrets.token_hex(8)
+            env_vars.update({
+                'MINIO_ROOT_USER': username,
+                'MINIO_ROOT_PASSWORD': password,
+            })
             cmd_parts.extend([
-                '-e', f'MINIO_ROOT_USER={username}',
-                '-e', f'MINIO_ROOT_PASSWORD={password}',
                 '-v', f'{container_name}-data:/data',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
+            _attach_env_file()
             cmd_parts.extend([image, 'server', '/data', '--console-address', ':9001'])
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             hostname = alias_name or container_name
@@ -985,13 +1143,13 @@ class AddonProvisioner:
             user = 'admin'
             db = 'app_db'
             if generic_config.get('user_env'):
-                cmd_parts.extend(['-e', f'{generic_config["user_env"]}={user}'])
+                env_vars[generic_config['user_env']] = user
             if generic_config.get('pass_env'):
-                cmd_parts.extend(['-e', f'{generic_config["pass_env"]}={password}'])
+                env_vars[generic_config['pass_env']] = password
             if generic_config.get('root_pass_env'):
-                cmd_parts.extend(['-e', f'{generic_config["root_pass_env"]}={password}'])
+                env_vars[generic_config['root_pass_env']] = password
             if generic_config.get('db_env'):
-                cmd_parts.extend(['-e', f'{generic_config["db_env"]}={db}'])
+                env_vars[generic_config['db_env']] = db
             cluster_id = self._generate_kraft_cluster_id()
             env_extra = cast(dict, generic_config.get('env') or {})
             for k, v in env_extra.items():
@@ -1000,15 +1158,23 @@ class AddonProvisioner:
                     .replace('{hostname}', hostname)
                     .replace('{cluster_id}', cluster_id)
                 )
-                cmd_parts.extend(['-e', f'{k}={val}'])
+                env_vars[k] = val
+            if any('{password}' in arg for arg in (generic_config.get('command') or [])):
+                env_vars['SMSLY_APP_PASSWORD'] = password
+            # Mount a persistent volume at the addon's data dir (never rely on
+            # the image's ephemeral container filesystem: the container is
+            # recreated on every deploy).
+            cmd_parts.extend([
+                '-v', f'{container_name}-data:{generic_config.get("data_dir", "/data")}',
+            ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
+            _attach_env_file()
             cmd_parts.append(image)
             if generic_config.get('command'):
-                cmd_args = [
-                    arg.replace('{password}', password).replace('{hostname}', hostname)
-                    for arg in cast(list, generic_config['command'])
-                ]
+                entrypoint, cmd_args = self._render_generic_command(generic_config, password, hostname)
+                if entrypoint:
+                    cmd_parts.extend(['--entrypoint', entrypoint])
                 cmd_parts.extend(cmd_args)
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             scheme = cast(str, generic_config.get('scheme', addon_type.lower()))
@@ -1027,15 +1193,6 @@ class AddonProvisioner:
         net_setup = f"docker network inspect {shlex.quote(self.network_name)} >/dev/null 2>&1 || docker network create {shlex.quote(self.network_name)}"
         provision_cmd = f"{net_setup} && docker rm -f {shlex.quote(container_name)} 2>/dev/null; {cmd_str}"
 
-        ssh = SSHClient(
-            ip=server.host,
-            key_content=server.ssh_key,
-            password=server.ssh_password,
-            user=server.ssh_user,
-            port=server.ssh_port,
-            wg_address=getattr(server, "wg_address", None),
-        )
-        ssh.connect()
         stdout, stderr, code = ssh.exec_command(provision_cmd, timeout=300, raise_on_error=False)
         if code != 0:
             raise RuntimeError(
@@ -1043,6 +1200,16 @@ class AddonProvisioner:
             )
 
         container_id = stdout.strip()[:12] if stdout.strip() else container_name
+
+        # Remove remote secrets (env files / redis.conf) now that the
+        # container is running.
+        for remote_path in remote_temp_files:
+            with contextlib.suppress(Exception):
+                ssh.exec_command(
+                    f"rm -f {shlex.quote(remote_path)}",
+                    timeout=10,
+                    raise_on_error=False,
+                )
 
         # Create data volume if not using auto-created one
         # (the -v flag in docker run auto-creates named volumes)
@@ -1052,7 +1219,8 @@ class AddonProvisioner:
 
     def _provision_rabbitmq(self, container_name: str,
                             password: str, port: int,
-                            alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
+                            alias_name: str = '', public_domain: str | None = None,
+                            host_port: int | None = None) -> tuple[str, str]:
         """Provision a RabbitMQ container with management plugin enabled."""
         user = "appuser"
         vhost = "/"
@@ -1070,6 +1238,8 @@ class AddonProvisioner:
             '--env-file', env_file,
             '-v', f'{container_name}-data:/var/lib/rabbitmq',
         ]
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace('.', '-').replace('_', '-'), public_domain, 15672) # Expose Management port, not AMQP
 
@@ -1078,7 +1248,7 @@ class AddonProvisioner:
         cmd.append(self.ADDON_IMAGES['RABBITMQ'])
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
         finally:
             with contextlib.suppress(Exception):
                 os.remove(env_file)
@@ -1092,7 +1262,8 @@ class AddonProvisioner:
 
     def _provision_minio(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '', username: str = 'admin', public_domain: str | None = None) -> tuple[str, str]:
+                         alias_name: str = '', username: str = 'admin', public_domain: str | None = None,
+                         host_port: int | None = None) -> tuple[str, str]:
         """Provision a MinIO container."""
         env_file = self._write_env_file({
             'MINIO_ROOT_USER': username,
@@ -1107,6 +1278,8 @@ class AddonProvisioner:
             '--env-file', env_file,
             '-v', f'{container_name}-data:/data',
         ]
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, 9001)
 
@@ -1122,7 +1295,8 @@ class AddonProvisioner:
                 cmd,
                 capture_output=True,
                 text=True,
-                check=True)
+                check=True,
+                timeout=120)
         finally:
             with contextlib.suppress(Exception):
                 os.remove(env_file)
@@ -1141,17 +1315,24 @@ class AddonProvisioner:
             time.sleep(2) # Give it a moment to fully initialize the API after healthcheck
 
             # Use 'mc' from inside the minio container to create the bucket
-            # First, configure the alias
+            # Credentials are passed via MC_HOST_<alias> env var, NOT argv,
+            # so they never appear in the process list / docker exec output.
+            import urllib.parse
+            encoded_password = urllib.parse.quote(password, safe='')
             subprocess.run([
-                'docker', 'exec', container_name,
-                'mc', 'alias', 'set', 'myminio', f'http://127.0.0.1:{port}', username, password
-            ], capture_output=True, check=True)
+                'docker', 'exec',
+                '-e', f'MC_HOST_myminio=http://{username}:{encoded_password}@127.0.0.1:{port}',
+                container_name,
+                'mc', 'alias', 'set', 'myminio', f'http://127.0.0.1:{port}'
+            ], capture_output=True, check=False, timeout=60)
 
             # Then, create the bucket
             subprocess.run([
-                'docker', 'exec', container_name,
+                'docker', 'exec',
+                '-e', f'MC_HOST_myminio=http://{username}:{encoded_password}@127.0.0.1:{port}',
+                container_name,
                 'mc', 'mb', f'myminio/{bucket_name}'
-            ], capture_output=True, check=False) # check=False because it might already exist on re-provision
+            ], capture_output=True, check=False, timeout=60) # check=False because it might already exist on re-provision
         except Exception as e:
             logger.error("Failed to auto-create default MinIO bucket %s: %s", bucket_name, e)
 
@@ -1175,7 +1356,7 @@ class AddonProvisioner:
             '--restart', 'unless-stopped',
             *self.SECURITY_OPTS,
             '--env-file', env_file,
-            '-v', f'{container_name}-data:/data'
+            '-v', f'{container_name}-data:{config.get("data_dir", "/data")}'
         ]
 
         if host_port:
@@ -1188,14 +1369,18 @@ class AddonProvisioner:
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
 
+        if config.get('command'):
+            entrypoint, cmd_args = self._render_generic_command(config, password, hostname)
+            if entrypoint:
+                cmd.extend(['--entrypoint', entrypoint])
+
         cmd.append(config['image'])
 
         if config.get('command'):
-            cmd_args = [arg.replace('{password}', password).replace('{hostname}', hostname) for arg in cast(list, config['command'])]
             cmd.extend(cmd_args)
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
         finally:
             with contextlib.suppress(Exception):
                 os.remove(env_file)
@@ -1234,6 +1419,27 @@ class AddonProvisioner:
         '--pids-limit', '1024',
     ]
 
+    def _render_generic_command(self, config: dict, password: str, hostname: str) -> tuple[str | None, list[str]]:
+        """Render a generic addon command without putting secrets on argv.
+
+        Commands containing ``{password}`` are executed through ``sh -c`` with
+        the secret read from the ``SMSLY_APP_PASSWORD`` env var (already in
+        the env file), so the password never appears in the host process list
+        nor in the container's ``Config.Cmd``.
+
+        Returns ``(entrypoint_override, command_args)``. ``entrypoint_override``
+        is ``"sh"`` when a shell wrapper is required, else ``None``.
+        """
+        command = cast(list, config.get('command')) or []
+        has_secret = any('{password}' in arg for arg in command)
+        rendered = [
+            arg.replace('{password}', '"$SMSLY_APP_PASSWORD"').replace('{hostname}', hostname)
+            for arg in command
+        ]
+        if not has_secret:
+            return None, rendered
+        return 'sh', ['-c', 'exec ' + ' '.join(rendered)]
+
     def _build_generic_env(self, config: dict, password: str, hostname: str, cluster_id: str, user: str, db: str) -> dict[str, str]:
         """Build env var dict for a generic addon, with placeholder substitution."""
         env: dict[str, str] = {}
@@ -1251,6 +1457,10 @@ class AddonProvisioner:
                 .replace('{hostname}', hostname)
                 .replace('{cluster_id}', cluster_id)
             )
+        if any('{password}' in arg for arg in (config.get('command') or [])):
+            # Password for commands rendered through sh -c (see
+            # _render_generic_command): never on the command line.
+            env['SMSLY_APP_PASSWORD'] = password
         return env
 
     def _generate_kraft_cluster_id(self) -> str:
@@ -1266,6 +1476,7 @@ class AddonProvisioner:
                     ['docker', 'exec', container_name, 'bash', '-lc', command],
                     capture_output=True,
                     text=True,
+                    timeout=30,
                 )
                 if result.returncode == 0:
                     return
@@ -1333,7 +1544,8 @@ class AddonProvisioner:
                 cmd,
                 capture_output=True,
                 text=True,
-                check=True)
+                check=True,
+                timeout=120)
         finally:
             with contextlib.suppress(Exception):
                 os.remove(env_file)
@@ -1357,6 +1569,7 @@ class AddonProvisioner:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=60,
             )
         except Exception as exc:  # pragma: no cover
             logger.error("pgvector extension init failed for %s: %s", container_name, exc)
@@ -1389,7 +1602,11 @@ class AddonProvisioner:
             cmd.extend(['--network-alias', alias_name])
         cmd.extend([
             self.ADDON_IMAGES['REDIS'],
-            'redis-server', '--requirepass', password, '--appendonly', 'yes'
+            # Password comes from the container env (--env-file above), never
+            # from the command line: keeps it out of `ps` output and survives
+            # container restarts (env is baked into the container config).
+            'sh', '-c',
+            'redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes',
         ])
 
         try:
@@ -1397,7 +1614,8 @@ class AddonProvisioner:
                 cmd,
                 capture_output=True,
                 text=True,
-                check=True)
+                check=True,
+                timeout=120)
         finally:
             with contextlib.suppress(Exception):
                 os.remove(env_file)
@@ -1409,9 +1627,63 @@ class AddonProvisioner:
         self._wait_for_health(container_name, port)
         return container_id, connection_url
 
+    def _get_published_host_port(self, container_name: str) -> int | None:
+        """Return the first host port published by an existing container.
+
+        Returns None when the container has no port bindings (e.g. addons
+        that only run on the docker network with no host exposure).
+        """
+        try:
+            inspect_proc = subprocess.run(
+                ['docker', 'inspect', '-f', '{{json .HostConfig.PortBindings}}', container_name],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            if inspect_proc.returncode == 0 and (inspect_proc.stdout or '').strip():
+                import json as _json
+                for binding in _json.loads(inspect_proc.stdout).values():
+                    if binding and binding[0].get('HostPort'):
+                        return int(binding[0]['HostPort'])
+        except Exception:
+            pass
+        return None
+
+    def rotate_redis_credentials(self, addon, container_name: str, password: str,
+                                 port: int, alias_name: str | None = None,
+                                 public_domain: str | None = None) -> str:
+        """Recreate a Redis container with a new password.
+
+        The Redis password is baked into the container environment at creation
+        time (see ``_provision_redis``), so a running container can never pick
+        up a rotated password on restart. Recreate it instead: the persistent
+        data volume (``{container_name}-data``) is reused and the previously
+        published host port (if any) is preserved so existing connection URLs
+        stay valid.
+        """
+        host_port = self._get_published_host_port(container_name)
+
+        subprocess.run(
+            ['docker', 'rm', '-f', container_name],
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+
+        container_id, _ = self._provision_redis(
+            container_name, password, port, alias_name,
+            host_port=host_port, public_domain=public_domain,
+        )
+        with contextlib.suppress(Exception):
+            self._connect_to_proxy_network(container_name)
+            self._connect_to_service_scoped_network(container_name, addon)
+        return container_id
+
     def _provision_mysql(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
+                         alias_name: str = '', public_domain: str | None = None,
+                         host_port: int | None = None) -> tuple[str, str]:
         """Provision a MySQL container."""
         db_name = "app_db"
         db_user = "app_user"
@@ -1431,6 +1703,8 @@ class AddonProvisioner:
             '--env-file', env_file,
             '-v', f'{container_name}-data:/var/lib/mysql',
         ]
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
@@ -1443,13 +1717,15 @@ class AddonProvisioner:
                 cmd,
                 capture_output=True,
                 text=True,
-                check=True)
+                check=True,
+                timeout=120)
         finally:
             with contextlib.suppress(Exception):
                 os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
-        connection_url = f"mysql://{db_user}:{password}@{container_name}:{port}/{db_name}"
+        hostname = alias_name or container_name
+        connection_url = f"mysql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
         self._wait_for_health(
             container_name,
@@ -1459,7 +1735,8 @@ class AddonProvisioner:
 
     def _provision_mongodb(self, container_name: str,
                            password: str, port: int,
-                           alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
+                           alias_name: str = '', public_domain: str | None = None,
+                           host_port: int | None = None) -> tuple[str, str]:
         """Provision a MongoDB container."""
         db_user = "app_user"
         db_name = "app_db"
@@ -1477,6 +1754,8 @@ class AddonProvisioner:
             '--env-file', env_file,
             '-v', f'{container_name}-data:/data/db',
         ]
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
@@ -1489,20 +1768,23 @@ class AddonProvisioner:
                 cmd,
                 capture_output=True,
                 text=True,
-                check=True)
+                check=True,
+                timeout=120)
         finally:
             with contextlib.suppress(Exception):
                 os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
-        connection_url = f"mongodb://{db_user}:{password}@{container_name}:{port}/{db_name}?authSource=admin"  # pylint: disable=line-too-long
+        hostname = alias_name or container_name
+        connection_url = f"mongodb://{db_user}:{password}@{hostname}:{port}/{db_name}?authSource=admin"  # pylint: disable=line-too-long
 
         self._wait_for_health(container_name, port)
         return container_id, connection_url
 
     def _provision_qdrant(self, container_name: str,
                           port: int,
-                          alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
+                          alias_name: str = '', public_domain: str | None = None,
+                          host_port: int | None = None) -> tuple[str, str]:
         """Provision a Qdrant vector database container."""
         cmd = [
             'docker', 'run', '-d',
@@ -1513,6 +1795,8 @@ class AddonProvisioner:
             '-e', 'QDRANT__SERVICE__GRPC_PORT=6334',
             '-v', f'{container_name}-data:/qdrant/storage',
         ]
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
@@ -1524,18 +1808,21 @@ class AddonProvisioner:
             cmd,
             capture_output=True,
             text=True,
-            check=True)
+            check=True,
+            timeout=120)
         container_id = result.stdout.strip()[:12]
 
         # Qdrant uses HTTP API — no auth by default
-        connection_url = f"http://{container_name}:{port}"
+        hostname = alias_name or container_name
+        connection_url = f"http://{hostname}:{port}"
 
         self._wait_for_health(container_name, port)
         return container_id, connection_url
 
     def _provision_elasticsearch(self, container_name: str,
                                  port: int,
-                                 alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
+                                 alias_name: str = '', public_domain: str | None = None,
+                                 host_port: int | None = None) -> tuple[str, str]:
         """Provision a single-node Elasticsearch container."""
         cmd = [
             'docker', 'run', '-d',
@@ -1548,6 +1835,8 @@ class AddonProvisioner:
             '-e', 'ES_JAVA_OPTS=-Xms256m -Xmx256m',
             '-v', f'{container_name}-data:/usr/share/elasticsearch/data',
         ]
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
@@ -1559,10 +1848,12 @@ class AddonProvisioner:
             cmd,
             capture_output=True,
             text=True,
-            check=True)
+            check=True,
+            timeout=120)
         container_id = result.stdout.strip()[:12]
 
-        connection_url = f"http://{container_name}:{port}"
+        hostname = alias_name or container_name
+        connection_url = f"http://{hostname}:{port}"
 
         self._wait_for_health(container_name, port, timeout=90)
         return container_id, connection_url
@@ -1583,7 +1874,8 @@ class AddonProvisioner:
                     ['docker', 'inspect', '-f',
                         '{{.State.Running}}', container_name],
                     capture_output=True,
-                    text=True
+                    text=True,
+                    timeout=15,
                 )
                 if result.stdout.strip() != 'true':
                     time.sleep(1)
@@ -1631,14 +1923,15 @@ class AddonProvisioner:
         try:
             # Stop and remove container
             subprocess.run(['docker', 'stop', container_id],
-                           capture_output=True)
-            subprocess.run(['docker', 'rm', container_id], capture_output=True)
+                           capture_output=True, timeout=60)
+            subprocess.run(['docker', 'rm', container_id], capture_output=True, timeout=60)
 
             # Remove associated volume if container_name provided
             if container_name:
                 subprocess.run(
                     ['docker', 'volume', 'rm', f'{container_name}-data'],
-                    capture_output=True
+                    capture_output=True,
+                    timeout=60,
                 )
 
             logger.info(f"Deprovisioned addon container: {container_id}")
@@ -1669,6 +1962,9 @@ class AddonProvisioner:
             if container_name:
                 safe_vol = shlex.quote(f'{container_name}-data')
                 ssh.exec_command(f"docker volume rm {safe_vol} 2>/dev/null", timeout=15)
+                # Remove the persisted redis.conf (mounted for requirepass)
+                safe_conf = shlex.quote(f'/var/lib/smsly/addon-envs/{container_name}.conf')
+                ssh.exec_command(f"rm -f {safe_conf} 2>/dev/null", timeout=15)
             ssh.close()
             logger.info(f"Deprovisioned remote addon container: {container_id} on {server.host}")
             return True
@@ -1693,7 +1989,8 @@ class AddonProvisioner:
             result = subprocess.run(
                 ['docker', 'inspect', container_id],
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=30,
             )
             if result.returncode == 0:
                 import json
@@ -1773,7 +2070,7 @@ class AddonProvisioner:
                 ['docker', 'inspect', '-f',
                  '{{range .NetworkSettings.Networks}}{{range .Aliases}}{{.}} {{end}}{{end}}',
                  container_name],
-                capture_output=True, text=True, check=False,
+                capture_output=True, text=True, check=False, timeout=30,
             )
             current_aliases = set(inspect_proc.stdout.split()) if inspect_proc.returncode == 0 else set()
         except Exception:
@@ -1790,7 +2087,7 @@ class AddonProvisioner:
                 for attempt in range(3):
                     result = subprocess.run(
                         ['docker', 'network', 'connect', '--alias', alias, self.network_name, container_name],
-                        capture_output=True, text=True, check=False,
+                        capture_output=True, text=True, check=False, timeout=30,
                     )
                     if result.returncode == 0:
                         success = True
@@ -1816,8 +2113,10 @@ class AddonProvisioner:
             raise ValueError("backup_path is required")
 
         real_path = os.path.realpath(backup_path)
+        from django.conf import settings
         allowed_roots = [
             os.path.realpath(os.path.join("/app", "backups", "addons")),
+            os.path.realpath(os.path.join(settings.BASE_DIR, "backups", "addons")),
         ]
 
         if not any(real_path.startswith(root + os.sep) for root in allowed_roots):
@@ -1837,6 +2136,7 @@ class AddonProvisioner:
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
         value = result.stdout.strip()
         if not value:
@@ -1853,7 +2153,10 @@ class AddonProvisioner:
 
         container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = os.path.join("/app", "backups", "addons", str(addon.service.id))
+        from django.conf import settings
+        backup_root = os.path.join(settings.BASE_DIR, "backups", "addons")
+        os.makedirs(backup_root, exist_ok=True)
+        backup_dir = os.path.join(backup_root, str(addon.service.id))
         os.makedirs(backup_dir, exist_ok=True)
 
         filename = f"{addon.addon_type.lower()}_{addon.id}_{timestamp}.dump"
@@ -1881,12 +2184,22 @@ class AddonProvisioner:
                         ],
                         check=True,
                         stdout=backup_file,
+                        timeout=300,
                     )
 
             elif addon.addon_type == 'REDIS':
-                # Redis save and copy using argument lists only.
-                subprocess.run(['docker', 'exec', container_name, 'redis-cli', 'save'], check=True)
-                subprocess.run(['docker', 'cp', f'{container_name}:/data/dump.rdb', backup_path], check=True)
+                # Redis save and copy using argument lists only. Auth with the
+                # container's own REDIS_PASSWORD env when set (never put the
+                # password on the command line).
+                subprocess.run(
+                    ['docker', 'exec', container_name,
+                     'sh', '-c',
+                     'if [ -n "$REDIS_PASSWORD" ]; then '
+                     'exec redis-cli -a "$REDIS_PASSWORD" --no-auth-warning save; '
+                     'else exec redis-cli save; fi'],
+                    check=True, timeout=60,
+                )
+                subprocess.run(['docker', 'cp', f'{container_name}:/data/dump.rdb', backup_path], check=True, timeout=120)
 
             elif addon.addon_type == 'MYSQL':
                 # Use the container's existing env var — never put the
@@ -1897,6 +2210,7 @@ class AddonProvisioner:
                          'sh', '-c', 'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" app_db'],
                         check=True,
                         stdout=backup_file,
+                        timeout=300,
                     )
 
             elif addon.addon_type == 'MONGODB':
@@ -1906,6 +2220,7 @@ class AddonProvisioner:
                          'sh', '-c', 'mongodump --username=app_user --password="$MONGO_INITDB_ROOT_PASSWORD" --db=app_db --archive'],
                         check=True,
                         stdout=backup_file,
+                        timeout=300,
                     )
 
             else:
@@ -1950,13 +2265,14 @@ class AddonProvisioner:
                         ],
                         stdin=backup_file,
                         check=True,
+                        timeout=300,
                     )
 
             elif addon.addon_type == 'REDIS':
                 # Copy file back, restart
-                subprocess.run(['docker', 'stop', container_name], check=True)
-                subprocess.run(['docker', 'cp', validated_backup_path, f'{container_name}:/data/dump.rdb'], check=True)
-                subprocess.run(['docker', 'start', container_name], check=True)
+                subprocess.run(['docker', 'stop', container_name], check=True, timeout=60)
+                subprocess.run(['docker', 'cp', validated_backup_path, f'{container_name}:/data/dump.rdb'], check=True, timeout=120)
+                subprocess.run(['docker', 'start', container_name], check=True, timeout=60)
 
             elif addon.addon_type == 'MYSQL':
                 with open(validated_backup_path, 'rb') as backup_file:
@@ -1965,6 +2281,7 @@ class AddonProvisioner:
                          'sh', '-c', 'mysql -u root -p"$MYSQL_ROOT_PASSWORD" app_db'],
                         stdin=backup_file,
                         check=True,
+                        timeout=300,
                     )
 
             elif addon.addon_type == 'MONGODB':
@@ -1974,13 +2291,10 @@ class AddonProvisioner:
                          'sh', '-c', 'mongorestore --username=app_user --password="$MONGO_INITDB_ROOT_PASSWORD" --db=app_db --archive'],
                         stdin=backup_file,
                         check=True,
+                        timeout=300,
                     )
             else:
                 logger.warning("Native restore not implemented for %s, skipping gracefully.", addon.addon_type)
-
-            # Clean up the backup file after a successful restore.
-            with contextlib.suppress(OSError):
-                os.remove(backup_path)
 
             return True
         except Exception as e:

@@ -309,8 +309,17 @@ class BuildManager:
         except Exception as e:
             self._log(f"Security scan error: {e!s}")
 
-    def _run_command(self, cmd, cwd=None, env=None):
-        """Run command and stream output to logs."""
+    def _run_command(self, cmd, cwd=None, env=None, timeout=None):
+        """Run command and stream output to logs.
+
+        Bounded by ``timeout`` (defaults to DOCKER_BUILD_TIMEOUT) so a hung
+        Docker build cannot block a Celery worker forever. Output is drained
+        on a daemon thread while the main thread waits, so the process is
+        killed when the deadline passes.
+        """
+        if timeout is None:
+            from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
+            timeout = DOCKER_BUILD_TIMEOUT
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -321,10 +330,24 @@ class BuildManager:
             bufsize=1  # Line buffered
         )
 
-        for line in process.stdout:
-            self._log(line.strip(), timestamp=False)
+        def _drain():
+            try:
+                for line in process.stdout:
+                    self._log(line.strip(), timestamp=False)
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
 
-        process.wait()
+        import threading
+        drainer = threading.Thread(target=_drain, daemon=True)
+        drainer.start()
+
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            drainer.join(timeout=10)
+            raise subprocess.TimeoutExpired(cmd, timeout) from None
+        drainer.join(timeout=10)
 
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, cmd)

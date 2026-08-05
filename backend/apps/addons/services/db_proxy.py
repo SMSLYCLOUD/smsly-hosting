@@ -124,15 +124,24 @@ class DatabaseProxy:
 
     def _build_pg_connection(proxy):
         import psycopg2
-        return psycopg2.connect(proxy.connection_url)
+        return psycopg2.connect(proxy.connection_url, connect_timeout=10)
 
     def _build_redis_connection(proxy):
         import redis
-        return redis.from_url(proxy.connection_url, decode_responses=True)
+        return redis.from_url(
+            proxy.connection_url,
+            decode_responses=True,
+            socket_connect_timeout=10,
+            socket_timeout=15,
+        )
 
     def _build_mongo_connection(proxy):
         from pymongo import MongoClient
-        return MongoClient(proxy.connection_url)
+        return MongoClient(
+            proxy.connection_url,
+            serverSelectionTimeoutMS=10000,
+            connectTimeoutMS=10000,
+        )
 
     _CONNECTION_BUILDERS = {
         'POSTGRES': _build_pg_connection,
@@ -153,7 +162,10 @@ class DatabaseProxy:
         if self.addon.addon_type != 'POSTGRES':
             return []
 
-        conn = self.get_connection()
+        try:
+            conn = self.get_connection()
+        except Exception:
+            return []
         try:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -253,57 +265,90 @@ class DatabaseProxy:
         if self.addon.addon_type != 'REDIS':
             return {}
         r = self.get_connection()
-        return r.info()
+        try:
+            return r.info()
+        finally:
+            r.close()
 
     def redis_keys(self, pattern: str = '*', limit: int = 100) -> list:
         if self.addon.addon_type != 'REDIS':
             return []
         r = self.get_connection()
-        keys = []
-        for key in r.scan_iter(match=pattern, count=limit):
-            keys.append(key)
-            if len(keys) >= limit:
-                break
-        return keys
+        try:
+            keys = []
+            for key in r.scan_iter(match=pattern, count=limit):
+                keys.append(key)
+                if len(keys) >= limit:
+                    break
+            return keys
+        finally:
+            r.close()
 
     def redis_get(self, key: str) -> dict:
         if self.addon.addon_type != 'REDIS':
             return {}
         r = self.get_connection()
-        dtype = r.type(key)
-        ttl = r.ttl(key)
-        val = None
-        if dtype == 'string':
-            val = r.get(key)
-        elif dtype == 'hash':
-            val = r.hgetall(key)
-        # Add other types as needed
-        return {'key': key, 'type': dtype, 'ttl': ttl, 'value': val}
+        try:
+            dtype = r.type(key)
+            ttl = r.ttl(key)
+            val = None
+            if dtype == 'string':
+                val = r.get(key)
+            elif dtype == 'hash':
+                val = r.hgetall(key)
+            # Add other types as needed
+            return {'key': key, 'type': dtype, 'ttl': ttl, 'value': val}
+        finally:
+            r.close()
 
     def get_stats(self) -> dict[str, Any]:
         """Database size, connections, uptime, memory usage."""
         if self.addon.addon_type == 'POSTGRES':
-            conn = self.get_connection()
+            try:
+                conn = self.get_connection()
+            except Exception:
+                return {'status': 'OFFLINE'}
             try:
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()))")
                     size = cur.fetchone()[0]
                     cur.execute("SELECT count(*) FROM pg_stat_activity")
                     conns = cur.fetchone()[0]
-                    return {'size': size, 'connections': conns, 'status': 'ONLINE'}
+                    return {
+                        'size': size,
+                        'connections': conns,
+                        'connection_count': conns,
+                        'status': 'ONLINE',
+                    }
             except Exception:
                 return {'status': 'OFFLINE'}
             finally:
-                conn.close()
+                with contextlib.suppress(Exception):
+                    conn.close()
         elif self.addon.addon_type == 'REDIS':
             try:
                 r = self.get_connection()
+            except Exception:
+                return {'status': 'OFFLINE'}
+            try:
                 info = r.info('memory')
+                clients = r.info('clients')
+                connected_clients = clients.get('connected_clients')
+                used_memory = info.get('used_memory') or 0
+                maxmemory = info.get('maxmemory') or 0
+                memory_usage_percent = None
+                if maxmemory and maxmemory > 0 and used_memory is not None:
+                    memory_usage_percent = round((used_memory / maxmemory) * 100, 1)
                 return {
                     'used_memory_human': info.get('used_memory_human'),
-                    'connections': r.info('clients').get('connected_clients'),
+                    'connections': connected_clients,
+                    'connection_count': connected_clients,
+                    'memory_usage_percent': memory_usage_percent,
                     'status': 'ONLINE'
                 }
             except Exception:
                 return {'status': 'OFFLINE'}
+            finally:
+                with contextlib.suppress(Exception):
+                    r.close()
         return {}

@@ -8,6 +8,8 @@ from typing import Any
 
 from django.conf import settings
 
+from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 
@@ -187,12 +189,14 @@ class NixpacksBuilder:
             f"Starting Nixpacks build for {image_name} (cache: {effective_cache_dir})...")
 
         try:
-            # Run the build process
+            # Run the build process (bounded so a hung Docker build cannot
+            # block a Celery worker forever)
             process = subprocess.run(
                 command,
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=DOCKER_BUILD_TIMEOUT,
                 env={**os.environ, "NIXPACKS_CACHE_DIR": effective_cache_dir}
             )
             # Log build output for debugging
@@ -244,6 +248,7 @@ class NixpacksBuilder:
                             check=True,
                             capture_output=True,
                             text=True,
+                            timeout=DOCKER_BUILD_TIMEOUT,
                             env={
                                 **os.environ,
                                 "NIXPACKS_CACHE_DIR": effective_cache_dir,

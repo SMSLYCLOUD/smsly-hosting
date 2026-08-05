@@ -1339,14 +1339,10 @@ CELERY_QUEUES = {
     },
 }
 
-CELERY_TASK_ROUTES = {
-    'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.restore_addon_task': {'queue': 'deploy'},
-}
+# NOTE: Task routes are defined in config/celery.py (the authoritative source).
+# Do NOT add CELERY_TASK_ROUTES here — config_from_object would replace the
+# full route map in celery.py with this smaller dict, silently dropping all
+# other routes at finalize time.
 
 # Allow heavy Docker builds (e.g. torch, playwright) up to 2 hours
 CELERY_TASK_SOFT_TIME_LIMIT = 7200  # 2 hours

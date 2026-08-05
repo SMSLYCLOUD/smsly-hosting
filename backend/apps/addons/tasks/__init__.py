@@ -57,7 +57,19 @@ def rotate_addon_credentials_task(self, addon_id) -> None:
     try:
         addon = Addon.objects.get(id=addon_id)
         service = AddonMaintenanceService(addon)
-        service.rotate_credentials()
+        result = service.rotate_credentials()
+        if result.get('status') == 'failed':
+            _logger.error(
+                "rotate_addon_credentials_task failed for addon %s: %s",
+                addon_id, result.get('error'),
+            )
+        elif result.get('status') == 'not_implemented':
+            _logger.warning(
+                "rotate_addon_credentials_task not supported for addon %s (%s)",
+                addon_id, addon.addon_type,
+            )
+        else:
+            _logger.info("rotate_addon_credentials_task succeeded for addon %s", addon_id)
     except Exception as exc:
         _logger.error("rotate_addon_credentials_task failed for addon %s: %s", addon_id, exc)
         raise

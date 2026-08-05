@@ -130,16 +130,23 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _verify_ownership(self):
-        from .models.addons import Addon
+        from apps.deployments.models.addons import Addon
         try:
             addon = Addon.objects.select_related('service', 'service__owner').get(id=self.addon_id)
-            return addon.service.owner_id == self.user.id or addon.service.project.team.members.filter(user=self.user).exists()
         except Addon.DoesNotExist:
             return False
+        if self.user.is_superuser:
+            return True
+        if addon.service.owner_id == self.user.id:
+            return True
+        project = getattr(addon.service, 'project', None)
+        if project is not None and project.team_id is not None and project.team.members.filter(user=self.user).exists():
+            return True
+        return False
 
     @database_sync_to_async
     def _get_initial_state(self):
-        from .models.addons import Addon
+        from apps.deployments.models.addons import Addon
         try:
             addon = Addon.objects.get(id=self.addon_id)
             container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
@@ -159,7 +166,7 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
 
     async def _stream_logs(self, tail=200):
         try:
-            from .models.addons import Addon
+            from apps.deployments.models.addons import Addon
             addon = await database_sync_to_async(
                 Addon.objects.get
             )(id=self.addon_id)
