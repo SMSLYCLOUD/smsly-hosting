@@ -49,7 +49,7 @@ class Finding100VacuumThrottleTests(TestCase):
         pk = str(self.addon.id)
 
         with patch(
-            "apps.addons.views.AddonMaintenanceService"
+            "apps.addons.views.addons.AddonMaintenanceService"
         ) as mock_service_class:
             mock_service_class.return_value.vacuum_analyze.return_value = None
 

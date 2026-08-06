@@ -31,7 +31,7 @@ _OAUTH_CACHE_PREFIX = "social_app"
 
 @receiver(post_save, sender=SocialApp)
 @receiver(post_delete, sender=SocialApp)
-def _invalidate_social_app_cache(_sender, instance, **kwargs):
+def _invalidate_social_app_cache(sender, instance, **kwargs):
     cache.delete(f"{_OAUTH_CACHE_PREFIX}:{instance.provider}:{instance.id}")
     # allauth memoises providers in an OrderedDict. Clearing it
     # and resetting ``loaded`` forces the next ``get_class`` call

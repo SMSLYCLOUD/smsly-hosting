@@ -28,7 +28,7 @@ _VOLUME_MOUNT_PATH_ALLOWED_PREFIXES = (
 
 
 @receiver(pre_save, sender=Volume)
-def validate_volume_name_pre_save(_sender, instance, **kwargs):
+def validate_volume_name_pre_save(sender, instance, **kwargs):
     """SECURITY (Issue 140): defence-in-depth for Volume.name.
 
     The serializer runs ``_validate_volume_name`` first, but admin
@@ -50,7 +50,7 @@ def validate_volume_name_pre_save(_sender, instance, **kwargs):
 
 
 @receiver(pre_save, sender=Volume)
-def validate_volume_mount_path_pre_save(_sender, instance, **kwargs):
+def validate_volume_mount_path_pre_save(sender, instance, **kwargs):
     mount = getattr(instance, "mount_path", None)
     if mount is None:
         return
@@ -165,7 +165,7 @@ def _cron_minute_gap(minute_field: str) -> int:
 
 
 @receiver(pre_save, sender=CronJob)
-def validate_cron_schedule_pre_save(_sender, instance, **kwargs):
+def validate_cron_schedule_pre_save(sender, instance, **kwargs):
     schedule = getattr(instance, "schedule", None)
     if schedule is None or not isinstance(schedule, str):
         return
@@ -203,7 +203,7 @@ def validate_cron_schedule_pre_save(_sender, instance, **kwargs):
 
 
 @receiver(pre_save, sender=BackupSchedule)
-def validate_backup_schedule_cron_pre_save(_sender, instance, **kwargs):
+def validate_backup_schedule_cron_pre_save(sender, instance, **kwargs):
     """Validate BackupSchedule.cron_expression — same rules as CronJob.schedule."""
     cron_expr = getattr(instance, "cron_expression", None)
     if cron_expr is None or not isinstance(cron_expr, str):

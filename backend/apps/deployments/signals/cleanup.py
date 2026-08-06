@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # TODO: Docker volume removal is sync and can be slow. Consider moving to a
 # Celery task dispatched pre_delete (or post_delete with a soft-delete pattern).
 @receiver(pre_delete, sender=Service)
-def remove_service_docker_volumes_on_delete(_sender, instance, **kwargs):
+def remove_service_docker_volumes_on_delete(sender, instance, **kwargs):
     volumes = list(instance.volumes.all())
     if not volumes:
         return
@@ -34,7 +34,7 @@ def remove_service_docker_volumes_on_delete(_sender, instance, **kwargs):
 
 
 @receiver(pre_delete, sender=Addon)
-def deprovision_addon_on_delete(_sender, instance, **kwargs):
+def deprovision_addon_on_delete(sender, instance, **kwargs):
     try:
         from ..tasks import deprovision_addon_task
         try:
@@ -64,7 +64,7 @@ def deprovision_addon_on_delete(_sender, instance, **kwargs):
 
 
 @receiver(pre_delete, sender=Bundle)
-def deprovision_bundle_on_delete(_sender, instance, **kwargs):
+def deprovision_bundle_on_delete(sender, instance, **kwargs):
     try:
         from ..tasks.deployment.tasks_bundles import deprovision_bundle_task
         bundle_name = instance.name
@@ -96,7 +96,7 @@ def deprovision_bundle_on_delete(_sender, instance, **kwargs):
 
 
 @receiver(pre_delete, sender=ManagedServer)
-def cleanup_managed_server_artifacts(_sender, instance, **kwargs):
+def cleanup_managed_server_artifacts(sender, instance, **kwargs):
     logger.info("Cleaning up provision artifacts for server %s (%s)", instance.name, instance.host)
 
     try:

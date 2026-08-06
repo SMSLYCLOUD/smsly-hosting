@@ -21,6 +21,26 @@ _DISALLOWED_TOP_LEVEL = {
 }
 _ALLOWED_TOP_LEVEL = {'SELECT', 'WITH', 'EXPLAIN', 'EXPLAIN ANALYZE'}
 
+_REDIS_PATTERN_WILDCARDS = frozenset('*?[]')
+_REDIS_RESPONSE_CAP = 1_048_576
+
+
+def _validate_redis_keys_pattern(pattern: str) -> None:
+    """Reject Redis key patterns that could enumerate the whole keyspace.
+
+    A pattern like ``*`` or ``?`` lets a user scan every key in the addon's
+    Redis.  Require a pattern containing at least 2 non-wildcard characters.
+    """
+    if pattern is None or not isinstance(pattern, str):
+        raise ValueError("Redis key pattern must be a string")
+    if not pattern.strip():
+        raise ValueError("Redis key pattern must not be empty")
+    non_wildcard = sum(1 for ch in pattern if ch not in _REDIS_PATTERN_WILDCARDS)
+    if non_wildcard < 2:
+        raise ValueError(
+            "Redis key pattern must contain at least 2 non-wildcard characters"
+        )
+
 
 def _validate_readonly_sql(sql: str) -> str:
     """Validate that ``sql`` is a single read-only statement.
@@ -273,6 +293,7 @@ class DatabaseProxy:
     def redis_keys(self, pattern: str = '*', limit: int = 100) -> list:
         if self.addon.addon_type != 'REDIS':
             return []
+        _validate_redis_keys_pattern(pattern)
         r = self.get_connection()
         try:
             keys = []
@@ -283,6 +304,28 @@ class DatabaseProxy:
             return keys
         finally:
             r.close()
+
+    @staticmethod
+    def _cap_response_size(
+        value: dict,
+        cap: int = _REDIS_RESPONSE_CAP,
+    ) -> tuple[dict, int, bool]:
+        """Trim a dict to fit ``cap`` bytes of key+value content.
+
+        Returns ``(value, total_size, truncated)`` where ``total_size`` is the
+        untrimmed serialized size and ``truncated`` signals the cap was hit.
+        """
+        total_size = sum(len(str(k)) + len(str(v)) for k, v in value.items())
+        if total_size <= cap:
+            return value, total_size, False
+        truncated: dict = {}
+        size = 0
+        for k, v in value.items():
+            size += len(str(k)) + len(str(v))
+            if size > cap:
+                break
+            truncated[k] = v
+        return truncated, total_size, True
 
     def redis_get(self, key: str) -> dict:
         if self.addon.addon_type != 'REDIS':
@@ -295,7 +338,18 @@ class DatabaseProxy:
             if dtype == 'string':
                 val = r.get(key)
             elif dtype == 'hash':
-                val = r.hgetall(key)
+                raw = r.hgetall(key)
+                value, total_size, truncated = self._cap_response_size(raw)
+                if truncated:
+                    return {
+                        'key': key,
+                        'type': dtype,
+                        'ttl': ttl,
+                        'truncated': True,
+                        'total_size': total_size,
+                        'data': value,
+                    }
+                val = value
             # Add other types as needed
             return {'key': key, 'type': dtype, 'ttl': ttl, 'value': val}
         finally:

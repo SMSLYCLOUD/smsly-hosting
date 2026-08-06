@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 @receiver(pre_delete, sender=settings.AUTH_USER_MODEL)
-def reassign_team_ownership_before_user_delete(_sender, instance, **kwargs):
+def reassign_team_ownership_before_user_delete(sender, instance, **kwargs):
     try:
         owned_teams = Team.objects.filter(owner_id=instance.pk)
         for team in owned_teams:

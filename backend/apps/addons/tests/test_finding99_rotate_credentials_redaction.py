@@ -14,7 +14,7 @@ User = get_user_model()
 
 
 SENSITIVE_LITERAL = "S3CR3T-OLD-PASSWORD-DO-NOT-LOG-99"
-SAFE_FRAGMENT = "rotation requested for addon"
+SAFE_FRAGMENT = "rotation failed for addon"
 
 
 class Finding99RotateCredentialsRedactionTests(TestCase):
@@ -35,8 +35,16 @@ class Finding99RotateCredentialsRedactionTests(TestCase):
             connection_url="postgres://user:pass@localhost:5432/appdb",
         )
 
-    def test_rotate_credentials_does_not_emit_old_secret_to_logs(self):
+    def _capture_rotation(self):
+        from unittest.mock import patch
+
         maintenance = AddonMaintenanceService(self.addon)
+        with patch.object(
+            maintenance.proxy,
+            "get_connection",
+            side_effect=OSError("connection refused"),
+        ):
+            result = maintenance.rotate_credentials()
 
         log_stream = io.StringIO()
         handler = logging.StreamHandler(log_stream)
@@ -46,13 +54,21 @@ class Finding99RotateCredentialsRedactionTests(TestCase):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(handler)
         try:
-            result = maintenance.rotate_credentials()
+            with patch.object(
+                maintenance.proxy,
+                "get_connection",
+                side_effect=OSError("connection refused"),
+            ):
+                maintenance.rotate_credentials()
         finally:
             logger.removeHandler(handler)
             logger.setLevel(previous_level)
 
-        self.assertEqual(result.get("status"), "not_implemented")
-        captured = log_stream.getvalue()
+        return result, log_stream.getvalue()
+
+    def test_rotate_credentials_does_not_emit_old_secret_to_logs(self):
+        result, captured = self._capture_rotation()
+        self.assertEqual(result.get("status"), "failed")
         self.assertNotIn(
             SENSITIVE_LITERAL,
             captured,
@@ -65,22 +81,7 @@ class Finding99RotateCredentialsRedactionTests(TestCase):
         )
 
     def test_rotate_credentials_log_message_is_redact_safe(self):
-        maintenance = AddonMaintenanceService(self.addon)
-
-        log_stream = io.StringIO()
-        handler = logging.StreamHandler(log_stream)
-        handler.setLevel(logging.DEBUG)
-        logger = logging.getLogger("apps.addons.services.maintenance")
-        previous_level = logger.level
-        logger.setLevel(logging.DEBUG)
-        logger.addHandler(handler)
-        try:
-            maintenance.rotate_credentials()
-        finally:
-            logger.removeHandler(handler)
-            logger.setLevel(previous_level)
-
-        captured = log_stream.getvalue()
+        _, captured = self._capture_rotation()
         self.assertNotIn(SENSITIVE_LITERAL, captured)
         if captured.strip():
             self.assertIn(SAFE_FRAGMENT, captured.lower())

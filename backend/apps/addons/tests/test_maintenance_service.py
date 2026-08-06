@@ -27,8 +27,23 @@ class AddonMaintenanceServiceTests(TestCase):
             connection_url="postgres://user:pass@localhost:5432/appdb",
         )
 
-    def test_rotate_credentials_fails_closed_when_not_implemented(self):
+    def test_rotate_credentials_returns_not_implemented_for_unsupported_type(self):
+        self.addon.addon_type = Addon.Type.MYSQL
+        self.addon.save(update_fields=["addon_type"])
         maintenance = AddonMaintenanceService(self.addon)
         result = maintenance.rotate_credentials()
         self.assertEqual(result.get("status"), "not_implemented")
         self.assertIn("not implemented", result.get("error", "").lower())
+
+    def test_rotate_credentials_postgres_fails_closed_on_connection_error(self):
+        from unittest.mock import patch
+
+        maintenance = AddonMaintenanceService(self.addon)
+        with patch.object(
+            maintenance.proxy,
+            "get_connection",
+            side_effect=OSError("connection refused"),
+        ):
+            result = maintenance.rotate_credentials()
+        self.assertEqual(result.get("status"), "failed")
+        self.assertIn("connection refused", result.get("error", "").lower())

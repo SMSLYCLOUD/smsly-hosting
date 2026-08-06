@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 @receiver(post_save, sender=Deployment)
-def sync_service_status_on_deployment_change(_sender, instance, created, **kwargs):
+def sync_service_status_on_deployment_change(sender, instance, created, **kwargs):
     service = instance.service
     if not service:
         return
@@ -125,7 +125,7 @@ def sync_service_status_on_deployment_change(_sender, instance, created, **kwarg
 
 
 @receiver(post_save, sender=Deployment)
-def notify_deployment_lifecycle(_sender, instance, created, **kwargs):
+def notify_deployment_lifecycle(sender, instance, created, **kwargs):
     owner = instance.service.owner if instance.service.owner else None
 
     if created:
@@ -189,7 +189,7 @@ def notify_deployment_lifecycle(_sender, instance, created, **kwargs):
 # TODO: Calls _regenerate_caddyfile() synchronously. Consider dispatching
 # to a Celery task to avoid blocking the request thread.
 @receiver(post_save, sender=Deployment)
-def sync_preview_status_on_deployment_change(_sender, instance, created, **kwargs):
+def sync_preview_status_on_deployment_change(sender, instance, created, **kwargs):
     logger = logging.getLogger(__name__)
     service = instance.service
     if not service or not service.is_preview:

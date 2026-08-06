@@ -201,6 +201,7 @@ class Service(TimeStampedModel):
     # Auto-Scaling
     autoscale_enabled = models.BooleanField(  # type: ignore[var-annotated]
         null=True,
+        blank=True,
         help_text="Master toggle for horizontal autoscaling. When disabled, "
                   "the service will not be auto-scaled regardless of other settings. "
                   "NULL/None is treated as enabled by autoscaling query filters.",

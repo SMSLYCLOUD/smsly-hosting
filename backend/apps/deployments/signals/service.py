@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 @receiver(post_save, sender=Service)
-def create_default_env_vars(_sender, instance, created, **kwargs):
+def create_default_env_vars(sender, instance, created, **kwargs):
     if created:
         api_key = f"smsly_{secrets.token_urlsafe(32)}"
         EnvironmentVariable.objects.create(
@@ -23,7 +23,7 @@ def create_default_env_vars(_sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Service)
-def audit_service_lifecycle(_sender, instance, created, **kwargs):
+def audit_service_lifecycle(sender, instance, created, **kwargs):
     if created:
         log_event(
             actor=instance.owner.get_username() if instance.owner else 'system',
@@ -46,7 +46,7 @@ def audit_service_lifecycle(_sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Service)
-def regenerate_caddyfile_on_service_change(_sender, instance, created, **kwargs):
+def regenerate_caddyfile_on_service_change(sender, instance, created, **kwargs):
     update_fields = kwargs.get('update_fields')
     if update_fields is not None and 'public_domain' not in update_fields and 'custom_domains' not in update_fields:
         return
@@ -60,7 +60,7 @@ def regenerate_caddyfile_on_service_change(_sender, instance, created, **kwargs)
 # TODO: Does DB queries (TeamMember filter) + WebSocket sends. Consider
 # dispatching WebSocket broadcast to a Celery task.
 @receiver(post_save, sender=Service)
-def broadcast_service_status_change(_sender, instance, created, **kwargs):
+def broadcast_service_status_change(sender, instance, created, **kwargs):
     if not created:
         try:
             from config.metrics import SERVICES_ACTIVE
@@ -113,7 +113,7 @@ def broadcast_service_status_change(_sender, instance, created, **kwargs):
 
 
 @receiver(post_delete, sender=Service)
-def regenerate_caddyfile_on_service_deletion(_sender, instance, **kwargs):
+def regenerate_caddyfile_on_service_deletion(sender, instance, **kwargs):
     logger = logging.getLogger(__name__)
     try:
         from apps.deployments.tasks.deploy.helpers import _regenerate_caddyfile
