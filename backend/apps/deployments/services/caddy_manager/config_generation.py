@@ -599,8 +599,8 @@ def generate_caddyfile(config) -> str:
     _server_ip = str(getattr(config, "server_ip", "") or "").strip()
     _crt_path = os.path.join(_cert_dir, "ip.crt")
     _key_path = os.path.join(_cert_dir, "ip.key")
-    _caddy_crt = "/config/certs/ip.crt"
-    _caddy_key = "/config/certs/ip.key"
+    _caddy_crt = "/etc/caddy/certs/ip.crt"
+    _caddy_key = "/etc/caddy/certs/ip.key"
     try:
         os.makedirs(_cert_dir, exist_ok=True)
         if _server_ip and ipaddress.ip_address(_server_ip):
@@ -629,6 +629,14 @@ def generate_caddyfile(config) -> str:
                         pass
     except Exception as _exc:
         logger.warning("Could not generate self-signed cert for IP redirect: %s", _exc)
+
+    if os.path.exists(_crt_path) and os.path.exists(_key_path) and _server_ip:
+        sections.append(
+            f"""{_server_ip} {{
+    tls {_caddy_crt} {_caddy_key}
+    redir http://{_server_ip}{{uri}} 308
+}}"""
+        )
 
     if use_ssl and domain:
         sections.append(
