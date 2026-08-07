@@ -14,6 +14,62 @@ logger = logging.getLogger(__name__)
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 
 
+def ensure_ip_cert():
+    """Generate the self-signed IP cert if it does not already exist.
+
+    This is called from the backend entrypoint so the cert file is always
+    present on the shared caddy-config volume BEFORE Caddy reads the
+    Caddyfile. Without this, Caddy crash-loops with:
+        loading certificates: open .../certs/ip.crt: no such file or directory
+    because the Caddyfile references the cert but it was only generated
+    on-demand by the domain-config signal (which may not have fired yet).
+    """
+    _cert_dir = os.path.join(CADDY_CONFIG_DIR, "certs")
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        _cfg = PlatformConfig.load()
+        _server_ip = str(getattr(_cfg, "server_ip", "") or "").strip()
+    except Exception as _exc:
+        logger.debug("ensure_ip_cert: could not load PlatformConfig: %s", _exc)
+        return
+    if not _server_ip:
+        return
+    _crt_path = os.path.join(_cert_dir, "ip.crt")
+    _key_path = os.path.join(_cert_dir, "ip.key")
+    try:
+        os.makedirs(_cert_dir, exist_ok=True)
+        if not ipaddress.ip_address(_server_ip):
+            return
+        _regenerate = True
+        if os.path.exists(_crt_path):
+            try:
+                from cryptography import x509
+                with open(_crt_path, "rb") as _cr:
+                    _existing = x509.load_pem_x509_certificate(_cr.read())
+                _current_ip_obj = ipaddress.ip_address(_server_ip)
+                for _san in _existing.extensions.get_extension_for_class(
+                    x509.SubjectAlternativeName
+                ).value:
+                    if isinstance(_san, x509.IPAddress) and _san.value == _current_ip_obj:
+                        _regenerate = False
+                        break
+            except Exception:
+                _regenerate = True
+        if _regenerate:
+            _generate_selfsigned_cert(_crt_path, _key_path, _server_ip)
+            logger.info("ensure_ip_cert: generated self-signed cert for %s", _server_ip)
+        for _f in (_crt_path, _key_path):
+            if os.path.exists(_f):
+                try:
+                    _mode = os.stat(_f).st_mode & 0o777
+                    if _mode < 0o644:
+                        os.chmod(_f, 0o644)
+                except OSError:
+                    pass
+    except Exception as _exc:
+        logger.warning("ensure_ip_cert: failed: %s", _exc)
+
+
 def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: str = ""):
     upstream_url = upstream_url or _service_proxy_upstream()
     has_fallbacks = len(str(upstream_url).split()) > 1

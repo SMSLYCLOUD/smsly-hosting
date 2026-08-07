@@ -448,14 +448,6 @@ setup_social_apps_nonfatal() {
 
 
 
-    # Fix bind-mount permissions BEFORE any entrypoint tasks. Runs as root
-    # (before the privilege drop) so cap_add CHOWN/DAC_OVERRIDE can chown the
-    # host dirs to uid 1000. Idempotent, runs on every start, so no manual
-    # host chown is ever needed after git pull / rebuild.
-    ensure_bind_mount_permissions
-
-
-
     if is_web_container "$@" && should_run_entrypoint_tasks; then
 
 
@@ -587,9 +579,25 @@ ensure_bind_mount_permissions() {
     done
 }
 
-
-
 # ensure_prometheus_targets_writable: Merged into ensure_bind_mount_permissions() above.
+
+# Fix bind-mount permissions and ensure the self-signed IP cert exists.
+# Runs as root BEFORE the privilege drop. Idempotent, runs on every start,
+# so no manual host chown is ever needed after git pull / rebuild.
+ensure_bind_mount_permissions
+
+# Ensure the self-signed IP cert exists on the shared volume BEFORE Caddy
+# reads the Caddyfile. Prevents Caddy crash-loop where it references a cert
+# that hasn't been generated yet.
+DJANGO_SETTINGS_MODULE="${DJANGO_SETTINGS_MODULE:-config.settings}" \
+python -c "
+import os, sys
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+sys.path.insert(0, '/app')
+import django; django.setup()
+from apps.deployments.services.caddy_manager.config_generation import ensure_ip_cert
+ensure_ip_cert()
+" 2>/dev/null || true
 
 
 
