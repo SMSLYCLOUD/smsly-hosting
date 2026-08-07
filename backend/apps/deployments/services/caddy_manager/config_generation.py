@@ -107,7 +107,6 @@ def _build_service_domain_block(domain: str, upstream_host: str, upstream_url: s
             "    encode gzip",
             "    log {",
             "        output file /var/log/caddy/access.log",
-            "        output stdout",
             "    }",
             "}",
         ]
@@ -374,8 +373,6 @@ def generate_caddyfile(config) -> str:
     sections.append(f"""\u007b
     on_demand_tls \u007b
         ask {_ask_url}
-        ask_timeout 5s
-        max_certs 50
     \u007d
 \u007d""")
 
