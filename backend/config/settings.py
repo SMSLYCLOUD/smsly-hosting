@@ -177,6 +177,11 @@ if not DEBUG and not IS_TESTING:
     _is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', DOMAIN))
     _is_local_host = DOMAIN.lower() in ('localhost', '127.0.0.1')
     _ssl_enabled = _use_ssl and not _is_ip and not _is_local_host
+    # SEC-002: Caddy serves TLS on IP addresses via self-signed cert.
+    # Even though USE_SSL is False for IPs, the connection IS encrypted.
+    # Set secure cookies so session data isn't transmitted in cleartext.
+    _caddy_serves_tls = _is_ip and os.path.exists('/etc/caddy/certs/ip.crt')
+    _effective_ssl = _ssl_enabled or _caddy_serves_tls
     # Caddy natively redirects domains to HTTPS. If Django also redirects,
     # it traps raw IP addresses (which bypass Caddy's redirect) in an HTTP->HTTPS loop.
     # This MUST remain False as long as Caddy is the edge reverse proxy; enable only
@@ -188,9 +193,9 @@ if not DEBUG and not IS_TESTING:
         r'^health',
         r'^metrics',
     ]
-    SESSION_COOKIE_SECURE = _ssl_enabled
-    CSRF_COOKIE_SECURE = _ssl_enabled
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if _ssl_enabled else None
+    SESSION_COOKIE_SECURE = _effective_ssl
+    CSRF_COOKIE_SECURE = _effective_ssl
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if _effective_ssl else None
 else:
     # Explicitly disable for tests and debug mode
     SECURE_HSTS_SECONDS = 0
@@ -1363,10 +1368,15 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = bool(
     DEBUG and config('CORS_ALLOW_ALL_ORIGINS', default=False, cast=bool)
 )
-CORS_ALLOWED_ORIGINS = config(
+_cors_origins = config(
     'CORS_ALLOWED_ORIGINS',
     default=f'http://localhost:3000,{SITE_URL}',
     cast=Csv())
+# SEC-003: Always include SITE_URL in CORS origins even if .env has a stale list.
+# When the domain changes via the Settings UI, .env may still have the old value.
+if SITE_URL not in _cors_origins:
+    _cors_origins = list(_cors_origins) + [SITE_URL]
+CORS_ALLOWED_ORIGINS = _cors_origins
 # ZH-007 FIX: No wildcard subdomains — explicit trusted origins only
 # Include both the frontend SITE_URL and the backend's own domain for OAuth callbacks
 _BACKEND_ORIGIN = f'https://{DOMAIN}' if not DEBUG else 'http://localhost:8000'

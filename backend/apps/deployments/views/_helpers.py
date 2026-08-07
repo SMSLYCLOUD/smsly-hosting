@@ -383,8 +383,6 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
         expected = self._get_expected_secret()
         if expected:
             provided = request.query_params.get("secret", "")
-            if "?domain=" in provided:
-                provided = provided.split("?domain=")[0]
             if provided and hmac.compare_digest(provided, expected):
                 return True
             # Also check X-Caddy-Secret header for older Caddyfile compatibility
@@ -396,8 +394,17 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
             getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)
         ):
             return True
-        # No secret configured — allow through with domain + rate limit protections only
-        return bool(not expected)
+        # No secret configured — reject unauthenticated requests.
+        # The secret is auto-generated at startup (settings.CADDY_ASK_SECRET)
+        # and stored in PlatformConfig.  Allowing through when it's missing
+        # would let anyone request TLS certs for arbitrary domains, exhausting
+        # Let's Encrypt rate limits.
+        logger.warning(
+            "CaddySecretOrAdminPermission: rejecting request — no secret configured "
+            "and no admin user.  Ensure CADDY_ASK_SECRET is set in .env or "
+            "PlatformConfig."
+        )
+        return False
 
     @staticmethod
     def _get_expected_secret():

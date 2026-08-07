@@ -62,8 +62,10 @@ def ensure_ip_cert():
             if os.path.exists(_f):
                 try:
                     _mode = os.stat(_f).st_mode & 0o777
-                    if _mode < 0o644:
-                        os.chmod(_f, 0o644)
+                    # Cert: 644 (readable by all), Key: 600 (owner-only)
+                    _target = 0o600 if _f == _key_path else 0o644
+                    if _mode < _target:
+                        os.chmod(_f, _target)
                 except OSError:
                     pass
     except Exception as _exc:
@@ -372,6 +374,8 @@ def generate_caddyfile(config) -> str:
     sections.append(f"""\u007b
     on_demand_tls \u007b
         ask {_ask_url}
+        ask_timeout 5s
+        max_certs 50
     \u007d
 \u007d""")
 
@@ -402,7 +406,6 @@ def generate_caddyfile(config) -> str:
                 "    encode gzip",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
-                "        output stdout",
                 "    }",
                 "    handle /api/* {",
                 "        reverse_proxy backend:8000",
@@ -679,8 +682,10 @@ def generate_caddyfile(config) -> str:
                 if os.path.exists(_f):
                     try:
                         _mode = os.stat(_f).st_mode & 0o777
-                        if _mode < 0o644:
-                            os.chmod(_f, 0o644)
+                        # Cert: 644 (readable by all), Key: 600 (owner-only)
+                        _target = 0o600 if _f == _key_path else 0o644
+                        if _mode < _target:
+                            os.chmod(_f, _target)
                     except OSError:
                         pass
     except Exception as _exc:

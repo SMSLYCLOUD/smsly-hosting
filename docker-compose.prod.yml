@@ -129,7 +129,7 @@ services:
     labels:
     - managed_by=smsly-hosting
     ports:
-      - "10.100.0.1:5432:6432"
+      - "${PGCAT_BIND_IP:-127.0.0.1}:5432:6432"
     networks:
     - smsly-net
     deploy:
@@ -898,7 +898,7 @@ services:
       dockerfile: Dockerfile
     image: smsly-hosting-backend:latest
     command: celery -A config worker -l info --autoscale=${CELERY_FAST_AUTOSCALE:-8,2} -Q fast
-    restart: always
+    restart: unless-stopped
     env_file: .env
     environment:
       REDIS_HOST: redis-primary
@@ -1060,6 +1060,7 @@ services:
       INFO: 1
       VERSION: 1
       AUTH: 1
+      EVENTS: 1
     volumes:
     - /var/run/docker.sock:/var/run/docker.sock:ro,z
     healthcheck:

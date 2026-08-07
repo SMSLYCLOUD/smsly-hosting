@@ -171,9 +171,11 @@ if command -v ufw ; then
     if [ -n "$_master_ip" ] && [ "$_master_ip" != "127.0.0.1" ] && ! echo "$_master_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'; then
         echo -e "${BLUE}  → Allowing master ($_master_ip) SSH access...${NC}"
         ufw allow from "$_master_ip" to any port 22  || true
+    else
+        # SECURITY: Fail loud instead of silently opening SSH to everyone.
+        echo -e "${YELLOW}  ⚠ WARNING: MASTER_IP is empty or invalid. SSH will be restricted to existing rules.${NC}"
+        echo -e "${YELLOW}    Set MASTER_IP in .env to enable master→node SSH access.${NC}"
     fi
-    # Fallback: allow SSH from any (in case MASTER_IP is empty)
-    ufw allow ssh  || true
     
     if [ "${INSTALL_MODE:-}" = "agent-lite" ]; then
         if [ -n "$_master_ip" ] && [ "$_master_ip" != "127.0.0.1" ] && ! echo "$_master_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'; then

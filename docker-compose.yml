@@ -138,7 +138,7 @@ services:
       - rabbitmq
       - socket-proxy
     command: celery -A config worker --loglevel=info -Q fast --concurrency=8
-    restart: always
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "celery -A config inspect ping -t 5 || exit 1"]
       interval: 30s
@@ -859,7 +859,7 @@ services:
       # The embed URL is only generated server-side for authenticated Django
       # users — Grafana itself is NOT publicly browseable.  Embedding is
       # allowed so the monitoring iframe works inside the SMSLY dashboard.
-      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON_ENABLED:-false}
       - GF_AUTH_ANONYMOUS_ORG_NAME=${GRAFANA_ANON_ORG:-Main Org.}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=${GRAFANA_ANON_ROLE:-Viewer}
       - GF_SECURITY_ALLOW_EMBEDDING=true

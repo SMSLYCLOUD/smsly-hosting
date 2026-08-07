@@ -209,10 +209,6 @@ class DomainActionsMixin:
         # apex may not consume more than CADDY_DAILY_CERT_CAP (default 20)
         # hostnames per UTC day.
         domain = request.query_params.get('domain', '')
-        if not domain:
-            secret_val = request.query_params.get('secret', '')
-            if '?domain=' in secret_val:
-                domain = secret_val.split('?domain=')[-1]
         raw_domain_for_cap = domain.strip().lower()
         apex = (
             raw_domain_for_cap.split('.', 1)[-1]
