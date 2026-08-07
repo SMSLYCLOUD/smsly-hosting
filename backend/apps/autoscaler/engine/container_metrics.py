@@ -11,8 +11,15 @@ between the per-service pipeline and the per-container dashboard.
 """
 import logging
 import concurrent.futures
+import threading
 
 logger = logging.getLogger(__name__)
+
+# Per-container stats timeout (seconds). Docker SDK has no built-in
+# per-request timeout for stats(), so we wrap in a thread.
+STATS_PER_CONTAINER_TIMEOUT = 3
+# Overall timeout for collecting ALL container stats (seconds).
+STATS_OVERALL_TIMEOUT = 10
 
 # Lazy-loaded K8s clients — only imported when the kubernetes package
 # is available.  ``init_k8s()`` populates ``_k8s_clients`` on first use.
@@ -124,73 +131,82 @@ def parse_k8s_memory(mem_str: str) -> float:
 def docker_stats_legacy() -> dict:
     """Collect container metrics via the Docker SDK (docker-py).
 
-    Uses parallel stats collection to avoid the 2s-per-container latency
-    that would make the API endpoint hang with many containers.
+    Uses parallel stats collection with per-container and overall timeouts
+    to prevent the API from hanging when Docker is slow.
     """
     try:
         from apps.cloud.docker_client import get_docker_client
 
-        client = get_docker_client(timeout=10)
+        client = get_docker_client(timeout=5)
         container_list = client.containers.list()
 
         def _collect_one(container):
-            try:
-                stats = container.stats(stream=False)
-            except Exception as exc:
-                logger.debug(
-                    "Skipping container %s: %s",
-                    getattr(container, "name", "?"), exc,
-                )
-                return None
+            result = [None]
+            def _do_collect():
+                try:
+                    stats = container.stats(stream=False)
+                except Exception:
+                    return
 
-            cpu_stats = stats.get("cpu_stats", {}) or {}
-            precpu_stats = stats.get("precpu_stats", {}) or {}
-            cpu_usage = cpu_stats.get("cpu_usage", {}) or {}
-            precpu_usage = precpu_stats.get("cpu_usage", {}) or {}
-            cpu_delta = cpu_usage.get("total_usage", 0) - precpu_usage.get("total_usage", 0)
-            system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
-            num_cpus = cpu_stats.get("online_cpus") or 1
-            if system_delta > 0 and cpu_delta >= 0:
-                cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0
-            else:
-                cpu_percent = 0.0
+                cpu_stats = stats.get("cpu_stats", {}) or {}
+                precpu_stats = stats.get("precpu_stats", {}) or {}
+                cpu_usage = cpu_stats.get("cpu_usage", {}) or {}
+                precpu_usage = precpu_stats.get("cpu_usage", {}) or {}
+                cpu_delta = cpu_usage.get("total_usage", 0) - precpu_usage.get("total_usage", 0)
+                system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
+                num_cpus = cpu_stats.get("online_cpus") or 1
+                if system_delta > 0 and cpu_delta >= 0:
+                    cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0
+                else:
+                    cpu_percent = 0.0
 
-            mem = stats.get("memory_stats", {}) or {}
-            mem_used = mem.get("usage", 0) or 0
-            mem_limit = mem.get("limit", 0) or 0
-            mem_used_mb = mem_used / (1024 * 1024)
-            mem_limit_mb = mem_limit / (1024 * 1024) if mem_limit else 0.0
-            mem_percent = (mem_used / mem_limit * 100.0) if mem_limit else 0.0
+                mem = stats.get("memory_stats", {}) or {}
+                mem_used = mem.get("usage", 0) or 0
+                mem_limit = mem.get("limit", 0) or 0
+                mem_used_mb = mem_used / (1024 * 1024)
+                mem_limit_mb = mem_limit / (1024 * 1024) if mem_limit else 0.0
+                mem_percent = (mem_used / mem_limit * 100.0) if mem_limit else 0.0
 
-            networks = stats.get("networks", {}) or {}
-            rx_bytes = sum(n.get("rx_bytes", 0) for n in networks.values())
-            tx_bytes = sum(n.get("tx_bytes", 0) for n in networks.values())
+                networks = stats.get("networks", {}) or {}
+                rx_bytes = sum(n.get("rx_bytes", 0) for n in networks.values())
+                tx_bytes = sum(n.get("tx_bytes", 0) for n in networks.values())
 
-            pids = (stats.get("pids_stats", {}) or {}).get("current", 0) or 0
+                pids = (stats.get("pids_stats", {}) or {}).get("current", 0) or 0
 
-            return container.name, {
-                "cpu_percent": round(cpu_percent, 1),
-                "memory_mb": round(mem_used_mb, 1),
-                "memory_limit_mb": round(mem_limit_mb, 1),
-                "memory_percent": round(mem_percent, 1),
-                "net_rx_mb": round(rx_bytes / (1024 * 1024), 2),
-                "net_tx_mb": round(tx_bytes / (1024 * 1024), 2),
-                "pids": int(pids),
-            }
+                result[0] = (container.name, {
+                    "cpu_percent": round(cpu_percent, 1),
+                    "memory_mb": round(mem_used_mb, 1),
+                    "memory_limit_mb": round(mem_limit_mb, 1),
+                    "memory_percent": round(mem_percent, 1),
+                    "net_rx_mb": round(rx_bytes / (1024 * 1024), 2),
+                    "net_tx_mb": round(tx_bytes / (1024 * 1024), 2),
+                    "pids": int(pids),
+                })
+
+            t = threading.Thread(target=_do_collect, daemon=True)
+            t.start()
+            t.join(timeout=STATS_PER_CONTAINER_TIMEOUT)
+            if t.is_alive():
+                logger.debug("Stats timeout for %s after %ds", container.name, STATS_PER_CONTAINER_TIMEOUT)
+            return result[0]
 
         containers = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_collect_one, c): c for c in container_list}
-            for future in concurrent.futures.as_completed(futures, timeout=15):
-                try:
-                    result = future.result()
-                    if result is not None:
-                        name, data = result
-                        containers[name] = data
-                except concurrent.futures.TimeoutError:
-                    logger.warning("Stats collection timed out for a container")
-                except Exception as exc:
-                    logger.debug("Stats collection failed: %s", exc)
+            try:
+                for future in concurrent.futures.as_completed(futures, timeout=STATS_OVERALL_TIMEOUT):
+                    try:
+                        result = future.result(timeout=0)
+                        if result is not None:
+                            name, data = result
+                            containers[name] = data
+                    except Exception as exc:
+                        logger.debug("Stats collection failed: %s", exc)
+            except concurrent.futures.TimeoutError:
+                logger.warning(
+                    "Stats collection overall timeout after %ds (%d/%d containers collected)",
+                    STATS_OVERALL_TIMEOUT, len(containers), len(container_list),
+                )
 
         return containers
     except Exception as exc:

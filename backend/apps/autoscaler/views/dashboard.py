@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
+import threading
 
 from django.core.cache import cache
 from django.utils import timezone
@@ -30,6 +31,10 @@ CACHE_KEY_LAST_SCALE = "autoscaler:last_scale"
 COOLDOWN_UP = 60
 COOLDOWN_DOWN = 300
 START_TIME = time.time()
+
+# Maximum time (seconds) the API view will wait for a live stats check
+# before returning cached data. Prevents the endpoint from hanging.
+API_TIMEOUT = 8
 
 init_k8s()
 
@@ -267,25 +272,59 @@ def _run_autoscaler_check():
 @api_view(["GET"])
 @permission_classes([IsAdminUser])
 def autoscaler_status(request) -> Response:
-    try:
-        return Response(_run_autoscaler_check())
-    except Exception as exc:
-        logger.error("Autoscaler status error: %s", exc)
-        return Response({"error": str(exc)}, status=503)
+    """Return autoscaler status. Runs a live check in a background thread;
+    if it doesn't complete within API_TIMEOUT seconds, returns cached data
+    so the endpoint never hangs."""
+    cached = cache.get(CACHE_KEY_STATUS)
+    result = [cached]
+    done = threading.Event()
+
+    def _live_check():
+        try:
+            result[0] = _run_autoscaler_check()
+        except Exception as exc:
+            logger.error("Autoscaler live check failed: %s", exc)
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_live_check, daemon=True)
+    t.start()
+    done.wait(timeout=API_TIMEOUT)
+
+    if not done.is_set():
+        logger.warning("Autoscaler status: live check exceeded %ds, returning cached", API_TIMEOUT)
+        if cached:
+            cached["_stale"] = True
+            return Response(cached)
+        return Response({"error": "Autoscaler check timed out", "status": "error"}, status=503)
+
+    return Response(result[0])
 
 
 @api_view(["GET"])
 @permission_classes([IsAdminUser])
 def autoscaler_history(request) -> Response:
-    try:
-        history = cache.get(CACHE_KEY_HISTORY)
-        if not history:
-            _run_autoscaler_check()
-            history = cache.get(CACHE_KEY_HISTORY, {"timestamps": [], "services": {}, "budget": {"used_mb": [], "free_mb": []}})
+    history = cache.get(CACHE_KEY_HISTORY)
+    if history:
         return Response(history)
-    except Exception as exc:
-        logger.error("Autoscaler history error: %s", exc)
-        return Response({"error": str(exc)}, status=503)
+    # No cached history yet — run a live check with timeout
+    result = [None]
+    done = threading.Event()
+
+    def _live():
+        try:
+            _run_autoscaler_check()
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_live, daemon=True)
+    t.start()
+    done.wait(timeout=API_TIMEOUT)
+
+    history = cache.get(CACHE_KEY_HISTORY, {"timestamps": [], "services": {}, "budget": {"used_mb": [], "free_mb": []}})
+    return Response(history)
 
 
 @api_view(["POST"])
@@ -305,11 +344,31 @@ def autoscaler_config(request) -> Response:
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def autoscaler_trigger(request) -> Response:
-    try:
-        return Response(_run_autoscaler_check())
-    except Exception as exc:
-        logger.error("Autoscaler trigger error: %s", exc)
-        return Response({"error": str(exc)}, status=503)
+    """Force an immediate check. Runs in a thread with timeout."""
+    result = [None]
+    done = threading.Event()
+
+    def _live():
+        try:
+            result[0] = _run_autoscaler_check()
+        except Exception as exc:
+            logger.error("Autoscaler trigger failed: %s", exc)
+            result[0] = {"error": str(exc)}
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_live, daemon=True)
+    t.start()
+    done.wait(timeout=API_TIMEOUT)
+
+    if result[0] is None:
+        cached = cache.get(CACHE_KEY_STATUS)
+        if cached:
+            cached["_stale"] = True
+            return Response(cached)
+        return Response({"error": "Autoscaler trigger timed out", "status": "error"}, status=503)
+
+    return Response(result[0])
 
 
 @api_view(["POST"])
