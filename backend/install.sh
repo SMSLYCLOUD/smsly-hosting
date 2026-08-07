@@ -8381,6 +8381,14 @@ if [ -n "$UPDATE_MODE" ]; then
         echo -e "${BLUE}  → Fixed .env permissions to 640 (readable by container UID 1000)${NC}"
     fi
 
+    # ─── Fix bind-mount directory permissions ────────────────────────────────
+    # caddy-config and backend/staticfiles are bind-mounted into the backend
+    # container, which writes to them as uid 1000 (Celery signal handlers for
+    # Caddyfile, entrypoint for collectstatic). If they are root-owned on the
+    # host, those writes fail with PermissionError/EPERM. ensure_infrastructure
+    # _permissions chowns them to 1000:1000 so container writes succeed.
+    ensure_infrastructure_permissions
+
     # ─── Pre-flight ──────────────────────────────────────────────────────────
     if [ "$EUID" -ne 0 ]; then
         echo -e "${RED}✗ Please run as root (sudo bash install.sh --update)${NC}"

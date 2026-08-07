@@ -392,13 +392,18 @@ create_admin_if_configured() {
 
 collect_static_nonfatal() {
     echo "Collecting static files..."
+    # Ensure the staticfiles directory exists and is writable by uid 1000 (smsly).
+    # The bind-mounted /app maps to the host's ./backend directory; creating the
+    # dir here (as root) and chowning to smsly lets the subsequent collectstatic
+    # run as smsly succeed even when the host dir is root-owned.
+    mkdir -p /app/staticfiles 2>/dev/null || true
+    chown -R smsly:smsly /app/staticfiles 2>/dev/null || true
+    chmod -R u+rwX /app/staticfiles 2>/dev/null || true
     if [ "$(id -u)" = "0" ]; then
-        # cap_add includes DAC_OVERRIDE + FOWNER, so root can write to bind-mounted
-        # /app/staticfiles even when owned by uid 1000 on the host. Run as root,
-        # then chown so the smsly-owned gunicorn workers can read the output.
-        python manage.py collectstatic --noinput || \
+        # Drop to smsly: gunicorn runs as smsly, so collectstatic must too, or the
+        # hashed manifest files end up owned by root and unreadable by workers.
+        su -s /bin/sh -c 'python manage.py collectstatic --noinput' smsly || \
             echo "WARNING: collectstatic failed (non-fatal)"
-        chown -R smsly:smsly /app/staticfiles 2>/dev/null || true
     else
         python manage.py collectstatic --noinput || \
             echo "WARNING: collectstatic failed (non-fatal)"
