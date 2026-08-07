@@ -285,9 +285,11 @@ def autoscaler_status(request) -> Response:
                 from datetime import datetime, timezone as tz
                 age = (datetime.now(tz) - datetime.fromisoformat(last_check)).total_seconds()
                 if age < 60:
+                    logger.debug("Autoscaler: returning cached data (age=%.1fs)", age)
                     return Response(cached)
-        except Exception:
-            pass
+                logger.debug("Autoscaler: cache stale (age=%.1fs), running live check", age)
+        except Exception as exc:
+            logger.debug("Autoscaler: cache freshness check failed: %s", exc)
 
     # No fresh cache — run live check with timeout
     result = [None]
