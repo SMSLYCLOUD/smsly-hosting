@@ -34,7 +34,7 @@ START_TIME = time.time()
 
 # Maximum time (seconds) the API view will wait for a live stats check
 # before returning cached data. Prevents the endpoint from hanging.
-API_TIMEOUT = 8
+API_TIMEOUT = 15
 
 init_k8s()
 

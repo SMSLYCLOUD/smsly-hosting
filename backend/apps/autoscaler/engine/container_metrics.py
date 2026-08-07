@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # per-request timeout for stats(), so we wrap in a thread.
 STATS_PER_CONTAINER_TIMEOUT = 3
 # Overall timeout for collecting ALL container stats (seconds).
-STATS_OVERALL_TIMEOUT = 10
+STATS_OVERALL_TIMEOUT = 20
 
 # Lazy-loaded K8s clients — only imported when the kubernetes package
 # is available.  ``init_k8s()`` populates ``_k8s_clients`` on first use.
