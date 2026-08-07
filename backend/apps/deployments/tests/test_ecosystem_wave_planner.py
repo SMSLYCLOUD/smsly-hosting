@@ -3,7 +3,7 @@
 
 from django.test import SimpleTestCase
 
-from apps.deployments.tasks.ecosystem import (
+from apps.deployments.tasks.ecosystem.helpers import (
     _build_dependency_waves,
     _resolve_dependency_map,
 )

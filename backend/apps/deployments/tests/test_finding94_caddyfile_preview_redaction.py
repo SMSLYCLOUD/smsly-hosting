@@ -18,7 +18,7 @@ These tests verify:
 
 from django.test import SimpleTestCase
 
-from apps.core.views.system import _redact_caddyfile_preview
+from apps.domains.views.domain import _redact_caddyfile_preview
 
 
 class Finding94CaddyfilePreviewRedactionTests(SimpleTestCase):

@@ -38,7 +38,7 @@ class ProxySizeCapTests(TestCase):
         self.server.delete()
         self.user.delete()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_proxy_with_body_under_one_mb_passes(self, mock_request):
         mock_request.return_value = _make_mock_response(
             status_code=200, payload={"results": [], "count": 0}
@@ -55,7 +55,7 @@ class ProxySizeCapTests(TestCase):
         self.assertIn(resp.status_code, (400, 405))
         mock_request.assert_not_called()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_proxy_with_body_over_one_mb_returns_413(self, mock_request):
         mock_request.return_value = _make_mock_response(status_code=200)
         large_string = "x" * (1024 * 1024 + 1024)
@@ -70,7 +70,7 @@ class ProxySizeCapTests(TestCase):
         self.assertIn(resp.status_code, (400, 405))
         mock_request.assert_not_called()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_proxy_admin_path_still_passes_size_cap(self, mock_request):
         mock_request.return_value = _make_mock_response(
             status_code=200, payload={"results": [], "count": 0}

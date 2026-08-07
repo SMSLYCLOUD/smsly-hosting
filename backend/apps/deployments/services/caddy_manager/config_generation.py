@@ -687,10 +687,43 @@ def generate_caddyfile(config) -> str:
         logger.warning("Could not generate self-signed cert for IP redirect: %s", _exc)
 
     if os.path.exists(_crt_path) and os.path.exists(_key_path) and _server_ip:
+        # Use :443 as the site address instead of the raw IP.
+        # Caddy breaks TLS when the site address is a bare IP because
+        # that IP doesn't exist on the container's network interface
+        # (the container has e.g. 172.18.0.20).  :443 listens on all
+        # interfaces and lets TLS negotiate via SNI.  The static cert
+        # for the IP is still presented.
         sections.append(
-            f"""{_server_ip} {{
+            f""":443 {{
     tls {_caddy_crt} {_caddy_key}
-    redir http://{_server_ip}{{uri}} 308
+    handle /api/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /ws/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /health* {{
+        reverse_proxy backend:8000
+    }}
+    handle /admin/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /static/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /media/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /grafana/* {{
+        reverse_proxy grafana:3000
+    }}
+    handle /grafana {{
+        reverse_proxy frontend:3000
+    }}
+    handle {{
+        reverse_proxy frontend:3000
+    }}
+    encode gzip
 }}"""
         )
 

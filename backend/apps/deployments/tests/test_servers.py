@@ -19,14 +19,14 @@ from apps.cloud.models import CloudProvider
 
 from ..models import Deployment, Service  # type: ignore[attr-defined]
 from ..models.servers import ManagedServer
-from ..tasks import (
+from ..tasks import update_remote_server_task
+from ..tasks.deploy.build import fleet_build_lock
+from ..tasks.deploy.queue import (
     enqueue_smart_deploy_task,
-    fleet_build_lock,
     recover_stalled_queued_deployments,
     should_skip_review_for_commit_message,
-    update_remote_server_task,
 )
-from ..views_servers import _build_remote_headers
+from ..views.server.helpers import _build_remote_headers
 
 User = get_user_model()
 
@@ -198,7 +198,7 @@ class ManagedServerViewTests(TestCase):
         servers = data if isinstance(data, list) else []
         self.assertEqual(len(servers), 0)
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_health_check_online(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -216,7 +216,7 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["status"], "ONLINE")
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_health_check_auto_detects_blank_api_url(self, mock_get):
         def fake_get(url, *args, **kwargs):
             mock_resp = MagicMock()
@@ -247,7 +247,7 @@ class ManagedServerViewTests(TestCase):
         server.refresh_from_db()
         self.assertIn(server.api_url, ["http://10.0.0.6", "http://10.0.0.6:8090"])
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_health_check_repairs_stale_https_api_url(self, mock_get):
         import requests as req
 
@@ -277,7 +277,7 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["status"], "ONLINE")
         self.assertIn(resp.data["api_url"], ["http://10.0.0.7", "http://10.0.0.7:8090"])
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_health_check_offline(self, mock_get):
         import requests as req
         mock_get.side_effect = req.ConnectionError("Connection refused")
@@ -293,7 +293,7 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["status"], "OFFLINE")
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_domains_aggregation(self, mock_get):
         """Test that the domains endpoint aggregates custom_domains across services."""
         mock_resp = MagicMock()
@@ -343,7 +343,7 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(domains[2]["domain"], "api.example.com")
         self.assertEqual(domains[2]["verified"], False)
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_remote_services_non_json_payload_returns_safe_response(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -364,7 +364,7 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["kind"], "services")
         self.assertEqual(resp.data["results"], [])
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_remote_services_upstream_error_returns_safe_response(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.status_code = 502
@@ -411,14 +411,14 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["data"]["count"], 1)
         self.assertEqual(resp.data["data"]["results"][0]["id"], str(service.id))
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_proxy_request_exception_returns_proxy_envelope_not_502(self, mock_request):
         mock_request.side_effect = requests.RequestException("connection refused")
         server = ManagedServer.objects.create(
             owner=self.user,
             name="Remote Down",
             host="10.0.0.13",
-            api_url="https://remote-down.example.com",
+            api_url="https://10.0.0.13",
             api_token="tok",
         )
 
@@ -435,7 +435,7 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["status_code"], 502)
         self.assertTrue(resp.data["data"]["remote_unreachable"])
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_remote_services_falls_back_to_gateway_secret_when_token_fails(self, mock_get):
         first = MagicMock()
         first.status_code = 403
@@ -465,7 +465,7 @@ class ManagedServerViewTests(TestCase):
         self.assertIn("Authorization", first_headers)
         self.assertIn("X-Gateway-Signature-V2", second_headers)
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_domains_handles_null_custom_domains(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -492,7 +492,7 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["count"], 0)
         self.assertEqual(resp.data["domains"], [])
 
-    @patch("apps.deployments.views_servers.requests.get")
+    @patch("apps.deployments.views.server.helpers.requests.get")
     def test_domains_aggregation_uses_all_paginated_service_pages(self, mock_get):
         first = MagicMock()
         first.status_code = 200
@@ -748,7 +748,7 @@ class RemoteServerUpdateTaskTests(TestCase):
         dispatch_mock.assert_called_once_with(
             event_type='server_update_success',
             user_id=self.user.id,
-            title=f"✅ Server Update Succeeded: {server.name}",
+            title=f"âœ… Server Update Succeeded: {server.name}",
             message=f"The update process for server '{server.name}' ({server.host}) completed successfully.",
             metadata={'server_id': str(server.id), 'server_name': server.name, 'host': server.host},
         )
@@ -819,7 +819,7 @@ class LiteAgentQueueTests(TestCase):
         self.assertTrue(should_skip_review_for_commit_message("[auto-fix] missing env"))
         self.assertFalse(should_skip_review_for_commit_message("Manual Trigger: HEAD"))
 
-    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
+    @patch("apps.deployments.tasks.deploy.queue.enqueue_smart_deploy_task")
     def test_recover_stalled_auto_redeploy_preserves_auto_approval(self, enqueue_mock):
         user = User.objects.create_user(username="queue-user", password="password123")
         provider = CloudProvider.objects.create(

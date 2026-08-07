@@ -14,7 +14,7 @@ from apps.deployments.models import (
     ManagedServer,
     Service,
 )
-from apps.deployments.tasks.ecosystem import (
+from apps.deployments.tasks.ecosystem.helpers import (
     _apply_service_profile,
     _build_dependency_waves,
     _normalize_buildpack,
@@ -26,6 +26,8 @@ from apps.deployments.tasks.ecosystem import (
     _select_shared_addon_anchor,
     _service_placeholder_target,
     _validate_resolved_env,
+)
+from apps.deployments.tasks.ecosystem.tasks import (
     ecosystem_deploy_task,
     ecosystem_scan_task,
 )
@@ -425,7 +427,7 @@ class EcosystemDeployTaskTests(TestCase):
             is_active=True,
         )
 
-    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     def test_local_provider_without_managed_server_queues_local_deployment(self, _queue_wave):
         plan = {
             "services": [
@@ -451,7 +453,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(deployment.branch, service.branch)
         self.assertEqual(service.repository_url, "https://github.com/owner/api")
 
-    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     def test_existing_service_is_reassigned_to_selected_node_and_deployment_targets_it(self, _queue_wave):
         server = ManagedServer.objects.create(
             owner=self.user,
@@ -490,7 +492,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertFalse(deployment.target_is_local)
 
     @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/app"))
-    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     def test_top_level_addons_and_shared_secret_placeholders_are_resolved(self, _queue_wave, _provision):
         plan = {
             "addons": [{"type": "POSTGRES", "shared_by": ["api"]}],
@@ -521,7 +523,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertNotIn("{{", env["JWT_SECRET"])
 
     @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
-    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     def test_embedded_postgres_url_with_db_suffix_resolves(self, _queue_wave, _provision):
         """{{POSTGRES_URL}}/identity must become postgres://.../identity."""
         plan = {
@@ -548,7 +550,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(env["DATABASE_URL"], "postgresql://u:p@db:5432/identity")
 
     @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
-    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     def test_dockerfile_services_choose_docker_build(self, _queue_wave, _provision):
         """Ecosystem services should default to DOCKER buildpack."""
         plan = {
@@ -572,7 +574,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(service.buildpack, "DOCKER")
 
     @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
-    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     def test_unknown_build_defaults_to_docker(self, _queue_wave, _provision):
         """Unknown/empty build type should default to DOCKER for ecosystem."""
         plan = {
@@ -608,7 +610,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(host, "auth-service")
         self.assertEqual(port, 8080)
 
-    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     @patch("apps.addons.services.addon_provisioner.provision", return_value=("mock-cid", "postgresql://new-user:new-pass@new-db:5432/app"))
     def test_addon_no_reuse_user_wide(self, _provision, _queue_wave):
         """Verify that deploying new ecosystem services does NOT reuse unrelated existing user-wide addons."""

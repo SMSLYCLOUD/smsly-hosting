@@ -4,8 +4,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
+from apps.cloud.models import CloudProvider
 from apps.deployments.models.core import (
-    CloudProvider,
     Deployment,
     ManagedServer,
     Service,

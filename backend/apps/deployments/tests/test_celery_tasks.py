@@ -8,6 +8,7 @@ Tests for critical Celery tasks:
   5. recover_stalled_deletions — re-queues stuck services
 """
 from datetime import timedelta
+import uuid
 from unittest.mock import MagicMock, patch
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -43,7 +44,7 @@ class DeleteServiceTaskTests(TestCase):
         )
 
     @patch(
-        "apps.deployments.tasks.deploy.deletion.DeletionOrchestrator"
+        "apps.deployments.services.deletion_orchestrator.DeletionOrchestrator"
     )
     def test_delete_service_success(self, MockOrchestrator):
         """Successful deletion removes the service from the DB."""
@@ -65,7 +66,7 @@ class DeleteServiceTaskTests(TestCase):
         self.assertFalse(Service.objects.filter(id=svc_id).exists())
 
     @patch(
-        "apps.deployments.tasks.deploy.deletion.DeletionOrchestrator"
+        "apps.deployments.services.deletion_orchestrator.DeletionOrchestrator"
     )
     def test_delete_service_failure_sets_status(self, MockOrchestrator):
         """When orchestrator fails, service is marked DELETION_FAILED."""
@@ -90,11 +91,11 @@ class DeleteServiceTaskTests(TestCase):
     def test_delete_service_nonexistent_returns(self):
         """Calling with a nonexistent ID returns silently (no crash)."""
         from apps.deployments.tasks.deploy.deletion import delete_service_task
-        result = delete_service_task(str(User.objects.create_user(username="z", password="z").id))
+        result = delete_service_task(str(uuid.uuid4()))
         self.assertIsNone(result)
 
     @patch(
-        "apps.deployments.tasks.deploy.deletion.DeletionOrchestrator"
+        "apps.deployments.services.deletion_orchestrator.DeletionOrchestrator"
     )
     @patch(
         "apps.deployments.tasks.deploy.deletion.delete_service_task.retry",
@@ -347,10 +348,10 @@ class AddonHealthCheckAllTests(TestCase):
         """If one addon's health check raises, the others still run."""
         call_count = [0]
 
-        def side_effect(addon):
-            if addon.name == "broken-addon":
-                raise RuntimeError("health check crashed")
+        def side_effect():
             call_count[0] += 1
+            if call_count[0] >= 2:
+                raise RuntimeError("health check crashed")
 
         mock_svc = MockMaintenance.return_value
         mock_svc.health_check.side_effect = side_effect

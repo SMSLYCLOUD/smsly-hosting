@@ -19,7 +19,7 @@ from django.utils import timezone
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
 from apps.deployments.models.metrics import ServiceMetric
-from apps.deployments.views.metrics import _db_metrics_fallback
+from apps.autoscaler.views.metrics import _db_metrics_fallback
 
 
 class DbMetricsFallbackAggregationTests(TestCase):

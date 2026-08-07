@@ -21,8 +21,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models import Service
-from apps.deployments.models.project import Project
+from apps.deployments.models import Project, Service
 
 User = get_user_model()
 

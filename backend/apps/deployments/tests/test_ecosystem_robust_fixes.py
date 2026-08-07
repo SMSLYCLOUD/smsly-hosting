@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from apps.deployments.models import Deployment
 from apps.deployments.models.ecosystem import EcosystemPlan
-from apps.deployments.tasks.ecosystem import (
+from apps.deployments.tasks.ecosystem.tasks import (
     _cancel_dependent_deployments,
     _cancel_unreleased_deployments,
     _finalize_ecosystem_plan,
@@ -16,7 +16,7 @@ from apps.deployments.tasks.ecosystem import (
 class TestEcosystemRobustFixes(TestCase):
     """Test suite for robust wave orchestration and EcosystemPlan finalization."""
 
-    @patch("apps.deployments.models_ecosystem.EcosystemPlan.objects.filter")
+    @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
     @patch("apps.deployments.models.Deployment.objects.filter")
     def test_finalize_ecosystem_plan_completed(self, mock_dep_filter, mock_plan_filter):
         """When all deployments in all waves succeed, plan status transitions to COMPLETED."""
@@ -34,7 +34,7 @@ class TestEcosystemRobustFixes(TestCase):
         self.assertEqual(mock_plan.error_message, "")
         mock_plan.save.assert_called_once()
 
-    @patch("apps.deployments.models_ecosystem.EcosystemPlan.objects.filter")
+    @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
     @patch("apps.deployments.models.Deployment.objects.filter")
     def test_finalize_ecosystem_plan_failed(self, mock_dep_filter, mock_plan_filter):
         """When any deployment fails, plan status transitions to FAILED."""
@@ -52,7 +52,7 @@ class TestEcosystemRobustFixes(TestCase):
         self.assertIn("1/2 service failures or cancellations", mock_plan.error_message)
         mock_plan.save.assert_called_once()
 
-    @patch("apps.deployments.models_ecosystem.EcosystemPlan.objects.filter")
+    @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
     @patch("apps.deployments.models.Deployment.objects.filter")
     def test_finalize_ecosystem_plan_in_progress(self, mock_dep_filter, mock_plan_filter):
         """If deployments are still in progress, finalization is deferred."""
@@ -69,7 +69,8 @@ class TestEcosystemRobustFixes(TestCase):
         mock_plan.save.assert_not_called()
 
     @patch("apps.deployments.models.Deployment.objects.filter")
-    def test_cancel_unreleased_deployments(self, mock_dep_filter):
+    @patch("apps.deployments.models.Deployment.objects.bulk_update")
+    def test_cancel_unreleased_deployments(self, mock_bulk_update, mock_dep_filter):
         """Unreleased QUEUED deployments are marked CANCELLED when wave times out."""
         dep_1 = MagicMock(status=Deployment.Status.QUEUED, build_logs="")
         dep_2 = MagicMock(status=Deployment.Status.ACTIVE, build_logs="")
@@ -81,12 +82,12 @@ class TestEcosystemRobustFixes(TestCase):
         self.assertEqual(cancelled_count, 1)
         self.assertEqual(dep_1.status, Deployment.Status.CANCELLED)
         self.assertIn("timeout", dep_1.build_logs)
-        dep_1.save.assert_called_once()
+        mock_bulk_update.assert_called_once()
         dep_2.save.assert_not_called()
 
-    @patch("apps.deployments.tasks.ecosystem._finalize_ecosystem_plan")
+    @patch("apps.deployments.tasks.ecosystem.tasks._finalize_ecosystem_plan")
     @patch("apps.deployments.models.Deployment.objects.filter")
-    @patch("apps.deployments.tasks.ecosystem._rebuild_ecosystem_build_counter")
+    @patch("apps.deployments.tasks.ecosystem.tasks._rebuild_ecosystem_build_counter")
     def test_ecosystem_release_wave_task_final_wave_completion(
         self, mock_counter, mock_dep_filter, mock_finalize
     ):
@@ -107,10 +108,10 @@ class TestEcosystemRobustFixes(TestCase):
         self.assertEqual(res["waves"], 1)
         mock_finalize.assert_called_once_with("plan-123", waves)
 
-    @patch("apps.deployments.tasks.ecosystem._finalize_ecosystem_plan")
-    @patch("apps.deployments.tasks.ecosystem._cancel_unreleased_deployments")
+    @patch("apps.deployments.tasks.ecosystem.tasks._finalize_ecosystem_plan")
+    @patch("apps.deployments.tasks.ecosystem.tasks._cancel_unreleased_deployments")
     @patch("apps.deployments.models.Deployment.objects.filter")
-    @patch("apps.deployments.tasks.ecosystem._rebuild_ecosystem_build_counter")
+    @patch("apps.deployments.tasks.ecosystem.tasks._rebuild_ecosystem_build_counter")
     def test_ecosystem_release_wave_task_timeout(
         self, mock_counter, mock_dep_filter, mock_cancel_unreleased, mock_finalize
     ):
@@ -135,7 +136,8 @@ class TestEcosystemRobustFixes(TestCase):
         mock_finalize.assert_called_once_with("plan-123", waves)
 
     @patch("apps.deployments.models.Deployment.objects.filter")
-    def test_cancel_dependent_deployments_only_cancels_downstream(self, mock_dep_filter):
+    @patch("apps.deployments.models.Deployment.objects.bulk_update")
+    def test_cancel_dependent_deployments_only_cancels_downstream(self, mock_bulk_update, mock_dep_filter):
         """Verify that when an upstream service fails, only its downstream dependents are cancelled."""
         dep_api = MagicMock(id="dep-api", status=Deployment.Status.QUEUED, build_logs="")
         dep_worker = MagicMock(id="dep-worker", status=Deployment.Status.QUEUED, build_logs="")
@@ -168,15 +170,15 @@ class TestEcosystemRobustFixes(TestCase):
 
         self.assertEqual(cancelled, 1)
         self.assertEqual(dep_api.status, Deployment.Status.CANCELLED)
-        dep_api.save.assert_called_once()
+        mock_bulk_update.assert_called_once()
         dep_worker.save.assert_not_called()
 
     @patch.object(ecosystem_release_wave_task.app, "send_task")
-    @patch("apps.deployments.tasks.ecosystem._finalize_ecosystem_plan")
-    @patch("apps.deployments.tasks.ecosystem._cancel_dependent_deployments")
-    @patch("apps.deployments.tasks.ecosystem._queue_wave")
+    @patch("apps.deployments.tasks.ecosystem.tasks._finalize_ecosystem_plan")
+    @patch("apps.deployments.tasks.ecosystem.tasks._cancel_dependent_deployments")
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave")
     @patch("apps.deployments.models.Deployment.objects.filter")
-    @patch("apps.deployments.tasks.ecosystem._rebuild_ecosystem_build_counter")
+    @patch("apps.deployments.tasks.ecosystem.tasks._rebuild_ecosystem_build_counter")
     def test_ecosystem_release_wave_cascade_failure_isolation(
         self, mock_counter, mock_dep_filter, mock_queue_wave, mock_cancel_dep, mock_finalize, mock_send_task
     ):

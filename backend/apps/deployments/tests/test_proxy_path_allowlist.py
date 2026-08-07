@@ -45,7 +45,7 @@ class ProxyAllowlistTests(TestCase):
         self.server.delete()
         self.user.delete()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_post_method_rejected(self, mock_request):
         mock_request.return_value = _make_mock_response(200)
         resp = self.client.post(
@@ -56,7 +56,7 @@ class ProxyAllowlistTests(TestCase):
         self.assertEqual(resp.status_code, 405)
         mock_request.assert_not_called()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_delete_method_rejected(self, mock_request):
         mock_request.return_value = _make_mock_response(200)
         resp = self.client.post(
@@ -67,7 +67,7 @@ class ProxyAllowlistTests(TestCase):
         self.assertEqual(resp.status_code, 405)
         mock_request.assert_not_called()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_services_path_rejected_as_not_in_allowlist(self, mock_request):
         mock_request.return_value = _make_mock_response(200)
         resp = self.client.post(
@@ -78,7 +78,7 @@ class ProxyAllowlistTests(TestCase):
         self.assertEqual(resp.status_code, 403)
         mock_request.assert_not_called()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_deployments_path_rejected_as_not_in_allowlist(self, mock_request):
         mock_request.return_value = _make_mock_response(200)
         resp = self.client.post(
@@ -89,7 +89,7 @@ class ProxyAllowlistTests(TestCase):
         self.assertEqual(resp.status_code, 403)
         mock_request.assert_not_called()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_admin_path_rejected_as_not_in_allowlist(self, mock_request):
         mock_request.return_value = _make_mock_response(200)
         resp = self.client.post(
@@ -100,7 +100,7 @@ class ProxyAllowlistTests(TestCase):
         self.assertEqual(resp.status_code, 403)
         mock_request.assert_not_called()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_api_url_with_mismatched_hostname_rejected(self, mock_request):
         mock_request.return_value = _make_mock_response(200)
         self.server.api_url = "https://attacker.example.com"
@@ -113,7 +113,7 @@ class ProxyAllowlistTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         mock_request.assert_not_called()
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_allowlisted_health_path_with_matching_host_succeeds(self, mock_request):
         mock_request.return_value = _make_mock_response(
             status_code=200, payload={"status": "ok"}
@@ -125,7 +125,7 @@ class ProxyAllowlistTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
 
-    @patch("apps.deployments.views_servers.requests.request")
+    @patch("apps.deployments.views.server.proxy.requests.request")
     def test_head_method_against_metrics_succeeds(self, mock_request):
         mock_request.return_value = _make_mock_response(status_code=200)
         resp = self.client.post(
