@@ -734,6 +734,7 @@ MIDDLEWARE = [
     'apps.core.shutdown.GracefulShutdownMiddleware', # Graceful shutdown on SIGTERM
     'apps.licensing.middleware.TierLimitsMiddleware', # License Tier Enforcement
     'allauth.account.middleware.AccountMiddleware',
+    'apps.core.middleware.social_app_not_found.SocialAppNotFoundMiddleware',
     'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 

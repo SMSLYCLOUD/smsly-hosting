@@ -393,11 +393,12 @@ create_admin_if_configured() {
 collect_static_nonfatal() {
     echo "Collecting static files..."
     if [ "$(id -u)" = "0" ]; then
-        # Running as root with all capabilities dropped (cap_drop: ALL), uid 0 has no
-        # CAP_DAC_OVERRIDE and cannot write to the smsly-owned static volume. Drop to
-        # smsly so collectstatic can write.
-        su -s /bin/sh -c 'python manage.py collectstatic --noinput' smsly || \
+        # cap_add includes DAC_OVERRIDE + FOWNER, so root can write to bind-mounted
+        # /app/staticfiles even when owned by uid 1000 on the host. Run as root,
+        # then chown so the smsly-owned gunicorn workers can read the output.
+        python manage.py collectstatic --noinput || \
             echo "WARNING: collectstatic failed (non-fatal)"
+        chown -R smsly:smsly /app/staticfiles 2>/dev/null || true
     else
         python manage.py collectstatic --noinput || \
             echo "WARNING: collectstatic failed (non-fatal)"
