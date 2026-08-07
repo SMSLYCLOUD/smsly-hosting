@@ -408,11 +408,10 @@ collect_static_nonfatal() {
         python manage.py collectstatic --noinput || \
             echo "WARNING: collectstatic failed (non-fatal)"
     fi
-}
 
 
 
-
+# } ensure_prometheus_targets_writable closing brace removed (function call merged above)
 
 
 
@@ -443,12 +442,17 @@ setup_social_apps_nonfatal() {
 
 
 
-
     migrate_db="$(select_management_database)"
 
 
 
 
+
+    # Fix bind-mount permissions BEFORE any entrypoint tasks. Runs as root
+    # (before the privilege drop) so cap_add CHOWN/DAC_OVERRIDE can chown the
+    # host dirs to uid 1000. Idempotent, runs on every start, so no manual
+    # host chown is ever needed after git pull / rebuild.
+    ensure_bind_mount_permissions
 
 
 
@@ -521,90 +525,71 @@ setup_social_apps_nonfatal() {
 
 
     fix_node_db_permissions
+ensure_bind_mount_permissions() {
 
 
+    # All bind-mounted directories that the backend (uid 1000) writes to.
+    # Runs as root BEFORE the privilege drop, so cap_add CHOWN/DAC_OVERRIDE
+    # let us fix ownership. Falls back to world-writable if chown fails
+    # (e.g. rootless Docker where container root is not host root).
 
 
+    _dirs="/caddy-config /app/staticfiles /opt/smsly-hosting/prometheus-targets"
 
 
-
-ensure_caddy_config_writable() {
-
-
-
-    if [ -d /caddy-config ]; then
+    for _d in $_dirs; do
+        mkdir -p "$_d" 2>/dev/null || true
 
 
-
-        # Try chown first (works if container runs with --privileged or as root).
-
+        # Try to give uid 1000 ownership.
 
 
-        chown -R 1000:1000 /caddy-config  || true
+        chown -R 1000:1000 "$_d" 2>/dev/null || true
 
 
-
-        # Try chmod (fast path, works if uid 1000 already owns it).
-
+        # Ensure owner + group can read/write/traverse.
 
 
-        chmod -R u+rwX,g+rwX /caddy-config  || true
+        chmod -R u+rwX,g+rwX "$_d" 2>/dev/null || true
 
 
-
-        find /caddy-config -type d -exec chmod 2775 {} +  || true
-
+        # Setgid bit on dirs so new files inherit group ownership.
 
 
-        # Verify write access with a probe file. If it fails, the host
+        find "$_d" -type d -exec chmod 2775 {} + 2>/dev/null || true
+    done
 
 
-
-        # directory is owned by root and needs a one-time chown from the host.
-
-
-
-        if ! touch /caddy-config/.perm_probe ; then
+    # prometheus-targets holds dynamically-written target files; make it
+    # world-writable so any uid can update it.
 
 
-
-            echo "[entrypoint] WARNING: /caddy-config is not writable by uid $(id -u)." >&2
-
+    chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
 
 
-            echo "[entrypoint] Run on host: sudo chown -R 1000:1000 /opt/smsly-hosting/caddy-config" >&2
+    # Verify each directory is actually writable by uid 1000. If chown
+    # did not take effect, fall back to world-writable as a last resort.
 
 
-
-        else
-
-
-
-            rm -f /caddy-config/.perm_probe
+    for _d in $_dirs; do
+        if ! su -s /bin/sh -c 'cd "$1" && echo ok > ./.perm_probe && rm -f ./.perm_probe' smsly "$_d" 2>/dev/null; then
+            # chown didn't stick — fall back to world-writable.
 
 
-
+            chmod -R 2777 "$_d" 2>/dev/null || true
+            if su -s /bin/sh -c 'cd "$1" && echo ok > ./.perm_probe && rm -f ./.perm_probe' smsly "$_d" 2>/dev/null; then
+                echo "[entrypoint] INFO: $_d chown failed, fell back to world-writable (2777)." >&2
+            else
+                echo "[entrypoint] WARNING: $_d is not writable by uid 1000." >&2
+                echo "[entrypoint] Run on host: sudo chown -R 1000:1000 $_d" >&2
+            fi
         fi
-
-
-
-    fi
-
-
-
+    done
 }
 
 
 
-ensure_caddy_config_writable
-
-
-
-
-
-
-
-ensure_prometheus_targets_writable() {
+# ensure_prometheus_targets_writable: Merged into ensure_bind_mount_permissions() above.
 
 
 
@@ -660,7 +645,7 @@ ensure_prometheus_targets_writable() {
 
 
 
-ensure_prometheus_targets_writable
+# ensure_prometheus_targets_writable: merged into ensure_bind_mount_permissions()
 
 
 
