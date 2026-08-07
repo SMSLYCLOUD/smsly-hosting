@@ -272,11 +272,25 @@ def _run_autoscaler_check():
 @api_view(["GET"])
 @permission_classes([IsAdminUser])
 def autoscaler_status(request) -> Response:
-    """Return autoscaler status. Runs a live check in a background thread;
-    if it doesn't complete within API_TIMEOUT seconds, returns cached data
-    so the endpoint never hangs."""
+    """Return autoscaler status.
+    - If cached data is fresh (<60s), return immediately (sub-second).
+    - Otherwise run a live check with timeout, fall back to cache."""
     cached = cache.get(CACHE_KEY_STATUS)
-    result = [cached]
+
+    # If cached data exists and is recent, return it instantly
+    if cached:
+        try:
+            last_check = cached.get("last_check_at", "")
+            if last_check:
+                from datetime import datetime, timezone as tz
+                age = (datetime.now(tz) - datetime.fromisoformat(last_check)).total_seconds()
+                if age < 60:
+                    return Response(cached)
+        except Exception:
+            pass
+
+    # No fresh cache — run live check with timeout
+    result = [None]
     done = threading.Event()
 
     def _live_check():
@@ -291,14 +305,14 @@ def autoscaler_status(request) -> Response:
     t.start()
     done.wait(timeout=API_TIMEOUT)
 
-    if not done.is_set():
-        logger.warning("Autoscaler status: live check exceeded %ds, returning cached", API_TIMEOUT)
-        if cached:
-            cached["_stale"] = True
-            return Response(cached)
-        return Response({"error": "Autoscaler check timed out", "status": "error"}, status=503)
+    if result[0] is not None:
+        return Response(result[0])
 
-    return Response(result[0])
+    # Timed out — return stale cache or error
+    if cached:
+        cached["_stale"] = True
+        return Response(cached)
+    return Response({"error": "Autoscaler check timed out", "status": "error"}, status=503)
 
 
 @api_view(["GET"])
@@ -307,8 +321,7 @@ def autoscaler_history(request) -> Response:
     history = cache.get(CACHE_KEY_HISTORY)
     if history:
         return Response(history)
-    # No cached history yet — run a live check with timeout
-    result = [None]
+    # No cached history — run a live check with timeout
     done = threading.Event()
 
     def _live():
