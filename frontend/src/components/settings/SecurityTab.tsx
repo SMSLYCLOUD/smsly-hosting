@@ -11,7 +11,23 @@ import { Loader2, Shield, Key, Smartphone, Trash2, AlertTriangle } from "lucide-
 import { Badge } from "@/components/ui/badge";
 import api from "@/lib/api";
 
-export function SecurityTab() {
+interface SecurityTabProps {
+  currentPassword: string;
+  setCurrentPassword: (v: string) => void;
+  newPassword: string;
+  setNewPassword: (v: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (v: string) => void;
+  changingPassword: boolean;
+  handleChangePassword: () => void;
+}
+
+export function SecurityTab({
+  currentPassword, setCurrentPassword,
+  newPassword, setNewPassword,
+  confirmPassword, setConfirmPassword,
+  changingPassword, handleChangePassword,
+}: SecurityTabProps) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState<any[]>([]);
@@ -55,6 +71,47 @@ export function SecurityTab() {
 
   return (
     <div className="space-y-6 max-w-4xl">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" /> Change Password
+          </CardTitle>
+          <CardDescription>Update your account password.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="current-password">Current Password</Label>
+            <Input
+              id="current-password"
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="new-password">New Password</Label>
+            <Input
+              id="new-password"
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="confirm-password">Confirm New Password</Label>
+            <Input
+              id="confirm-password"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          </div>
+          <Button onClick={handleChangePassword} disabled={changingPassword}>
+            {changingPassword ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Changing...</> : "Change Password"}
+          </Button>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

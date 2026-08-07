@@ -138,7 +138,7 @@ export default function SettingsPage() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
 
-  // Password state
+  // Password state (wired to SecurityTab)
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -149,7 +149,7 @@ export default function SettingsPage() {
   const [newKeyName, setNewKeyName] = useState("");
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
 
-  // Team state
+  // Team state (wired to TeamsTab)
   const [teams, setTeams] = useState<any[]>([]);
   const [teamMembers, setTeamMembers] = useState<any[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -576,7 +576,6 @@ export default function SettingsPage() {
           await teamsApi.inviteMember(activeTeamId, inviteEmail, inviteRole);
           toast({ title: "Invitation Sent", description: `Invited ${inviteEmail}` });
           setInviteEmail("");
-          // Refresh members
           const members = await teamsApi.members(activeTeamId);
           setTeamMembers(members);
       } catch (err: any) {
@@ -625,18 +624,6 @@ export default function SettingsPage() {
     }
   };
 
-  const handleTestAI = async () => {
-    setTestingAI(true);
-    try {
-      const result = await aiApi.testPrompt("Hello, confirm you are working.");
-      toast({ title: `${result.provider} responded`, description: result.response?.substring(0, 100) + "..." });
-    } catch (err) {
-      toast({ title: "Test failed", description: "Could not reach AI provider.", variant: "destructive" });
-    } finally {
-      setTestingAI(false);
-    }
-  };
-
   const handleChangePassword = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
       toast({ title: "Error", description: "Please fill all password fields.", variant: "destructive" });
@@ -666,6 +653,18 @@ export default function SettingsPage() {
       toast({ title: "Error", description: detail, variant: "destructive" });
     } finally {
       setChangingPassword(false);
+    }
+  };
+
+  const handleTestAI = async () => {
+    setTestingAI(true);
+    try {
+      const result = await aiApi.testPrompt("Hello, confirm you are working.");
+      toast({ title: `${result.provider} responded`, description: result.response?.substring(0, 100) + "..." });
+    } catch (err) {
+      toast({ title: "Test failed", description: "Could not reach AI provider.", variant: "destructive" });
+    } finally {
+      setTestingAI(false);
     }
   };
 
@@ -872,7 +871,16 @@ export default function SettingsPage() {
           <TeamsTab />
         </TabsContent>
         <TabsContent value="security">
-          <SecurityTab />
+          <SecurityTab
+            currentPassword={currentPassword}
+            setCurrentPassword={setCurrentPassword}
+            newPassword={newPassword}
+            setNewPassword={setNewPassword}
+            confirmPassword={confirmPassword}
+            setConfirmPassword={setConfirmPassword}
+            changingPassword={changingPassword}
+            handleChangePassword={handleChangePassword}
+          />
         </TabsContent>
         <TabsContent value="platform">
           <PlatformSettingsTab />
