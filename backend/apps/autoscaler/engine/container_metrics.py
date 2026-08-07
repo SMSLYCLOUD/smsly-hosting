@@ -10,6 +10,7 @@ used by the container-level autoscaler dashboard (which scales
 between the per-service pipeline and the per-container dashboard.
 """
 import logging
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
@@ -123,19 +124,16 @@ def parse_k8s_memory(mem_str: str) -> float:
 def docker_stats_legacy() -> dict:
     """Collect container metrics via the Docker SDK (docker-py).
 
-    Replaces the previous ``docker stats`` subprocess invocation, which
-    required the ``docker`` CLI binary in the container image. We talk
-    to the Docker daemon over HTTP via ``docker-py`` and the shared
-    ``apps.cloud.docker_client`` factory, which honors the ``DOCKER_HOST``
-    env var (pointing at the socket-proxy in compose mode) and falls back
-    to the local socket otherwise.
+    Uses parallel stats collection to avoid the 2s-per-container latency
+    that would make the API endpoint hang with many containers.
     """
     try:
         from apps.cloud.docker_client import get_docker_client
 
         client = get_docker_client(timeout=10)
-        containers = {}
-        for container in client.containers.list():
+        container_list = client.containers.list()
+
+        def _collect_one(container):
             try:
                 stats = container.stats(stream=False)
             except Exception as exc:
@@ -143,7 +141,7 @@ def docker_stats_legacy() -> dict:
                     "Skipping container %s: %s",
                     getattr(container, "name", "?"), exc,
                 )
-                continue
+                return None
 
             cpu_stats = stats.get("cpu_stats", {}) or {}
             precpu_stats = stats.get("precpu_stats", {}) or {}
@@ -170,7 +168,7 @@ def docker_stats_legacy() -> dict:
 
             pids = (stats.get("pids_stats", {}) or {}).get("current", 0) or 0
 
-            containers[container.name] = {
+            return container.name, {
                 "cpu_percent": round(cpu_percent, 1),
                 "memory_mb": round(mem_used_mb, 1),
                 "memory_limit_mb": round(mem_limit_mb, 1),
@@ -179,6 +177,21 @@ def docker_stats_legacy() -> dict:
                 "net_tx_mb": round(tx_bytes / (1024 * 1024), 2),
                 "pids": int(pids),
             }
+
+        containers = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_collect_one, c): c for c in container_list}
+            for future in concurrent.futures.as_completed(futures, timeout=15):
+                try:
+                    result = future.result()
+                    if result is not None:
+                        name, data = result
+                        containers[name] = data
+                except concurrent.futures.TimeoutError:
+                    logger.warning("Stats collection timed out for a container")
+                except Exception as exc:
+                    logger.debug("Stats collection failed: %s", exc)
+
         return containers
     except Exception as exc:
         logger.error("Failed to get docker stats: %s", exc)
