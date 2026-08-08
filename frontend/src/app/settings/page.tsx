@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
 import { EcosystemSuggestion } from "@/components/dashboard/EcosystemSuggestion";
-import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock, Users, Copy } from "lucide-react";
+import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock, Users, Copy, Link2 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import api, { systemApi, aiApi, coreApi, teamsApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -100,6 +100,7 @@ const SETTINGS_ROUTE_LINKS = [
   { href: "/settings/ai", label: "AI Engine", icon: Sparkles, match: (pathname: string) => pathname.startsWith("/settings/ai") },
   { href: "/settings/billing", label: "Billing", icon: Cloud, match: (pathname: string) => pathname.startsWith("/settings/billing") },
   { href: "/settings/team", label: "Team", icon: Users, match: (pathname: string) => pathname.startsWith("/settings/team") },
+  { href: "/settings/integrations", label: "Integrations", icon: Link2, match: (pathname: string) => pathname.startsWith("/settings/integrations") },
   { href: "/settings/audit-logs", label: "Audit Logs", icon: Shield, match: (pathname: string) => pathname.startsWith("/settings/audit-logs") },
 ] as const;
 

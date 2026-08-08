@@ -53,8 +53,8 @@ export default function GitHubAppSetupPage() {
             <ul>
               <li><strong>GitHub App name</strong>: Something like <code>Grid Deploy</code> or <code>MyOrg Grid</code> (must be globally unique)</li>
               <li><strong>Homepage URL</strong>: Your Grid instance URL, e.g. <code>https://grid.example.com</code></li>
-              <li><strong>Callback URL</strong>: <code>https://grid.example.com/auth/github/app/callback</code></li>
-              <li><strong>Request user authorization (OAuth) during installation</strong>: Leave unchecked</li>
+              <li><strong>Callback URL</strong>: <code>https://grid.example.com/auth/github/app/callback</code> (only needed if you enable &quot;Request user authorization during installation&quot;)</li>
+              <li><strong>Request user authorization (OAuth) during installation</strong>: Leave unchecked for most setups</li>
             </ul>
           </li>
         </ol>

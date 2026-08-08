@@ -59,6 +59,7 @@ from ..views.integrations import (
     gitlab_connection,
     gitlab_oauth_callback,
     gitlab_oauth_url,
+    integrations_overview,
 )
 from ..views.mesh import MeshNetworkViewSet
 from ..views.metrics import MetricsViewSet
@@ -187,6 +188,7 @@ urlpatterns = [
     path('platform/resources/', PlatformResourcesView.as_view(), name='platform-resources'),
     path('oauth/status/', oauth_providers_status, name='oauth-status'),
     path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
+    path('integrations/overview/', integrations_overview, name='integrations-overview'),
     path('integrations/github/', github_connection, name='github-connection'),
     path('integrations/github/connect/', github_connect, name='github-connect'),
     path('integrations/github/repos/', github_repos, name='github-repos'),

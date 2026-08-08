@@ -58,6 +58,80 @@ def _get_github_app():
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+def integrations_overview(request):
+    """
+    Return overview of all integration statuses for the settings page.
+
+    Shows which integrations are configured (admin credentials) and
+    which are connected (user OAuth tokens).
+    """
+    from allauth.socialaccount.models import SocialAccount, SocialToken
+
+    # GitHub App (server-to-server)
+    github_app_configured = bool(
+        getattr(settings, "GITHUB_APP_ID", "")
+        and getattr(settings, "GITHUB_APP_PRIVATE_KEY", "")
+    )
+
+    # GitHub OAuth (user login)
+    github_oauth_app = _get_github_app()
+    github_oauth_configured = bool(github_oauth_app)
+
+    # User's GitHub connection
+    github_account = SocialAccount.objects.filter(
+        user=request.user, provider="github"
+    ).first()
+    github_connected = bool(github_account)
+
+    # GitHub App installations
+    github_installations = []
+    try:
+        from apps.cloud.models.github_app import GitHubAppInstallation
+        for inst in GitHubAppInstallation.objects.filter(
+            user=request.user,
+            status=GitHubAppInstallation.Status.ACTIVE,
+        ):
+            github_installations.append({
+                "installation_id": inst.installation_id,
+                "account_login": inst.account_login,
+                "account_type": inst.account_type,
+                "repo_count": len(inst.repositories or []),
+            })
+    except Exception:
+        pass
+
+    # Webhook secret
+    webhook_secret_set = False
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        pc = PlatformConfig.load()
+        webhook_secret_set = bool(pc.get_webhook_secret("github"))
+    except Exception:
+        webhook_secret_set = bool(getattr(settings, "GITHUB_WEBHOOK_SECRET", ""))
+
+    return Response({
+        "github_app": {
+            "configured": github_app_configured,
+            "app_id": getattr(settings, "GITHUB_APP_ID", "") or None,
+        },
+        "github_oauth": {
+            "configured": github_oauth_configured,
+            "client_id": github_oauth_app.client_id if github_oauth_app else None,
+        },
+        "github_connected": github_connected,
+        "github_account": {
+            "login": github_account.extra_data.get("login") if github_account else None,
+            "avatar_url": github_account.extra_data.get("avatar_url") if github_account else None,
+        } if github_account else None,
+        "github_installations": github_installations,
+        "webhook_secret_set": webhook_secret_set,
+        "webhook_url": f"{request.build_absolute_uri('/').rstrip('/')}/api/v1/webhooks/github/",
+    })
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def github_connection(request):
     """
     Return GitHub integration status for the current user.
