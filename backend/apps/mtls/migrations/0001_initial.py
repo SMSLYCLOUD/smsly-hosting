@@ -7,7 +7,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ("deployments", "0160_rename_deployapproval_service_status_idx_deployapproval_svc_stat"),
+        ("deployments", "0160_rename_deployapproval_service_status_idx_deployapproval_svc_status_idx_and_more"),
     ]
 
     operations = [
