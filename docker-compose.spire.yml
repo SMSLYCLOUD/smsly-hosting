@@ -50,6 +50,7 @@ services:
       - ./infrastructure/spire/agent.conf:/etc/spire/agent.conf:ro,z
     environment:
       SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
+      DOCKER_HOST: tcp://traefik-socket-proxy:2375
     command: ["-config", "/etc/spire/agent.conf"]
     networks:
       - smsly-net
@@ -118,6 +119,7 @@ services:
       - ./infrastructure/spire/agent-ecosystem.conf:/etc/spire/agent.conf:ro,z
     environment:
       SPIFFE_TRUST_DOMAIN: ${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}
+      DOCKER_HOST: tcp://traefik-socket-proxy:2375
     command: ["-config", "/etc/spire/agent.conf"]
     networks:
       - smsly-net
