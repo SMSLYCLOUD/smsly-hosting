@@ -192,9 +192,10 @@ def _check_registry_permission(user, scope: str, actions: list[str]) -> bool:
         accessible_prefixes.add(str(p.id))
 
     # Platform images (smsly/*) are managed by superusers only.
-    # Non-superusers must never push or pull platform images.
+    # Non-superusers may pull platform images for deployments but must
+    # never push.
     if not user.is_superuser and repo_name.startswith("smsly/"):
-        return False
+        return req_actions == ["pull"]
 
     # Check if the repo name starts with any accessible prefix
     repo_lower = repo_name.lower()
