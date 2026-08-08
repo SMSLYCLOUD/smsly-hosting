@@ -25,7 +25,7 @@ ECOSYSTEM_SPIFFE_TRUST_DOMAIN = os.getenv("ECOSYSTEM_TRUST_DOMAIN", "ecosystem.l
 ECOSYSTEM_SPIRE_SERVER_CONTAINER = os.getenv(
     "SPIRE_ECOSYSTEM_SERVER_CONTAINER", "smsly-spire-server-ecosystem"
 )
-ECOSYSTEM_SPIRE_SERVER_SOCKET = "/opt/spire/data/server.sock"
+ECOSYSTEM_SPIRE_SERVER_SOCKET = "/tmp/spire-server/private/api.sock"
 
 
 @shared_task(

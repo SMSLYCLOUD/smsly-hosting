@@ -31,7 +31,7 @@ ECOSYSTEM_SPIRE_AGENT_CONTAINER = os.getenv(
 PLATFORM_SPIRE_AGENT_CONTAINER = os.getenv(
     "SPIRE_AGENT_CONTAINER", "smsly-spire-agent"
 )
-SPIRE_SERVER_SOCKET = "/opt/spire/data/server.sock"
+SPIRE_SERVER_SOCKET = "/tmp/spire-server/private/api.sock"
 SPIRE_AGENT_SOCKET = "/opt/spire/run/agent.sock"
 
 
