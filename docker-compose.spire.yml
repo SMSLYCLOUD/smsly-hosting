@@ -43,7 +43,8 @@ services:
     image: ghcr.io/spiffe/spire-agent:1.9.6
     container_name: ${SPIRE_AGENT_CONTAINER:-smsly-spire-agent}
     hostname: spire-agent
-    restart: unless-stopped
+    restart: "no"
+    profiles: ["manual"]
     volumes:
       - spire-agent-data:/opt/spire/data
       - spire-agent-socket:/opt/spire/run
@@ -113,7 +114,8 @@ services:
     image: ghcr.io/spiffe/spire-agent:1.9.6
     container_name: smsly-spire-agent-ecosystem
     hostname: spire-agent-ecosystem
-    restart: unless-stopped
+    restart: "no"
+    profiles: ["manual"]
     volumes:
       - spire-ecosystem-agent-data:/opt/spire/data
       - spire-ecosystem-agent-socket:/opt/spire/run
@@ -186,6 +188,53 @@ services:
           sleep 2
         done
         echo "Ecosystem server ready. No static entries (populated by Celery sync task)."
+
+        echo "=== Generating Join Tokens ==="
+        PLATFORM_TOKEN=$$(docker exec smsly-spire-server /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>&1 | grep 'Token:' | awk '{print $$2}')
+        ECOSYSTEM_TOKEN=$$(docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>&1 | grep 'Token:' | awk '{print $$2}')
+        echo "Platform token: $${PLATFORM_TOKEN}"
+        echo "Ecosystem token: $${ECOSYSTEM_TOKEN}"
+
+        echo "=== Starting Platform Agent ==="
+        docker rm -f smsly-spire-agent 2>/dev/null || true
+        docker run -d \
+          --name smsly-spire-agent \
+          --hostname spire-agent \
+          --restart unless-stopped \
+          --network smsly-net \
+          -e SPIFFE_TRUST_DOMAIN=$${SPIFFE_TRUST_DOMAIN} \
+          -e DOCKER_HOST=tcp://traefik-socket-proxy:2375 \
+          -v smsly-hosting_spire-agent-data:/opt/spire/data \
+          -v smsly-hosting_spire-agent-socket:/opt/spire/run \
+          -v smsly-hosting_spire-agent-svids:/opt/spire/svids \
+          -v /opt/smsly-hosting/infrastructure/spire/agent.conf:/etc/spire/agent.conf:ro \
+          --security-opt no-new-privileges:true \
+          --cap-drop ALL \
+          --memory 128m \
+          ghcr.io/spiffe/spire-agent:1.9.6 \
+          -config /etc/spire/agent.conf \
+          -joinToken "$${PLATFORM_TOKEN}"
+
+        echo "=== Starting Ecosystem Agent ==="
+        docker rm -f smsly-spire-agent-ecosystem 2>/dev/null || true
+        docker run -d \
+          --name smsly-spire-agent-ecosystem \
+          --hostname spire-agent-ecosystem \
+          --restart unless-stopped \
+          --network smsly-net \
+          -e SPIFFE_TRUST_DOMAIN=$${ECOSYSTEM_TRUST_DOMAIN} \
+          -e DOCKER_HOST=tcp://traefik-socket-proxy:2375 \
+          -v smsly-hosting_spire-ecosystem-agent-data:/opt/spire/data \
+          -v smsly-hosting_spire-ecosystem-agent-socket:/opt/spire/run \
+          -v smsly-hosting_spire-ecosystem-agent-svids:/opt/spire/svids \
+          -v /opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf:/etc/spire/agent.conf:ro \
+          --security-opt no-new-privileges:true \
+          --cap-drop ALL \
+          --memory 128m \
+          ghcr.io/spiffe/spire-agent:1.9.6 \
+          -config /etc/spire/agent.conf \
+          -joinToken "$${ECOSYSTEM_TOKEN}"
+
         echo "=== SPIRE Initialization Complete ==="
     networks:
       - smsly-net
