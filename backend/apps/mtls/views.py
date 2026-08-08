@@ -19,6 +19,21 @@ from .models import MtlsConfig
 
 logger = logging.getLogger(__name__)
 
+ECOSYSTEM_SPIRE_SERVER_CONTAINER = os.getenv(
+    "SPIRE_ECOSYSTEM_SERVER_CONTAINER", "smsly-spire-server-ecosystem"
+)
+PLATFORM_SPIRE_SERVER_CONTAINER = os.getenv(
+    "SPIRE_SERVER_CONTAINER", "smsly-spire-server"
+)
+ECOSYSTEM_SPIRE_AGENT_CONTAINER = os.getenv(
+    "SPIRE_ECOSYSTEM_AGENT_CONTAINER", "smsly-spire-agent-ecosystem"
+)
+PLATFORM_SPIRE_AGENT_CONTAINER = os.getenv(
+    "SPIRE_AGENT_CONTAINER", "smsly-spire-agent"
+)
+SPIRE_SERVER_SOCKET = "/opt/spire/data/server.sock"
+SPIRE_AGENT_SOCKET = "/opt/spire/run/agent.sock"
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -53,15 +68,18 @@ def mtls_enable(request, service_id):
     """
     config, created = MtlsConfig.objects.get_or_create(
         service_id=service_id,
-        defaults={"enabled": True},
+        defaults={"enabled": True, "trust_domain": "ecosystem.local"},
     )
     if not created:
         config.enabled = True
+        if not config.trust_domain:
+            config.trust_domain = "ecosystem.local"
         config.save()
 
     return Response({
         "status": "enabled",
         "spiffe_id": config.spiffe_id,
+        "trust_domain": config.trust_domain,
         "message": "mTLS enabled. Redeploy the service for SPIRE mounts to take effect.",
         "requires_redeploy": True,
     })
@@ -93,38 +111,40 @@ def mtls_health(request):
     """
     GET /api/v1/mtls/health
 
-    Returns platform-wide mTLS health status.
+    Returns platform-wide mTLS health status including both
+    platform and ecosystem SPIRE servers.
     """
 
-    # Check SPIRE server health
-    spire_server_healthy = False
-    spire_server_container = os.getenv("SPIRE_SERVER_CONTAINER", "smsly-spire-server")
-    spire_server_socket = os.getenv("SPIRE_SERVER_SOCKET", "/opt/spire/data/server.sock")
-    try:
-        result = subprocess.run(
-            ["docker", "exec", spire_server_container, "/opt/spire/bin/spire-server",
-             "healthcheck", "-socketPath", spire_server_socket],
-            capture_output=True, timeout=10,
-        )
-        spire_server_healthy = result.returncode == 0
-    except Exception:
-        pass
+    def _check_spire(container, socket_path):
+        try:
+            result = subprocess.run(
+                ["docker", "exec", container, "/opt/spire/bin/spire-server",
+                 "healthcheck", "-socketPath", socket_path],
+                capture_output=True, timeout=10,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
-    # Check SPIRE agent health
-    spire_agent_healthy = False
-    spire_agent_container = os.getenv("SPIRE_AGENT_CONTAINER", "smsly-spire-agent")
-    spire_agent_socket = os.getenv("SPIRE_AGENT_SOCKET", "/opt/spire/run/agent.sock")
-    try:
-        result = subprocess.run(
-            ["docker", "exec", spire_agent_container, "/opt/spire/bin/spire-agent",
-             "healthcheck", "-socketPath", spire_agent_socket],
-            capture_output=True, timeout=10,
-        )
-        spire_agent_healthy = result.returncode == 0
-    except Exception:
-        pass
+    def _check_agent(container, socket_path):
+        try:
+            result = subprocess.run(
+                ["docker", "exec", container, "/opt/spire/bin/spire-agent",
+                 "healthcheck", "-socketPath", socket_path],
+                capture_output=True, timeout=10,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
-    # Count services with mTLS
+    # Platform SPIRE
+    platform_server_healthy = _check_spire(PLATFORM_SPIRE_SERVER_CONTAINER, SPIRE_SERVER_SOCKET)
+    platform_agent_healthy = _check_agent(PLATFORM_SPIRE_AGENT_CONTAINER, SPIRE_AGENT_SOCKET)
+
+    # Ecosystem SPIRE
+    ecosystem_server_healthy = _check_spire(ECOSYSTEM_SPIRE_SERVER_CONTAINER, SPIRE_SERVER_SOCKET)
+    ecosystem_agent_healthy = _check_agent(ECOSYSTEM_SPIRE_AGENT_CONTAINER, SPIRE_AGENT_SOCKET)
+
     total_services = MtlsConfig.objects.count()
     enabled_services = MtlsConfig.objects.filter(enabled=True).count()
     expired_svids = MtlsConfig.objects.filter(
@@ -132,12 +152,19 @@ def mtls_health(request):
     ).count()
 
     return Response({
-        "spire_server_healthy": spire_server_healthy,
-        "spire_agent_healthy": spire_agent_healthy,
+        "platform": {
+            "spire_server_healthy": platform_server_healthy,
+            "spire_agent_healthy": platform_agent_healthy,
+            "trust_domain": os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"),
+        },
+        "ecosystem": {
+            "spire_server_healthy": ecosystem_server_healthy,
+            "spire_agent_healthy": ecosystem_agent_healthy,
+            "trust_domain": os.getenv("ECOSYSTEM_TRUST_DOMAIN", "ecosystem.local"),
+        },
         "total_services": total_services,
         "mtls_enabled_services": enabled_services,
         "expired_svids": expired_svids,
-        "trust_domain": os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"),
     })
 
 
@@ -155,6 +182,7 @@ def mtls_list(request):
             "service_id": str(c.service_id),
             "service_name": c.service.name,
             "mtls_enabled": c.enabled,
+            "trust_domain": c.trust_domain,
             "spiffe_id": c.spiffe_id,
             "svid_expiry": c.svid_expiry.isoformat() if c.svid_expiry else None,
             "is_svid_expired": c.is_svid_expired,

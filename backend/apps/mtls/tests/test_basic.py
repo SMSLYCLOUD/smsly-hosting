@@ -24,7 +24,7 @@ class MtlsConfigModelTests(TestCase):
 
     def test_spiffe_id_auto_generated(self):
         config = MtlsConfig.objects.create(service=self.service)
-        self.assertEqual(config.spiffe_id, 'spiffe://platform.local/service/test-svc')
+        self.assertEqual(config.spiffe_id, 'spiffe://ecosystem.local/service/test-svc')
 
     def test_custom_trust_domain(self):
         config = MtlsConfig.objects.create(

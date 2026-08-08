@@ -3,6 +3,8 @@ Django management command to create/update SPIRE registration entries.
 
 Usage:
     python manage.py create_spiffe_entries
+    python manage.py create_spiffe_entries --server ecosystem
+    python manage.py create_spiffe_entries --server platform
 
 This command:
 1. Reads all deployed services from the database
@@ -19,9 +21,16 @@ import subprocess
 import logging
 
 from django.core.management.base import BaseCommand
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+ECOSYSTEM_SPIRE_SERVER_CONTAINER = os.getenv(
+    "SPIRE_ECOSYSTEM_SERVER_CONTAINER", "smsly-spire-server-ecosystem"
+)
+PLATFORM_SPIRE_SERVER_CONTAINER = os.getenv(
+    "SPIRE_SERVER_CONTAINER", "smsly-spire-server"
+)
+SPIRE_SERVER_SOCKET = "/opt/spire/data/server.sock"
 
 
 class Command(BaseCommand):
@@ -29,9 +38,15 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
+            "--server",
+            choices=["ecosystem", "platform", "both"],
+            default="ecosystem",
+            help="Which SPIRE server to create entries for (default: ecosystem)",
+        )
+        parser.add_argument(
             "--trust-domain",
-            default=os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"),
-            help="SPIFFE trust domain (default: platform.local)",
+            default=None,
+            help="SPIFFE trust domain (auto-selected based on --server if not set)",
         )
         parser.add_argument(
             "--svid-ttl",
@@ -44,67 +59,61 @@ class Command(BaseCommand):
             action="store_true",
             help="Print entries without creating them",
         )
-        parser.add_argument(
-            "--spire-server-socket",
-            default="/opt/spire/data/server.sock",
-            help="SPIRE server socket path",
-        )
 
     def handle(self, *args, **options):
-        trust_domain = options["trust_domain"]
+        server = options["server"]
         svid_ttl = options["svid_ttl"]
         dry_run = options["dry_run"]
-        server_socket = options["spire_server_socket"]
+        trust_domain_override = options["trust_domain"]
 
-        # Get all services with mTLS enabled
+        servers = {
+            "ecosystem": {
+                "container": ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+                "trust_domain": trust_domain_override or os.getenv("ECOSYSTEM_TRUST_DOMAIN", "ecosystem.local"),
+                "dns_suffix": "ecosystem.svc",
+            },
+            "platform": {
+                "container": PLATFORM_SPIRE_SERVER_CONTAINER,
+                "trust_domain": trust_domain_override or os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"),
+                "dns_suffix": "paas.svc",
+            },
+        }
+
+        targets = [server] if server != "both" else ["ecosystem", "platform"]
+
+        for target in targets:
+            cfg = servers[target]
+            self._sync_server(cfg, svid_ttl, dry_run)
+
+    def _sync_server(self, cfg, svid_ttl, dry_run):
+        trust_domain = cfg["trust_domain"]
+        container = cfg["container"]
+        dns_suffix = cfg["dns_suffix"]
+
+        self.stdout.write(f"\n=== Syncing {container} (trust_domain={trust_domain}) ===")
+
         try:
             from apps.mtls.models import MtlsConfig
-            configs = MtlsConfig.objects.filter(enabled=True).select_related("service")
+            configs = MtlsConfig.objects.filter(
+                enabled=True, trust_domain=trust_domain
+            ).select_related("service")
         except ImportError:
             self.stdout.write(self.style.WARNING(
-                "MtlsConfig model not found. Using static entries from registration_entries.json"
+                "MtlsConfig model not found. Skipping dynamic entries."
             ))
-            configs = None
+            configs = []
 
         entries = []
-
-        if configs:
-            # Dynamic entries from database
-            for config in configs:
-                service_name = config.service.name
-                entry = {
-                    "spiffe_id": {
-                        "trust_domain": trust_domain,
-                        "path": f"/service/{service_name}",
-                    },
-                    "parent_id": {
-                        "trust_domain": trust_domain,
-                        "path": "/spire-server",
-                    },
-                    "selectors": [
-                        {"type": "docker", "value": f"label:com.paas.service:{service_name}"},
-                    ],
-                    "x509_svid_ttl": svid_ttl,
-                    "dns_names": [
-                        service_name,
-                        f"{service_name}.paas.svc",
-                    ],
-                }
-                entries.append(entry)
-        else:
-            # Static entries from file
-            entries_file = os.path.join(
-                os.path.dirname(__file__), "..", "..", "..", "..", "..",
-                "infrastructure", "spire", "registration_entries.json"
-            )
-            if os.path.exists(entries_file):
-                with open(entries_file) as f:
-                    data = json.load(f)
-                    entries = data.get("entries", [])
-                    # Replace trust domain placeholder
-                    entries = json.loads(
-                        json.dumps(entries).replace("TRUST_DOMAIN_PLACEHOLDER", trust_domain)
-                    )
+        for config in configs:
+            service_name = config.service.name
+            entry = {
+                "spiffe_id": f"spiffe://{trust_domain}/service/{service_name}",
+                "parent_id": f"spiffe://{trust_domain}/spire-server",
+                "selectors": [f"docker:label:com.paas.service:{service_name}"],
+                "ttl": svid_ttl,
+                "dns": [service_name, f"{service_name}.{dns_suffix}"],
+            }
+            entries.append(entry)
 
         if not entries:
             self.stdout.write(self.style.WARNING("No entries to create."))
@@ -116,28 +125,24 @@ class Command(BaseCommand):
             self.stdout.write(json.dumps({"entries": entries}, indent=2))
             return
 
-        # Create entries via SPIRE server CLI
         created = 0
         errors = 0
 
         for entry in entries:
             try:
-                # Build spire-server entry create command
                 cmd = [
-                    "docker", "exec", "smsly-spire-server",
+                    "docker", "exec", container,
                     "/opt/spire/bin/spire-server", "entry", "create",
-                    "-socketPath", server_socket,
-                    "-spiffeID", f"spiffe://{entry['spiffe_id']['trust_domain']}{entry['spiffe_id']['path']}",
-                    "-parentID", f"spiffe://{entry['parent_id']['trust_domain']}{entry['parent_id']['path']}",
-                    "-ttl", str(entry.get("x509_svid_ttl", svid_ttl)),
+                    "-socketPath", SPIRE_SERVER_SOCKET,
+                    "-spiffeID", entry["spiffe_id"],
+                    "-parentID", entry["parent_id"],
+                    "-ttl", str(entry["ttl"]),
                 ]
 
-                # Add selectors
-                for selector in entry.get("selectors", []):
-                    cmd.extend(["-selector", f"{selector['type']}:{selector['value']}"])
+                for selector in entry["selectors"]:
+                    cmd.extend(["-selector", selector])
 
-                # Add DNS names
-                for dns in entry.get("dns_names", []):
+                for dns in entry["dns"]:
                     cmd.extend(["-dns", dns])
 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -145,28 +150,26 @@ class Command(BaseCommand):
                 if result.returncode == 0:
                     created += 1
                     self.stdout.write(self.style.SUCCESS(
-                        f"  Created: {entry['spiffe_id']['path']}"
+                        f"  Created: {entry['spiffe_id']}"
                     ))
                 else:
-                    # Entry might already exist
                     if "already exists" in result.stderr:
-                        self.stdout.write(f"  Exists: {entry['spiffe_id']['path']}")
+                        self.stdout.write(f"  Exists: {entry['spiffe_id']}")
                     else:
                         errors += 1
                         self.stdout.write(self.style.ERROR(
-                            f"  Failed: {entry['spiffe_id']['path']} - {result.stderr.strip()}"
+                            f"  Failed: {entry['spiffe_id']} - {result.stderr.strip()}"
                         ))
 
             except subprocess.TimeoutExpired:
                 errors += 1
                 self.stdout.write(self.style.ERROR(
-                    f"  Timeout: {entry['spiffe_id']['path']}"
+                    f"  Timeout: {entry['spiffe_id']}"
                 ))
             except Exception as e:
                 errors += 1
                 self.stdout.write(self.style.ERROR(
-                    f"  Error: {entry['spiffe_id']['path']} - {e}"
+                    f"  Error: {entry['spiffe_id']} - {e}"
                 ))
 
-        self.stdout.write("")
         self.stdout.write(f"Done. Created: {created}, Errors: {errors}, Total: {len(entries)}")

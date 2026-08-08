@@ -28,13 +28,13 @@ class MtlsConfig(models.Model):
     )
     trust_domain = models.CharField(
         max_length=255,
-        default="platform.local",
-        help_text="SPIFFE trust domain for this service.",
+        default="ecosystem.local",
+        help_text="SPIFFE trust domain for this service (ecosystem.local for user services).",
     )
     spiffe_id = models.CharField(
         max_length=512,
         blank=True,
-        help_text="Auto-generated SPIFFE ID (e.g., spiffe://platform.local/service/my-app).",
+        help_text="Auto-generated SPIFFE ID (e.g., spiffe://ecosystem.local/service/my-app).",
     )
     svid_expiry = models.DateTimeField(
         null=True,

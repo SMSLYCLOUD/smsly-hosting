@@ -255,7 +255,7 @@ class ComposeNetworkingMixin:
                         mtls_env = {}
                         try:
                             if is_mtls_enabled(self.service):
-                                for host_vol, container_path, mode in get_mtls_volumes():
+                                for host_vol, container_path, mode in get_mtls_volumes(self.service):
                                     mtls_volumes.append(f"{host_vol}:{container_path}:{mode}")
                                 mtls_env = get_mtls_env_vars(self.service)
                         except Exception as e:
