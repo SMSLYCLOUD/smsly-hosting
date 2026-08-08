@@ -48,6 +48,11 @@ def _normalize_health_path(path: str) -> str:
     value = str(path or "/").strip()
     if not value.startswith("/"):
         value = f"/{value}"
+    # Strip shell metacharacters to prevent injection in health check commands
+    import re as _re
+    value = _re.sub(r'[^a-zA-Z0-9._/\-]', '', value)
+    if not value:
+        value = "/"
     return value
 
 
@@ -377,10 +382,17 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception as exc:
             logger.debug("Failed to look up service %s for public flag: %s", name, exc)
 
-        all_domains = [domain]
+        from apps.domains.utils import normalize_domain
+        all_domains = [normalize_domain(domain, allow_ip=True)]
         custom = env.get('CUSTOM_DOMAINS', '')
         if custom:
-            all_domains.extend([d.strip() for d in custom.split(',') if d.strip()])
+            for d in custom.split(','):
+                d = d.strip()
+                if d:
+                    try:
+                        all_domains.append(normalize_domain(d, allow_ip=True))
+                    except ValueError:
+                        logger.warning("Skipping invalid custom domain: %s", d)
         host_rule = ' || '.join(f'Host(`{d}`)' for d in all_domains)
 
         try:
@@ -571,6 +583,12 @@ class LocalAdapter(BaseCloudAdapter):
             "cap_drop": ["ALL"],
             "cap_add": ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
             "pids_limit": 1024,
+            "read_only": True,
+            "tmpfs": {"/tmp": "size=100m", "/run": "size=20m"},
+            "ulimits": {
+                "nofile": {"soft": 1024, "hard": 2048},
+                "fsize": {"soft": 512000000, "hard": 512000000},
+            },
             **run_kwargs,
         }
         if docker_healthcheck is not None:
@@ -995,6 +1013,10 @@ class LocalAdapter(BaseCloudAdapter):
                             labels=live_labels,
                             restart_policy=rp,
                             command=green_cmd,
+                            security_opt=["no-new-privileges:true", "apparmor:docker-default"],
+                            cap_drop=["ALL"],
+                            cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+                            pids_limit=1024,
                         )
                         emergency.start()
                         logger.info(

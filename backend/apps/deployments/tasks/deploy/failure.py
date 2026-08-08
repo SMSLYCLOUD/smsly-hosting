@@ -79,6 +79,21 @@ def _handle_failure(_task: Any, deployment: Deployment | None, error_msg: str, r
             safe_reason = str(reason).replace('\x00', '')
             safe_msg = str(error_msg).replace('\x00', '')
 
+            # Redact secret values from build logs before persisting
+            try:
+                from apps.deployments.utils.files import redact_values
+                _secret_vals = []
+                if deployment.service:
+                    _secret_vals = [
+                        str(v) for v in [
+                            getattr(deployment.service, 'environment', {}),
+                        ]
+                        if isinstance(v, str) and len(v) >= 4
+                    ]
+                safe_msg = redact_values(safe_msg, _secret_vals)
+            except Exception:
+                pass
+
             deployment.build_logs += f"\n✗ {safe_reason}: {safe_msg}\n"
             deployment.save()
             from apps.deployments.utils import broadcast_status

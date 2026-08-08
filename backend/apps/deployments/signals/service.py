@@ -121,3 +121,29 @@ def regenerate_caddyfile_on_service_deletion(sender, instance, **kwargs):
         logger.info("Caddyfile regenerated after service %s deletion", instance.name)
     except Exception as exc:
         logger.warning("Could not regenerate Caddyfile after service deletion: %s", exc)
+
+    # Prune stale CORS origins from deleted service domains
+    try:
+        from django.conf import settings
+        import re
+        deleted_domain = (instance.public_domain or "").strip()
+        if deleted_domain:
+            origin_https = f"https://{deleted_domain}"
+            origin_http = f"http://{deleted_domain}"
+            for origin in [origin_https, origin_http]:
+                if origin in settings.CORS_ALLOWED_ORIGINS:
+                    settings.CORS_ALLOWED_ORIGINS.remove(origin)
+                    logger.info("Pruned stale CORS origin: %s", origin)
+                if origin in settings.CSRF_TRUSTED_ORIGINS:
+                    settings.CSRF_TRUSTED_ORIGINS.remove(origin)
+                    logger.info("Pruned stale CSRF origin: %s", origin)
+        # Also prune any custom domains
+        for custom_domain in (instance.custom_domains or []):
+            if isinstance(custom_domain, str) and custom_domain.strip():
+                for origin in [f"https://{custom_domain.strip()}", f"http://{custom_domain.strip()}"]:
+                    if origin in settings.CORS_ALLOWED_ORIGINS:
+                        settings.CORS_ALLOWED_ORIGINS.remove(origin)
+                    if origin in settings.CSRF_TRUSTED_ORIGINS:
+                        settings.CSRF_TRUSTED_ORIGINS.remove(origin)
+    except Exception as exc:
+        logger.debug("CORS origin pruning skipped: %s", exc)

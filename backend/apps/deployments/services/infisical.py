@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 INFISICAL_URL = os.environ.get(
     "INFISICAL_URL",
-    "http://infisical:8080",
+    "https://infisical:8443",
 )
 INFISICAL_API_URL = f"{INFISICAL_URL}/api/v1"
 
@@ -183,6 +183,15 @@ def push_platform_config_to_infisical(
         "registry_user": "SMSLY_REGISTRY_USER",
         "registry_password": "SMSLY_REGISTRY_PASSWORD",
         "cloudflare_api_token": "CLOUDFLARE_API_TOKEN",
+        "smtp_host": "SMSLY_SMTP_HOST",
+        "smtp_port": "SMSLY_SMTP_PORT",
+        "smtp_user": "SMSLY_SMTP_USER",
+        "smtp_password": "SMSLY_SMTP_PASSWORD",
+        "github_app_id": "SMSLY_GITHUB_APP_ID",
+        "github_app_private_key": "SMSLY_GITHUB_APP_PRIVATE_KEY",
+        "github_webhook_secret": "SMSLY_GITHUB_WEBHOOK_SECRET",
+        "gateway_secret": "SMSLY_GATEWAY_SECRET",
+        "crowdsec_bouncer_key": "SMSLY_CROWDSEC_BOUNCER_KEY",
     }
 
     results = {"synced": [], "failed": [], "skipped": []}
@@ -251,6 +260,15 @@ def pull_platform_config_from_infisical(
         "SMSLY_REGISTRY_USER": "registry_user",
         "SMSLY_REGISTRY_PASSWORD": "registry_password",
         "CLOUDFLARE_API_TOKEN": "cloudflare_api_token",
+        "SMSLY_SMTP_HOST": "smtp_host",
+        "SMSLY_SMTP_PORT": "smtp_port",
+        "SMSLY_SMTP_USER": "smtp_user",
+        "SMSLY_SMTP_PASSWORD": "smtp_password",
+        "SMSLY_GITHUB_APP_ID": "github_app_id",
+        "SMSLY_GITHUB_APP_PRIVATE_KEY": "github_app_private_key",
+        "SMSLY_GITHUB_WEBHOOK_SECRET": "github_webhook_secret",
+        "SMSLY_GATEWAY_SECRET": "gateway_secret",
+        "SMSLY_CROWDSEC_BOUNCER_KEY": "crowdsec_bouncer_key",
     }
 
     results = {"updated": [], "skipped": []}

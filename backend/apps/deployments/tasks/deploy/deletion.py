@@ -46,8 +46,10 @@ def recover_stalled_deletions(self):
 def _clear_directory_contents(path: str) -> dict:
     """Clear direct children of a known cache directory."""
     root = os.path.abspath(path)
-    if root in {"/", "/app", "/opt", "/opt/smsly-hosting"}:
-        raise ValueError(f"Refusing to clear unsafe directory: {root}")
+    # Only allow clearing under known safe roots
+    allowed_roots = {"/opt/smsly-cache"}
+    if not any(root == r or root.startswith(r + "/") for r in allowed_roots):
+        raise ValueError(f"Refusing to clear directory outside allowed roots: {root}")
 
     result: dict = {"path": root, "removed": 0, "missing": False, "errors": []}
     if not os.path.isdir(root):

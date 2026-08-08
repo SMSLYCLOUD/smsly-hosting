@@ -368,8 +368,11 @@ def generate_caddyfile(config) -> str:
         _ask_secret = str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
     _ask_url = "http://backend:8000/api/v1/services/check-domain/"
     if _ask_secret:
-        import urllib.parse
-        _ask_url += f"?secret={urllib.parse.quote(_ask_secret, safe='')}"
+        # Pass the secret via Caddy env var interpolation to avoid
+        # embedding it in plaintext in the Caddyfile.
+        import os as _os
+        _os.environ.setdefault("CADDY_ASK_SECRET", _ask_secret)
+        _ask_url += "?secret={env.CADDY_ASK_SECRET}"
     sections.append(f"""\u007b
     on_demand_tls \u007b
         ask {_ask_url}

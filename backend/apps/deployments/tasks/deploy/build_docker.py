@@ -78,6 +78,12 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
         append_log(deployment, f"[hook] Skipped managed-image hooks: {exc}\n")
         return
 
+    # Validate container name to prevent shell injection
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_.\-]+$', container_name):
+        append_log(deployment, f"[hook] Invalid container name: {container_name}\n")
+        return
+
     env_map = {ev.key: ev.value for ev in service.env_vars.all()}
 
 

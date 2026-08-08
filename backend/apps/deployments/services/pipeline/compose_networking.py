@@ -296,20 +296,14 @@ class ComposeNetworkingMixin:
                                     existing_env = dict(e.split("=", 1) for e in existing_env if "=" in e)
                                 existing_env.update(mtls_env)
                                 override_payload["services"][svc_name]["environment"] = existing_env
-            except Exception:
-                # Fallback to just securing the main service if parsing fails
-                details: dict = {
-                    "security_opt": [
-                        "no-new-privileges:true",
-                        "apparmor:docker-default"
-                    ],
-                    "networks": [network_name],
-                }
-                from apps.deployments.services.container_runtime import detect_best_runtime
-                compose_runtime = detect_best_runtime()
-                if compose_runtime and compose_runtime != "runc":
-                    details["runtime"] = compose_runtime
-                override_payload["services"][main_service] = details
+            except Exception as exc:
+                # Reject the deployment entirely if compose file cannot be
+                # parsed for security validation — proceeding with incomplete
+                # hardening would leave services exposed.
+                raise BuildError(
+                    f"Failed to parse compose file for security validation: {exc}. "
+                    "The compose file must be valid YAML with a 'services' key."
+                ) from exc
         else:
             details = {
                 "security_opt": [

@@ -246,7 +246,6 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 raise RuntimeError(
                     f"Container failed readiness checks for service {service.name}"
                 )
-            _regenerate_caddyfile()
             if service.is_public:
                 route_timeout = _local_route_timeout_seconds(service)
                 route_ready = _wait_for_local_route_ready(
@@ -258,6 +257,9 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                         f"Route for {host} did not become ready after deployment. "
                         "Caddy/Traefik may still be returning 404 for this host."
                     )
+            # Regenerate Caddyfile AFTER route readiness check to avoid
+            # stale Caddyfile pointing to a dead container on failure.
+            _regenerate_caddyfile()
             _run_managed_image_post_deploy_hooks(
                 deployment,
                 service,

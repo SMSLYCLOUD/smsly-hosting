@@ -67,10 +67,10 @@ main() {
     }
 
     if [ -z "${SKIP_DOWNLOAD:-}" ]; then
+        # Only use stable release builds — nightly/master are unaudited
+        # and pose a supply-chain risk.
         for url in \
-            "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}" \
-            "https://storage.googleapis.com/gvisor/releases/nightly/latest/${ARCH}" \
-            "https://storage.googleapis.com/gvisor/releases/master/latest/${ARCH}"; do
+            "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"; do
             if download_via_curl "$url"; then
                 echo "  Installed from ${url}"
                 SKIP_DOWNLOAD=true

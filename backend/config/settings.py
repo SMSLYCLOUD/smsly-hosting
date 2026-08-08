@@ -1023,10 +1023,9 @@ REST_FRAMEWORK = {
         # fires 4-20 GETs per page render, plus an auto-refresh
         # every few seconds, and the platform's per-user
         # throttle tripped the dashboard out of the gate.
-        # Bumped to 1000000/hour (~278 req/sec) which is
-        # effectively unlimited for normal UI use. Per-action
-        # guards (deployments, server_*, transfers, etc.) still
-        # protect against abusive write operations.
+        # Kept at 5000/hour which provides ~1.4 req/sec sustained.
+        # Per-action guards (deployments, server_*, transfers, etc.)
+        # still protect against abusive write operations.
         # The 'anon' throttle is 1000/hour so unauthenticated
         # probes aren't overused. The middleware
         # (RateLimitMiddleware) provides a separate per-IP
