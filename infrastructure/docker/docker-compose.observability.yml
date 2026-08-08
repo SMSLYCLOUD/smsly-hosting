@@ -8,7 +8,7 @@ services:
     container_name: smsly-loki
     restart: unless-stopped
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - loki-data:/loki
       - ../monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
@@ -134,8 +134,9 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: smsly-cadvisor
     restart: unless-stopped
-    cap_add: [SYS_PTRACE, NET_ADMIN, SYS_ADMIN]
-    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true, apparmor:docker-default]
     command:
       - --containerd=unix:///var/run/containerd/containerd.sock
     volumes:

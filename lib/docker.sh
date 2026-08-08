@@ -65,9 +65,9 @@ configure_docker_mirror() {
         local my_ip
         my_ip="$(detect_public_ip)"
         if [ "$my_ip" != "127.0.0.1" ]; then
-            echo -e "${BLUE}  → Configuring Master insecure registry (registry:5000, ${my_ip}:5000)...${NC}"
+            echo -e "${BLUE}  → Configuring Master insecure registry (registry:5000 only — public IP excluded; trust installed via /etc/docker/certs.d/)...${NC}"
             mkdir -p /etc/docker
-            local master_trust_list="\"127.0.0.1:5000\", \"registry:5000\", \"${my_ip}:5000\""
+            local master_trust_list="\"127.0.0.1:5000\", \"registry:5000\""
             if [ -n "${MASTER_MESH_IP:-}" ]; then
                 master_trust_list="${master_trust_list}, \"${MASTER_MESH_IP}:5000\""
             fi

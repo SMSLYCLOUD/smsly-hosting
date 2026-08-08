@@ -122,7 +122,7 @@ services:
       MAX_USER_CONNECTIONS: 100
       AUTH_TYPE: scram-sha-256
     ports:
-      - "6432:6432"
+      - "127.0.0.1:6432:6432"
     networks:
       - smsly-net
     depends_on:
@@ -151,7 +151,7 @@ services:
       DEFAULT_POOL_SIZE: ${PGBOUNCER_RO_POOL_SIZE:-25}
       AUTH_TYPE: scram-sha-256
     ports:
-      - "6433:6432"
+      - "127.0.0.1:6433:6432"
     networks:
       - smsly-net
     depends_on:
