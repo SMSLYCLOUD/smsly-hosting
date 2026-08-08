@@ -17,6 +17,7 @@ import {
   Settings,
   GitBranch,
   GitMerge,
+  Chrome,
 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import api from "@/lib/api";
@@ -38,6 +39,11 @@ type IntegrationStatus = {
     account: { login: string; avatar_url: string } | null;
   };
   bitbucket: {
+    configured: boolean;
+    connected: boolean;
+    account: { login: string; avatar_url: string } | null;
+  };
+  google: {
     configured: boolean;
     connected: boolean;
     account: { login: string; avatar_url: string } | null;
@@ -390,6 +396,51 @@ export default function IntegrationsPage() {
           {status?.bitbucket?.connected && (
             <div className="mt-4 p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground">
               <p>Enables: Bitbucket repository listing, push-to-deploy, branch/commit browsing</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Google */}
+      <div className="rounded-xl border bg-card">
+        <div className="p-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-slate-100 dark:bg-slate-800">
+                <Chrome className="h-5 w-5 text-red-500" />
+              </div>
+              <div>
+                <h3 className="font-semibold">Google</h3>
+                <p className="text-xs text-muted-foreground">OAuth connection for Google account login</p>
+              </div>
+            </div>
+            {status?.google?.connected ? (
+              <div className="flex items-center gap-2">
+                {status.google.account?.avatar_url && (
+                  <img src={status.google.account.avatar_url} alt="" className="w-6 h-6 rounded-full" />
+                )}
+                <span className="text-sm font-medium">{status.google.account?.login}</span>
+                <span className="inline-flex items-center gap-1 text-xs text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 px-2 py-0.5 rounded-full">
+                  <CheckCircle2 className="h-3 w-3" /> Connected
+                </span>
+              </div>
+            ) : status?.google?.configured ? (
+              <a
+                href="/settings"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border hover:bg-muted/50 transition-opacity"
+              >
+                <Link2 className="h-4 w-4" />
+                Connect in Settings
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                Not configured
+              </span>
+            )}
+          </div>
+          {status?.google?.connected && (
+            <div className="mt-4 p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground">
+              <p>Enables: Google account login, profile photo, email verification</p>
             </div>
           )}
         </div>

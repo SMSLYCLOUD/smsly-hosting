@@ -1237,6 +1237,7 @@ export default function SettingsPage() {
               <GitIntegrationCard provider="github" />
               <GitIntegrationCard provider="gitlab" />
               <GitIntegrationCard provider="bitbucket" />
+              <GitIntegrationCard provider="google" />
               <WebhookConfigCard />
               <OAuthTab />
           </div>

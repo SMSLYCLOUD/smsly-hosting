@@ -52,6 +52,15 @@ def _get_github_app():
         return None
 
 
+def _get_google_app():
+    """Return the allauth SocialApp for Google, or None."""
+    try:
+        from allauth.socialaccount.models import SocialApp
+        return SocialApp.objects.filter(provider="google").first()
+    except Exception:
+        return None
+
+
 # ── Views ────────────────────────────────────────────────────────────────────
 
 
@@ -114,6 +123,13 @@ def integrations_overview(request):
     ).first()
     bitbucket_connected = bool(bitbucket_account)
 
+    # Google connection
+    google_app = _get_google_app()
+    google_account = SocialAccount.objects.filter(
+        user=request.user, provider="google"
+    ).first()
+    google_connected = bool(google_account)
+
     # Webhook secret
     webhook_secret_set = False
     try:
@@ -153,6 +169,14 @@ def integrations_overview(request):
                 "login": bitbucket_account.extra_data.get("username") if bitbucket_account else None,
                 "avatar_url": (bitbucket_account.extra_data.get("links") or {}).get("avatar", {}).get("href") if bitbucket_account else None,
             } if bitbucket_account else None,
+        },
+        "google": {
+            "configured": bool(google_app),
+            "connected": google_connected,
+            "account": {
+                "login": google_account.extra_data.get("email") if google_account else None,
+                "avatar_url": google_account.extra_data.get("picture") if google_account else None,
+            } if google_account else None,
         },
         "webhook_secret_set": webhook_secret_set,
         "webhook_url": f"{request.build_absolute_uri('/').rstrip('/')}/api/v1/webhooks/github/",
@@ -999,3 +1023,231 @@ def bitbucket_oauth_callback(request):
             "avatar_url": profile.get("links", {}).get("avatar", {}).get("href"),
         },
     })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Google Integration
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _get_google_oauth_callback_url(request) -> str:
+    override = getattr(settings, 'GOOGLE_OAUTH_CALLBACK_URL', None)
+    if override:
+        return override
+    site_url = _get_site_url(request)
+    return f"{site_url}/auth/google/callback"
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def google_connection(request):
+    try:
+        from allauth.socialaccount.models import SocialAccount, SocialToken
+    except Exception:
+        return Response({
+            "connected": False,
+            "has_token": False,
+            "account": None,
+            "warning": "Google integration not available on this server.",
+        })
+
+    account = SocialAccount.objects.filter(user=request.user, provider="google").order_by("-id").first()
+    extra = account.extra_data if account and isinstance(account.extra_data, dict) else {}
+
+    return Response({
+        "connected": bool(account),
+        "has_token": bool(SocialToken.objects.filter(account=account).exists() if account else False),
+        "account": {
+            "uid": account.uid,
+            "login": extra.get("email") or extra.get("name"),
+            "avatar_url": extra.get("picture"),
+        } if account else None,
+    })
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def google_oauth_url(request):
+    app = _get_google_app()
+    if not app:
+        return Response(
+            {"error": "Google OAuth not configured. Add a SocialApp in admin."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    callback_url = _get_google_oauth_callback_url(request)
+    state = secrets.token_urlsafe(32)
+    from django.core.cache import cache
+    cache.set(f"google_oauth_state:{state}", str(request.user.id), timeout=600)
+
+    scopes = settings.SOCIALACCOUNT_PROVIDERS.get("google", {}).get(
+        "SCOPE", ["profile", "email"]
+    )
+    auth_params = settings.SOCIALACCOUNT_PROVIDERS.get("google", {}).get(
+        "AUTH_PARAMS", {"access_type": "online"}
+    )
+
+    params = {
+        "client_id": app.client_id.strip(),
+        "redirect_uri": callback_url,
+        "scope": " ".join(scopes),
+        "response_type": "code",
+        "state": state,
+        **auth_params,
+    }
+
+    return Response({
+        "url": f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}",
+        "callback_url": callback_url,
+    })
+
+
+class GoogleCallbackSerializer(serializers.Serializer):
+    code = serializers.CharField(required=True)
+
+
+@extend_schema(request=GoogleCallbackSerializer, responses=OpenApiTypes.OBJECT)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def google_oauth_callback(request):
+    state_err = _verify_oauth_state(request, "google")
+    if state_err is not None:
+        return state_err
+
+    code = request.data.get("code")
+    if not code:
+        return Response({"error": "Missing 'code' parameter."}, status=status.HTTP_400_BAD_REQUEST)
+
+    app = _get_google_app()
+    if not app:
+        return Response({"error": "Google OAuth not configured."}, status=status.HTTP_400_BAD_REQUEST)
+
+    callback_url = _get_google_oauth_callback_url(request)
+
+    try:
+        token_resp = http_requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": app.client_id,
+                "client_secret": app.secret,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": callback_url,
+            },
+            timeout=15,
+        )
+        token_resp.raise_for_status()
+        token_data = token_resp.json()
+    except Exception as exc:
+        logger.error("Google token exchange failed: %s", exc)
+        return Response({"error": "Failed to exchange code with Google."}, status=status.HTTP_502_BAD_GATEWAY)
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return Response({"error": "Google rejected the code."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile_resp = http_requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        profile_resp.raise_for_status()
+        profile = profile_resp.json()
+    except Exception as exc:
+        logger.error("Google profile fetch failed: %s", exc)
+        return Response({"error": "Failed to fetch Google profile."}, status=status.HTTP_502_BAD_GATEWAY)
+
+    google_uid = str(profile.get("id", ""))
+    if not google_uid:
+        return Response({"error": "Google profile missing user ID."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        from allauth.socialaccount.models import SocialAccount, SocialToken
+        existing = SocialAccount.objects.filter(
+            provider="google", uid=google_uid,
+        ).first()
+        if existing and existing.user_id != request.user.id:
+            return Response(
+                {
+                    "error": (
+                        "This OAuth account is already linked to another "
+                        "user. Please contact the original owner to "
+                        "release the link."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        account, _created = SocialAccount.objects.update_or_create(
+            provider="google",
+            uid=google_uid,
+            defaults={"user": request.user, "extra_data": profile},
+        )
+
+        from datetime import timedelta
+        from django.utils import timezone
+
+        expires_in = token_data.get("expires_in")
+        token_defaults = {"token": access_token, "token_secret": token_data.get("refresh_token", ""), "app": app}
+        if expires_in:
+            token_defaults["expires_at"] = timezone.now() + timedelta(seconds=int(expires_in))
+        else:
+            token_defaults["expires_at"] = timezone.now() + timedelta(days=365)
+
+        SocialToken.objects.update_or_create(account=account, defaults=token_defaults)
+    except Exception as exc:
+        logger.error("Failed to save Google account: %s", exc)
+        return Response({"error": "Failed to save Google connection."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response({
+        "connected": True,
+        "account": {
+            "uid": google_uid,
+            "login": profile.get("email") or profile.get("name"),
+            "avatar_url": profile.get("picture"),
+        },
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Disconnect (unlink provider)
+# ══════════════════════════════════════════════════════════════════════════════
+
+PROVIDER_MAP = {
+    "github": "github",
+    "gitlab": "gitlab",
+    "bitbucket": "bitbucket_oauth2",
+    "google": "google",
+}
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def disconnect_provider(request, provider: str):
+    """Unlink a social provider from the current user's account."""
+    from allauth.socialaccount.models import SocialAccount, SocialToken
+
+    allauth_provider = PROVIDER_MAP.get(provider)
+    if not allauth_provider:
+        return Response(
+            {"error": f"Unknown provider: {provider}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    account = SocialAccount.objects.filter(
+        user=request.user, provider=allauth_provider,
+    ).first()
+    if not account:
+        return Response(
+            {"error": f"No {provider} account linked."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    # Delete associated tokens first
+    SocialToken.objects.filter(account=account).delete()
+    account.delete()
+
+    return Response(status=status.HTTP_204_NO_CONTENT)

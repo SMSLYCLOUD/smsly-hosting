@@ -76,6 +76,13 @@ class CaddyfileValidityTests(TestCase):
         self.assertIn('/accounts/github/*', self.caddyfile)
         self.assertIn('/accounts/google/*', self.caddyfile)
 
+    def test_oauth_connect_routes_on_frontend(self):
+        """OAuth connect callback routes must go to frontend."""
+        self.assertIn('@oauth_github_connect', self.caddyfile)
+        self.assertIn('@oauth_google_connect', self.caddyfile)
+        self.assertIn('@oauth_gitlab_connect', self.caddyfile)
+        self.assertIn('@oauth_bitbucket_connect', self.caddyfile)
+
     def test_http_to_https_redirect(self):
         """The :80 block should redirect to HTTPS for non-IP hosts."""
         self.assertIn('redir @redirectable https://{host}{uri} 308', self.caddyfile)

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Github, Loader2, Link as LinkIcon, GitBranch, GitMerge, Package, ExternalLink, Trash2 } from "lucide-react";
+import { Github, Loader2, Link as LinkIcon, GitBranch, GitMerge, Package, ExternalLink, Trash2, Chrome } from "lucide-react";
 import api from "@/lib/api";
 
 type GitConnection = {
@@ -31,7 +31,7 @@ type GitHubInstallation = {
 };
 
 interface GitIntegrationCardProps {
-  provider: "github" | "gitlab" | "bitbucket";
+  provider: "github" | "gitlab" | "bitbucket" | "google";
 }
 
 export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
@@ -122,6 +122,17 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
     }
   };
 
+  const disconnectProvider = async () => {
+    try {
+      await api.delete(`/integrations/${provider}/disconnect/`);
+      setData(null);
+      fetchStatus();
+    } catch (e: any) {
+      const message = e?.response?.data?.error || "Failed to disconnect.";
+      setConnectError(String(message));
+    }
+  };
+
   const getProviderDetails = () => {
     switch (provider) {
       case "github":
@@ -130,6 +141,8 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
         return { name: "GitLab", icon: GitBranch, color: "text-orange-500" };
       case "bitbucket":
         return { name: "Bitbucket", icon: GitMerge, color: "text-blue-500" };
+      case "google":
+        return { name: "Google", icon: Chrome, color: "text-red-500" };
     }
   };
 
@@ -185,6 +198,17 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                     {data.warning}
                   </div>
                 )}
+
+                <div className="pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={disconnectProvider}
+                    className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                  >
+                    Disconnect Account
+                  </Button>
+                </div>
               </div>
             ) : (
               <div className="flex flex-col gap-3 items-start">

@@ -52,6 +52,7 @@ from ..views.integrations import (
     bitbucket_connection,
     bitbucket_oauth_callback,
     bitbucket_oauth_url,
+    disconnect_provider,
     github_connect,
     github_connection,
     github_oauth_callback,
@@ -59,6 +60,9 @@ from ..views.integrations import (
     gitlab_connection,
     gitlab_oauth_callback,
     gitlab_oauth_url,
+    google_connection,
+    google_oauth_callback,
+    google_oauth_url,
     integrations_overview,
 )
 from ..views.mesh import MeshNetworkViewSet
@@ -213,6 +217,12 @@ urlpatterns = [
     path('integrations/bitbucket/', bitbucket_connection, name='bitbucket-connection'),
     path('integrations/bitbucket/oauth-url/', bitbucket_oauth_url, name='bitbucket-oauth-url'),
     path('integrations/bitbucket/oauth-callback/', bitbucket_oauth_callback, name='bitbucket-oauth-callback'),
+    # Google integration
+    path('integrations/google/', google_connection, name='google-connection'),
+    path('integrations/google/oauth-url/', google_oauth_url, name='google-oauth-url'),
+    path('integrations/google/oauth-callback/', google_oauth_callback, name='google-oauth-callback'),
+    # Disconnect provider
+    path('integrations/<str:provider>/disconnect/', disconnect_provider, name='disconnect-provider'),
     # GitLab repos
     path('integrations/gitlab/repos/', gitlab_repos, name='gitlab-repos'),
     path('integrations/gitlab/branches/', gitlab_branches, name='gitlab-branches'),
