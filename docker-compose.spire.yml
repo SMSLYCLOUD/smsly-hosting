@@ -157,30 +157,31 @@ services:
     command:
       - |
         apk add --no-cache docker-cli > /dev/null 2>&1 || true
+        TD="$${SPIFFE_TRUST_DOMAIN}"
+        ETD="$${ECOSYSTEM_TRUST_DOMAIN}"
 
         echo "=== Initializing Platform SPIRE Server ==="
-        cp /etc/spire/entries.json /tmp/entries-platform.json
-        sed -i "s/TRUST_DOMAIN_PLACEHOLDER/$${SPIFFE_TRUST_DOMAIN}/g" /tmp/entries-platform.json
-        docker cp /tmp/entries-platform.json smsly-spire-server:/opt/spire/data/entries-platform.json
-
         until docker exec smsly-spire-server /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
           sleep 2
         done
         echo "Platform server ready. Loading registration entries..."
-        docker exec smsly-spire-server /opt/spire/bin/spire-server entry create -socketPath /tmp/spire-server/private/api.sock -data /opt/spire/data/entries-platform.json || true
+        for SVC in gateway identity backend platform audit policy rate-limit chain email; do
+          docker exec smsly-spire-server /opt/spire/bin/spire-server entry create \
+            -socketPath /tmp/spire-server/private/api.sock \
+            -spiffeID "spiffe://$${TD}/service/$${SVC}" \
+            -parentID "spiffe://$${TD}/spire-server" \
+            -selector "docker:label:com.paas.service:$${SVC}" \
+            -ttl 3600 \
+            -dns "$${SVC}" \
+            -dns "$${SVC}.paas.svc" 2>&1 || true
+        done
         echo "Platform registration entries loaded."
 
         echo "=== Initializing Ecosystem SPIRE Server ==="
-        cp /etc/spire/entries-ecosystem.json /tmp/entries-ecosystem.json
-        sed -i "s/ECOSYSTEM_TRUST_DOMAIN_PLACEHOLDER/$${ECOSYSTEM_TRUST_DOMAIN}/g" /tmp/entries-ecosystem.json
-        docker cp /tmp/entries-ecosystem.json smsly-spire-server-ecosystem:/opt/spire/data/entries-ecosystem.json
-
         until docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
           sleep 2
         done
-        echo "Ecosystem server ready. Loading registration entries..."
-        docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server entry create -socketPath /tmp/spire-server/private/api.sock -data /opt/spire/data/entries-ecosystem.json || true
-        echo "Ecosystem registration entries loaded."
+        echo "Ecosystem server ready. No static entries (populated by Celery sync task)."
         echo "=== SPIRE Initialization Complete ==="
     networks:
       - smsly-net
