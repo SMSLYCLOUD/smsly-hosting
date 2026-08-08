@@ -356,7 +356,7 @@ export function OAuthTab() {
           </div>
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/bitbucket/login/callback/</code>
+              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/bitbucket_oauth2/login/callback/</code>
             </p>
             <Button onClick={() => handleSave("bitbucket")} disabled={saving || !bitbucketClientId}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}

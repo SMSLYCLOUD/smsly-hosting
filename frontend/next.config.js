@@ -118,7 +118,7 @@ const nextConfig = {
           : `${API_BASE}/api/:path*`,
       },
       {
-        source: '/accounts/:provider(github|google)/:path*',
+        source: '/accounts/:provider(github|google|gitlab|bitbucket_oauth2)/:path*',
         destination: process.env.INTERNAL_API_URL
             ? `${process.env.INTERNAL_API_URL}/accounts/:provider/:path*`
           : `${API_BASE}/accounts/:provider/:path*`,

@@ -100,6 +100,20 @@ def integrations_overview(request):
     except Exception:
         pass
 
+    # GitLab connection
+    gitlab_app = _get_gitlab_app()
+    gitlab_account = SocialAccount.objects.filter(
+        user=request.user, provider="gitlab"
+    ).first()
+    gitlab_connected = bool(gitlab_account)
+
+    # Bitbucket connection
+    bitbucket_app = _get_bitbucket_app()
+    bitbucket_account = SocialAccount.objects.filter(
+        user=request.user, provider="bitbucket_oauth2"
+    ).first()
+    bitbucket_connected = bool(bitbucket_account)
+
     # Webhook secret
     webhook_secret_set = False
     try:
@@ -124,6 +138,22 @@ def integrations_overview(request):
             "avatar_url": github_account.extra_data.get("avatar_url") if github_account else None,
         } if github_account else None,
         "github_installations": github_installations,
+        "gitlab": {
+            "configured": bool(gitlab_app),
+            "connected": gitlab_connected,
+            "account": {
+                "login": gitlab_account.extra_data.get("username") if gitlab_account else None,
+                "avatar_url": gitlab_account.extra_data.get("avatar_url") if gitlab_account else None,
+            } if gitlab_account else None,
+        },
+        "bitbucket": {
+            "configured": bool(bitbucket_app),
+            "connected": bitbucket_connected,
+            "account": {
+                "login": bitbucket_account.extra_data.get("username") if bitbucket_account else None,
+                "avatar_url": (bitbucket_account.extra_data.get("links") or {}).get("avatar", {}).get("href") if bitbucket_account else None,
+            } if bitbucket_account else None,
+        },
         "webhook_secret_set": webhook_secret_set,
         "webhook_url": f"{request.build_absolute_uri('/').rstrip('/')}/api/v1/webhooks/github/",
     })
@@ -654,7 +684,7 @@ def gitlab_oauth_url(request):
         "redirect_uri": callback_url,
         "response_type": "code",
         "state": state,
-        "scope": "read_user read_api read_repository",
+        "scope": "read_user api",
     }
 
     return Response({
@@ -848,6 +878,7 @@ def bitbucket_oauth_url(request):
         "redirect_uri": callback_url,
         "response_type": "code",
         "state": state,
+        "scope": "account repository",
     }
     authorize_url = f"https://bitbucket.org/site/oauth2/authorize?{urlencode(params)}"
 

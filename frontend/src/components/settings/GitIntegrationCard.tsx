@@ -185,12 +185,6 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                     {data.warning}
                   </div>
                 )}
-                
-                <div className="pt-2">
-                  <Button variant="outline" size="sm" className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">
-                    Disconnect Account
-                  </Button>
-                </div>
               </div>
             ) : (
               <div className="flex flex-col gap-3 items-start">
