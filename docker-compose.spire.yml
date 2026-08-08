@@ -45,6 +45,7 @@ services:
     hostname: spire-agent
     restart: unless-stopped
     volumes:
+      - spire-agent-data:/opt/spire/data
       - spire-agent-socket:/opt/spire/run
       - spire-agent-svids:/opt/spire/svids
       - ./infrastructure/spire/agent.conf:/etc/spire/agent.conf:ro,z
@@ -114,6 +115,7 @@ services:
     hostname: spire-agent-ecosystem
     restart: unless-stopped
     volumes:
+      - spire-ecosystem-agent-data:/opt/spire/data
       - spire-ecosystem-agent-socket:/opt/spire/run
       - spire-ecosystem-agent-svids:/opt/spire/svids
       - ./infrastructure/spire/agent-ecosystem.conf:/etc/spire/agent.conf:ro,z
@@ -208,9 +210,11 @@ services:
 
 volumes:
   spire-server-data:
+  spire-agent-data:
   spire-agent-socket:
   spire-agent-svids:
   spire-ecosystem-server-data:
+  spire-ecosystem-agent-data:
   spire-ecosystem-agent-socket:
   spire-ecosystem-agent-svids:
 
