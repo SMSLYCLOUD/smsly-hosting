@@ -56,6 +56,16 @@ def _load_install_script():
                 "Skipping checksum verification for %s.", source
             )
             return
+
+        # For URL-sourced scripts, refuse to use an auto-calculated hash.
+        # An auto-calculated hash only proves the local file is intact — it
+        # says nothing about whether the remote script matches.
+        if source.startswith("url:") and not os.environ.get("SMSLY_INSTALL_SCRIPT_SHA256"):
+            raise ValueError(
+                "Refusing to verify a remote install.sh with an auto-calculated SHA-256. "
+                "Set SMSLY_INSTALL_SCRIPT_SHA256 explicitly to the hash of the remote script."
+            )
+
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if digest.lower() != required_sha.lower():
             raise ValueError(

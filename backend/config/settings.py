@@ -1489,4 +1489,26 @@ _DEFAULT_FROM = config(
 )
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=_DEFAULT_FROM)
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+# =============================================================================
+# SPIFFE mTLS Configuration
+# =============================================================================
+# Trust domain for SPIFFE identity verification. User services use ecosystem.local.
+SPIFFE_TRUST_DOMAIN = config('SPIFFE_TRUST_DOMAIN', default='ecosystem.local')
+
+# Paths that bypass SPIFFE identity checks (health checks, metrics, etc.)
+SPIFFE_EXEMPT_PATHS = set(config(
+    'SPIFFE_EXEMPT_PATHS',
+    default='/health/,/ready/,/metrics/,/api/v1/webhooks/',
+    cast=lambda v: [p.strip() for p in v.split(',') if p.strip()],
+))
+
+# If True, reject requests without valid SPIFFE identity.
+# If False, allow unauthenticated requests through (for gradual rollout).
+SPIFFE_FAIL_CLOSED = config('SPIFFE_FAIL_CLOSED', default=True, cast=bool)
+
+# Enable L7 authorization policy checks via MtlsAuthorizationPolicy model.
+# When True, the DjangoSpiffeMiddleware checks policy rules for each inbound request.
+SPIFFE_MTLS_POLICY_CHECK = config('SPIFFE_MTLS_POLICY_CHECK', default=False, cast=bool)
+
 # (Patching moved higher up)

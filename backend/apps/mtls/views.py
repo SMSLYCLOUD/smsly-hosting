@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from .models import MtlsConfig
+from .models import MtlsAuthorizationPolicy, MtlsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,9 @@ def mtls_enable(request, service_id):
     """
     POST /api/v1/services/{service_id}/mtls/enable
 
-    Enables mTLS for a service. The service must be redeployed for
-    SPIRE socket mounts, labels, and env vars to take effect.
+    Enables mTLS for a service. For running services, automatically
+    injects SPIRE mounts via container hot-swap. For stopped services,
+    SPIRE mounts will be included on next deploy.
     """
     from apps.deployments.models import Service
     service = get_object_or_404(Service, id=service_id)
@@ -96,12 +97,51 @@ def mtls_enable(request, service_id):
             config.trust_domain = "ecosystem.local"
         config.save()
 
+    # Auto-inject SPIRE mounts into running containers
+    injected = False
+    if service.status == "RUNNING":
+        try:
+            from apps.deployments.services.mtls_integration import (
+                get_mtls_labels,
+                get_mtls_env_vars,
+                get_mtls_docker_run_volumes,
+            )
+            from apps.cloud.docker_client import get_docker_client
+
+            docker_client = get_docker_client()
+            containers = docker_client.containers.list(
+                filters={"label": "managed_by=smsly-hosting"},
+            )
+
+            # Find containers for this service
+            service_containers = [
+                c for c in containers
+                if (c.labels or {}).get("smsly.blue_green.canonical_name") == service.name
+            ]
+
+            if service_containers:
+                # Trigger background hot-swap via Celery
+                from .tasks import inject_mtls_task
+                inject_mtls_task.delay(str(service.id))
+                injected = True
+        except Exception as e:
+            logger.warning("Auto-injection scheduling failed for %s: %s", service.name, e)
+
+    message = "mTLS enabled."
+    if injected:
+        message += " SPIRE mounts are being injected into running containers (hot-swap in progress)."
+    elif service.status == "RUNNING":
+        message += " Redeploy the service for SPIRE mounts to take effect."
+    else:
+        message += " SPIRE mounts will be included on next deploy."
+
     return Response({
         "status": "enabled",
         "spiffe_id": config.spiffe_id,
         "trust_domain": config.trust_domain,
-        "message": "mTLS enabled. Redeploy the service for SPIRE mounts to take effect.",
-        "requires_redeploy": True,
+        "message": message,
+        "auto_injected": injected,
+        "requires_redeploy": not injected and service.status == "RUNNING",
     })
 
 
@@ -232,3 +272,186 @@ def models_Q_owner_or_team(user):
     from apps.deployments.models import Service
 
     return Q(owner=user) | Q(project__team__members__user=user)
+
+
+# ---------------------------------------------------------------------------
+# Authorization Policy CRUD
+# ---------------------------------------------------------------------------
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def policy_list_create(request):
+    """
+    GET  /api/v1/mtls/policies/?service_id=<uuid>   — list policies
+    GET  /api/v1/mtls/policies/?service_id=*         — list all policies
+    POST /api/v1/mtls/policies/                      — create policy
+    """
+    from apps.deployments.models import Service
+    from django.db.models import Q
+
+    if request.method == "POST":
+        data = request.data
+        service_id = data.get("target_service_id")
+        if not service_id:
+            return Response(
+                {"detail": "target_service_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        service = get_object_or_404(Service, id=service_id)
+        if not _user_can_access_service(request.user, service):
+            return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+
+        name = data.get("name", "").strip()
+        source_spiffe_id = data.get("source_spiffe_id", "").strip()
+        if not name or not source_spiffe_id:
+            return Response(
+                {"detail": "name and source_spiffe_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if source_spiffe_id != "*" and not source_spiffe_id.startswith("spiffe://"):
+            return Response(
+                {"detail": "source_spiffe_id must start with 'spiffe://' or be '*'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        action = data.get("action", MtlsAuthorizationPolicy.Action.ALLOW)
+        if action not in dict(MtlsAuthorizationPolicy.Action.choices):
+            return Response(
+                {"detail": f"Invalid action. Must be one of: {dict(MtlsAuthorizationPolicy.Action.choices)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        methods = [m.upper() for m in data.get("methods", [])]
+
+        policy = MtlsAuthorizationPolicy.objects.create(
+            name=name,
+            source_spiffe_id=source_spiffe_id,
+            target_service=service,
+            paths=data.get("paths", []),
+            methods=methods,
+            action=action,
+            priority=data.get("priority", 0),
+            enabled=data.get("enabled", True),
+        )
+
+        return Response({
+            "id": policy.id,
+            "name": policy.name,
+            "source_spiffe_id": policy.source_spiffe_id,
+            "target_service_id": str(policy.target_service_id),
+            "target_service_name": policy.target_service.name,
+            "paths": policy.paths,
+            "methods": policy.methods,
+            "action": policy.action,
+            "priority": policy.priority,
+            "enabled": policy.enabled,
+            "created_at": policy.created_at.isoformat(),
+            "updated_at": policy.updated_at.isoformat(),
+        }, status=status.HTTP_201_CREATED)
+
+    # GET
+    service_id = request.query_params.get("service_id")
+    if not service_id:
+        return Response(
+            {"detail": "service_id query parameter is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    accessible_service_ids = Service.objects.filter(
+        Q(owner=request.user) | Q(project__team__members__user=request.user)
+    ).values_list("id", flat=True)
+
+    if service_id == "*":
+        policies = MtlsAuthorizationPolicy.objects.filter(
+            target_service_id__in=accessible_service_ids
+        ).order_by("-priority", "id")
+    else:
+        service = get_object_or_404(Service, id=service_id)
+        if not _user_can_access_service(request.user, service):
+            return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+        policies = MtlsAuthorizationPolicy.objects.filter(
+            target_service=service
+        ).order_by("-priority", "id")
+
+    return Response([
+        {
+            "id": p.id,
+            "name": p.name,
+            "source_spiffe_id": p.source_spiffe_id,
+            "target_service_id": str(p.target_service_id),
+            "target_service_name": p.target_service.name,
+            "paths": p.paths,
+            "methods": p.methods,
+            "action": p.action,
+            "priority": p.priority,
+            "enabled": p.enabled,
+            "created_at": p.created_at.isoformat(),
+            "updated_at": p.updated_at.isoformat(),
+        }
+        for p in policies
+    ])
+
+
+@api_view(["PUT", "PATCH", "DELETE"])
+@permission_classes([IsAuthenticated])
+def policy_update_delete(request, policy_id):
+    """
+    PUT/PATCH /api/v1/mtls/policies/<id>/   — update policy
+    DELETE   /api/v1/mtls/policies/<id>/   — delete policy
+    """
+    policy = get_object_or_404(MtlsAuthorizationPolicy, id=policy_id)
+    service = policy.target_service
+
+    if not _user_can_access_service(request.user, service):
+        return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == "DELETE":
+        policy.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # PUT / PATCH
+    data = request.data
+    if "name" in data:
+        policy.name = data["name"]
+    if "source_spiffe_id" in data:
+        source = data["source_spiffe_id"].strip()
+        if source != "*" and not source.startswith("spiffe://"):
+            return Response(
+                {"detail": "source_spiffe_id must start with 'spiffe://' or be '*'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        policy.source_spiffe_id = source
+    if "paths" in data:
+        policy.paths = data["paths"]
+    if "methods" in data:
+        policy.methods = [m.upper() for m in data["methods"]]
+    if "action" in data:
+        if data["action"] not in dict(MtlsAuthorizationPolicy.Action.choices):
+            return Response(
+                {"detail": f"Invalid action. Must be one of: {dict(MtlsAuthorizationPolicy.Action.choices)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        policy.action = data["action"]
+    if "priority" in data:
+        policy.priority = data["priority"]
+    if "enabled" in data:
+        policy.enabled = data["enabled"]
+
+    policy.save()
+
+    return Response({
+        "id": policy.id,
+        "name": policy.name,
+        "source_spiffe_id": policy.source_spiffe_id,
+        "target_service_id": str(policy.target_service_id),
+        "target_service_name": policy.target_service.name,
+        "paths": policy.paths,
+        "methods": policy.methods,
+        "action": policy.action,
+        "priority": policy.priority,
+        "enabled": policy.enabled,
+        "created_at": policy.created_at.isoformat(),
+        "updated_at": policy.updated_at.isoformat(),
+    })

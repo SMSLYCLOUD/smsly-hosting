@@ -367,6 +367,13 @@ class SpawningService:
         replica.status = 'RUNNING'
         replica.save(update_fields=['container_id', 'container_name', 'status'])
         logger.info("Spawned replica %s locally", name)
+
+        # --- mTLS: Inject Envoy sidecar if enabled ---
+        try:
+            self._maybe_inject_sidecar(service, container, client)
+        except Exception as e:
+            logger.debug("Envoy sidecar injection skipped: %s", e)
+
         return replica
 
     def _check_local_capacity(self, service):
@@ -418,3 +425,85 @@ class SpawningService:
     def _safe_name(name: str) -> str:
         import re
         return re.sub(r'[^a-zA-Z0-9_.-]', '', name)[:100]
+
+    def _maybe_inject_sidecar(self, service, main_container, client):
+        """
+        Inject Envoy sidecar if mTLS sidecar_enabled is True.
+
+        Uses Docker network_mode: service:{main_container} to share
+        the network namespace with the application container.
+        """
+        try:
+            from apps.mtls.models import MtlsConfig
+            from apps.mtls.services.envoy_sidecar import (
+                EnvoySidecar,
+                ENVOY_IMAGE,
+                SPIRE_AGENT_SOCKET_VOLUME,
+                SPIRE_SVIDS_VOLUME,
+                SPIRE_AGENT_SOCKET_CONTAINER_PATH,
+                SPIRE_SVIDS_CONTAINER_PATH,
+            )
+            import tempfile
+
+            mtls_config = service.mtls_config
+            if not mtls_config.enabled or not mtls_config.sidecar_enabled:
+                return
+
+            sidecar_name = EnvoySidecar.get_sidecar_name(service)
+            app_port = service.internal_port or 8000
+
+            # Generate Envoy config
+            config = EnvoySidecar.generate_config(service, mtls_config)
+
+            # Write config to temp file
+            config_dir = tempfile.mkdtemp(prefix="envoy-config-")
+            config_path = os.path.join(config_dir, "envoy.yaml")
+            with open(config_path, "w") as f:
+                f.write(config)
+
+            try:
+                container = client.containers.run(
+                    image=ENVOY_IMAGE,
+                    name=sidecar_name,
+                    detach=True,
+                    restart_policy={"Name": "unless-stopped"},
+                    network_mode=f"service:{main_container.name}",
+                    labels={
+                        "managed_by": "smsly-hosting",
+                        "envoy_sidecar": "true",
+                        "smsly.blue_green.canonical_name": service.name,
+                        "com.paas.service": service.name,
+                    },
+                    environment={
+                        "SPIFFE_TRUST_DOMAIN": mtls_config.trust_domain or "ecosystem.local",
+                        "SPIFFE_ENDPOINT_SOCKET": "unix:///opt/spire/run/agent.sock",
+                        "SERVICE_NAME": service.name,
+                        "APP_PORT": str(app_port),
+                    },
+                    volumes={
+                        config_path: {"bind": "/etc/envoy/envoy.yaml", "mode": "ro"},
+                        SPIRE_AGENT_SOCKET_VOLUME: {
+                            "bind": SPIRE_AGENT_SOCKET_CONTAINER_PATH,
+                            "mode": "ro",
+                        },
+                        SPIRE_SVIDS_VOLUME: {
+                            "bind": SPIRE_SVIDS_CONTAINER_PATH,
+                            "mode": "ro",
+                        },
+                    },
+                    security_opt=["no-new-privileges:true"],
+                    cap_drop=["ALL"],
+                    mem_limit="64m",
+                    nano_cpus=int(0.25e9),
+                    pids_limit=64,
+                )
+                logger.info("Injected Envoy sidecar %s for %s", sidecar_name, service.name)
+            finally:
+                try:
+                    os.unlink(config_path)
+                    os.rmdir(config_dir)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.debug("Envoy sidecar injection failed for %s: %s", service.name, e)

@@ -1,5 +1,6 @@
 """Resource tracking and rollback for provisioning."""
 
+import contextlib
 import io
 import logging
 import os
@@ -81,7 +82,7 @@ class _ProvisioningResources:
             import psycopg2
             from psycopg2 import sql
             from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-            conn = psycopg2.connect(master_db_url)
+            conn = psycopg2.connect(master_db_url, connect_timeout=10)
             try:
                 conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
                 with conn.cursor() as cur:
@@ -107,13 +108,34 @@ class _ProvisioningResources:
 
     def _remove_dns_record(self, domain: str):
         try:
+            import threading
+
             from apps.deployments.models.core import PlatformConfig
             from apps.domains.services.dns import delete_dns_record
+
             config = PlatformConfig.load()
             cf_token = config.cloudflare_api_token
             if not cf_token:
                 return
-            delete_dns_record(domain, cf_token)
+
+            # Run DNS deletion with a timeout to prevent hanging the rollback
+            # if the Cloudflare API is slow or unreachable.
+            exc_holder: list[Exception] = []
+
+            def _do_delete():
+                try:
+                    delete_dns_record(domain, cf_token)
+                except Exception as exc:
+                    exc_holder.append(exc)
+
+            t = threading.Thread(target=_do_delete, daemon=True)
+            t.start()
+            t.join(timeout=30)
+            if t.is_alive():
+                _append_log(self.server, f"⚠️ DNS rollback for {domain} timed out (30s) — may need manual cleanup")
+                return
+            if exc_holder:
+                raise exc_holder[0]
             _append_log(self.server, f"🧹 Rolled back DNS record: {domain}")
         except Exception as exc:
             logger.warning("Rollback: failed to clean DNS record %s: %s", domain, exc)

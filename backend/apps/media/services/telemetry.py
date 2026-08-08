@@ -31,25 +31,12 @@ class TelemetryService:
         self._queue_db_update(node_id, payload)
 
     def process_telemetry(self, node_id: str, payload: dict):
-        """Called by WebSocket handler when node pushes telemetry."""
-        # 1. Update Redis (instant dashboard)
+        """Called by WebSocket handler when node pushes telemetry.
+
+        Only writes to Redis — the flush_telemetry_to_db Celery task
+        handles the DB write to avoid duplicate/mutex issues.
+        """
         cache.set(f"media:telemetry:{node_id}", payload, timeout=30)
-
-        # 2. Update DB fields (async, can lag)
-        from ..models import MediaNodeProfile
-
-        MediaNodeProfile.objects.filter(server_id=node_id).update(
-            cpu_percent=payload.get("system", {}).get("cpu_percent", 0),
-            memory_percent=payload.get("system", {}).get("memory_used_mb", 0)
-            / max(payload.get("system", {}).get("memory_total_mb", 1), 1)
-            * 100,
-            active_calls=payload.get("voice", {}).get("active_calls", 0),
-            active_rooms=payload.get("video", {}).get("active_rooms", 0),
-            active_participants=payload.get("video", {}).get("total_participants", 0),
-            active_rtp_sessions=payload.get("media", {}).get("rtp_sessions", 0),
-            capacity_score=payload.get("capacity", {}).get("score", 0),
-            last_telemetry_at=timezone.now(),
-        )
 
     def process_audit_event(self, node_id: str, event: dict):
         """Called by webhook when node reports attestation event."""
@@ -64,9 +51,19 @@ class TelemetryService:
         )
 
     def get_all_node_status(self) -> dict:
-        """O(1) lookup of all node statuses from Redis."""
-        keys = cache._client.keys("media:heartbeat:*")  # noqa: SLF001
-        return {k: cache.get(k) for k in keys}
+        """O(1) lookup of all node statuses from Redis.
+
+        Uses SCAN instead of KEYS to avoid blocking the event loop.
+        """
+        result = {}
+        cursor = 0
+        while True:
+            cursor, keys = cache._client.scan(cursor=cursor, match="media:heartbeat:*", count=100)  # noqa: SLF001
+            for key in keys:
+                result[key] = cache.get(key)
+            if cursor == 0:
+                break
+        return result
 
     def _log_recovery(self, node_id: str):
         logger.info("Media node %s recovered", node_id)

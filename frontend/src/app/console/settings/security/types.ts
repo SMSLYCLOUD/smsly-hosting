@@ -18,6 +18,7 @@ export interface MtlsConfig {
   svid_expiry: string | null;
   is_svid_expired: boolean;
   last_rotation: string | null;
+  sidecar_enabled?: boolean;
 }
 
 export interface MtlsStatusResponse {
@@ -30,4 +31,19 @@ export interface MtlsStatusResponse {
   svid_ttl_remaining: number;
   is_svid_expired: boolean;
   last_rotation: string | null;
+}
+
+export interface MtlsAuthorizationPolicy {
+  id: number;
+  name: string;
+  source_spiffe_id: string;
+  target_service_id: string;
+  target_service_name: string;
+  paths: string[];
+  methods: string[];
+  action: 'allow' | 'deny';
+  priority: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
 }

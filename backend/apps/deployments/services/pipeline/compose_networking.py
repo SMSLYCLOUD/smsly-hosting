@@ -296,6 +296,27 @@ class ComposeNetworkingMixin:
                                     existing_env = dict(e.split("=", 1) for e in existing_env if "=" in e)
                                 existing_env.update(mtls_env)
                                 override_payload["services"][svc_name]["environment"] = existing_env
+
+                        # --- mTLS: Inject Envoy sidecar if enabled ---
+                        try:
+                            from apps.mtls.models import MtlsConfig
+                            from apps.mtls.services.envoy_sidecar import (
+                                EnvoySidecar,
+                                ENVOY_IMAGE,
+                                SPIRE_AGENT_SOCKET_VOLUME,
+                                SPIRE_SVIDS_VOLUME,
+                                SPIRE_AGENT_SOCKET_CONTAINER_PATH,
+                                SPIRE_SVIDS_CONTAINER_PATH,
+                            )
+                            mtls_config_obj = MtlsConfig.objects.filter(
+                                service=self.service, enabled=True, sidecar_enabled=True
+                            ).first()
+                            if mtls_config_obj:
+                                override_payload = EnvoySidecar.inject_sidecar_compose(
+                                    self.service, override_payload
+                                )
+                        except Exception as e:
+                            logger.debug("Envoy sidecar compose injection skipped: %s", e)
             except Exception as exc:
                 # Reject the deployment entirely if compose file cannot be
                 # parsed for security validation — proceeding with incomplete

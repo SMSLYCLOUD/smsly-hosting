@@ -1,3 +1,4 @@
+import contextlib
 import io
 import logging
 import os
@@ -117,6 +118,11 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
 
 
 def _harden_node_ssh(ssh, server: ManagedServer) -> None:
+    """Verify the IP-restricted key works, but do NOT clear the password yet.
+
+    Password clearing is deferred to provisioning success to avoid locking
+    ourselves out if any subsequent step needs password-based sudo.
+    """
     if not server.ssh_key:
         _append_log(server, "⚠ SSH cleanup skipped: no key on record")
         return
@@ -146,10 +152,18 @@ def _harden_node_ssh(ssh, server: ManagedServer) -> None:
             timeout=10,
         )
         test_ssh.close()
+        _append_log(server, "🔒 IP-restricted SSH key verified working")
     except Exception as exc:
         _append_log(server, f"⚠ SSH cleanup skipped: test connection using restricted key failed: {exc}")
         return
 
+
+def _clear_ssh_password_after_success(server: ManagedServer) -> None:
+    """Clear the SSH password from DB after provisioning succeeds.
+
+    Called only on the success path — not during setup — so that
+    password-based auth remains available if any step needs it.
+    """
     if server.ssh_password:
         server.ssh_password = ""
         server.save(update_fields=['ssh_password', 'updated_at'])
@@ -165,7 +179,13 @@ def _schedule_remote_reboot(ssh, server: ManagedServer, reason: str) -> bool:
         "fi"
     )
     try:
-        ssh.exec_command(command)
+        stdin, stdout, stderr = ssh.exec_command(command)
+        # Close channel immediately — the reboot runs in the background via nohup.
+        # Leaving channels open risks hanging if the connection drops mid-reboot.
+        stdin.close()
+        with contextlib.suppress(Exception):
+            stdout.channel.close()
+            stderr.channel.close()
         logger.info("Scheduled remote reboot for %s after %s", server.host, reason)
         return True
     except Exception as exc:

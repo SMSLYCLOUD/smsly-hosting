@@ -50,6 +50,14 @@ class MtlsConfig(models.Model):
         blank=True,
         help_text="When the SVID was last rotated.",
     )
+    sidecar_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "Enable Envoy sidecar for transparent mTLS. "
+            "When enabled, an Envoy proxy is deployed alongside the service "
+            "to handle mTLS termination/origination transparently."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -89,3 +97,95 @@ class MtlsConfig(models.Model):
             return 0
         delta = self.svid_expiry - timezone.now()
         return max(0, int(delta.total_seconds()))
+
+
+class MtlsAuthorizationPolicy(models.Model):
+    """
+    L7 authorization rule: which source service can call which target service.
+
+    Policies are evaluated in priority order (highest first). The first matching
+    rule determines the action (ALLOW or DENY). If no rule matches, the default
+    is DENY when fail_closed=True.
+    """
+
+    class Action(models.TextChoices):
+        ALLOW = "allow", "Allow"
+        DENY = "deny", "Deny"
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Human-readable policy name.",
+    )
+    source_spiffe_id = models.CharField(
+        max_length=512,
+        help_text=(
+            "SPIFFE ID of the caller. Use '*' for any source. "
+            "Example: spiffe://ecosystem.local/service/frontend"
+        ),
+    )
+    target_service = models.ForeignKey(
+        "deployments.Service",
+        on_delete=models.CASCADE,
+        related_name="mtls_inbound_policies",
+    )
+    paths = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            'Path prefixes this policy applies to. Empty = all paths. '
+            'Example: ["/api/", "/internal/"]'
+        ),
+    )
+    methods = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            'HTTP methods this policy applies to. Empty = all methods. '
+            'Example: ["GET", "POST"]'
+        ),
+    )
+    action = models.CharField(
+        max_length=10,
+        choices=Action.choices,
+        default=Action.ALLOW,
+    )
+    priority = models.IntegerField(
+        default=0,
+        help_text="Higher priority rules are evaluated first.",
+    )
+    enabled = models.BooleanField(
+        default=True,
+        help_text="Whether this policy is active.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "mTLS Authorization Policy"
+        verbose_name_plural = "mTLS Authorization Policies"
+        ordering = ["-priority", "id"]
+
+    def __str__(self):
+        return f"{self.name}: {self.source_spiffe_id} -> {self.target_service.name} [{self.action}]"
+
+    def matches(self, source_spiffe_id: str, path: str, method: str) -> bool:
+        """Check if this policy matches the given request parameters."""
+        if not self.enabled:
+            return False
+
+        # Check source
+        if self.source_spiffe_id != "*":
+            if self.source_spiffe_id != source_spiffe_id:
+                return False
+
+        # Check paths (empty = all paths)
+        if self.paths:
+            if not any(path.startswith(p) for p in self.paths):
+                return False
+
+        # Check methods (empty = all methods)
+        if self.methods:
+            if method.upper() not in self.methods:
+                return False
+
+        return True

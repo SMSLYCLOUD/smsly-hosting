@@ -33,4 +33,15 @@ urlpatterns = [
         views.mtls_list,
         name="mtls-list",
     ),
+    # Authorization policies
+    path(
+        "mtls/policies/",
+        views.policy_list_create,
+        name="mtls-policy-list-create",
+    ),
+    path(
+        "mtls/policies/<int:policy_id>/",
+        views.policy_update_delete,
+        name="mtls-policy-update-delete",
+    ),
 ]

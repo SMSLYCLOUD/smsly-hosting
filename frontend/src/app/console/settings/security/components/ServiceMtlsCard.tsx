@@ -1,5 +1,5 @@
 // ServiceMtlsCard Component
-// Shows mTLS status for a single service with enable/disable toggle.
+// Shows mTLS status for a single service with enable/disable toggle and sidecar toggle.
 
 'use client';
 
@@ -9,17 +9,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Modal } from '@/components/ui/modal';
-import { Shield, ShieldOff, Clock, RefreshCw } from 'lucide-react';
+import { Shield, ShieldOff, Clock, RefreshCw, Box } from 'lucide-react';
 import type { MtlsConfig } from '../types';
 
 interface Props {
   config: MtlsConfig;
   onEnable: (serviceId: string) => void;
   onDisable: (serviceId: string) => void;
+  onToggleSidecar?: (serviceId: string, enabled: boolean) => void;
   isToggling: boolean;
 }
 
-export function ServiceMtlsCard({ config, onEnable, onDisable, isToggling }: Props) {
+export function ServiceMtlsCard({ config, onEnable, onDisable, onToggleSidecar, isToggling }: Props) {
   const [showConfirm, setShowConfirm] = useState(false);
 
   const svidExpiry = config.svid_expiry ? new Date(config.svid_expiry) : null;
@@ -59,6 +60,12 @@ export function ServiceMtlsCard({ config, onEnable, onDisable, isToggling }: Pro
                 <Badge variant={config.mtls_enabled ? 'default' : 'secondary'}>
                   {config.mtls_enabled ? 'Active' : 'Disabled'}
                 </Badge>
+                {config.sidecar_enabled && (
+                  <Badge variant="outline" className="gap-1">
+                    <Box className="h-3 w-3" />
+                    Envoy
+                  </Badge>
+                )}
               </div>
 
               {/* SPIFFE ID */}
@@ -93,16 +100,32 @@ export function ServiceMtlsCard({ config, onEnable, onDisable, isToggling }: Pro
               )}
             </div>
 
-            {/* Toggle Button */}
-            <Button
-              size="sm"
-              variant={config.mtls_enabled ? 'outline' : 'default'}
-              onClick={handleToggle}
-              disabled={isToggling}
-              className="ml-4 flex-shrink-0"
-            >
-              {isToggling ? 'Updating...' : config.mtls_enabled ? 'Disable' : 'Enable'}
-            </Button>
+            {/* Actions */}
+            <div className="flex flex-col items-end gap-2 ml-4">
+              {/* Toggle Button */}
+              <Button
+                size="sm"
+                variant={config.mtls_enabled ? 'outline' : 'default'}
+                onClick={handleToggle}
+                disabled={isToggling}
+              >
+                {isToggling ? 'Updating...' : config.mtls_enabled ? 'Disable' : 'Enable'}
+              </Button>
+
+              {/* Sidecar Toggle */}
+              {config.mtls_enabled && onToggleSidecar && (
+                <Button
+                  size="sm"
+                  variant={config.sidecar_enabled ? 'outline' : 'ghost'}
+                  onClick={() => onToggleSidecar(config.service_id, !config.sidecar_enabled)}
+                  disabled={isToggling}
+                  className="text-xs gap-1"
+                >
+                  <Box className="h-3 w-3" />
+                  {config.sidecar_enabled ? 'Envoy On' : 'Envoy Off'}
+                </Button>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>

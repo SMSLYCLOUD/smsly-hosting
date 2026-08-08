@@ -138,6 +138,31 @@ class ProvisioningMixin:
             ManagedServer.ProvisionStatus.UPDATING,
         }
         if server.provision_status in blocked_statuses:
+            # Only the user who started provisioning (or a superuser) may
+            # force-clear a stuck status.  Otherwise the clear is silently
+            # skipped — the caller will see the current in-flight status.
+            provision_started_by = getattr(server, "_provision_started_by", None)
+            if (
+                not request.user.is_superuser
+                and provision_started_by is not None
+                and provision_started_by != request.user.id
+            ):
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    "update_server: refusing to auto-clear provision_status=%s "
+                    "for server %s — user %s is not the initiator (%s) and not "
+                    "a superuser",
+                    server.provision_status, server.id, request.user.id,
+                    provision_started_by,
+                )
+                return Response(
+                    {
+                        "error": "Server is currently being provisioned by another user.",
+                        "provision_status": server.provision_status,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
             import logging
             logger = logging.getLogger(__name__)
             logger.warning(

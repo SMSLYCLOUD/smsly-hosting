@@ -93,6 +93,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         _get_ssh_client,
         _harden_master_firewall,
         _harden_node_ssh,
+        _clear_ssh_password_after_success,
         _restrict_ssh_key_to_master_ip,
     )
 
@@ -277,6 +278,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         buffer = ""
         credentials_file_content = ""
+        last_heartbeat = time.monotonic()
         while True:
             if channel.recv_ready():
                 chunk = channel.recv(4096).decode("utf-8", errors="replace")
@@ -310,6 +312,15 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 raise TimeoutError(
                     f"Install script timed out after {PROVISION_TIMEOUT_SECONDS} seconds"
                 )
+
+            # Heartbeat: update updated_at every 60s so the stale cleanup
+            # task doesn't kill a still-running provision.
+            if time.monotonic() - last_heartbeat >= 60:
+                try:
+                    server.save(update_fields=["updated_at"])
+                except Exception:
+                    pass
+                last_heartbeat = time.monotonic()
 
             time.sleep(0.5)
 
@@ -365,6 +376,38 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         admin_user = ""
         admin_password = ""
 
+        def _parse_credentials(text: str) -> dict:
+            """Parse credentials from key=value or 'key: value' formats."""
+            result = {}
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    key = key.strip().lower()
+                    value = value.strip().strip("'\"")
+                    if key in ("admin_token", "api_token", "auth_token", "token"):
+                        result["api_token"] = value
+                    elif key == "django_superuser_password":
+                        result["admin_user"] = "admin"
+                        result["admin_password"] = value
+                    elif key == "username":
+                        result["admin_user"] = value
+                    elif key == "password":
+                        result["admin_password"] = value
+                elif ":" in line:
+                    key, _, value = line.partition(":")
+                    key = key.strip().lower()
+                    value = value.strip().strip("'\"")
+                    if key == "username":
+                        result["admin_user"] = value
+                    elif key == "password":
+                        result["admin_password"] = value
+                    elif key in ("token", "api_token", "admin_token", "auth_token"):
+                        result["api_token"] = value
+            return result
+
         if "CREDS_NOT_FOUND" in credentials_file_content:
             _append_log(server, "⚠️ Credentials file not found — trying API token from .env")
             stdin, stdout, stderr = ssh.exec_command(
@@ -372,29 +415,16 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 "/opt/smsly-hosting/.env 2>/dev/null",
                 timeout=30,
             )
-            for token_line in stdout.read().decode("utf-8").strip().splitlines():
-                if "=" in token_line:
-                    key, value = token_line.split("=", 1)
-                    key = key.strip()
-                    value = value.strip().strip("'\"")
-                    if key == "DJANGO_SUPERUSER_PASSWORD":
-                        admin_user = "admin"
-                        admin_password = value
-                    elif key in ("ADMIN_TOKEN", "API_TOKEN", "AUTH_TOKEN"):
-                        api_token = value
+            env_text = stdout.read().decode("utf-8")
+            parsed = _parse_credentials(env_text)
+            api_token = parsed.get("api_token", "")
+            admin_user = parsed.get("admin_user", "")
+            admin_password = parsed.get("admin_password", "")
         else:
-            for line in credentials_file_content.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                if line.lower().startswith("username:"):
-                    admin_user = line.split(":", 1)[1].strip()
-                elif line.lower().startswith("password:"):
-                    admin_password = line.split(":", 1)[1].strip()
-                elif "token" in line.lower() and ":" in line:
-                    api_token = line.split(":", 1)[1].strip().strip("'\"")
-                elif line.startswith(("API_TOKEN=", "ADMIN_TOKEN=", "AUTH_TOKEN=")):
-                    api_token = line.split("=", 1)[1].strip().strip("'\"")
+            parsed = _parse_credentials(credentials_file_content)
+            api_token = parsed.get("api_token", "")
+            admin_user = parsed.get("admin_user", "")
+            admin_password = parsed.get("admin_password", "")
 
         if install_mode in ("agent-lite", "node"):
             _append_log(server, "[cred] Fetching node TLS certificate automatically...")
@@ -658,6 +688,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         server.status = ManagedServer.Status.ONLINE
         server.save(update_fields=update_fields)
 
+        # Clear SSH password now that provisioning succeeded (key-only auth)
+        _clear_ssh_password_after_success(server)
+
         _append_log(server, "✅ Grid provisioning complete!")
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
 
@@ -707,7 +740,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                             if new_token:
                                 server.api_token = new_token
                                 server.save(update_fields=["api_token", "updated_at"])
-                                _append_log(server, f"✅ Auto-exchanged for smsly_ API token: {new_token[:12]}...")
+                                _append_log(server, f"✅ Auto-exchanged for smsly_ API token: {'*' * 8}...{new_token[-4:] if len(new_token) > 4 else '****'}")
                                 break
             except Exception as exc:
                 _append_log(server, f"⚠️ Auto token exchange failed (non-critical): {exc}")

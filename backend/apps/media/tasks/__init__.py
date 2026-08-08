@@ -50,28 +50,34 @@ def flush_telemetry_to_db(self):
     """Batch-write Redis telemetry snapshots to PostgreSQL."""
     from apps.media.models import MediaNodeProfile
 
-    keys = cache._client.keys("media:telemetry:*")  # noqa: SLF001
-    for key in keys:
-        data = cache.get(key)
-        if not data:
-            continue
+    # Use SCAN instead of KEYS — O(1) per call, non-blocking.
+    cursor = 0
+    while True:
+        cursor, keys = cache._client.scan(cursor=cursor, match="media:telemetry:*", count=100)  # noqa: SLF001
+        for key in keys:
+            data = cache.get(key)
+            if not data:
+                continue
 
-        node_id = key.split(":")[-1]
-        try:
-            MediaNodeProfile.objects.filter(server_id=node_id).update(
-                cpu_percent=data.get("system", {}).get("cpu_percent", 0),
-                memory_percent=data.get("system", {}).get("memory_used_mb", 0)
-                / max(data.get("system", {}).get("memory_total_mb", 1), 1)
-                * 100,
-                active_calls=data.get("voice", {}).get("active_calls", 0),
-                active_rooms=data.get("video", {}).get("active_rooms", 0),
-                active_participants=data.get("video", {}).get("total_participants", 0),
-                active_rtp_sessions=data.get("media", {}).get("rtp_sessions", 0),
-                capacity_score=data.get("capacity", {}).get("score", 0),
-                last_telemetry_at=timezone.now(),
-            )
-        except Exception:
-            logger.exception("Failed to flush telemetry for node %s", node_id)
+            node_id = key.split(":")[-1]
+            try:
+                MediaNodeProfile.objects.filter(server_id=node_id).update(
+                    cpu_percent=data.get("system", {}).get("cpu_percent", 0),
+                    memory_percent=data.get("system", {}).get("memory_used_mb", 0)
+                    / max(data.get("system", {}).get("memory_total_mb", 1), 1)
+                    * 100,
+                    active_calls=data.get("voice", {}).get("active_calls", 0),
+                    active_rooms=data.get("video", {}).get("active_rooms", 0),
+                    active_participants=data.get("video", {}).get("total_participants", 0),
+                    active_rtp_sessions=data.get("media", {}).get("rtp_sessions", 0),
+                    capacity_score=data.get("capacity", {}).get("score", 0),
+                    last_telemetry_at=timezone.now(),
+                )
+            except Exception:
+                logger.exception("Failed to flush telemetry for node %s", node_id)
+
+        if cursor == 0:
+            break
 
 
 @shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], queue="deploy")

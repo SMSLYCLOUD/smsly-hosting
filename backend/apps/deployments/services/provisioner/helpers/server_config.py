@@ -34,6 +34,8 @@ def server_connection_mode(server: ManagedServer) -> str:
         return "agent-lite"
     if install_mode == "node":
         return "full-stack-node"
+    if install_mode == "media":
+        return "media-baremetal"
     return "full-install"
 
 

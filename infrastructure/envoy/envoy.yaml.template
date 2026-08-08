@@ -1,0 +1,221 @@
+# Envoy Sidecar Configuration Template
+# ======================================
+# Transparent mTLS proxy for user services on the smsly-hosting platform.
+# Uses SPIRE SDS (Secret Discovery Service) for dynamic certificate management.
+#
+# Traffic flow:
+#   Inbound:  other_service -> envoy:80 -> app:{{APP_PORT}}  (mTLS terminated)
+#   Outbound: app -> envoy:8080 -> other_service:80          (mTLS originated)
+#
+# Placeholders (replaced at runtime):
+#   {{APP_PORT}}          - Application's internal port (e.g., 8000)
+#   {{SPIFFE_ID}}         - This service's SPIFFE identity
+#   {{TRUST_DOMAIN}}      - SPIFFE trust domain (ecosystem.local)
+#   {{SERVICE_NAME}}      - Service name for DNS resolution
+#   {{SPIRE_AGENT_SOCKET}} - Path to SPIRE agent UDS socket
+
+static_resources:
+  listeners:
+  # ── Inbound listener: terminates mTLS from other services ──
+  - name: inbound
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 80
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: inbound
+          codec_type: AUTO
+          route_config:
+            name: inbound_route
+            virtual_hosts:
+            - name: inbound_service
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: local_app
+                  timeout: 30s
+                  retry_policy:
+                    retry_on: "5xx"
+                    num_retries: 2
+          http_filters:
+          # CORS filter
+          - name: envoy.filters.http.cors
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+          # RBAC authorization filter
+          - name: envoy.filters.http.rbac
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC
+              stat_prefix: inbound_rbac
+              rules:
+                action: ALLOW
+                policies:
+                  spiffe_auth:
+                    principals:
+                    - authenticated:
+                        principal_name:
+                          safe_regex:
+                            google_re2: {}
+                            regex: "spiffe://{{TRUST_DOMAIN}}/service/.*"
+                    permissions:
+                    - url_path:
+                        path:
+                          safe_regex:
+                            google_re2: {}
+                            regex: ".*"
+          # JWT authentication (validates SPIFFE SVIDs)
+          - name: envoy.filters.http.jwt_authn
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+              providers:
+                spiffe:
+                  remote:
+                    cluster_name: spire_agent
+                    http_uri:
+                      uri: "unix//{{SPIRE_AGENT_SOCKET}}"
+                      cluster_name: spire_agent
+                      timeout: 5s
+                  forward: true
+                  payload_in_metadata: spiffe_identity
+          # Router
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+        require_client_certificate: true
+        common_tls_context:
+          tls_certificates:
+          - certificate_chain:
+              filename: /opt/spire/svids/svid.pem
+            private_key:
+              filename: /opt/spire/svids/svid.key
+          validation_context:
+            trusted_ca:
+              filename: /opt/spire/svids/bundle.pem
+            match_typed_subject_alt_names:
+            - matcher:
+                exact: "spiffe://{{TRUST_DOMAIN}}/service/{{SERVICE_NAME}}"
+              san_type: URI
+
+  # ── Outbound listener: originates mTLS to other services ──
+  - name: outbound
+    address:
+      socket_address:
+        address: 127.0.0.1
+        port_value: 8080
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: outbound
+          codec_type: AUTO
+          route_config:
+            name: outbound_route
+            virtual_hosts:
+            - name: outbound_service
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: upstream_services
+                  timeout: 30s
+                  retry_policy:
+                    retry_on: "5xx"
+                    num_retries: 2
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+        common_tls_context:
+          tls_certificates:
+          - certificate_chain:
+              filename: /opt/spire/svids/svid.pem
+            private_key:
+              filename: /opt/spire/svids/svid.key
+          validation_context:
+            trusted_ca:
+              filename: /opt/spire/svids/bundle.pem
+
+  clusters:
+  # ── Local application cluster ──
+  - name: local_app
+    connect_timeout: 1s
+    type: STATIC
+    load_assignment:
+      cluster_name: local_app
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: {{APP_PORT}}
+
+  # ── SPIRE agent cluster (for SDS) ──
+  - name: spire_agent
+    connect_timeout: 1s
+    type: STATIC
+    load_assignment:
+      cluster_name: spire_agent
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              uds:
+                path: "{{SPIRE_AGENT_SOCKET}}"
+                server_features: envoy
+
+  # ── Upstream services cluster (for outbound mTLS) ──
+  # Uses DNS resolution via Docker network for service discovery
+  - name: upstream_services
+    connect_timeout: 2s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: upstream_services
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: "{{SERVICE_NAME}}"
+                port_value: 80
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+        common_tls_context:
+          tls_certificates:
+          - certificate_chain:
+              filename: /opt/spire/svids/svid.pem
+            private_key:
+              filename: /opt/spire/svids/svid.key
+          validation_context:
+            trusted_ca:
+              filename: /opt/spire/svids/bundle.pem
+
+  listeners:
+  # ... (listeners defined above)
+
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901

@@ -265,6 +265,14 @@ export function MtlsTab() {
             Trust domain: <code className="bg-muted px-1 rounded">ecosystem.local</code> — isolated
             from platform-internal services.
           </p>
+          <p>
+            <a
+              href="/console/settings/security"
+              className="text-emerald-500 hover:underline"
+            >
+              Manage authorization policies and Envoy sidecar →
+            </a>
+          </p>
         </CardContent>
       </Card>
     </div>

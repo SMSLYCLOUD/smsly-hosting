@@ -70,6 +70,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.infra.tasks_health  # noqa: F401  # check_agent_heartbeats_task
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
+    import apps.mtls.tasks  # noqa: F401  # inject_mtls_task
     # -- apps.core.tasks is an empty package (only submodules hold tasks),
     #    so autodiscovery has nothing to import. Load them explicitly. --
     import apps.core.tasks.metrics  # noqa: F401  # collect_metrics_task, cleanup_build_cache_task
@@ -138,6 +139,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.run_maintenance_task': {'queue': 'deploy'},
     'apps.deployments.tasks.registry_garbage_collection_task': {'queue': 'deploy'},
     'apps.deployments.tasks_spiffe.sync_spiffe_entries_task': {'queue': 'deploy'},
+    'apps.mtls.tasks.inject_mtls_task': {'queue': 'deploy'},
     'apps.deployments.services.provisioner.provision_server': {'queue': 'deploy'},
     'apps.core.services.health_monitor.monitor_health_task': {'queue': 'deploy'},
     'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'deploy'},

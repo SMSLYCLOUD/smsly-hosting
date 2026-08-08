@@ -11,6 +11,7 @@ from ..views import (
     AttestationProfileViewSet,
     MediaCapacityView,
     MediaNodeProfileViewSet,
+    MediaNodeRegistrationView,
     MediaParticipantViewSet,
     MediaRoomViewSet,
     MediaWebhookView,
@@ -32,6 +33,7 @@ rooms_router = routers.NestedSimpleRouter(nodes_router, r"rooms", lookup="room")
 rooms_router.register(r"participants", MediaParticipantViewSet, basename="media-participant")
 
 urlpatterns = [
+    path("media-nodes/register/", MediaNodeRegistrationView.as_view({"post": "register"}), name="media-node-register"),
     path("", include(router.urls)),
     path("", include(nodes_router.urls)),
     path("", include(rooms_router.urls)),
