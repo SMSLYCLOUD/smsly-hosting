@@ -285,8 +285,8 @@ def autoscaler_status(request) -> Response:
         try:
             last_check = cached.get("last_check_at", "")
             if last_check:
-                from datetime import datetime, timezone as tz
-                age = (datetime.now(tz) - datetime.fromisoformat(last_check)).total_seconds()
+                from datetime import datetime, timezone
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(last_check)).total_seconds()
                 if age < 60:
                     logger.info("Autoscaler: returning cached data (age=%.1fs)", age)
                     return Response(cached)
