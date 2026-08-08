@@ -35,6 +35,16 @@ SPIRE_SERVER_SOCKET = "/opt/spire/data/server.sock"
 SPIRE_AGENT_SOCKET = "/opt/spire/run/agent.sock"
 
 
+def _user_can_access_service(user, service) -> bool:
+    """Check if a user can manage a service."""
+    if user.is_superuser:
+        return True
+    if service.owner == user:
+        return True
+    team = getattr(service.project, 'team', None)
+    return bool(team and team.members.filter(user=user).exists())
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def mtls_status(request, service_id):
@@ -43,7 +53,12 @@ def mtls_status(request, service_id):
 
     Returns mTLS status for a service.
     """
-    config = get_object_or_404(MtlsConfig, service_id=service_id)
+    from apps.deployments.models import Service
+    service = get_object_or_404(Service, id=service_id)
+    if not _user_can_access_service(request.user, service):
+        return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+
+    config = get_object_or_404(MtlsConfig, service=service)
     return Response({
         "service_id": str(config.service_id),
         "service_name": config.service.name,
@@ -66,8 +81,13 @@ def mtls_enable(request, service_id):
     Enables mTLS for a service. The service must be redeployed for
     SPIRE socket mounts, labels, and env vars to take effect.
     """
+    from apps.deployments.models import Service
+    service = get_object_or_404(Service, id=service_id)
+    if not _user_can_access_service(request.user, service):
+        return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+
     config, created = MtlsConfig.objects.get_or_create(
-        service_id=service_id,
+        service=service,
         defaults={"enabled": True, "trust_domain": "ecosystem.local"},
     )
     if not created:
@@ -94,7 +114,12 @@ def mtls_disable(request, service_id):
     Disables mTLS for a service. The service must be redeployed for
     the SPIRE socket mount to be removed.
     """
-    config = get_object_or_404(MtlsConfig, service_id=service_id)
+    from apps.deployments.models import Service
+    service = get_object_or_404(Service, id=service_id)
+    if not _user_can_access_service(request.user, service):
+        return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+
+    config = get_object_or_404(MtlsConfig, service=service)
     config.enabled = False
     config.save()
 
@@ -112,8 +137,10 @@ def mtls_health(request):
     GET /api/v1/mtls/health
 
     Returns platform-wide mTLS health status including both
-    platform and ecosystem SPIRE servers.
+    platform and ecosystem SPIRE servers. Admin only.
     """
+    if not request.user.is_superuser:
+        return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
 
     def _check_spire(container, socket_path):
         try:
@@ -137,11 +164,8 @@ def mtls_health(request):
         except Exception:
             return False
 
-    # Platform SPIRE
     platform_server_healthy = _check_spire(PLATFORM_SPIRE_SERVER_CONTAINER, SPIRE_SERVER_SOCKET)
     platform_agent_healthy = _check_agent(PLATFORM_SPIRE_AGENT_CONTAINER, SPIRE_AGENT_SOCKET)
-
-    # Ecosystem SPIRE
     ecosystem_server_healthy = _check_spire(ECOSYSTEM_SPIRE_SERVER_CONTAINER, SPIRE_SERVER_SOCKET)
     ecosystem_agent_healthy = _check_agent(ECOSYSTEM_SPIRE_AGENT_CONTAINER, SPIRE_AGENT_SOCKET)
 
@@ -174,9 +198,20 @@ def mtls_list(request):
     """
     GET /api/v1/mtls/configs
 
-    Returns all mTLS configurations.
+    Returns mTLS configurations for services the user can access.
     """
-    configs = MtlsConfig.objects.select_related("service").all()
+    from apps.deployments.models import Service
+
+    if request.user.is_superuser:
+        configs = MtlsConfig.objects.select_related("service").all()
+    else:
+        accessible_service_ids = Service.objects.filter(
+            models_Q_owner_or_team(request.user)
+        ).values_list("id", flat=True)
+        configs = MtlsConfig.objects.select_related("service").filter(
+            service_id__in=accessible_service_ids
+        )
+
     return Response([
         {
             "service_id": str(c.service_id),
@@ -189,3 +224,11 @@ def mtls_list(request):
         }
         for c in configs
     ])
+
+
+def models_Q_owner_or_team(user):
+    """Build a Q filter for services owned by or team-accessible to user."""
+    from django.db.models import Q
+    from apps.deployments.models import Service
+
+    return Q(owner=user) | Q(project__team__members__user=user)

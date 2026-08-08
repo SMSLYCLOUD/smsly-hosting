@@ -9,6 +9,15 @@ def migrate_trust_domain(apps, schema_editor):
     )
 
 
+def regenerate_spiffe_ids(apps, schema_editor):
+    """Regenerate spiffe_id to match the new trust domain."""
+    MtlsConfig = apps.get_model("mtls", "MtlsConfig")
+    for config in MtlsConfig.objects.all():
+        expected = f"spiffe://{config.trust_domain}/service/{config.service.name}"
+        if config.spiffe_id != expected:
+            MtlsConfig.objects.filter(pk=config.pk).update(spiffe_id=expected)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -35,4 +44,5 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.RunPython(migrate_trust_domain, migrations.RunPython.noop),
+        migrations.RunPython(regenerate_spiffe_ids, migrations.RunPython.noop),
     ]

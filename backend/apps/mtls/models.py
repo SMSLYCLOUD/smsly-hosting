@@ -1,12 +1,16 @@
 """
 mTLS Management API
-====================
+===================
 API endpoints for managing SPIFFE mTLS on the smsly-hosting platform.
 Generic — works with any tenant service, not SMSLY-specific.
 """
 
 from django.db import models
 from django.utils import timezone
+from django.core.exceptions import ValidationError
+
+
+ALLOWED_TRUST_DOMAINS = {"ecosystem.local"}
 
 
 class MtlsConfig(models.Model):
@@ -14,7 +18,7 @@ class MtlsConfig(models.Model):
     Per-service mTLS configuration.
 
     Each deployed service can have mTLS enabled/disabled independently.
-    SPIFFE ID is auto-generated from the app name.
+    SPIFFE ID is auto-generated from the app name and trust domain.
     """
 
     service = models.OneToOneField(
@@ -29,7 +33,7 @@ class MtlsConfig(models.Model):
     trust_domain = models.CharField(
         max_length=255,
         default="ecosystem.local",
-        help_text="SPIFFE trust domain for this service (ecosystem.local for user services).",
+        help_text="SPIFFE trust domain for this service.",
     )
     spiffe_id = models.CharField(
         max_length=512,
@@ -53,9 +57,19 @@ class MtlsConfig(models.Model):
         verbose_name = "mTLS Configuration"
         verbose_name_plural = "mTLS Configurations"
 
+    def clean(self):
+        if self.trust_domain not in ALLOWED_TRUST_DOMAINS:
+            raise ValidationError(
+                f"Trust domain '{self.trust_domain}' is not allowed. "
+                f"User services must use: {', '.join(sorted(ALLOWED_TRUST_DOMAINS))}"
+            )
+
     def save(self, *args, **kwargs):
-        if not self.spiffe_id and self.service:
-            self.spiffe_id = f"spiffe://{self.trust_domain}/service/{self.service.name}"
+        self.clean()
+        if self.service:
+            new_spiffe = f"spiffe://{self.trust_domain}/service/{self.service.name}"
+            if self.spiffe_id != new_spiffe:
+                self.spiffe_id = new_spiffe
         super().save(*args, **kwargs)
 
     def __str__(self):

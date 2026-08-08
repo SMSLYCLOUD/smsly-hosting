@@ -27,6 +27,7 @@ import { WebhookConfigCard } from "@/components/settings/WebhookConfigCard";
 import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
 import { PlatformSettingsTab } from "@/components/settings/PlatformSettingsTab";
 import { SecurityTab } from "@/components/settings/SecurityTab";
+import { MtlsTab } from "@/components/settings/MtlsTab";
 import { TeamsTab } from "@/components/settings/TeamsTab";
 import { AlertsTab } from "@/components/settings/AlertsTab";
 import { RegistryCredentialsTab } from "@/components/settings/RegistryCredentialsTab";
@@ -110,6 +111,7 @@ const SETTINGS_SECTIONS = [
   { value: "team", label: "Team", icon: Users },
   { value: "notifications", label: "Alerts", icon: Bell },
   { value: "security", label: "Security", icon: Shield },
+  { value: "mtls", label: "mTLS", icon: Lock },
   { value: "providers", label: "Cloud", icon: Cloud },
   { value: "ai", label: "AI", icon: Sparkles },
   { value: "oauth", label: "OAuth", icon: Key },
@@ -882,6 +884,9 @@ export default function SettingsPage() {
             changingPassword={changingPassword}
             handleChangePassword={handleChangePassword}
           />
+        </TabsContent>
+        <TabsContent value="mtls">
+          <MtlsTab />
         </TabsContent>
         <TabsContent value="platform">
           <PlatformSettingsTab />

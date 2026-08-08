@@ -147,9 +147,7 @@ services:
     volumes:
       - spire-server-data:/opt/spire/data
       - spire-ecosystem-server-data:/opt/spire-ecosystem/data
-      - ./infrastructure/spire/server.conf:/etc/spire/server.conf:ro,z
       - ./infrastructure/spire/registration_entries.json:/etc/spire/entries.json:ro,z
-      - ./infrastructure/spire/server-ecosystem.conf:/etc/spire/server-ecosystem.conf:ro,z
       - ./infrastructure/spire/registration_entries_ecosystem.json:/etc/spire/entries-ecosystem.json:ro,z
     environment:
       SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
@@ -162,13 +160,12 @@ services:
           sleep 2
         done
         echo "Platform server ready. Loading registration entries..."
-        sed -i "s/TRUST_DOMAIN_PLACEHOLDER/$${SPIFFE_TRUST_DOMAIN}/g" /etc/spire/entries.json
-        /opt/spire/bin/spire-server entry create -socketPath /opt/spire/data/server.sock -data @/etc/spire/entries.json || true
+        cp /etc/spire/entries.json /tmp/entries-platform.json
+        sed -i "s/TRUST_DOMAIN_PLACEHOLDER/$${SPIFFE_TRUST_DOMAIN}/g" /tmp/entries-platform.json
+        /opt/spire/bin/spire-server entry create -socketPath /opt/spire/data/server.sock -data @/tmp/entries-platform.json || true
         echo "Platform registration entries loaded."
 
         echo "=== Initializing Ecosystem SPIRE Server ==="
-        cp /etc/spire/server-ecosystem.conf /tmp/server-ecosystem.conf
-        sed -i "s/ECOSYSTEM_TRUST_DOMAIN_PLACEHOLDER/$${ECOSYSTEM_TRUST_DOMAIN}/g" /tmp/server-ecosystem.conf
         cp /etc/spire/entries-ecosystem.json /tmp/entries-ecosystem.json
         sed -i "s/ECOSYSTEM_TRUST_DOMAIN_PLACEHOLDER/$${ECOSYSTEM_TRUST_DOMAIN}/g" /tmp/entries-ecosystem.json
 
@@ -191,6 +188,10 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 128M
     labels:
       - managed_by=smsly-hosting
 

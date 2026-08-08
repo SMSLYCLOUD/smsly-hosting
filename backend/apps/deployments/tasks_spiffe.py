@@ -21,18 +21,11 @@ from apps.deployments.constants import RETRY_DELAY_FAST, TASK_TIME_LIMIT_QUICK
 
 logger = logging.getLogger(__name__)
 
-# Ecosystem SPIRE (for user-deployed services)
 ECOSYSTEM_SPIFFE_TRUST_DOMAIN = os.getenv("ECOSYSTEM_TRUST_DOMAIN", "ecosystem.local")
 ECOSYSTEM_SPIRE_SERVER_CONTAINER = os.getenv(
     "SPIRE_ECOSYSTEM_SERVER_CONTAINER", "smsly-spire-server-ecosystem"
 )
 ECOSYSTEM_SPIRE_SERVER_SOCKET = "/opt/spire/data/server.sock"
-
-# Platform SPIRE (for platform-internal services, managed statically)
-PLATFORM_SPIFFE_TRUST_DOMAIN = os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local")
-PLATFORM_SPIRE_SERVER_CONTAINER = os.getenv(
-    "SPIRE_SERVER_CONTAINER", "smsly-spire-server"
-)
 
 
 @shared_task(
@@ -47,7 +40,7 @@ PLATFORM_SPIRE_SERVER_CONTAINER = os.getenv(
 def sync_spiffe_entries_task(self):
     """Sync SPIRE registration entries with all deployed services.
 
-    1. Get all services with mTLS enabled
+    1. Get all services with mTLS enabled (ecosystem trust domain only)
     2. List existing SPIRE entries from ecosystem server
     3. Create missing entries
     4. Delete entries for removed services
@@ -58,14 +51,15 @@ def sync_spiffe_entries_task(self):
         return {"status": "skipped", "reason": "mtls_disabled"}
 
     try:
-        from apps.deployments.models import Service
         from apps.mtls.models import MtlsConfig
     except Exception:
         logger.warning("Models not available, skipping SPIRE sync")
         return {"status": "skipped", "reason": "models_not_found"}
 
     try:
-        enabled_configs = MtlsConfig.objects.filter(enabled=True).select_related("service")
+        enabled_configs = MtlsConfig.objects.filter(
+            enabled=True, trust_domain=ECOSYSTEM_SPIFFE_TRUST_DOMAIN
+        ).select_related("service")
         service_names = {cfg.service.name for cfg in enabled_configs}
 
         existing_entries = _list_spire_entries()
