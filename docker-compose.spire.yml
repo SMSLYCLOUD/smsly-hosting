@@ -142,11 +142,12 @@ services:
           memory: ${SPIRE_AGENT_MEMORY_LIMIT:-128M}
 
   spire-init:
-    image: ghcr.io/spiffe/spire-server:1.9.6
+    image: alpine:3.20
     container_name: ${SPIRE_INIT_CONTAINER:-smsly-spire-init}
     volumes:
       - spire-server-data:/opt/spire/data
       - spire-ecosystem-server-data:/opt/spire-ecosystem/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infrastructure/spire/registration_entries.json:/etc/spire/entries.json:ro,z
       - ./infrastructure/spire/registration_entries_ecosystem.json:/etc/spire/entries-ecosystem.json:ro,z
     environment:
@@ -155,25 +156,28 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        apk add --no-cache docker-cli > /dev/null 2>&1 || true
+
         echo "=== Initializing Platform SPIRE Server ==="
-        until /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
+        cp /etc/spire/entries.json /tmp/entries-platform.json
+        sed -i "s/TRUST_DOMAIN_PLACEHOLDER/$${SPIFFE_TRUST_DOMAIN}/g" /tmp/entries-platform.json
+
+        until docker exec smsly-spire-server /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
           sleep 2
         done
         echo "Platform server ready. Loading registration entries..."
-        cp /etc/spire/entries.json /tmp/entries-platform.json
-        sed -i "s/TRUST_DOMAIN_PLACEHOLDER/$${SPIFFE_TRUST_DOMAIN}/g" /tmp/entries-platform.json
-        /opt/spire/bin/spire-server entry create -socketPath /opt/spire/data/server.sock -data @/tmp/entries-platform.json || true
+        docker exec smsly-spire-server /opt/spire/bin/spire-server entry create -socketPath /tmp/spire-server/private/api.sock -data @/tmp/entries-platform.json || true
         echo "Platform registration entries loaded."
 
         echo "=== Initializing Ecosystem SPIRE Server ==="
         cp /etc/spire/entries-ecosystem.json /tmp/entries-ecosystem.json
         sed -i "s/ECOSYSTEM_TRUST_DOMAIN_PLACEHOLDER/$${ECOSYSTEM_TRUST_DOMAIN}/g" /tmp/entries-ecosystem.json
 
-        until /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
+        until docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
           sleep 2
         done
         echo "Ecosystem server ready. Loading registration entries..."
-        /opt/spire/bin/spire-server entry create -socketPath /opt/spire-ecosystem/data/server.sock -data @/tmp/entries-ecosystem.json || true
+        docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server entry create -socketPath /tmp/spire-server/private/api.sock -data @/tmp/entries-ecosystem.json || true
         echo "Ecosystem registration entries loaded."
         echo "=== SPIRE Initialization Complete ==="
     networks:
@@ -188,6 +192,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - SYS_PTRACE
     deploy:
       resources:
         limits:
