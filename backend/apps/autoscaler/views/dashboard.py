@@ -265,6 +265,7 @@ def _run_autoscaler_check():
         "recent_decisions": cache.get(CACHE_KEY_DECISIONS, []),
     }
     cache.set(CACHE_KEY_STATUS, status_data, timeout=300)
+    logger.info("Autoscaler: cached status data (%d services)", len(services))
     return status_data
 
 
@@ -276,6 +277,8 @@ def autoscaler_status(request) -> Response:
     - If cached data is fresh (<60s), return immediately (sub-second).
     - Otherwise run a live check with timeout, fall back to cache."""
     cached = cache.get(CACHE_KEY_STATUS)
+    if cached is None:
+        logger.info("Autoscaler: no cached data, running live check")
 
     # If cached data exists and is recent, return it instantly
     if cached:
@@ -285,11 +288,11 @@ def autoscaler_status(request) -> Response:
                 from datetime import datetime, timezone as tz
                 age = (datetime.now(tz) - datetime.fromisoformat(last_check)).total_seconds()
                 if age < 60:
-                    logger.debug("Autoscaler: returning cached data (age=%.1fs)", age)
+                    logger.info("Autoscaler: returning cached data (age=%.1fs)", age)
                     return Response(cached)
-                logger.debug("Autoscaler: cache stale (age=%.1fs), running live check", age)
+                logger.info("Autoscaler: cache stale (age=%.1fs), running live check", age)
         except Exception as exc:
-            logger.debug("Autoscaler: cache freshness check failed: %s", exc)
+            logger.info("Autoscaler: cache freshness check failed: %s", exc)
 
     # No fresh cache — run live check with timeout
     result = [None]
@@ -306,6 +309,8 @@ def autoscaler_status(request) -> Response:
     t = threading.Thread(target=_live_check, daemon=True)
     t.start()
     done.wait(timeout=API_TIMEOUT)
+    if not done.is_set():
+        logger.info("Autoscaler: live check timed out after %ds", API_TIMEOUT)
 
     if result[0] is not None:
         return Response(result[0])
