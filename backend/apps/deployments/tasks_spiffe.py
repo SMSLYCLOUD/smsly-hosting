@@ -52,7 +52,7 @@ def sync_spiffe_entries_task(self):
     try:
         from apps.deployments.models import Service
         from apps.mtls.models import MtlsConfig
-    except ImportError:
+    except Exception:
         logger.warning("Models not available, skipping SPIRE sync")
         return {"status": "skipped", "reason": "models_not_found"}
 
@@ -78,7 +78,7 @@ def sync_spiffe_entries_task(self):
         # Clean up removed entries (only entries with /service/ prefix)
         removed = 0
         for name in existing_services - service_names:
-            if _delete_spire_entry(name):
+            if _delete_spire_entry(name, existing_entries):
                 removed += 1
 
         result = {
@@ -151,13 +151,11 @@ def _create_spire_entry(service_name: str) -> bool:
         return False
 
 
-def _delete_spire_entry(service_name: str) -> bool:
+def _delete_spire_entry(service_name: str, entries: list | None = None) -> bool:
     """Delete a SPIRE registration entry for a service."""
     try:
-        spiffe_id = f"spiffe://{SPIFFE_TRUST_DOMAIN}/service/{service_name}"
-
-        # Need to find the entry ID first
-        entries = _list_spire_entries()
+        if entries is None:
+            entries = _list_spire_entries()
         for entry in entries:
             if entry.get("spiffe_id", {}).get("path", "") == f"/service/{service_name}":
                 entry_id = entry.get("id", "")

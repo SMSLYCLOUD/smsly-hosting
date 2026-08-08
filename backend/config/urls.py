@@ -56,7 +56,8 @@ urlpatterns = [
     path('api/v1/accounts/',
          include('apps.deployments.urls.accounts_alias')),
 
-    # API
+    # API — mTLS must come before deployments.urls to avoid route shadowing
+    path('api/v1/', include('apps.mtls.urls')),
     path('api/v1/', include('apps.deployments.urls')),
     path('api/v1/cloud/', include('apps.cloud.urls')),
     path('api/v1/teams/', include('apps.teams.urls')),

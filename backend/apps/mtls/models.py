@@ -63,8 +63,10 @@ class MtlsConfig(models.Model):
 
     @property
     def is_svid_expired(self) -> bool:
-        if not self.svid_expiry:
+        if not self.enabled:
             return False
+        if not self.svid_expiry:
+            return True
         return timezone.now() > self.svid_expiry
 
     @property

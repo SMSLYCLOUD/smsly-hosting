@@ -48,7 +48,8 @@ def mtls_enable(request, service_id):
     """
     POST /api/v1/services/{service_id}/mtls/enable
 
-    Enables mTLS for a service. The service will be redeployed with SPIRE socket mount.
+    Enables mTLS for a service. The service must be redeployed for
+    SPIRE socket mounts, labels, and env vars to take effect.
     """
     config, created = MtlsConfig.objects.get_or_create(
         service_id=service_id,
@@ -61,7 +62,8 @@ def mtls_enable(request, service_id):
     return Response({
         "status": "enabled",
         "spiffe_id": config.spiffe_id,
-        "message": "mTLS enabled. Service will be redeployed with SPIRE socket mount.",
+        "message": "mTLS enabled. Redeploy the service for SPIRE mounts to take effect.",
+        "requires_redeploy": True,
     })
 
 
@@ -71,7 +73,8 @@ def mtls_disable(request, service_id):
     """
     POST /api/v1/services/{service_id}/mtls/disable
 
-    Disables mTLS for a service. The SPIRE socket mount will be removed on next deploy.
+    Disables mTLS for a service. The service must be redeployed for
+    the SPIRE socket mount to be removed.
     """
     config = get_object_or_404(MtlsConfig, service_id=service_id)
     config.enabled = False
@@ -79,7 +82,8 @@ def mtls_disable(request, service_id):
 
     return Response({
         "status": "disabled",
-        "message": "mTLS disabled. SPIRE socket mount will be removed on next deploy.",
+        "message": "mTLS disabled. Redeploy the service to remove SPIRE mounts.",
+        "requires_redeploy": True,
     })
 
 

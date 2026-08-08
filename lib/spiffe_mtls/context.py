@@ -108,7 +108,9 @@ def create_mtls_requests_session(
     except ImportError:
         raise ImportError("requests is required. Install with: pip install requests")
 
+    from requests.adapters import HTTPAdapter
+
     ctx = create_mtls_context(cert_path, key_path, bundle_path, server_side=False)
     session = requests.Session()
-    session.verify = ctx
+    session.mount('https://', HTTPAdapter(ssl_context=ctx))
     return session

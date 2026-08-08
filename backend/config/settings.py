@@ -653,6 +653,7 @@ INSTALLED_APPS = [
     'apps.notifications',
     'apps.addons',
     'apps.autoscaler',
+    'apps.mtls',
     'apps.licensing',
     'apps.permissions',
     'apps.mcp',

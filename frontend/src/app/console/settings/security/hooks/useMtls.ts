@@ -32,25 +32,25 @@ export function useMtls() {
 
   const health = useQuery<MtlsHealth>({
     queryKey: ['mtls', 'health'],
-    queryFn: () => fetchJson('/mtls/health'),
+    queryFn: () => fetchJson('mtls/health'),
     refetchInterval: 30_000, // Refresh every 30s
   });
 
   const configs = useQuery<MtlsConfig[]>({
     queryKey: ['mtls', 'configs'],
-    queryFn: () => fetchJson('/mtls/configs'),
+    queryFn: () => fetchJson('mtls/configs'),
     refetchInterval: 30_000,
   });
 
   const enableMtls = useMutation({
-    mutationFn: (serviceId: string) => postJson(`/services/${serviceId}/mtls/enable`),
+    mutationFn: (serviceId: string) => postJson(`services/${serviceId}/mtls/enable`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mtls'] });
     },
   });
 
   const disableMtls = useMutation({
-    mutationFn: (serviceId: string) => postJson(`/services/${serviceId}/mtls/disable`),
+    mutationFn: (serviceId: string) => postJson(`services/${serviceId}/mtls/disable`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mtls'] });
     },

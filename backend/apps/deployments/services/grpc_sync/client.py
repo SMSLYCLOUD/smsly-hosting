@@ -52,7 +52,11 @@ def push_db_to_agent(
         logger.warning("gRPC certs not configured for %s, falling back to HTTP", target_wg_address)
         return _push_db_to_agent_http(target_wg_address, dump_path, source_wg_address)
 
-    body_hash = hashlib.sha256(open(dump_path, 'rb').read()).hexdigest()
+    body_hash = hashlib.sha256()
+    with open(dump_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            body_hash.update(chunk)
+    body_hash = body_hash.hexdigest()
     timestamp = str(int(time.time()))
 
     channel = None
