@@ -167,7 +167,7 @@ services:
           sleep 2
         done
         echo "Platform server ready. Loading registration entries..."
-        docker exec smsly-spire-server /opt/spire/bin/spire-server entry create -socketPath /tmp/spire-server/private/api.sock -data @/opt/spire/data/entries-platform.json || true
+        docker exec smsly-spire-server /opt/spire/bin/spire-server entry create -socketPath /tmp/spire-server/private/api.sock -data /opt/spire/data/entries-platform.json || true
         echo "Platform registration entries loaded."
 
         echo "=== Initializing Ecosystem SPIRE Server ==="
@@ -179,7 +179,7 @@ services:
           sleep 2
         done
         echo "Ecosystem server ready. Loading registration entries..."
-        docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server entry create -socketPath /tmp/spire-server/private/api.sock -data @/opt/spire/data/entries-ecosystem.json || true
+        docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server entry create -socketPath /tmp/spire-server/private/api.sock -data /opt/spire/data/entries-ecosystem.json || true
         echo "Ecosystem registration entries loaded."
         echo "=== SPIRE Initialization Complete ==="
     networks:
