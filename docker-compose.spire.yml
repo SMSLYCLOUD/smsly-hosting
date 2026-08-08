@@ -23,7 +23,7 @@ services:
       - "127.0.0.1:8081:8081"
       - "127.0.0.1:8080:8080"
     healthcheck:
-      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck", "-socketPath", "/opt/spire/data/server.sock"]
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck", "-socketPath", "/tmp/spire-server/private/api.sock"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -91,7 +91,7 @@ services:
       - "127.0.0.1:8091:8081"
       - "127.0.0.1:8090:8080"
     healthcheck:
-      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck", "-socketPath", "/opt/spire/data/server.sock"]
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck", "-socketPath", "/tmp/spire-server/private/api.sock"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -156,7 +156,7 @@ services:
     command:
       - |
         echo "=== Initializing Platform SPIRE Server ==="
-        until /opt/spire/bin/spire-server healthcheck -socketPath /opt/spire/data/server.sock 2>/dev/null; do
+        until /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
           sleep 2
         done
         echo "Platform server ready. Loading registration entries..."
@@ -169,7 +169,7 @@ services:
         cp /etc/spire/entries-ecosystem.json /tmp/entries-ecosystem.json
         sed -i "s/ECOSYSTEM_TRUST_DOMAIN_PLACEHOLDER/$${ECOSYSTEM_TRUST_DOMAIN}/g" /tmp/entries-ecosystem.json
 
-        until /opt/spire/bin/spire-server healthcheck -socketPath /opt/spire-ecosystem/data/server.sock 2>/dev/null; do
+        until /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
           sleep 2
         done
         echo "Ecosystem server ready. Loading registration entries..."
