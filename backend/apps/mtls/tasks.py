@@ -10,7 +10,7 @@ import time
 from celery import shared_task
 from django.utils import timezone
 
-from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, RETRY_DELAY_SECONDS
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, RETRY_DELAY_STANDARD
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def inject_mtls_task(self, service_id: str):
 
     except Exception as exc:
         logger.error("mTLS injection failed for %s: %s", service.name, exc)
-        raise self.retry(exc=exc, countdown=RETRY_DELAY_SECONDS)
+        raise self.retry(exc=exc, countdown=RETRY_DELAY_STANDARD)
 
 
 def _swap_container_with_mtls(client, old_container, service):
