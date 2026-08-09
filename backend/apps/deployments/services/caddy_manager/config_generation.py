@@ -124,7 +124,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
         if not _table_exists(Service._meta.db_table):
             return []
 
-        for service in Service.objects.select_related("server").prefetch_related("domains").only(
+        for service in Service.objects.select_related("server").only(
             "id", "public_domain", "custom_domains", "public_domain_hidden",
             "server__id", "server__is_primary", "server__host", "server__wg_address",
         ).order_by("id"):
