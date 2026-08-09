@@ -159,7 +159,12 @@ def is_valid_host(host_str: str) -> bool:
         from django.db.models import Q
 
         from apps.deployments.models.core import ManagedServer
-        if ManagedServer.objects.filter(Q(host=domain) | Q(private_ip=domain)).exists():
+        q = Q(host=domain)
+        # private_ip is an inet column — only compare with IP addresses
+        import re as _re
+        if _re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', domain):
+            q |= Q(private_ip=domain)
+        if ManagedServer.objects.filter(q).exists():
             return True
     except Exception as exc:
         logger.warning("Domain validation failed for ManagedServer check (%s): %s", domain, exc)

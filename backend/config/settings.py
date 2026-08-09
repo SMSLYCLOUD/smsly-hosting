@@ -399,6 +399,14 @@ if DOMAIN and DOMAIN != 'localhost':
     _grid_wildcard = f'.{DOMAIN}'
     if _grid_wildcard not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(_grid_wildcard)
+
+# Internal grid services (e.g. smsly-frontend-node1-a37373.grid.smsly.cloud)
+_GRID_DOMAIN = config('GRID_DOMAIN', default='grid.smsly.cloud')
+if _GRID_DOMAIN:
+    _grid_wildcard2 = f'.{_GRID_DOMAIN}'
+    if _grid_wildcard2 not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_grid_wildcard2)
+
 APPEND_SLASH = True
 
 JULES_ALLOWED_HOSTS = config(
