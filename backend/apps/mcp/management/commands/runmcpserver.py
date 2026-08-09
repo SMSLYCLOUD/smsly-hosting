@@ -30,6 +30,12 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if mcp_server is None:
+            self.stderr.write(self.style.ERROR(
+                "MCP server is not available. Install 'mcp<2.0.0' for FastMCP support."
+            ))
+            return
+
         use_sse = options["sse"]
         if use_sse:
             host = options["host"]

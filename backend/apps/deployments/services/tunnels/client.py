@@ -28,10 +28,10 @@ import aiohttp
 try:
     from rich.console import Console
     # pylint: disable=unused-import
-    CONSOLE: Console | None = Console()
+    CONSOLE = Console()
     RICH_AVAILABLE = True
 except ImportError:
-    CONSOLE: Console | None = None
+    CONSOLE = None
     RICH_AVAILABLE = False
 
 logger = logging.getLogger('smsly.tunnel.client')

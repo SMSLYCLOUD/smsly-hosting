@@ -8,7 +8,7 @@ canary safety and resource guarding.
 import logging
 
 from apps.deployments.models import ManagedServer
-from apps.deployments.models_updates import PlatformUpdate
+from apps.deployments.models.updates import PlatformUpdate
 
 from apps.deployments.tasks import fleet_build_lock
 

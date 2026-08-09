@@ -64,7 +64,7 @@ class TunnelSession(models.Model):
         return f"{self.subdomain} -> localhost:{self.local_port}"
 
 
-class TunnelRequest(models.Model):
+class TunnelRequestLog(models.Model):
     """
     Logged HTTP request through a tunnel (for inspector).
     """
