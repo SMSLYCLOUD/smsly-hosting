@@ -696,11 +696,18 @@ def generate_caddyfile(config) -> str:
         # Caddy breaks TLS when the site address is a bare IP because
         # that IP doesn't exist on the container's network interface
         # (the container has e.g. 172.18.0.20).  :443 listens on all
-        # interfaces and lets TLS negotiate via SNI.  The static cert
-        # for the IP is still presented.
+        # interfaces and lets TLS negotiate via SNI.
+        #
+        # When the platform domain is a real hostname (not an IP), skip the
+        # static IP cert in :443 — otherwise Caddy serves the self-signed IP
+        # cert for ALL TLS connections (including named sites like
+        # grid.smsly.cloud) instead of using the ACME-issued cert.
+        _tls_line = ""
+        if _is_ip(str(domain)):
+            _tls_line = f"    tls {_caddy_crt} {_caddy_key}"
         sections.append(
             f""":443 {{
-    tls {_caddy_crt} {_caddy_key}
+{_tls_line}
     handle /api/* {{
         reverse_proxy backend:8000
     }}
