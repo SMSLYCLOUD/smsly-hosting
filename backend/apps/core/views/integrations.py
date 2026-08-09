@@ -239,6 +239,10 @@ def github_connection(request):
                 if account
                 else None
             ),
+            "github_app_configured": bool(
+                getattr(settings, "GITHUB_APP_ID", "")
+                and getattr(settings, "GITHUB_APP_PRIVATE_KEY", "")
+            ),
         },
         status=status.HTTP_200_OK,
     )

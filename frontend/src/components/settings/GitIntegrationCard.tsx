@@ -17,6 +17,7 @@ type GitConnection = {
     avatar_url: string | null;
   };
   warning?: string;
+  github_app_configured?: boolean;
 };
 
 type GitHubInstallation = {
@@ -238,20 +239,24 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                     <h4 className="text-sm font-medium">GitHub App</h4>
                     <Badge variant="outline" className="text-xs font-normal">Recommended</Badge>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={startGitHubAppInstall}
-                    disabled={installLoading}
-                    className="gap-1.5"
-                  >
-                    {installLoading ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    )}
-                    Install App
-                  </Button>
+                  {data?.github_app_configured ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={startGitHubAppInstall}
+                      disabled={installLoading}
+                      className="gap-1.5"
+                    >
+                      {installLoading ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      )}
+                      Install App
+                    </Button>
+                  ) : (
+                    <Badge variant="secondary" className="text-xs">Not configured</Badge>
+                  )}
                 </div>
 
                 <p className="text-xs text-muted-foreground mb-3">
@@ -261,46 +266,55 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                   </a>
                 </p>
 
-                {installError ? (
-                  <p className="text-xs text-red-500">{installError}</p>
-                ) : installations.length > 0 ? (
-                  <div className="space-y-2">
-                    {installations.map((inst) => (
-                      <div
-                        key={inst.installation_id}
-                        className="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          {inst.account_avatar_url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={inst.account_avatar_url} alt="" className="w-7 h-7 rounded-full bg-slate-200" />
-                          ) : (
-                            <div className="w-7 h-7 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center">
-                              <Github className="h-3.5 w-3.5 text-slate-400" />
-                            </div>
-                          )}
-                          <div>
-                            <p className="text-sm font-medium">{inst.account_login}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {inst.repo_count} {inst.repo_count === 1 ? "repo" : "repos"} · {inst.account_type}
-                            </p>
-                          </div>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeInstallation(inst.installation_id)}
-                          className="h-7 w-7 p-0 text-slate-400 hover:text-red-500"
+                {data?.github_app_configured ? (
+                  installError ? (
+                    <p className="text-xs text-red-500">{installError}</p>
+                  ) : installations.length > 0 ? (
+                    <div className="space-y-2">
+                      {installations.map((inst) => (
+                        <div
+                          key={inst.installation_id}
+                          className="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
+                          <div className="flex items-center gap-2.5">
+                            {inst.account_avatar_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={inst.account_avatar_url} alt="" className="w-7 h-7 rounded-full bg-slate-200" />
+                            ) : (
+                              <div className="w-7 h-7 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center">
+                                <Github className="h-3.5 w-3.5 text-slate-400" />
+                              </div>
+                            )}
+                            <div>
+                              <p className="text-sm font-medium">{inst.account_login}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {inst.repo_count} {inst.repo_count === 1 ? "repo" : "repos"} · {inst.account_type}
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeInstallation(inst.installation_id)}
+                            className="h-7 w-7 p-0 text-slate-400 hover:text-red-500"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">
+                      No installations linked yet. Click &quot;Install App&quot; to get started.
+                    </p>
+                  )
                 ) : (
-                  <p className="text-xs text-muted-foreground italic">
-                    No installations linked yet. Click &quot;Install App&quot; to get started.
-                  </p>
+                  <ol className="text-xs text-muted-foreground space-y-1.5 list-decimal list-inside">
+                    <li>Create a GitHub App at <a href="https://github.com/organizations/SMSLYCLOUD/settings/apps/new" target="_blank" rel="noreferrer" className="text-primary hover:underline">GitHub Apps</a></li>
+                    <li>Name: <code className="bg-muted px-1 rounded">smsly-paas-builder</code></li>
+                    <li>Webhook URL: <code className="bg-muted px-1 rounded">https://your-domain/webhooks/github/</code></li>
+                    <li>Run: <code className="bg-muted px-1 rounded">python manage.py setup_github --app-id ID --private-key key.pem</code></li>
+                  </ol>
                 )}
               </div>
             )}
