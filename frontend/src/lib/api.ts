@@ -280,8 +280,6 @@ api.interceptors.response.use(
   }
 );
 
-import { clearAuthCookies } from "@/lib/auth-cookies";
-
 // Auto-clear stale tokens on 401 and redirect to login
 api.interceptors.response.use(
   (response) => response,
