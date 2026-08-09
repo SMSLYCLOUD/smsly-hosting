@@ -1332,6 +1332,7 @@ services:
       - "443:443"
     environment:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+      - CADDY_ASK_SECRET=${CADDY_ASK_SECRET:-}
       - DOMAIN=${DOMAIN:-localhost}
     volumes:
       - ./caddy-config:/etc/caddy:z
