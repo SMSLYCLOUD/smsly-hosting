@@ -3,28 +3,21 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { config } from '@/lib/config';
-import { tokenManager } from '@/lib/token-manager';
 import type { MtlsHealth, MtlsConfig, MtlsAuthorizationPolicy } from '../types';
 
 const API_BASE = config.api.baseUrl;
 
 async function fetchJson<T>(path: string): Promise<T> {
-  const token = tokenManager.getAccessToken();
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
-  const token = tokenManager.getAccessToken();
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
@@ -32,13 +25,10 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
 }
 
 async function putJson<T>(path: string, body: unknown): Promise<T> {
-  const token = tokenManager.getAccessToken();
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
@@ -46,10 +36,9 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function deleteJson(path: string): Promise<void> {
-  const token = tokenManager.getAccessToken();
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
