@@ -140,13 +140,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
             page_ids = [obj.id for obj in page]
             filtered_qs = queryset.model.objects.filter(id__in=page_ids)
             serializer = self.ProjectSerializer.prefetch_for_list(filtered_qs)
-            serializer.instance = page
-            serializer._context = {'request': request}
-            return self.get_paginated_response(serializer.data)
+            data = [serializer.to_representation(item) for item in page]
+            return self.get_paginated_response(data)
         serializer = self.ProjectSerializer.prefetch_for_list(queryset)
-        serializer.instance = queryset
-        serializer._context = {'request': request}
-        return Response(serializer.data)
+        data = [serializer.to_representation(item) for item in queryset]
+        return Response(data)
 
     def get_queryset(self):
         """Owner and Team scoped: users see their own projects and team projects.
