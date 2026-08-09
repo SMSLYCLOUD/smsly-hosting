@@ -280,7 +280,7 @@ api.interceptors.response.use(
   }
 );
 
-import { isProtectedPath, canRedirectToLogin } from "@/lib/paths";
+import { clearAuthCookies } from "@/lib/auth-cookies";
 
 // Auto-clear stale tokens on 401 and redirect to login
 api.interceptors.response.use(
@@ -299,23 +299,17 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401 && typeof window !== 'undefined') {
-      // MUST call backend logout so the server clears the HttpOnly
-      // __Host-auth_token cookie via Set-Cookie: Max-Age=0.  Without
-      // this the cookie survives in the browser, the middleware sees
-      // it on /login and redirects straight back to /dashboard,
-      // creating an infinite loop.
+      // Call backend logout to clear the HttpOnly __Host-auth_token cookie
+      // via Set-Cookie: Max-Age=0.  Without this the cookie survives in the
+      // browser, the middleware sees it on /login and redirects back to
+      // /dashboard, creating an infinite loop.
+      //
+      // Do NOT redirect here — the auth-provider is the authority on auth
+      // state and handles redirect.  Handling it in both places causes
+      // double-fire (two logout calls, two redirects) and log spam from
+      // revalidation polling.
       fetch('/api/v1/auth/logout/', { method: 'POST', credentials: 'include' }).catch(() => {});
       clearAuthCookies();
-      const path = window.location.pathname;
-      if (
-        path !== '/login' &&
-        path !== '/register' &&
-        !path.startsWith('/auth/') &&
-        isProtectedPath(path) &&
-        canRedirectToLogin()
-      ) {
-        window.location.replace('/login');
-      }
     }
     return Promise.reject(error);
   }

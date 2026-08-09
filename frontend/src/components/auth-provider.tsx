@@ -46,16 +46,21 @@ export const AuthContext = createContext<AuthContextType>({ user: null, loading:
 /** Interval between periodic /auth/user/ revalidation (ms). */
 const AUTH_REVALIDATE_INTERVAL = 60_000;
 
+/** How many consecutive revalidation failures before we give up and redirect. */
+const MAX_REVALIDATION_FAILURES = 2;
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const revalidateTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const consecutiveFailures = useRef(0);
 
   useEffect(() => {
     const fetchUser = async (isRevalidate = false) => {
       try {
         const res = await api.get("/auth/user/");
         setUser(res.data);
+        consecutiveFailures.current = 0;
         if (!isRevalidate) resetRedirectGuard();
 
         const path = window.location.pathname;
@@ -80,16 +85,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } catch {
-        // Clear HttpOnly cookies by calling backend logout before redirecting.
-        // Without this the __Host-auth_token cookie survives in the browser,
-        // the middleware sees it on /login and redirects back to /dashboard.
-        fetch('/api/v1/auth/logout/', { method: 'POST', credentials: 'include' }).catch(() => {});
-        clearAuthCookies();
-        setUser(null);
+        consecutiveFailures.current += 1;
 
-        const path = window.location.pathname;
-        if (isProtectedPath(path) && canRedirectToLogin()) {
-          window.location.replace("/login");
+        // Stop the revalidation timer once we exceed the failure limit.
+        // This prevents dead sessions from hammering the server every 60s.
+        if (isRevalidate && consecutiveFailures.current > MAX_REVALIDATION_FAILURES) {
+          if (revalidateTimer.current) {
+            clearInterval(revalidateTimer.current);
+            revalidateTimer.current = null;
+          }
+        }
+
+        // On the first revalidation failure, don't kill the session yet —
+        // it might be a transient error (network blip, Docker restart, etc.).
+        // Only kill the session on the initial load or after exceeding the
+        // failure limit.
+        if (!isRevalidate || consecutiveFailures.current > MAX_REVALIDATION_FAILURES) {
+          // The api interceptor already called POST /api/v1/auth/logout/ to
+          // clear the HttpOnly cookie. We just need to clear client state
+          // and redirect.
+          clearAuthCookies();
+          setUser(null);
+
+          const path = window.location.pathname;
+          if (isProtectedPath(path) && canRedirectToLogin()) {
+            window.location.replace("/login");
+          }
         }
       } finally {
         setLoading(false);
