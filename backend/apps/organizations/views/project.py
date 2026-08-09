@@ -137,9 +137,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         if page is not None:
-            serializer = self.ProjectSerializer.prefetch_for_list(
-                queryset.__class__(page)
-            )
+            page_ids = [obj.id for obj in page]
+            filtered_qs = queryset.model.objects.filter(id__in=page_ids)
+            serializer = self.ProjectSerializer.prefetch_for_list(filtered_qs)
             serializer.instance = page
             serializer.context = {'request': request}
             return self.get_paginated_response(serializer.data)

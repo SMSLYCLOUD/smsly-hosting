@@ -50,38 +50,63 @@ def cookie_name() -> str:
     runtime (the test-suite flips DEBUG via ``override_settings``).
 
     The ``__Host-`` prefix REQUIRES ``Secure=True``, ``Path=/``, and no
-    ``Domain`` attribute. If USE_SSL is false the cookie cannot be Secure,
-    so we must use the plain ``auth_token`` name even in production.
+    ``Domain`` attribute. If the connection is not encrypted the cookie
+    cannot be Secure, so we must use the plain ``auth_token`` name.
     """
-    is_secure = not getattr(settings, "DEBUG", False) and getattr(settings, "USE_SSL", False)
-    if is_secure:
+    if _effective_ssl():
         return PROD_COOKIE_NAME
     return DEV_COOKIE_NAME
 
 
+def _effective_ssl() -> bool:
+    """Return True when the connection is encrypted (HTTPS).
+
+    Mirrors the logic in ``config/settings.py`` that computes
+    ``_effective_ssl`` from ``USE_SSL`` and the IP/Caddy cert check.
+    Falls back to False when the settings aren't available (tests, CLI).
+    """
+    try:
+        use_ssl = getattr(settings, "USE_SSL", False)
+        if use_ssl:
+            return True
+        # Caddy serves TLS on IP addresses via self-signed cert.
+        import os, re
+        domain = getattr(settings, "DOMAIN", "")
+        is_ip = bool(re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", domain))
+        caddy_serves_tls = is_ip and os.path.exists("/etc/caddy/certs/ip.crt")
+        if caddy_serves_tls:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def set_auth_cookie(response: HttpResponse, token: str) -> None:
-    """Attach the auth token as an HttpOnly+SameSite=Strict cookie.
+    """Attach the auth token as an HttpOnly cookie.
 
     The cookie name, ``Secure`` flag, and lifetime are derived from the
     current environment (see module docstring).
 
     Args:
         response: The HttpResponse that will be returned to the client.
-            The Set-Cookie header is added in-place.
+            The ``Set-Cookie`` header is added in-place.
         token: The opaque auth token to embed in the cookie.
     """
-    is_secure = not getattr(settings, "DEBUG", False) and getattr(settings, "USE_SSL", False)
+    secure = _effective_ssl()
     name = cookie_name()
-    # The __Host- prefix requires Secure=True, path=/, and no Domain. Plain
-    # cookies do not need Secure, but we still set it when serving over HTTPS
-    # so the browser refuses to send the cookie over a plaintext connection.
+    # When the site is served over HTTPS, set Secure so the browser refuses
+    # to send the cookie over a plaintext connection. SameSite=Lax allows
+    # the cookie on same-site top-level navigations (login redirect) while
+    # still blocking cross-site CSRF.  Strict was previously used but
+    # caused the browser to withhold the cookie on certain revalidation
+    # requests after login, killing the session within seconds.
     response.set_cookie(
         key=name,
         value=token,
         max_age=AUTH_COOKIE_MAX_AGE_SECONDS,
-        secure=is_secure,
+        secure=secure,
         httponly=True,
-        samesite="Strict",
+        samesite="Lax",
         path="/",
     )
 
