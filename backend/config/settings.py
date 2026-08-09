@@ -180,7 +180,9 @@ if not DEBUG and not IS_TESTING:
     # SEC-002: Caddy serves TLS on IP addresses via self-signed cert.
     # Even though USE_SSL is False for IPs, the connection IS encrypted.
     # Set secure cookies so session data isn't transmitted in cleartext.
-    _caddy_serves_tls = _is_ip and os.path.exists('/etc/caddy/certs/ip.crt')
+    # The caddy_config volume is mounted at /caddy-config in the backend
+    # container (not /etc/caddy).
+    _caddy_serves_tls = _is_ip and os.path.exists('/caddy-config/certs/ip.crt')
     _effective_ssl = _ssl_enabled or _caddy_serves_tls
     # Caddy natively redirects domains to HTTPS. If Django also redirects,
     # it traps raw IP addresses (which bypass Caddy's redirect) in an HTTP->HTTPS loop.
@@ -196,6 +198,7 @@ if not DEBUG and not IS_TESTING:
     SESSION_COOKIE_SECURE = _effective_ssl
     CSRF_COOKIE_SECURE = _effective_ssl
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if _effective_ssl else None
+    EFFECTIVE_SSL = _effective_ssl
 else:
     # Explicitly disable for tests and debug mode
     SECURE_HSTS_SECONDS = 0
@@ -204,6 +207,7 @@ else:
     SECURE_SSL_REDIRECT = False
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
+    EFFECTIVE_SSL = False
     SECURE_PROXY_SSL_HEADER = None
 
 # ── Additional security headers (unconditional) ──────────────────────────────

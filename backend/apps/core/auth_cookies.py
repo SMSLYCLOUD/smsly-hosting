@@ -53,32 +53,9 @@ def cookie_name() -> str:
     ``Domain`` attribute. If the connection is not encrypted the cookie
     cannot be Secure, so we must use the plain ``auth_token`` name.
     """
-    if _effective_ssl():
+    if getattr(settings, "EFFECTIVE_SSL", False):
         return PROD_COOKIE_NAME
     return DEV_COOKIE_NAME
-
-
-def _effective_ssl() -> bool:
-    """Return True when the connection is encrypted (HTTPS).
-
-    Mirrors the logic in ``config/settings.py`` that computes
-    ``_effective_ssl`` from ``USE_SSL`` and the IP/Caddy cert check.
-    Falls back to False when the settings aren't available (tests, CLI).
-    """
-    try:
-        use_ssl = getattr(settings, "USE_SSL", False)
-        if use_ssl:
-            return True
-        # Caddy serves TLS on IP addresses via self-signed cert.
-        import os, re
-        domain = getattr(settings, "DOMAIN", "")
-        is_ip = bool(re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", domain))
-        caddy_serves_tls = is_ip and os.path.exists("/etc/caddy/certs/ip.crt")
-        if caddy_serves_tls:
-            return True
-    except Exception:
-        pass
-    return False
 
 
 def set_auth_cookie(response: HttpResponse, token: str) -> None:
@@ -92,7 +69,7 @@ def set_auth_cookie(response: HttpResponse, token: str) -> None:
             The ``Set-Cookie`` header is added in-place.
         token: The opaque auth token to embed in the cookie.
     """
-    secure = _effective_ssl()
+    secure = getattr(settings, "EFFECTIVE_SSL", False)
     name = cookie_name()
     # When the site is served over HTTPS, set Secure so the browser refuses
     # to send the cookie over a plaintext connection. SameSite=Lax allows
