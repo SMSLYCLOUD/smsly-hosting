@@ -503,6 +503,9 @@ services:
     cap_add:
       - SETGID
       - SETUID
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
     cap_drop:
       - ALL
     build:
