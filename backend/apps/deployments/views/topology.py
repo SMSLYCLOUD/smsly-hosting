@@ -383,7 +383,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
         if not request.user or not request.user.is_authenticated or not request.user.is_staff:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Admin access required.")
-        from ..apps.deployments.services.ecosystem_graph_builder import EcosystemGraphBuilder
+        from ..services.ecosystem_graph_builder import EcosystemGraphBuilder
         builder = EcosystemGraphBuilder()
         graph = builder.build()
         return Response(graph)
