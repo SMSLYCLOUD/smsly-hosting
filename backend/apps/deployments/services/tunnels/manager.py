@@ -96,7 +96,7 @@ class TunnelRequestLog(models.Model):
         return f"{self.method} {self.path} -> {self.response_status}"
 
 
-class ReservedSubdomain(models.Model):
+class ReservedSubdomainRecord(models.Model):
     """
     Reserved custom subdomains for Pro/Team users.
     """
