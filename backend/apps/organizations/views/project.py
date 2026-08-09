@@ -141,11 +141,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
             filtered_qs = queryset.model.objects.filter(id__in=page_ids)
             serializer = self.ProjectSerializer.prefetch_for_list(filtered_qs)
             serializer.instance = page
-            serializer.context = {'request': request}
+            serializer._context = {'request': request}
             return self.get_paginated_response(serializer.data)
         serializer = self.ProjectSerializer.prefetch_for_list(queryset)
         serializer.instance = queryset
-        serializer.context = {'request': request}
+        serializer._context = {'request': request}
         return Response(serializer.data)
 
     def get_queryset(self):

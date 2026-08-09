@@ -509,7 +509,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         Accepts optional ``project_id`` to scope the plan and all subsequently
         created services to a specific project for isolation and permissions.
         """
-        from apps.deployments.models_ecosystem import EcosystemPlan
+        from apps.deployments.models.ecosystem import EcosystemPlan
         from apps.deployments.tasks.ecosystem import ecosystem_scan_task
 
         # Guard: no concurrent active scan or deploy
@@ -630,7 +630,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         isolation, permissions, and resource tracking.
         """
         from apps.deployments.models_core import Project
-        from apps.deployments.models_ecosystem import EcosystemPlan
+        from apps.deployments.models.ecosystem import EcosystemPlan
         from apps.deployments.tasks.ecosystem import ecosystem_deploy_task
 
         plan_id = request.data.get('plan_id')
@@ -733,7 +733,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """
         Check status of a long-running background task (Celery).
         """
-        from apps.deployments.models_ecosystem import EcosystemPlan
+        from apps.deployments.models.ecosystem import EcosystemPlan
 
         task_id = request.query_params.get('task_id')
         if not task_id:
@@ -851,7 +851,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['get'])
     def active_plan(self, request):
         """Return the user's most recent non-completed plan for resume."""
-        from apps.deployments.models_ecosystem import EcosystemPlan
+        from apps.deployments.models.ecosystem import EcosystemPlan
 
         SCANNING_STALE_THRESHOLD = timezone.timedelta(minutes=40)
 
@@ -892,7 +892,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['get'])
     def download_env(self, request):
         """Download all env vars from the latest ecosystem plan as a JSON file."""
-        from apps.deployments.models_ecosystem import EcosystemPlan
+        from apps.deployments.models.ecosystem import EcosystemPlan
         from django.http import JsonResponse
 
         plan = EcosystemPlan.objects.filter(
