@@ -467,11 +467,30 @@ def _write_target_file(filename, targets):
     """Write a JSON target file to TARGETS_DIR."""
     filepath = os.path.join(TARGETS_DIR, filename)
     try:
+        # Pre-heal: if the file exists but we can't open it, try to fix perms
+        if os.path.exists(filepath) and not os.access(filepath, os.W_OK):
+            try:
+                os.chmod(filepath, 0o666)
+            except OSError:
+                pass
         with open(filepath, "w") as f:
             json.dump(targets, f, indent=2)
+        # Ensure world-writable so future callers (any uid) can overwrite
+        try:
+            os.chmod(filepath, 0o666)
+        except OSError:
+            pass
         logger.debug("Wrote %d targets to %s", len(targets), filepath)
     except OSError as exc:
-        logger.warning("Failed to write %s: %s", filepath, exc)
+        # Last resort: delete and recreate
+        try:
+            os.remove(filepath)
+            with open(filepath, "w") as f:
+                json.dump(targets, f, indent=2)
+            os.chmod(filepath, 0o666)
+            logger.debug("Wrote %d targets to %s (after removal)", len(targets), filepath)
+        except OSError:
+            logger.warning("Failed to write %s: %s", filepath, exc)
 
 
 def _get_exporter_script_content():

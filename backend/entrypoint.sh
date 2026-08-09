@@ -871,7 +871,7 @@ if is_web_container "$@"; then
 
 
 
-    python manage.py deploy_docker_labels_exporters --targets-only 2>&1 | \
+    su -s /bin/sh -c 'exec python manage.py deploy_docker_labels_exporters --targets-only' smsly 2>&1 | \
 
 
 
