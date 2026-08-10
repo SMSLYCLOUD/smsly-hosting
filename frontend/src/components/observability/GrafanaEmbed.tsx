@@ -46,7 +46,7 @@ export function GrafanaEmbed({ dashboard, service, time }: GrafanaEmbedProps) {
 
     const params = useMemo(() => {
         const p = new URLSearchParams();
-        p.set('time', time || 'now-1h');
+        p.set('time', time || 'now-24h');
         const svc = resolvedService || service;
         if (svc) p.set('var-service', svc);
         return p.toString();

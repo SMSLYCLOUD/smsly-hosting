@@ -16,6 +16,7 @@ const TIME_RANGES = [
     { label: '1h', value: 'now-1h' },
     { label: '6h', value: 'now-6h' },
     { label: '24h', value: 'now-24h' },
+    { label: '7d', value: 'now-7d' },
 ];
 
 const DEFAULT_QUERY = '{compose_service=~".+"}';
@@ -34,7 +35,7 @@ export function LogsView({
     const [events, setEvents] = useState<LokiEvent[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [range, setRange] = useState('now-1h');
+    const [range, setRange] = useState('now-24h');
     const [limit, setLimit] = useState(200);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
