@@ -201,10 +201,9 @@ export function OAuthTab() {
             </div>
           </div>
           <div className="flex items-center justify-between">
-            <div className="text-xs text-muted-foreground space-y-1">
-              <p>Callback URL 1 (Login): <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/github/login/callback/</code></p>
-              <p>Callback URL 2 (Connect): <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/auth/github/callback</code></p>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Authorization callback URL: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/github/login/callback/</code>
+            </p>
             <Button onClick={() => handleSave("github")} disabled={saving || !githubClientId}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
               Save GitHub

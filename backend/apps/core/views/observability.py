@@ -182,16 +182,16 @@ def grafana_embed_url(request, dashboard_uid: str):
         )
 
     params = dict(request.GET)
-    params.setdefault('theme', 'dark')
-    params.setdefault('kiosk', 'tv')
+    params.setdefault('theme', ['dark'])
+    params.setdefault('kiosk', ['tv'])
     # Resolve var-service UUID to service name for Grafana template variable.
     # Tenant-scoped: if the caller doesn't own the service, resolved becomes ""
     # which hides all metrics in the dashboard instead of leaking another
     # tenant's data.
-    var_service = params.get('var-service', '')
-    if var_service:
-        resolved = _resolve_service_var(var_service, user=request.user)
-        params['var-service'] = resolved
+    var_service_raw = params.get('var-service', [''])[0]
+    if var_service_raw:
+        resolved = _resolve_service_var(var_service_raw, user=request.user)
+        params['var-service'] = [resolved]
 
     try:
         resp = requests.get(

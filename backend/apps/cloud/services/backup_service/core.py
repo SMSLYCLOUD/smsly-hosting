@@ -184,14 +184,10 @@ class BackupService:
         ).first()
         if existing:
             return {'key_id': str(existing.id), 'fingerprint': fingerprint, 'created': False}
-        key_id_raw = struct.pack('>I', int(hashlib.md5(key_material.encode()).hexdigest()[:8], 16))
-        from cryptography.fernet import Fernet
-        fernet = Fernet(Fernet.generate_key())
-        encrypted_material = fernet.encrypt(key_material.encode()).decode()
         obj = BackupEncryptionKey.objects.create(
-            key_id=key_id_raw.hex(),
+            key_id=uuid.uuid4().hex[:16],
             fingerprint=fingerprint,
-            key_material_encrypted=encrypted_material,
+            key_material_encrypted=key_material,
             is_active=True,
         )
         return {'key_id': str(obj.id), 'fingerprint': fingerprint, 'created': True}
@@ -201,9 +197,7 @@ class BackupService:
         from apps.cloud.models.backup import BackupEncryptionKey
         try:
             obj = BackupEncryptionKey.objects.get(id=key_id, is_active=True)
-            from cryptography.fernet import Fernet
-            fernet = Fernet(Fernet.generate_key())
-            return fernet.decrypt(obj.key_material_encrypted.encode()).decode()
+            return obj.key_material_encrypted
         except Exception:
             return None
 
@@ -287,12 +281,13 @@ class BackupService:
         return decrypted_path, decrypted_path
 
     def backup_service(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False) -> ServiceBackup:
-        if not _acquire_service_lock(str(service_id), 'backup'):
+        lock_token = _acquire_service_lock(str(service_id), 'backup')
+        if not lock_token:
             raise RuntimeError(f"Another backup/restore is already in progress for service {service_id}")
         try:
             return self._backup_service_inner(service_id, backup_id, backup_type, db_only)
         finally:
-            _release_service_lock(str(service_id))
+            _release_service_lock(str(service_id), lock_token)
 
     def _backup_service_inner(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False) -> ServiceBackup:
         service = Service.objects.get(id=service_id)
@@ -499,6 +494,8 @@ class BackupService:
             metadata['checksum_sha256'] = metadata['checksum_sha256'].hexdigest()
             metadata['size_bytes'] = os.path.getsize(filepath)
 
+            BackupService.stamp_encryption_header_into_metadata(metadata, filepath)
+
             metadata_json = json.dumps(metadata)
             metadata_path = filepath + '.meta'
             with open(metadata_path, 'w') as f:
@@ -512,8 +509,6 @@ class BackupService:
             backup.save(update_fields=[
                 'metadata', 'file_path', 'size_bytes', 'status', 'completed_at'
             ])
-
-            BackupService.stamp_encryption_header_into_metadata(backup.metadata, filepath)
 
             try:
                 result = _upload_backup_to_cloud(backup, filepath, service.name)
@@ -546,12 +541,18 @@ class BackupService:
                 logger.debug("Failed to remove backup image %s: %s", image_tag, exc)
 
     def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True):
-        if not _acquire_service_lock(str(backup_id), 'restore'):
-            raise RuntimeError(f"Another backup/restore is already in progress for backup_id={backup_id}")
+        try:
+            backup = ServiceBackup.objects.get(id=backup_id)
+        except ServiceBackup.DoesNotExist:
+            raise ValueError(f"Backup not found: id={backup_id}")
+        service_id = target_service_id or backup.service_id
+        lock_token = _acquire_service_lock(str(service_id), 'restore')
+        if not lock_token:
+            raise RuntimeError(f"Another backup/restore is already in progress for service {service_id}")
         try:
             return self._restore_service_inner(backup_id, target_service_id, requesting_user_id, raise_on_snapshot_failure)
         finally:
-            _release_service_lock(str(backup_id))
+            _release_service_lock(str(service_id), lock_token)
 
     def _restore_service_inner(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True):
         snapshot_for_rollback = None
@@ -669,8 +670,9 @@ class BackupService:
                         )
                         logger.info(f"mysql restore exit: {result.exit_code}")
                 elif fname == 'redis_dump.rdb':
-                    ctr.exec_run(['redis-cli', 'FLUSHALL'])
-                    ctr.exec_run(['redis-cli', '--pipe'], data_input=open(db_dump_path, 'rb').read())
+                    ctr.exec_run(['redis-cli', 'FLUSHALL'], timeout=60)
+                    with open(db_dump_path, 'rb') as f:
+                        ctr.exec_run(['redis-cli', '--pipe'], data_input=f.read(), timeout=120)
 
             vol_files = [f for f in extracted_files if f.startswith('volume_') and f.endswith('.tar.gz')]
             all_vols = list(Volume.objects.filter(service=target_service))
@@ -806,8 +808,8 @@ for e in env:
 " > env_vars.txt 2>/dev/null || echo "env_vars_skipped"
 
 # Save image
-docker commit "$SERVICE_NAME" "backup_{shlex.quote(service.name)}_img" 2>/dev/null || true
-docker save "backup_{shlex.quote(service.name)}_img" -o image.tar 2>/dev/null || true
+docker commit "$SERVICE_NAME" "backup_{shlex.quote(service.name)}_img"
+docker save "backup_{shlex.quote(service.name)}_img" -o image.tar
 
 # Dump volumes
 for vol in $(docker inspect "$SERVICE_NAME" | python3 -c "
@@ -958,17 +960,22 @@ rm -rf {remote_tmp}
     def backup_server(self, backup_id=None, db_only=False):
         from apps.deployments.models import Service as Svc
 
-        backup = ServerBackup.objects.create(
-            status='IN_PROGRESS',
-            backup_type='SERVER',
-        )
         if backup_id:
             try:
                 backup = ServerBackup.objects.get(id=backup_id)
                 backup.status = 'IN_PROGRESS'
-                backup.save(update_fields=['status'])
+                backup.error_message = ''
+                backup.save(update_fields=['status', 'error_message'])
             except ServerBackup.DoesNotExist:
-                pass
+                backup = ServerBackup.objects.create(
+                    status='IN_PROGRESS',
+                    backup_type='SERVER',
+                )
+        else:
+            backup = ServerBackup.objects.create(
+                status='IN_PROGRESS',
+                backup_type='SERVER',
+            )
 
         services = Svc.objects.filter(is_ai_router=False)
 
@@ -1200,7 +1207,7 @@ rm -rf {remote_tmp}
             channel_layer = get_channel_layer()
             if channel_layer:
                 async_to_sync(channel_layer.group_send)(
-                    f"backup_{backup_id}",
+                    f"backup_progress_{backup_id}",
                     {
                         'type': 'backup_progress',
                         'stage': stage,
@@ -1295,9 +1302,7 @@ rm -rf {remote_tmp}
                     if not ct_len_bytes:
                         break
                     ct_len = struct.unpack('>I', ct_len_bytes)[0]
-                    ct = f.read(ct_len)
-                    if len(ct) != ct_len:
-                        raise ValueError("Unexpected end of file reading ciphertext chunk")
+                    ct = BackupService._read_exact(f, ct_len)
                     nonce = nonce_prefix + ct[:12]
                     ciphertext = ct[12:]
                     plaintext = aesgcm.decrypt(nonce, ciphertext, None)
@@ -1334,9 +1339,7 @@ rm -rf {remote_tmp}
                     if not ct_len_bytes:
                         break
                     ct_len = struct.unpack('>I', ct_len_bytes)[0]
-                    ct = f.read(ct_len)
-                    if len(ct) != ct_len:
-                        raise ValueError("Unexpected end of file reading V3 ciphertext chunk")
+                    ct = BackupService._read_exact(f, ct_len)
                     nonce = ct[:12]
                     ciphertext = ct[12:]
                     plaintext = aesgcm.decrypt(nonce, ciphertext, aad)
@@ -1382,9 +1385,7 @@ rm -rf {remote_tmp}
                         if not ct_len_bytes:
                             break
                         ct_len = struct.unpack('>I', ct_len_bytes)[0]
-                        ct = f.read(ct_len)
-                        if len(ct) != ct_len:
-                            raise ValueError("Unexpected end of file reading ciphertext chunk")
+                        ct = BackupService._read_exact(f, ct_len)
                         nonce = nonce_prefix + ct[:12]
                         ciphertext = ct[12:]
                         plaintext = aesgcm.decrypt(nonce, ciphertext, None)
@@ -1409,17 +1410,6 @@ rm -rf {remote_tmp}
         raise ValueError("Not a chunked backup format (no valid magic header found)")
 
     @staticmethod
-    def _decode_fernet_token_to_file(path: str) -> str:
-        decrypted_path, cleanup = BackupService._make_private_decrypted_path(suffix=".tar.gz")
-        try:
-            with open(decrypted_path, 'wb') as out:
-                pass
-            return decrypted_path
-        except Exception:
-            BackupService.cleanup_decrypted_path(decrypted_path)
-            raise
-
-    @staticmethod
     def _decrypt_legacy_fernet_backup(path: str, key: str) -> str:
         expected_fp = BackupService.compute_backup_key_fingerprint(key)
         try:
@@ -1430,15 +1420,16 @@ rm -rf {remote_tmp}
 
         decrypted_path, cleanup = BackupService._make_private_decrypted_path()
         try:
+            header_bytes = b''
             with open(path, 'rb') as f:
-                data = f.read()
-
-            if data.startswith(b'gAAAA'):
-                decrypted = fernet.decrypt(data)
+                header_bytes = f.read(8)
+            if header_bytes.startswith(b'gAAAA'):
+                decrypted = fernet.decrypt(open(path, 'rb').read())
             else:
-                nonce = data[:16]
-                ct = data[16:-32]
-                hmac_val = data[-32:]
+                with open(path, 'rb') as f:
+                    nonce = f.read(16)
+                    ct = f.read(os.path.getsize(path) - 16 - 32)
+                    hmac_val = f.read(32)
                 key_material = fernet_key_raw
                 h = hmac.HMAC(key_material, hashes.SHA256())
                 h.update(nonce + ct)
@@ -1468,13 +1459,17 @@ rm -rf {remote_tmp}
         if service_id:
             filters['service_id'] = service_id
         stale = model_cls.objects.filter(**filters)
+        ids_to_delete = []
         for backup in stale:
-            if backup.file_path and os.path.exists(backup.file_path):
+            ids_to_delete.append(backup.id)
+            if backup.file_path:
                 try:
-                    os.remove(backup.file_path)
-                except OSError:
-                    pass
-        stale.delete()
+                    if os.path.exists(backup.file_path):
+                        os.remove(backup.file_path)
+                except OSError as exc:
+                    logger.debug("Failed to remove backup file %s: %s", backup.file_path, exc)
+        if ids_to_delete:
+            model_cls.objects.filter(id__in=ids_to_delete).delete()
 
     def _maybe_encrypt(self, path: str) -> str:
         if BackupService._backup_encryption_required():
@@ -1497,9 +1492,8 @@ rm -rf {remote_tmp}
             fout.write(_CHUNKED_BACKUP_MAGIC)
             nonce_prefix = os.urandom(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
             fout.write(nonce_prefix)
-            key_id_raw = struct.pack('>I', int(hashlib.md5(key.encode()).hexdigest()[:8], 16))
-            fout.write(key_id_raw)
-            fp_raw = struct.pack('>I', int(hashlib.md5(key.encode()).hexdigest()[:8], 16))
+            fp_raw = hashlib.sha256(key_raw).digest()[:_CHUNKED_BACKUP_FINGERPRINT_BYTES]
+            fout.write(struct.pack('>I', int(fp_raw.hex()[:8], 16)))
             fout.write(fp_raw)
 
             total = 0
@@ -1507,11 +1501,13 @@ rm -rf {remote_tmp}
                 plaintext = fin.read(chunk_size)
                 if not plaintext:
                     break
-                nonce = nonce_prefix + os.urandom(12)
+                nonce_suffix = os.urandom(12)
+                nonce = nonce_prefix + nonce_suffix
                 ct = aesgcm.encrypt(nonce, plaintext, None)
-                ct_len = len(ct)
+                chunk_data = nonce_suffix + ct
+                ct_len = len(chunk_data)
                 fout.write(struct.pack('>I', ct_len))
-                fout.write(ct)
+                fout.write(chunk_data)
                 total += len(plaintext)
 
             logger.info("Encrypted backup (%d bytes plaintext) -> %s", total, enc_path)

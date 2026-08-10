@@ -50,6 +50,7 @@ def _dump_container_database(container_name, image_tag, temp_dir):
                      '--no-role-passwords',
                      '--lock-wait-timeout=5000'],
                     environment={'PGPASSWORD': pg_password},
+                    timeout=600,
                 )
                 if result.exit_code == 0:
                     with open(dump_file, 'wb') as f:
@@ -75,7 +76,7 @@ def _dump_container_database(container_name, image_tag, temp_dir):
                 raise RuntimeError(f"mysqldump failed for {container_name}: {result.output}")
         elif 'redis' in image_lower:
             dump_file = os.path.join(temp_dir, 'redis_dump.rdb')
-            ctr.exec_run(['redis-cli', 'SAVE'])
+            ctr.exec_run(['redis-cli', 'SAVE'], timeout=120)
             time.sleep(2)
             bits, _ = ctr.get_archive('/data/dump.rdb')
             if bits:
@@ -101,16 +102,18 @@ def _stop_service_for_restore(service, is_remote):
                 key_content=server.ssh_key, wg_address=server.wg_address,
             )
             client.connect()
-            safe_name = shlex.quote(container_name)
-            client.exec_command(f"docker stop {safe_name} 2>/dev/null || true", raise_on_error=False)
-            client.exec_command(
-                f"for i in $(seq 1 15); do "
-                f"  docker inspect -f '{{{{.State.Status}}}}' {safe_name} 2>/dev/null | grep -q exited && break; "
-                f"  sleep 1; "
-                f"done",
-                raise_on_error=False,
-            )
-            client.close()
+            try:
+                safe_name = shlex.quote(container_name)
+                client.exec_command(f"docker stop {safe_name} 2>/dev/null || true", raise_on_error=False)
+                client.exec_command(
+                    f"for i in $(seq 1 15); do "
+                    f"  docker inspect -f '{{{{.State.Status}}}}' {safe_name} 2>/dev/null | grep -q exited && break; "
+                    f"  sleep 1; "
+                    f"done",
+                    raise_on_error=False,
+                )
+            finally:
+                client.close()
         else:
             import docker as _docker
             client = _docker.from_env()
@@ -238,6 +241,7 @@ def backup_addon(addon_id: str) -> str | None:
                         for chunk in bits:
                             f.write(chunk)
                     return dump_file
+            raise RuntimeError(f"mongodump failed for addon {addon_id}: exit {result.exit_code}")
     except Exception as exc:
         logger.warning("Addon backup failed for %s: %s", addon_id, exc)
     return None

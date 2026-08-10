@@ -26,11 +26,14 @@ def _make_signed(pk: str) -> str:
 
 def _encrypt_chunked(source: bytes, key: str) -> bytes:
     """Replicate the chunked AES-GCM encryption format for tests."""
+    import hashlib
     import struct
 
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     from apps.deployments.services.backup_service import (
+        _CHUNKED_BACKUP_FINGERPRINT_BYTES,
+        _CHUNKED_BACKUP_KEY_ID_BYTES,
         _CHUNKED_BACKUP_MAGIC,
         _CHUNKED_BACKUP_NONCE_PREFIX_BYTES,
     )
@@ -41,13 +44,19 @@ def _encrypt_chunked(source: bytes, key: str) -> bytes:
     out = bytearray()
     out += _CHUNKED_BACKUP_MAGIC
     out += nonce_prefix
+    key_id_raw = struct.pack('>I', int(hashlib.md5(key.encode()).hexdigest()[:8], 16))
+    out += key_id_raw
+    fp_raw = struct.pack('>I', int(hashlib.md5(key.encode()).hexdigest()[:8], 16))
+    out += fp_raw
     chunk_size = 64 * 1024
-    for chunk_index, start in enumerate(range(0, len(source), chunk_size)):
+    for start in range(0, len(source), chunk_size):
         chunk = source[start:start + chunk_size]
-        nonce = nonce_prefix + struct.pack(">I", chunk_index)
+        nonce_suffix = os.urandom(12)
+        nonce = nonce_prefix + nonce_suffix
         ciphertext = aesgcm.encrypt(nonce, chunk, None)
-        out += struct.pack(">I", len(ciphertext))
-        out += ciphertext
+        chunk_data = nonce_suffix + ciphertext
+        out += struct.pack(">I", len(chunk_data))
+        out += chunk_data
     out += struct.pack(">I", 0)
     return bytes(out)
 

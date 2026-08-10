@@ -48,7 +48,12 @@ export default function BackupKeysTab() {
         const reader = new FileReader();
         reader.onload = (ev) => {
             try {
-                const json = JSON.parse(ev.target?.result as string);
+                const result = ev.target?.result;
+                if (typeof result !== 'string') {
+                    toast({ title: "Read error", description: "Could not read the file.", variant: "destructive" });
+                    return;
+                }
+                const json = JSON.parse(result);
                 
                 let populated = false;
                 if (json.key_id) { setImportKeyId(json.key_id); populated = true; }

@@ -239,12 +239,13 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None, encryption
                         os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
         else:
             backup_service.backup_server(backup_id=backup_id, db_only=db_only)
-        if schedule_id:
-            _touch_schedule_last_run(schedule_id)
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc, countdown=RETRY_DELAY_BACKUP)
         raise
+    finally:
+        if schedule_id:
+            _touch_schedule_last_run(schedule_id)
 
 
 
@@ -337,6 +338,14 @@ def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = 
     from apps.deployments.models.audit import AuditLog
     from apps.deployments.services.backup_service import purge_user_backups
 
+    counters = {
+        'service_backups_deleted': 0,
+        'service_backup_files_deleted': 0,
+        'server_backups_deleted': 0,
+        'server_backup_files_deleted': 0,
+        'cloud_objects_deleted': 0,
+        'errors': 0,
+    }
     try:
         counters = purge_user_backups(user_id)
     except Exception as exc:
@@ -386,32 +395,37 @@ def cleanup_old_backups_task():
                     service=sched.service, created_at__lt=cutoff
                 ).exclude(backup_type='TRANSFER')
                 for b in old:
-                    # Delete the cloud object first (idempotent: already-gone = no-op).
-                    bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)
-                    if bucket and key:
-                        delete_cloud_backup_object(
-                            bucket, key,
-                            endpoint=endpoint, region=region,
-                            access_key=access_key, secret_key=secret_key,
-                        )
-                    if b.file_path and os.path.exists(b.file_path):
-                        os.remove(b.file_path)
-                    b.delete()
-                    cleaned += 1
+                    try:
+                        bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)
+                        if bucket and key:
+                            delete_cloud_backup_object(
+                                bucket, key,
+                                endpoint=endpoint, region=region,
+                                access_key=access_key, secret_key=secret_key,
+                            )
+                        if b.file_path and os.path.exists(b.file_path):
+                            os.remove(b.file_path)
+                        b.delete()
+                        cleaned += 1
+                    except Exception as item_exc:
+                        logger.warning("Failed to delete backup %s: %s", b.id, item_exc)
             elif sched.is_server_wide:
                 old = ServerBackup.objects.filter(created_at__lt=cutoff)
                 for b in old:
-                    bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)
-                    if bucket and key:
-                        delete_cloud_backup_object(
-                            bucket, key,
-                            endpoint=endpoint, region=region,
-                            access_key=access_key, secret_key=secret_key,
-                        )
-                    if b.file_path and os.path.exists(b.file_path):
-                        os.remove(b.file_path)
-                    b.delete()
-                    cleaned += 1
+                    try:
+                        bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)
+                        if bucket and key:
+                            delete_cloud_backup_object(
+                                bucket, key,
+                                endpoint=endpoint, region=region,
+                                access_key=access_key, secret_key=secret_key,
+                            )
+                        if b.file_path and os.path.exists(b.file_path):
+                            os.remove(b.file_path)
+                        b.delete()
+                        cleaned += 1
+                    except Exception as item_exc:
+                        logger.warning("Failed to delete server backup %s: %s", b.id, item_exc)
         except Exception as exc:
             logger.warning("Backup cleanup failed for schedule %s: %s", sched.id, exc)
 
@@ -436,8 +450,19 @@ def cleanup_old_backups_task():
                             )
 
                     if snap.cloud_uploaded and snap.cloud_key:
-                        # Optional: delete from cloud storage if needed, but not implemented for snapshots yet
-                        pass
+                        try:
+                            bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(snap)
+                            if bucket and key:
+                                delete_cloud_backup_object(
+                                    bucket, key,
+                                    endpoint=endpoint, region=region,
+                                    access_key=access_key, secret_key=secret_key,
+                                )
+                        except Exception as cloud_exc:
+                            logger.warning(
+                                "Failed to delete cloud object for snapshot %s: %s",
+                                snap.id, cloud_exc,
+                            )
                     snap.delete()
                     cleaned += 1
         except Exception as exc:

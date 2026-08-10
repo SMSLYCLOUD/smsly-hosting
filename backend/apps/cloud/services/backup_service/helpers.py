@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import tarfile
+import uuid
 
 from django.core.cache import cache
 
@@ -13,15 +14,34 @@ from .exceptions import _SENSITIVE_ENV_PATTERN
 logger = logging.getLogger(__name__)
 
 
-def _acquire_service_lock(service_id: str, operation: str) -> bool:
-    """Try to acquire a Redis lock for a service operation."""
+def _acquire_service_lock(service_id: str, operation: str) -> str | None:
+    """Try to acquire a Redis lock for a service operation.
+
+    Returns a lock token (UUID) on success, or None if the lock is already held.
+    The caller MUST pass the token to ``_release_service_lock`` to release.
+    """
     lock_key = f"backup_lock:{service_id}"
-    return cache.add(lock_key, operation, timeout=3600)
+    token = uuid.uuid4().hex
+    acquired = cache.add(lock_key, token, timeout=3600)
+    return token if acquired else None
 
 
-def _release_service_lock(service_id: str):
-    """Release the Redis lock for a service operation."""
+def _release_service_lock(service_id: str, token: str | None = None):
+    """Release the Redis lock for a service operation.
+
+    If *token* is provided, the lock is only released if the stored token
+    matches — preventing one caller from accidentally releasing another
+    caller's lock.
+    """
     lock_key = f"backup_lock:{service_id}"
+    if token:
+        stored = cache.get(lock_key)
+        if stored and stored != token:
+            logger.debug(
+                "Lock token mismatch for %s: stored=%s, expected=%s — refusing release",
+                service_id, stored, token,
+            )
+            return
     cache.delete(lock_key)
 
 

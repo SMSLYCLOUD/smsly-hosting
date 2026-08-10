@@ -98,6 +98,9 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     // Restore progress tracking
     const [restoringId, setRestoringId] = useState<string | null>(null);
     const [restoreStatus, setRestoreStatus] = useState<string>('');
+    const deploymentStatusRef = useRef<string>('');
+    const deployPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const deployTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [deploymentStatus, setDeploymentStatus] = useState<string>('');
     const [deploymentProgress, setDeploymentProgress] = useState<number>(0);
     const [deploymentLogs, setDeploymentLogs] = useState<string>('');
@@ -456,50 +459,61 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     };
 
     const monitorDeploymentAfterRestore = async (backupId: string) => {
+        if (deployPollRef.current) clearInterval(deployPollRef.current);
+        if (deployTimeoutRef.current) clearTimeout(deployTimeoutRef.current);
+
+        deploymentStatusRef.current = '';
         const pollInterval = setInterval(async () => {
             try {
                 const res = await api.get(`/services/${serviceId}/`);
                 const service = res.data;
                 
-                // Check for active deployment
                 if (service.latest_deployment) {
                     const deployment = service.latest_deployment;
                     
                     if (deployment.status === 'BUILDING' || deployment.status === 'DEPLOYING') {
+                        deploymentStatusRef.current = 'DEPLOYING';
                         setDeploymentStatus('DEPLOYING');
                         setDeploymentProgress(calculateProgress(deployment.status));
                         setRestoreStatus('RESTORED');
                         setIsLiveDeploying(true);
                     } else if (deployment.status === 'ACTIVE') {
+                        deploymentStatusRef.current = 'COMPLETED';
                         setDeploymentStatus('COMPLETED');
                         setDeploymentProgress(100);
                         setIsLiveDeploying(false);
                         clearInterval(pollInterval);
+                        deployPollRef.current = null;
                         toast({ title: "Restore Completed", description: "Service has been successfully restored and deployed." });
-                        // Refresh backups to show any new status
                         loadBackups();
                     } else if (deployment.status === 'FAILED') {
+                        deploymentStatusRef.current = 'FAILED';
                         setDeploymentStatus('FAILED');
                         setIsLiveDeploying(false);
                         clearInterval(pollInterval);
+                        deployPollRef.current = null;
                         toast({ title: "Restore Failed", description: "Deployment failed. Check service logs for details.", variant: "destructive" });
                     }
                 }
             } catch (err) {
                 console.error('Error monitoring deployment:', err);
             }
-        }, 3000); // Poll every 3 seconds
+        }, 3000);
+        deployPollRef.current = pollInterval;
         
-        // Stop monitoring after 5 minutes
-        setTimeout(() => {
-            clearInterval(pollInterval);
-            if (deploymentStatus !== 'COMPLETED' && deploymentStatus !== 'FAILED') {
+        const timeoutId = setTimeout(() => {
+            if (deployPollRef.current) {
+                clearInterval(deployPollRef.current);
+                deployPollRef.current = null;
+            }
+            if (deploymentStatusRef.current !== 'COMPLETED' && deploymentStatusRef.current !== 'FAILED') {
                 setRestoreStatus('TIMEOUT');
                 setDeploymentStatus('TIMEOUT');
                 setIsLiveDeploying(false);
                 toast({ title: "Restore Monitoring Timeout", description: "Restore process may still be running. Check service status manually.", variant: "destructive" });
             }
-        }, 300000); // 5 minutes
+        }, 300000);
+        deployTimeoutRef.current = timeoutId;
     };
 
     const calculateProgress = (status: string): number => {
@@ -582,8 +596,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const connectBackupProgressWebSocket = (backupId: string) => {
         if (progressWsRef.current?.readyState === WebSocket.OPEN) return;
 
-        const token = typeof document !== 'undefined' ? document.cookie.replace(/(?:(?:^|.*;\s*)auth_token\s*=\s*([^;]*).*$)|^.*$/, '$1') : '';
-        const wsUrl = getWsUrl(`/ws/backup-progress/${backupId}/${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+        const wsUrl = getWsUrl(`/ws/backup-progress/${backupId}/`);
 
         try {
             const ws = new WebSocket(wsUrl);
@@ -636,9 +649,17 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     };
 
     useEffect(() => {
-        // Cleanup WebSocket on unmount
+        // Cleanup on unmount
         return () => {
             cleanupWebSocket();
+            if (deployPollRef.current) {
+                clearInterval(deployPollRef.current);
+                deployPollRef.current = null;
+            }
+            if (deployTimeoutRef.current) {
+                clearTimeout(deployTimeoutRef.current);
+                deployTimeoutRef.current = null;
+            }
         };
     }, []);
 
@@ -700,9 +721,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             const formData = new FormData();
             formData.append('file', uploadRestoreFile);
             formData.append('service_id', serviceId);
-            const res = await api.post('/backups/upload-restore/', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-            });
+            const res = await api.post('/backups/upload-restore/', formData);
             toast({ title: "Restore Started", description: `Restoring from ${uploadRestoreFile.name}.` });
             setUploadRestoreOpen(false);
             setUploadRestoreFile(null);
@@ -1637,7 +1656,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                             <label className="text-xs text-muted-foreground block mb-1">Stored keys:</label>
                             <select
                                 className="w-full h-9 px-3 border border-border rounded-md bg-background text-sm"
-                                value=""
+                                value={keyPromptKeyId || ""}
                                 onChange={(e) => {
                                     const val = e.target.value;
                                     if (val === '__manual__') {

@@ -311,7 +311,7 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                 ) : (
                   <ol className="text-xs text-muted-foreground space-y-1.5 list-decimal list-inside">
                     <li>Create a GitHub App at <a href="https://github.com/organizations/SMSLYCLOUD/settings/apps/new" target="_blank" rel="noreferrer" className="text-primary hover:underline">GitHub Apps</a></li>
-                    <li>Name: <code className="bg-muted px-1 rounded">smsly-paas-builder</code></li>
+                    <li>Name: <code className="bg-muted px-1 rounded">smslycloud</code></li>
                     <li>Webhook URL: <code className="bg-muted px-1 rounded">https://your-domain/webhooks/github/</code></li>
                     <li>Run: <code className="bg-muted px-1 rounded">python manage.py setup_github --app-id ID --private-key key.pem</code></li>
                   </ol>

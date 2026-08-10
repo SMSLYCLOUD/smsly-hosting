@@ -217,13 +217,18 @@ def _download_backup_from_cloud(backup, local_path) -> bool:
         logger.warning("No cloud config found to download backup %s", backup.id)
         return False
     backup_id_str = str(getattr(backup, 'id', ''))
+    total_size = getattr(backup, 'size_bytes', 0) or 0
     class _S3DownloadProgress:
+        def __init__(self):
+            self.transferred = 0
         def __call__(self, bytes_amount):
+            self.transferred += bytes_amount
             from .core import BackupService
+            pct = min(95, (self.transferred / max(total_size, 1)) * 100) if total_size else 0
             BackupService._broadcast_progress(
-                backup_id_str, 'downloading', percent=min(10, bytes_amount / (1024 * 1024)),
-                message='Downloading from cloud...',
-                bytes_transferred=bytes_amount, total_bytes=0,
+                backup_id_str, 'downloading', percent=pct,
+                message=f'Downloading from cloud... {self.transferred // (1024 * 1024)} MB',
+                bytes_transferred=self.transferred, total_bytes=total_size,
             )
     return download_from_s3(
         bucket, key, local_path,

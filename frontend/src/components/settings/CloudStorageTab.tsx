@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Cloud, Plus, Trash2, Loader2, Check, Wifi, WifiOff, Server, HardDrive } from "lucide-react";
 import api from "@/lib/api";
 
@@ -41,6 +42,7 @@ const PROVIDER_TEMPLATES: Record<string, { name: string; endpoint: string; regio
 
 export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [destinations, setDestinations] = useState<CloudDestination[]>([]);
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState<string | null>(null);
@@ -91,6 +93,7 @@ export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
   };
 
   const handleDelete = async (id: string) => {
+    if (!await confirm({ title: 'Delete destination?', message: 'This will remove the cloud storage destination. Any backup schedules using it will need to be updated.', variant: 'destructive', confirmText: 'Delete' })) return;
     try { await api.delete(`/cloud-storage/${id}/`); fetchDestinations(); }
     catch { toast({ title: "Failed to delete", variant: "destructive" }); }
   };
@@ -145,7 +148,7 @@ export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
                       {d.provider_display} · {d.bucket} · {d.region}
                       {d.endpoint && ` · ${d.endpoint}`}
                     </p>
-                    <p className="text-xs text-zinc-600">Key: {d.access_key?.slice(0, 8)}... / {d.secret_key_masked}</p>
+                    <p className="text-xs text-zinc-600">Key: {d.access_key ? '••••••••' : '—'} / {d.secret_key_masked}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -193,12 +196,12 @@ export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
                 </div>
                 <div><Label className="text-xs">Endpoint (leave blank for AWS S3)</Label><Input className="h-8 text-sm" placeholder="https://..." value={form.endpoint} onChange={e => setForm(f => ({...f, endpoint: e.target.value}))} /></div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><Label className="text-xs">Access Key</Label><Input className="h-8 text-sm" value={form.access_key} onChange={e => setForm(f => ({...f, access_key: e.target.value}))} /></div>
+                  <div><Label className="text-xs">Access Key</Label><Input className="h-8 text-sm" type="password" value={form.access_key} onChange={e => setForm(f => ({...f, access_key: e.target.value}))} /></div>
                   <div><Label className="text-xs">Secret Key</Label><Input className="h-8 text-sm" type="password" value={form.secret_key} onChange={e => setForm(f => ({...f, secret_key: e.target.value}))} /></div>
                 </div>
                 <div className="flex gap-2 pt-1">
                   <Button size="sm" onClick={handleCreate}><Check className="w-3 h-3 mr-1" /> Save</Button>
-                  <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setForm({ name: "", provider: "r2", bucket: "", region: "auto", endpoint: "", access_key: "", secret_key: "" }); setAdding(false); }}>Cancel</Button>
                 </div>
               </CardContent>
             </Card>

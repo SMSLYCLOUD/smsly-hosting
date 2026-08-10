@@ -11,6 +11,12 @@ interface LokiEvent {
     labels: Record<string, string>;
 }
 
+/** Loki returns timestamps in nanoseconds; JS Date needs milliseconds. */
+function lokiTsToMs(ts: string): number {
+    const n = Number(ts);
+    return Number.isFinite(n) ? (n > 1e12 ? Math.floor(n / 1_000_000) : n) : 0;
+}
+
 const TIME_RANGES = [
     { label: '15m', value: 'now-15m' },
     { label: '1h', value: 'now-1h' },
@@ -255,13 +261,13 @@ export function LogsView({
                         <div className="max-h-[60vh] overflow-y-auto rounded border border-border bg-zinc-950 text-zinc-200 font-mono text-xs">
                             {events.map((event, idx) => (
                                 <div
-                                    key={`${event.timestamp}-${idx}`}
+                                     key={`${lokiTsToMs(event.timestamp)}-${idx}`}
                                     className="px-3 py-1 border-b border-zinc-900 hover:bg-zinc-900/60"
                                 >
                                     <div className="flex items-center gap-3 text-zinc-500">
-                                        <span className="shrink-0 w-32 truncate">
-                                            {new Date(event.timestamp).toLocaleString()}
-                                        </span>
+                                         <span className="shrink-0 w-32 truncate">
+                                             {new Date(lokiTsToMs(event.timestamp)).toLocaleString()}
+                                         </span>
                                         <span className="shrink-0 truncate">
                                             {event.labels?.compose_service || event.labels?.container_name || event.labels?.container?.slice(0, 12) || '—'}
                                         </span>

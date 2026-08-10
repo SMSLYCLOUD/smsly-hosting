@@ -91,7 +91,7 @@ def github_app_install_with_oauth(request) -> Response:
     return Response({"url": install_url})
 
 
-@api_view(["POST"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def github_app_callback(request) -> Response:
     """Process a GitHub App installation callback.
@@ -103,6 +103,8 @@ def github_app_callback(request) -> Response:
        ``github_app_install_with_oauth``).  When *state* is present the
        user is identified from the JWT rather than the session, so the
        endpoint can be called unauthenticated (e.g. from a redirect).
+
+    GET is supported for GitHub's redirect-based installation flow.
     """
     import jwt as pyjwt
     from django.conf import settings as dj_settings
@@ -201,17 +203,24 @@ def github_app_callback(request) -> Response:
         },
     )
 
-    return Response(
-        {
-            "id": str(installation.id),
-            "installation_id": installation_id,
-            "account_login": installation.account_login,
-            "account_type": installation.account_type,
-            "repositories": installation.repositories,
-            "created": created,
-        },
-        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-    )
+    from django.http import HttpResponseRedirect
+    from django.conf import settings as dj_settings
+
+    result = {
+        "id": str(installation.id),
+        "installation_id": installation_id,
+        "account_login": installation.account_login,
+        "account_type": installation.account_type,
+        "repositories": installation.repositories,
+        "created": created,
+    }
+
+    # For browser redirects (GET from GitHub), redirect to frontend settings
+    if request.method == "GET":
+        frontend_url = getattr(dj_settings, "FRONTEND_URL", "https://grid.smsly.cloud")
+        return HttpResponseRedirect(f"{frontend_url.rstrip('/')}/settings/integrations?github_app=connected")
+
+    return Response(result, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 @api_view(["GET"])

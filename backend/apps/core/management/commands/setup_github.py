@@ -216,7 +216,7 @@ You need to create TWO things on GitHub:
      (replace {org} with your GitHub organization)
 
   2. Fill in:
-     • GitHub App name: smsly-paas-builder
+     • GitHub App name: smslycloud
      • Homepage URL: https://{domain}
      • Webhook URL: https://{domain}/webhooks/github/
      • Webhook secret: (use the value from your .env file)
@@ -244,7 +244,7 @@ You need to create TWO things on GitHub:
      • A .pem file will download — keep it safe!
 
   8. Install the App on your org:
-     • Go to: https://github.com/apps/smsly-paas-builder/installations/new
+     • Go to: https://github.com/apps/smslycloud/installations/new
      • Select repos to grant access to
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

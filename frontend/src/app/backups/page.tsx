@@ -11,6 +11,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import api from '@/lib/api';
+import { getWsUrl } from '@/lib/websocket';
 
 interface CloudDestination {
     id: string;
@@ -67,6 +68,14 @@ export default function ServerBackupsPage() {
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const jsonKeyInputRef = useRef<HTMLInputElement>(null);
+
+    // Backup progress WebSocket
+    const progressWsRef = useRef<WebSocket | null>(null);
+    const [backupProgress, setBackupProgress] = useState<{
+        stage: string; percent: number; message: string;
+        bytes_transferred?: number; total_bytes?: number;
+    } | null>(null);
+    const [progressLog, setProgressLog] = useState<string[]>([]);
 
     // Encryption key prompt modal state
     const [keyPromptOpen, setKeyPromptOpen] = useState(false);
@@ -205,6 +214,68 @@ export default function ServerBackupsPage() {
         }
     };
 
+    const connectBackupProgressWebSocket = (backupId: string) => {
+        if (progressWsRef.current?.readyState === WebSocket.OPEN) return;
+
+        const token = typeof document !== 'undefined' ? document.cookie.replace(/(?:(?:^|.*;\s*)auth_token\s*=\s*([^;]*).*$)|^.*$/, '$1') : '';
+        const wsUrl = getWsUrl(`/ws/backup-progress/${backupId}/${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+
+        try {
+            const ws = new WebSocket(wsUrl);
+            setProgressLog([]);
+            setBackupProgress({ stage: 'connecting', percent: 0, message: 'Connecting...' });
+
+            ws.onopen = () => {
+                setBackupProgress({ stage: 'connected', percent: 0, message: 'Waiting for progress...' });
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'backup_progress') {
+                        setBackupProgress({
+                            stage: data.stage,
+                            percent: data.percent ?? 0,
+                            message: data.message ?? '',
+                            bytes_transferred: data.bytes_transferred,
+                            total_bytes: data.total_bytes,
+                        });
+                        const timeStr = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+                        const logLine = `[${timeStr}] ${data.stage}: ${data.message || ''}`;
+                        setProgressLog(prev => [...prev.slice(-200), logLine]);
+                    }
+                } catch {
+                    // Ignore non-JSON messages
+                }
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+
+            ws.onclose = () => {
+                progressWsRef.current = null;
+            };
+
+            progressWsRef.current = ws;
+        } catch (error) {
+            console.error('Backup progress WebSocket failed:', error);
+        }
+    };
+
+    const disconnectBackupProgressWebSocket = () => {
+        if (progressWsRef.current) {
+            progressWsRef.current.close();
+            progressWsRef.current = null;
+        }
+    };
+
+    useEffect(() => {
+        return () => {
+            disconnectBackupProgressWebSocket();
+        };
+    }, []);
+
     const handleSaveSchedule = async () => {
         setSavingSchedule(true);
         try {
@@ -272,8 +343,11 @@ export default function ServerBackupsPage() {
         setCreating(true);
         try {
             const payload = selectedDestination ? { cloud_destination: selectedDestination, db_only: dbOnly } : { db_only: dbOnly };
-            await api.post('/server/backups/', payload);
+            const res = await api.post('/server/backups/', payload);
             toast({ title: "Server Backup Started", description: "This captures all services and configuration." });
+            if (res.data?.id) {
+                connectBackupProgressWebSocket(res.data.id);
+            }
             loadBackups();
         } catch (err: unknown) {
             const axiosErr = err as { response?: { data?: { error?: string; detail?: string } } };
@@ -290,6 +364,7 @@ export default function ServerBackupsPage() {
         try {
             await api.post(`/server/backups/${backupId}/restore/`, { confirm: true, ...(encryptionKey ? { encryption_key: encryptionKey } : {}) });
             toast({ title: "Restore Started", description: "Server will restart once restore is complete." });
+            connectBackupProgressWebSocket(backupId);
         } catch (err: any) {
             const data = err?.response?.data;
             if (data?.error_code === 'ENCRYPTION_KEY_REQUIRED') {
@@ -1050,6 +1125,71 @@ export default function ServerBackupsPage() {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* Live Backup/Restore Progress */}
+            {backupProgress && (
+                <Card className="border-zinc-800">
+                    <CardContent className="p-4 space-y-2">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                            {backupProgress.stage === 'connecting' || backupProgress.stage === 'connected' ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                            ) : backupProgress.stage === 'completed' ? (
+                                <Archive className="w-4 h-4 text-green-500" />
+                            ) : backupProgress.stage === 'failed' ? (
+                                <X className="w-4 h-4 text-red-500" />
+                            ) : (
+                                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                            )}
+                            {backupProgress.stage === 'completed' ? 'Complete' : 'Live Progress'}
+                            <span className="text-xs text-muted-foreground ml-auto">
+                                {backupProgress.percent.toFixed(0)}%
+                            </span>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    disconnectBackupProgressWebSocket();
+                                    setBackupProgress(null);
+                                    setProgressLog([]);
+                                }}
+                                className="text-xs ml-2"
+                            >
+                                Dismiss
+                            </Button>
+                        </div>
+                        <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                            <div
+                                className={`h-full rounded-full transition-all duration-300 ${
+                                    backupProgress.stage === 'completed' ? 'bg-green-500' :
+                                    backupProgress.stage === 'failed' ? 'bg-red-500' : 'bg-blue-500'
+                                }`}
+                                style={{ width: `${Math.min(100, backupProgress.percent)}%` }}
+                            />
+                        </div>
+                        <div className="text-sm text-muted-foreground font-medium">
+                            {backupProgress.message}
+                        </div>
+                        {backupProgress.bytes_transferred != null && backupProgress.total_bytes != null && backupProgress.total_bytes > 0 && (
+                            <div className="text-xs text-muted-foreground">
+                                {backupProgress.bytes_transferred >= 1048576
+                                    ? `${(backupProgress.bytes_transferred / (1024 * 1024)).toFixed(1)} MB`
+                                    : `${(backupProgress.bytes_transferred / 1024).toFixed(1)} KB`} / {backupProgress.total_bytes >= 1048576
+                                    ? `${(backupProgress.total_bytes / (1024 * 1024)).toFixed(1)} MB`
+                                    : `${(backupProgress.total_bytes / 1024).toFixed(1)} KB`} transferred
+                            </div>
+                        )}
+                        {progressLog.length > 0 && (
+                            <div className="bg-zinc-950 border border-zinc-800 rounded p-2 max-h-32 overflow-y-auto font-mono text-xs">
+                                {progressLog.slice(-50).map((line, i) => (
+                                    <div key={i} className="text-green-400/80">
+                                        {line}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
             )}
         </DashboardShell>
     );
