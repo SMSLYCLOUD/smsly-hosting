@@ -95,8 +95,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 self._stream_task = asyncio.create_task(self._stream_logs(tail))
 
         except Exception as e:
-            if settings.DEBUG:
-                logger.error("RuntimeLogConsumer.connect() failed: %s", e, exc_info=True)
+            logger.error("RuntimeLogConsumer.connect() failed: %s", e, exc_info=True)
             with contextlib.suppress(Exception):
                 await self.send(text_data=json.dumps({'error': 'Internal error'}))
             await self.close(code=4000)
@@ -245,7 +244,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.debug("Runtime log stream ended for %s: %s", self.deployment_id, e)
+            logger.warning("Runtime log stream ended for %s: %s", self.deployment_id, e)
         finally:
             if self._proc:
                 try:
