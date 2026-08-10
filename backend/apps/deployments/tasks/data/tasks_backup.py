@@ -35,7 +35,7 @@ from apps.deployments.utils import log_event
 def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None, schedule_id=None, encryption_key=None):
     from apps.deployments.utils import log_event
 
-    from .services.backup_service import BackupService
+    from apps.deployments.services.backup_service import BackupService
     log_event(
         action='BACKUP_CREATE',
         target=f'Service: {service_id}',
@@ -373,8 +373,8 @@ def cleanup_old_backups_task():
     """Delete backups older than retention_days per schedule, including cloud objects."""
     from datetime import timedelta
 
-    from .models.backup import BackupSchedule, ServerBackup, ServiceBackup
-    from .services.backup_service import _resolve_cloud_config, delete_cloud_backup_object
+    from apps.cloud.models.backup import BackupSchedule, ServerBackup, ServiceBackup
+    from apps.cloud.services.backup_service import _resolve_cloud_config, delete_cloud_backup_object
 
     schedules = BackupSchedule.objects.filter(enabled=True)
     cleaned = 0
@@ -415,7 +415,7 @@ def cleanup_old_backups_task():
         except Exception as exc:
             logger.warning("Backup cleanup failed for schedule %s: %s", sched.id, exc)
 
-    from .models.backup import ServiceSnapshot, SnapshotSchedule
+    from apps.cloud.models.backup import ServiceSnapshot, SnapshotSchedule
     snapshot_schedules = SnapshotSchedule.objects.filter(enabled=True)
     for sched in snapshot_schedules:
         try:
@@ -467,7 +467,7 @@ def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
     import croniter  # type: ignore[import-untyped]
 
-    from .models.backup import BackupSchedule
+    from apps.cloud.models.backup import BackupSchedule
 
     now = timezone.now()
     schedules = BackupSchedule.objects.filter(enabled=True)
@@ -501,7 +501,7 @@ def run_scheduled_snapshots_task():
     """Execute all due SnapshotSchedule entries."""
     import croniter  # type: ignore[import-untyped]
 
-    from .models.backup import SnapshotSchedule
+    from apps.cloud.models.backup import SnapshotSchedule
 
     now = timezone.now()
     schedules = SnapshotSchedule.objects.filter(enabled=True)
