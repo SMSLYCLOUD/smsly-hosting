@@ -1409,12 +1409,7 @@ volumes:
   verdaccio_data: null
 
   traefik_logs: null
-  caddy_logs:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /opt/smsly-hosting/caddy-logs
+  caddy_logs: null
   crowdsec_data: null
   crowdsec_config: null
   
