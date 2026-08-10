@@ -105,6 +105,7 @@ def _upsert_traffic_row(ip: str, domain: str) -> None:
     """Insert or increment traffic count for an IP+domain combination."""
     from apps.deployments.models import Service
     from apps.deployments.models.traffic import ServiceTrafficLog
+    from apps.domains.models import Domain
 
     clean_domain = _clean_domain(domain)
     if not clean_domain:
@@ -119,6 +120,11 @@ def _upsert_traffic_row(ip: str, domain: str) -> None:
                 service = candidate
                 break
     if not service:
+        domain_obj = Domain.objects.filter(domain_name__iexact=clean_domain, verified=True).select_related('service').first()
+        if domain_obj:
+            service = domain_obj.service
+    if not service:
+        logger.debug("traffic.drop: no service for domain=%s ip=%s", clean_domain, ip)
         return
 
     is_private = _is_private_ip(ip)
