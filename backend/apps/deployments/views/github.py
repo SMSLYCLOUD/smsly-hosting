@@ -106,12 +106,51 @@ def _refresh_github_token(token_obj):
         return False
 
 
+def _get_github_app_repos(user, q: str = "") -> list[dict] | None:
+    """Fetch repos from the user's GitHub App installations.
+
+    Returns a list of raw GitHub API repo dicts, or ``None`` if no
+    installations exist or the App is not configured.
+    """
+    try:
+        from apps.cloud.models.github_app import GitHubAppInstallation
+        from apps.deployments.services.github_app import get_github_app_service
+
+        installations = GitHubAppInstallation.objects.filter(
+            user=user,
+            status=GitHubAppInstallation.Status.ACTIVE,
+        )
+        if not installations.exists():
+            return None
+
+        svc = get_github_app_service()
+        if svc is None:
+            return None
+
+        items: list[dict] = []
+        for inst in installations:
+            repos = svc.list_installation_repos(inst.installation_id)
+            items.extend(repos)
+
+        if q:
+            q_lower = q.lower()
+            items = [r for r in items if q_lower in r.get("full_name", "").lower()]
+
+        return items
+    except Exception as exc:
+        logger.debug("GitHub App repo fallback failed: %s", exc)
+        return None
+
+
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def github_repos(request):
     """
     Return the authenticated user's GitHub repositories.
+
+    Tries the user's OAuth token first; falls back to GitHub App
+    installations when the OAuth token is unavailable or expired.
 
     Query params
     ------------
@@ -121,14 +160,7 @@ def github_repos(request):
     sort    — 'updated' (default), 'created', 'pushed', 'full_name'.
     """
     token = _get_github_token(request.user)
-    if not token:
-        return Response(
-            {
-                "error": "GitHub not connected. Please link your GitHub account first.",
-                "repos": [],
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    use_app_fallback = token is None
 
     try:
         page = int(request.query_params.get("page", 1))
@@ -138,48 +170,59 @@ def github_repos(request):
     sort = request.query_params.get("sort", "updated")
     q = request.query_params.get("q", "").strip()
 
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
-    }
-
     try:
-        items = []
-        if q:
-            # Use the search API for query filtering
-            gh = requests.get(
-                "https://api.github.com/search/repositories",
-                headers=headers,
-                params={
-                    "q": f"{q} user:@me fork:true",
-                    "sort": "updated",
-                    "per_page": per_page,
-                    "page": page,
-                },
-                timeout=10,
-            )
-            gh.raise_for_status()
-            items = gh.json().get("items", [])
+        if use_app_fallback:
+            items = _get_github_app_repos(request.user, q=q)
+            if items is None:
+                return Response(
+                    {
+                        "error": "GitHub not connected. Please link your GitHub account first.",
+                        "repos": [],
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
-            # Loop to fetch up to 3 pages (300 repos) to ensure all repos are returned
-            for p in range(1, 4):
+            headers = {
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+
+            items = []
+            if q:
+                # Use the search API for query filtering
                 gh = requests.get(
-                    "https://api.github.com/user/repos",
+                    "https://api.github.com/search/repositories",
                     headers=headers,
                     params={
-                        "sort": sort,
-                        "direction": "desc",
+                        "q": f"{q} user:@me fork:true",
+                        "sort": "updated",
                         "per_page": per_page,
-                        "page": p,
-                        "affiliation": "owner,collaborator,organization_member",
+                        "page": page,
                     },
                     timeout=10,
                 )
                 gh.raise_for_status()
-                page_items = gh.json()
-                items.extend(page_items)
-                if len(page_items) < per_page:
-                    break
+                items = gh.json().get("items", [])
+            else:
+                # Loop to fetch up to 3 pages (300 repos) to ensure all repos are returned
+                for p in range(1, 4):
+                    gh = requests.get(
+                        "https://api.github.com/user/repos",
+                        headers=headers,
+                        params={
+                            "sort": sort,
+                            "direction": "desc",
+                            "per_page": per_page,
+                            "page": p,
+                            "affiliation": "owner,collaborator,organization_member",
+                        },
+                        timeout=10,
+                    )
+                    gh.raise_for_status()
+                    page_items = gh.json()
+                    items.extend(page_items)
+                    if len(page_items) < per_page:
+                        break
 
         repos = []
         for r in items:
@@ -188,11 +231,11 @@ def github_repos(request):
 
             repo_data = {
                 "full_name": r["full_name"],
-                "name": r["name"],
-                "private": r["private"],
+                "name": r.get("name") or r["full_name"].split("/")[-1],
+                "private": r.get("private", True),
                 "default_branch": r.get("default_branch", "main"),
-                "html_url": r["html_url"],
-                "clone_url": r["clone_url"],
+                "html_url": r.get("html_url") or f"https://github.com/{r['full_name']}",
+                "clone_url": r.get("clone_url") or f"https://github.com/{r['full_name']}.git",
                 "description": r.get("description") or "",
                 "language": r.get("language") or "",
                 "updated_at": r.get("updated_at"),
@@ -297,34 +340,61 @@ def _cluster_repos(repos: list[dict]) -> list[dict]:
     return sorted(clusters, key=lambda x: x["count"], reverse=True)
 
 
+def _get_app_token_for_repo(user, repo: str) -> str | None:
+    """Get an installation token for *repo* via GitHub App, or ``None``."""
+    try:
+        from apps.deployments.services.github_app import (
+            get_github_app_service,
+            get_installation_for_repo,
+        )
+        installation = get_installation_for_repo(repo)
+        if installation and installation.user_id == user.id:
+            svc = get_github_app_service()
+            if svc:
+                return svc.get_installation_token_for_id(installation.installation_id)
+    except Exception as exc:
+        logger.debug("App token fallback failed for %s: %s", repo, exc)
+    return None
+
+
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def github_branches(request):
     """Return branches for a specific repository."""
-    token = _get_github_token(request.user)
-    if not token:
-        return Response({"error": "GitHub not connected"}, status=status.HTTP_400_BAD_REQUEST)
-
     repo = request.query_params.get("repo")
     if not repo:
         return Response({"error": "repo parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
-    }
+    token = _get_github_token(request.user)
+    auth_headers = None
+    if token:
+        auth_headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+    else:
+        app_token = _get_app_token_for_repo(request.user, repo)
+        if app_token:
+            from apps.deployments.services.github_app import get_github_app_service
+            svc = get_github_app_service()
+            if svc:
+                auth_headers = svc._auth_headers(app_token)
+
+    if auth_headers is None:
+        return Response({"error": "GitHub not connected"}, status=status.HTTP_400_BAD_REQUEST)
+
     try:
         gh = requests.get(
             f"https://api.github.com/repos/{repo}/branches",
-            headers=headers,
+            headers=auth_headers,
             params={"per_page": 100},
             timeout=10,
         )
         gh.raise_for_status()
         return Response(gh.json())
     except Exception as exc:
-        logger.warning(f"Failed to fetch branches for {repo}: {exc}")
+        logger.warning("Failed to fetch branches for %s: %s", repo, exc)
         return Response({"error": "Failed to fetch branches"}, status=status.HTTP_502_BAD_GATEWAY)
 
 
@@ -333,31 +403,41 @@ def github_branches(request):
 @permission_classes([IsAuthenticated])
 def github_commits(request):
     """Return recent commits for a specific repository and branch."""
-    token = _get_github_token(request.user)
-    if not token:
-        return Response({"error": "GitHub not connected"}, status=status.HTTP_400_BAD_REQUEST)
-
     repo = request.query_params.get("repo")
     branch = request.query_params.get("branch")
 
     if not repo or not branch:
         return Response({"error": "repo and branch parameters are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
-    }
+    token = _get_github_token(request.user)
+    auth_headers = None
+    if token:
+        auth_headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+    else:
+        app_token = _get_app_token_for_repo(request.user, repo)
+        if app_token:
+            from apps.deployments.services.github_app import get_github_app_service
+            svc = get_github_app_service()
+            if svc:
+                auth_headers = svc._auth_headers(app_token)
+
+    if auth_headers is None:
+        return Response({"error": "GitHub not connected"}, status=status.HTTP_400_BAD_REQUEST)
+
     try:
         gh = requests.get(
             f"https://api.github.com/repos/{repo}/commits",
-            headers=headers,
+            headers=auth_headers,
             params={"sha": branch, "per_page": 30},
             timeout=10,
         )
         gh.raise_for_status()
         return Response(gh.json())
     except Exception as exc:
-        logger.warning(f"Failed to fetch commits for {repo} on branch {branch}: {exc}")
+        logger.warning("Failed to fetch commits for %s on branch %s: %s", repo, branch, exc)
         return Response({"error": "Failed to fetch commits"}, status=status.HTTP_502_BAD_GATEWAY)
 
 
