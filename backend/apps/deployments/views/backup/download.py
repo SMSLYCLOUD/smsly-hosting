@@ -175,7 +175,33 @@ class DownloadActionsMixin:
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
-                return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                error_msg = str(e).lower()
+                if 'hmac' in error_msg or 'invalid' in error_msg or 'tag' in error_msg:
+                    try:
+                        current_fp = BackupService.compute_backup_key_fingerprint(key)
+                    except Exception:
+                        current_fp = 'unknown'
+                    return Response(
+                        {
+                            'error': 'Encryption key mismatch.',
+                            'detail': (
+                                'The backup was encrypted with a different key than the '
+                                'current BACKUP_ENCRYPTION_KEY. The backup cannot be '
+                                'decrypted with the current key.'
+                            ),
+                            'current_fingerprint': current_fp,
+                            'remediation': (
+                                'Either restore the original encryption key that was used '
+                                'when this backup was created, or delete this backup and '
+                                'create a new one with the current key.'
+                            ),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                return Response(
+                    {'error': f'Failed to decrypt backup: {e}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
         return _open_backup_download_response(
             request,
