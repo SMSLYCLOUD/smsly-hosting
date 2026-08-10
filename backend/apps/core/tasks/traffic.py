@@ -42,7 +42,7 @@ def _is_traffic_geo_enabled() -> bool:
     if now - _traffic_geo_cache[0] < _TRAFFIC_GEO_CACHE_TTL:
         return _traffic_geo_cache[1]
     try:
-        from .models.core import PlatformConfig
+        from apps.deployments.models.core import PlatformConfig
         enabled = PlatformConfig.load().traffic_geo_enabled
     except Exception:
         enabled = True  # fail-open: keep collecting if DB is down
@@ -103,8 +103,8 @@ def _clean_domain(domain: str) -> str:
 
 def _upsert_traffic_row(ip: str, domain: str) -> None:
     """Insert or increment traffic count for an IP+domain combination."""
-    from .models import Service
-    from .models.traffic import ServiceTrafficLog
+    from apps.deployments.models import Service
+    from apps.deployments.models.traffic import ServiceTrafficLog
 
     clean_domain = _clean_domain(domain)
     if not clean_domain:
@@ -264,7 +264,7 @@ def resolve_traffic_geolocations(self) -> None:
     Runs every ~30 seconds, processes up to 20 IPs per batch."""
     if not _is_traffic_geo_enabled():
         return
-    from .models.traffic import ServiceTrafficLog
+    from apps.deployments.models.traffic import ServiceTrafficLog
 
     unresolved = list(
         ServiceTrafficLog.objects.filter(geo_resolved=False)
