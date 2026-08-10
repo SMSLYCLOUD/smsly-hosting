@@ -2183,10 +2183,69 @@ export const cloudProviderApi = {
 
 // ─── Ecosystem API ────────────────────────────────────────────────────────────
 
+export interface EcosystemPlanSummary {
+  id: string;
+  status: string;
+  project: string | null;
+  selected_repos: string[];
+  ai_provider: string | null;
+  use_shared_addons: boolean;
+  cancel_others_on_failure: boolean;
+  services_created: unknown[];
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface EcosystemPlanDetail extends EcosystemPlanSummary {
+  plan: Record<string, unknown> | null;
+  scan_progress: string | null;
+  shared_addon_config: Record<string, unknown>;
+  scan_task_id: string | null;
+  deploy_task_id: string | null;
+}
+
 export const ecosystemApi = {
+  // ── Existing ──
   bulkUpdateEnvironment: (data: { app_ids: string[]; env_vars: Record<string, string> }) =>
     api.post('/cloud/ecosystem/bulk-env/', data).then(r => r.data),
-  cachedScan: () => api.get('/cloud/ecosystem/cached-scan/').then(r => r.data.has_cache ? r.data.plan : null),
+  cachedScan: () =>
+    api.get('/cloud/ecosystem/cached-scan/').then(r => (r.data.has_cache ? r.data.plan : null)),
+
+  // ── Scan / Deploy lifecycle ──
+  getActivePlan: () =>
+    api.get('/cloud/ecosystem/active-plan/').then(r => r.data),
+
+  getTaskStatus: (taskId: string) =>
+    api.get('/cloud/ecosystem/task_status/', { params: { task_id: taskId } }).then(r => r.data),
+
+  getDeepScanStatus: (taskId: string) =>
+    api.get('/cloud/ecosystem/deep_scan/status/', { params: { task_id: taskId } }).then(r => r.data),
+
+  startScan: (data: { ai_provider: string; selected_repos: string[] }) =>
+    api.post('/cloud/ecosystem/scan/', data).then(r => r.data),
+
+  startDeepScan: (data: { ai_provider: string; repos_data: unknown[]; deploy_plan: unknown }) =>
+    api.post('/cloud/ecosystem/deep_scan/', data).then(r => r.data),
+
+  deploy: (data: {
+    plan: unknown;
+    plan_id: string;
+    use_shared_addons: boolean;
+    cancel_others_on_failure: boolean;
+    shared_addon_config: Record<string, unknown>;
+  }) => api.post('/cloud/ecosystem/deploy/', data).then(r => r.data),
+
+  downloadEnv: () =>
+    api.get('/cloud/ecosystem/download-env/', { responseType: 'blob' }).then(r => r.data),
+
+  // ── Plan history ──
+  listPlans: (params?: { status?: string; page?: number }) =>
+    api.get('/cloud/ecosystem/plans/', { params }).then(r => r.data),
+
+  getPlan: (planId: string) =>
+    api.get(`/cloud/ecosystem/plans/${planId}/`).then(r => r.data),
 };
 
 // ─── Database Replicas API ───────────────────────────────────────────────────

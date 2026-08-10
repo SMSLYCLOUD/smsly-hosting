@@ -13,10 +13,12 @@ import {
     Code, CheckCircle, AlertTriangle, Variable, Terminal, Download
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { ecosystemApi } from '@/lib/api';
 import Link from 'next/link';
 import { TopologyCanvas } from './components/TopologyCanvas';
 import { BulkEnvDialog } from './components/BulkEnvDialog';
 import { CachedScanCard } from './components/CachedScanCard';
+import { PlanHistorySection } from './components/PlanHistorySection';
 
 // Types
 interface ServicePlan {
@@ -190,10 +192,7 @@ export default function EcosystemPage() {
             if (step === 'review' || step === 'done') return;
 
             try {
-                const res = await fetch('/api/v1/cloud/ecosystem/active-plan/', {
-                    credentials: 'include',
-                });
-                const data = await res.json();
+                const data = await ecosystemApi.getActivePlan();
                 if (!data.has_active_plan) {
                     // Server has no record but our local session says we're
                     // mid-flow — the plan was likely cleaned up or failed.
@@ -255,7 +254,7 @@ export default function EcosystemPage() {
         const MAX_RETRIES = 900; // 900 * 2s ≈ 30 min (matches Celery soft_time_limit)
         const poll = async () => {
             try {
-                const data = await apiGet(`/api/v1/cloud/ecosystem/task_status/?task_id=${taskId}`);
+                const data = await ecosystemApi.getTaskStatus(taskId);
                 if (data.status === 'SUCCESS' && data.result) {
                     onComplete(data.result);
                 } else if (data.status === 'FAILURE') {
@@ -310,7 +309,7 @@ export default function EcosystemPage() {
     const pollDeepScanTask = useCallback(async (taskId: string, onComplete: (result: any) => void) => {
         const poll = async () => {
             try {
-                const data = await apiGet(`/api/v1/cloud/ecosystem/deep_scan/status/?task_id=${taskId}`);
+                const data = await ecosystemApi.getDeepScanStatus(taskId);
                 if (data.status === 'SUCCESS' && data.result) {
                     onComplete(data.result);
                 } else if (data.status === 'FAILURE') {
@@ -357,9 +356,9 @@ export default function EcosystemPage() {
         setScanLogs(['Initializing batch processing...']);
 
         try {
-            const data = await apiPost('/api/v1/cloud/ecosystem/scan/', { 
+            const data = await ecosystemApi.startScan({
                 ai_provider: selectedProvider,
-                selected_repos: selectedRepos
+                selected_repos: selectedRepos,
             });
             setScanTaskId(data.task_id);
             if (data.plan_id) setPlanId(data.plan_id);
@@ -414,7 +413,7 @@ export default function EcosystemPage() {
         const reposData = plan.services.map((s: any) => ({ repo: s.repo, stack: s.stack }));
 
         try {
-            const data = await apiPost('/api/v1/cloud/ecosystem/deep_scan/', { 
+            const data = await ecosystemApi.startDeepScan({
                 ai_provider: selectedProvider,
                 repos_data: reposData,
                 deploy_plan: plan
@@ -441,7 +440,7 @@ export default function EcosystemPage() {
         setError(null);
 
         try {
-            const data = await apiPost('/api/v1/cloud/ecosystem/deploy/', {
+            const data = await ecosystemApi.deploy({
                 plan,
                 plan_id: planId,
                 use_shared_addons: useSharedAddons,
@@ -498,11 +497,7 @@ export default function EcosystemPage() {
 
     const downloadEnv = async () => {
         try {
-            const res = await fetch('/api/v1/cloud/ecosystem/download-env/', {
-                credentials: 'include',
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const blob = await res.blob();
+            const blob = await ecosystemApi.downloadEnv();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -733,6 +728,11 @@ export default function EcosystemPage() {
                                 Begin Ecosystem Discovery
                             </motion.button>
                         </motion.div>
+                    )}
+
+                    {/* Plan History */}
+                    {step === 'idle' && (
+                        <PlanHistorySection />
                     )}
 
                     {/* Step: Selection */}

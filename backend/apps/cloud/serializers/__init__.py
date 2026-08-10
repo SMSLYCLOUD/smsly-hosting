@@ -1,6 +1,7 @@
 """Serializers module."""
 from rest_framework import serializers
 
+from apps.deployments.models import EcosystemPlan
 from ..models import CloudProvider, CloudResource, Secret
 
 
@@ -49,3 +50,29 @@ class SecretSerializer(serializers.ModelSerializer):
     class Meta:
         model = Secret
         fields = ['id', 'name', 'provider', 'arn', 'updated_at']
+
+
+class EcosystemPlanSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EcosystemPlan
+        fields = [
+            'id', 'status', 'project', 'selected_repos', 'ai_provider',
+            'use_shared_addons', 'cancel_others_on_failure',
+            'services_created', 'error_message',
+            'created_at', 'updated_at', 'completed_at',
+        ]
+        read_only_fields = fields
+
+
+class EcosystemPlanDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EcosystemPlan
+        fields = [
+            'id', 'status', 'project', 'selected_repos', 'ai_provider',
+            'use_shared_addons', 'cancel_others_on_failure', 'shared_addon_config',
+            'scan_task_id', 'deploy_task_id',
+            'plan', 'scan_progress',
+            'services_created', 'error_message',
+            'created_at', 'updated_at', 'completed_at',
+        ]
+        read_only_fields = fields

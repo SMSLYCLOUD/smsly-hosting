@@ -1042,3 +1042,36 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 {'error': 'Analysis failed.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @action(detail=False, methods=['get'], url_path='plans')
+    def list_plans(self, request):
+        """List user's ecosystem plans with optional status filter."""
+        from apps.deployments.models.ecosystem import EcosystemPlan
+        from apps.cloud.serializers import EcosystemPlanSummarySerializer
+
+        qs = EcosystemPlan.objects.filter(user=request.user)
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            return self.get_paginated_response(
+                EcosystemPlanSummarySerializer(page, many=True).data
+            )
+        return Response(EcosystemPlanSummarySerializer(qs, many=True).data)
+
+    @action(detail=False, methods=['get'], url_path=r'plans/(?P<plan_id>[^/.]+)')
+    def plan_detail(self, request, plan_id=None):
+        """Retrieve a single ecosystem plan by ID."""
+        from apps.deployments.models.ecosystem import EcosystemPlan
+        from apps.cloud.serializers import EcosystemPlanDetailSerializer
+
+        try:
+            plan = EcosystemPlan.objects.get(id=plan_id, user=request.user)
+        except EcosystemPlan.DoesNotExist:
+            return Response(
+                {'error': 'Plan not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(EcosystemPlanDetailSerializer(plan).data)
