@@ -527,6 +527,10 @@ def generate_caddyfile(config) -> str:
                 wildcard_lines.append(f"        dns cloudflare {cloudflare_token}")
                 wildcard_lines.append("    }")
 
+            wildcard_lines.append("    log {")
+            wildcard_lines.append("        output file /var/log/caddy/access.log")
+            wildcard_lines.append("    }")
+
             local_previews = []
             try:
                 from apps.deployments.models import Service
