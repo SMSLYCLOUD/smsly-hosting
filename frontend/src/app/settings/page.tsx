@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
 import { EcosystemSuggestion } from "@/components/dashboard/EcosystemSuggestion";
-import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock, Users, Copy, Link2 } from "lucide-react";
+import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock, Users, Copy, Link2, Database } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import api, { systemApi, aiApi, coreApi, teamsApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,7 @@ import { OAuthTab } from "@/components/settings/OAuthTab";
 import { GitIntegrationCard } from "@/components/settings/GitIntegrationCard";
 import { WebhookConfigCard } from "@/components/settings/WebhookConfigCard";
 import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
+import { DatabaseReplicasTab } from "@/components/settings/DatabaseReplicasTab";
 import { PlatformSettingsTab } from "@/components/settings/PlatformSettingsTab";
 import { SecurityTab } from "@/components/settings/SecurityTab";
 import { MtlsTab } from "@/components/settings/MtlsTab";
@@ -96,19 +97,11 @@ const MAINTENANCE_COPY: Record<MaintenanceAction, {
   },
 };
 
-const SETTINGS_ROUTE_LINKS = [
-  { href: "/settings", label: "General", icon: SettingsIcon, match: (pathname: string) => pathname === "/settings" },
-  { href: "/settings/ai", label: "AI Engine", icon: Sparkles, match: (pathname: string) => pathname.startsWith("/settings/ai") },
-  { href: "/settings/billing", label: "Billing", icon: Cloud, match: (pathname: string) => pathname.startsWith("/settings/billing") },
-  { href: "/settings/team", label: "Team", icon: Users, match: (pathname: string) => pathname.startsWith("/settings/team") },
-  { href: "/settings/integrations", label: "Integrations", icon: Link2, match: (pathname: string) => pathname.startsWith("/settings/integrations") },
-  { href: "/settings/audit-logs", label: "Audit Logs", icon: Shield, match: (pathname: string) => pathname.startsWith("/settings/audit-logs") },
-] as const;
-
 const SETTINGS_SECTIONS = [
-  { value: "profile", label: "Profile", icon: User },
+  { value: "profile", label: "General", icon: SettingsIcon },
   { value: "api-keys", label: "API Keys", icon: Key },
   { value: "team", label: "Team", icon: Users },
+  { value: "billing", label: "Billing", icon: Cloud },
   { value: "notifications", label: "Alerts", icon: Bell },
   { value: "security", label: "Security", icon: Shield },
   { value: "mtls", label: "mTLS", icon: Lock },
@@ -118,7 +111,9 @@ const SETTINGS_SECTIONS = [
   { value: "autoscaling", label: "Auto-Scaling", icon: Cloud },
   { value: "cloud-storage", label: "Cloud Storage", icon: Cloud },
   { value: "backups", label: "Backups", icon: Cloud },
+  { value: "database-replicas", label: "Database", icon: Database },
   { value: "infra", label: "Infra", icon: Server },
+  { value: "audit-logs", label: "Audit Logs", icon: Shield },
   { value: "platform", label: "Platform", icon: Globe },
   { value: "registry", label: "Registry", icon: Cloud },
   { value: "maintenance", label: "Maintenance", icon: Server },
@@ -127,7 +122,6 @@ const SETTINGS_SECTIONS = [
 export default function SettingsPage() {
   const { toast } = useToast();
   const confirm = useConfirm();
-  const pathname = usePathname();
   const [saving, setSaving] = useState(false);
   const [providers, setProviders] = useState<CloudProvider[]>([]);
   const [loadingProviders, setLoadingProviders] = useState(true);
@@ -726,31 +720,6 @@ export default function SettingsPage() {
         backHref="/dashboard"
       />
 
-      <div className="sticky top-16 z-30 mb-6 rounded-xl border border-border/70 bg-background/80 p-3 backdrop-blur-md">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Settings Navigation</p>
-        <nav className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-          {SETTINGS_ROUTE_LINKS.map((item) => {
-            const Icon = item.icon;
-            const isActive = item.match(pathname);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "inline-flex h-9 shrink-0 items-center gap-2 rounded-md border px-3 text-sm transition-colors",
-                  isActive
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : "border-border/70 text-muted-foreground hover:border-primary/20 hover:bg-muted/60 hover:text-foreground",
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
-      </div>
-
       <Tabs defaultValue="profile" className="space-y-6">
         <div className="rounded-xl border border-border/70 bg-card/80 p-2 backdrop-blur-sm">
           <TabsList className="h-auto w-full justify-start gap-2 overflow-x-auto bg-transparent p-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
@@ -1167,6 +1136,43 @@ export default function SettingsPage() {
             </Card>
           </div>
         </TabsContent>
+
+        {/* Billing Tab */}
+        <TabsContent value="billing">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Cloud className="h-5 h-5 text-emerald-500" /> Billing & Usage</CardTitle>
+                <CardDescription>Manage your subscription, view invoices, and track resource usage.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">View and manage your billing details, subscription plan, and invoice history.</p>
+                <Button asChild variant="outline">
+                  <a href="/settings/billing">Open Full Billing Page</a>
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Audit Logs Tab */}
+        <TabsContent value="audit-logs">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Shield className="h-5 w-5 text-yellow-500" /> Audit Logs</CardTitle>
+                <CardDescription>Security events and system activity.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">Review security events, login attempts, and system configuration changes.</p>
+                <Button asChild variant="outline">
+                  <a href="/settings/audit-logs">Open Full Audit Logs</a>
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
         {/* Auto-Scaling Configuration Tab */}
         <TabsContent value="autoscaling">
           <div className="space-y-6">
@@ -1251,6 +1257,11 @@ export default function SettingsPage() {
         {/* Cross-Master Backup Keys Tab */}
         <TabsContent value="backups">
           <BackupKeysTab />
+        </TabsContent>
+
+        {/* Database Replicas Tab */}
+        <TabsContent value="database-replicas">
+          <DatabaseReplicasTab />
         </TabsContent>
 
         {/* Infrastructure Tab */}

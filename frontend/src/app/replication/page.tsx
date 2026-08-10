@@ -6,9 +6,10 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import {
     Database, RefreshCw, Loader2, Crown, Server, AlertTriangle,
-    ArrowRightLeft, RotateCcw, Zap, Eye, CheckCircle2
+    ArrowRightLeft, RotateCcw, Zap, Eye, CheckCircle2, ExternalLink
 } from 'lucide-react';
-import api from '@/lib/api';
+import api, { databaseReplicasApi, DatabaseReplica } from '@/lib/api';
+import { AddReplicaCard, ReplicaRow } from '@/components/settings/DatabaseReplicasTab';
 
 interface MeshPeer {
     id: string;
@@ -34,6 +35,14 @@ interface ReplicationHealth {
     nodes: ReplicationNode[];
     primary: ReplicationNode | null;
     replicas: ReplicationNode[];
+    local_replicas?: {
+        name: string;
+        host: string;
+        port: number;
+        status: string;
+        lag_seconds: number | null;
+        last_checked_at: string | null;
+    }[];
 }
 
 interface MeshNetwork {
@@ -65,6 +74,10 @@ export default function ReplicationPage() {
     // Scale out states
     const [availablePeers, setAvailablePeers] = useState<MeshPeer[]>([]);
     const [connectState, setConnectState] = useState<Record<string, { status: 'idle' | 'testing' | 'awaiting_approval' | 'connecting' | 'connected' }>>({});
+
+    // External database replicas
+    const [externalReplicas, setExternalReplicas] = useState<DatabaseReplica[]>([]);
+    const [showExternalForm, setShowExternalForm] = useState(false);
 
     const fetchMeshes = useCallback(async () => {
         try {
@@ -119,6 +132,17 @@ export default function ReplicationPage() {
 
     useEffect(() => { fetchMeshes(); }, [fetchMeshes]);
     useEffect(() => { if (selectedMesh) checkHealth(); }, [selectedMesh, checkHealth]);
+
+    const fetchExternalReplicas = useCallback(async () => {
+        try {
+            const list = await databaseReplicasApi.list();
+            setExternalReplicas(list);
+        } catch {
+            // silently ignore — non-critical
+        }
+    }, []);
+
+    useEffect(() => { fetchExternalReplicas(); }, [fetchExternalReplicas]);
 
     const runPreflight = async (wgAddress: string) => {
         setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'testing' } }));
@@ -332,7 +356,7 @@ export default function ReplicationPage() {
                                 Database Replication
                             </h1>
                             <p className="text-muted-foreground mt-1">
-                                Patroni streaming replication with automatic failover
+                                Patroni streaming replication with automatic failover, or connect external read replicas
                             </p>
                         </div>
                         <div className="flex items-center gap-3">
@@ -375,6 +399,14 @@ export default function ReplicationPage() {
                             >
                                 {oneClicking ? <Loader2 size={14} className="animate-spin mr-1" /> : <ArrowRightLeft size={14} className="mr-1" />}
                                 One-click Replication
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setShowExternalForm(!showExternalForm)}
+                            >
+                                <ExternalLink size={14} className="mr-1" />
+                                Add External Database
                             </Button>
                         </div>
                     </div>
@@ -472,6 +504,19 @@ export default function ReplicationPage() {
                         </div>
                     )}
 
+                    {/* External Database Form */}
+                    {showExternalForm && (
+                        <div className="border border-purple-500/20 rounded-xl p-1">
+                            <AddReplicaCard
+                                defaultOpen
+                                onAdded={(r) => {
+                                    setExternalReplicas((cur) => [...cur, r]);
+                                    setShowExternalForm(false);
+                                }}
+                            />
+                        </div>
+                    )}
+
                     {/* Loading */}
                     {loading && (
                         <div className="text-center py-16">
@@ -490,12 +535,20 @@ export default function ReplicationPage() {
                                 Deploy a Patroni cluster to enable streaming replication
                                 with automatic failover across your server mesh.
                             </p>
-                            <Button
-                                onClick={() => setShowDeployForm(true)}
-                                className="bg-gradient-to-r from-blue-500 to-cyan-600 text-white"
-                            >
-                                <Zap size={16} className="mr-2" /> Deploy Patroni Cluster
-                            </Button>
+                            <div className="flex items-center justify-center gap-3">
+                                <Button
+                                    onClick={() => setShowDeployForm(true)}
+                                    className="bg-gradient-to-r from-blue-500 to-cyan-600 text-white"
+                                >
+                                    <Zap size={16} className="mr-2" /> Deploy Patroni Cluster
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setShowExternalForm(true)}
+                                >
+                                    <ExternalLink size={16} className="mr-2" /> Add External Database
+                                </Button>
+                            </div>
                         </div>
                     )}
 
@@ -679,6 +732,44 @@ export default function ReplicationPage() {
                                         </div>
                                     );
                                 })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* External Database Replicas */}
+                    {externalReplicas.length > 0 && (
+                        <div className="space-y-4 pt-6 border-t border-border mt-8">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h2 className="text-xl font-bold flex items-center gap-2">
+                                        <ExternalLink className="text-purple-500" size={24} />
+                                        External Replicas
+                                    </h2>
+                                    <p className="text-muted-foreground text-sm">
+                                        Read-only endpoints managed via pgcat. Writes always go to the Patroni primary.
+                                    </p>
+                                </div>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setShowExternalForm(!showExternalForm)}
+                                >
+                                    <Database size={14} className="mr-1" />
+                                    Add
+                                </Button>
+                            </div>
+
+                            <div className="space-y-3">
+                                {externalReplicas.map((r) => (
+                                    <ReplicaRow
+                                        key={r.id}
+                                        replica={r}
+                                        onUpdated={(updated) =>
+                                            setExternalReplicas((cur) => cur.map((x) => (x.id === updated.id ? updated : x)))
+                                        }
+                                        onDeleted={(id) => setExternalReplicas((cur) => cur.filter((x) => x.id !== id))}
+                                    />
+                                ))}
                             </div>
                         </div>
                     )}
