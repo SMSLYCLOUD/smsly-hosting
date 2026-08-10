@@ -61,7 +61,7 @@ class AnalysisMixin:
             # Replaces the AI Senate approach which hallucinated vars
             append_log(self.deployment, "📋 Resolving environment from repo manifest files...\n")
             try:
-                from .manifest_env_resolver import ManifestEnvResolver
+                from ..manifest_env_resolver import ManifestEnvResolver
                 resolver = ManifestEnvResolver(
                     source_dir=self.source_dir,
                     service_name=self.service.name,

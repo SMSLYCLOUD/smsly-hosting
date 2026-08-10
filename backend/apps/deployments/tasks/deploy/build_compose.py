@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import os
 import re
@@ -19,6 +20,7 @@ from .build_docker import _detect_exposed_port
 from .helpers import _env_bool, _env_int
 
 logger = logging.getLogger(__name__)
+@contextmanager
 def fleet_build_lock(deployment):
     if not _env_bool("SMSLY_ENABLE_FLEET_BUILD_LOCK", False):
         append_log(deployment, "🚀 Build starting...\n")

@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 def _deploy_container(deployment: Deployment, provider: CloudProvider, image_name: str) -> None:
-    from ...tasks_deploy import _post_deploy_monitor
+    from ..deployment.tasks_deploy import _post_deploy_monitor
     # pylint: disable=too-many-locals, R0914
     update_stage(deployment, 'Deploy', 'running')
     start = timezone.now()

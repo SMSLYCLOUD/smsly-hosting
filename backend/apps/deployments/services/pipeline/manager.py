@@ -368,7 +368,7 @@ class PipelineManager(
         Snapshot failures are non-fatal (logged but not raised).
         """
         try:
-            from .snapshot_service import SnapshotService
+            from ..snapshot_service import SnapshotService
             SnapshotService.capture_snapshot(
                 service_id=str(self.service.id),
                 trigger='PRE_DEPLOY',

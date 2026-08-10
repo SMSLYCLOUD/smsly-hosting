@@ -1,0 +1,11 @@
+[
+  {
+    "targets": [
+      "smsly-docker-labels:9234"
+    ],
+    "labels": {
+      "node": "local",
+      "job": "docker-labels"
+    }
+  }
+]

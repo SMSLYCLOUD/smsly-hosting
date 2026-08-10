@@ -352,7 +352,7 @@ class ComposeNetworkingMixin:
         if it does not already exist.  Uses ``ensure_scoped_network`` to
         honour ScopedNetwork model config (internal, enable_ipv6, subnet).
         """
-        from .network_scope import ensure_scoped_network, apply_egress_restrictions
+        from ..network_scope import ensure_scoped_network, apply_egress_restrictions
         from apps.deployments.models.network_scope import ScopedNetwork
 
         network_name = self._resolve_service_network_name()

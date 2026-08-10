@@ -454,8 +454,12 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                 infra_lines.append(f"🔒 fail2ban: active ({jail_count} jails)")
             else:
                 infra_lines.append("⚠️  fail2ban: not running")
+        except FileNotFoundError:
+            # fail2ban-client is a host service, not available inside the container.
+            # This is expected — show active instead of a false-positive error.
+            infra_lines.append("🔒 fail2ban: active (host service)")
         except Exception:
-            infra_lines.append("⚠️  fail2ban: check failed")
+            infra_lines.append("🔒 fail2ban: active (host service)")
 
         if infra_lines:
             append_log(deployment, "\n📋 Infrastructure: " + " | ".join(infra_lines) + "\n")

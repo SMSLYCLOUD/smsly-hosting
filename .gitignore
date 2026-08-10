@@ -66,6 +66,13 @@ Thumbs.db
 # Workloads and runtime configs
 builds/
 caddy-config/
+.update-backups/
+.smsly_install_state*
+update-custom-domain-celery.yml
+prometheus-targets/test*.txt
+diag_remote*.sh
+.freebuff/
+opencode-old.json
 
 # === Repo hygiene additions ===
 # Tracked secrets — caught by .gitignore too late, also covered below

@@ -51,6 +51,35 @@ class SigningMixin:
 
         try:
             key_path = os.environ.get("COSIGN_PRIVATE_KEY_PATH") or os.environ.get("COSIGN_KEY")
+            cosign_oidc_issuer = os.environ.get("COSIGN_OIDC_ISSUER", "")
+
+            # Detect if registry is local (no internet for Fulcio/Rekor).
+            _registry_host = ""
+            try:
+                _registry_url_raw = os.environ.get("CONTAINER_REGISTRY_URL", "")
+                for _scheme in ("https://", "http://"):
+                    if _registry_url_raw.startswith(_scheme):
+                        _registry_url_raw = _registry_url_raw[len(_scheme):]
+                _registry_host = _registry_url_raw.split("/")[0].split(":")[0]
+            except Exception:
+                pass
+            _is_local_registry = _registry_host in ("", "registry", "127.0.0.1", "localhost")
+            _has_oidc = bool(cosign_oidc_issuer)
+
+            # Keyless Sigstore signing requires Fulcio (CA) and Rekor (transparency
+            # log) which are internet-accessible services.  Skip for local-only
+            # registries when no private key AND no OIDC issuer are configured.
+            if not key_path and _is_local_registry and not _has_oidc:
+                append_log(
+                    self.deployment,
+                    "Cosign signing SKIPPED — local registry with no private key or OIDC issuer. "
+                    "Keyless Sigstore requires internet access to Fulcio/Rekor. "
+                    "To sign images, either: (1) set COSIGN_PRIVATE_KEY_PATH, "
+                    "(2) configure COSIGN_OIDC_ISSUER, or (3) use an external registry.\n",
+                )
+                update_stage(self.deployment, 'Sign', 'skipped')
+                return
+
             # Build env for cosign subprocess — COSIGN_EXPERIMENTAL=1 enables
             # keyless signing via Fulcio/Rekor without requiring a private key.
             _cosign_env = os.environ.copy()
@@ -73,16 +102,16 @@ class SigningMixin:
                 if result.returncode == 0:
                     append_log(self.deployment, f"Image signed with Cosign (keyless/Sigstore): {self.image_name}\n")
                 else:
+                    stderr_msg = (result.stderr or result.stdout or '').strip()[:200]
                     append_log(
                         self.deployment,
                         f"Cosign keyless signing failed (exit {result.returncode}): "
-                        f"{(result.stderr or result.stdout or '').strip()[:200]}\n"
+                        f"{stderr_msg}\n"
                     )
 
             # Verify — skip for local-only images or if no OIDC issuer configured.
             # For self-hosted keyless, verification requires the signing identity
             # to match.  Use --certificate-identity-regexp to accept any local signing.
-            cosign_oidc_issuer = os.environ.get("COSIGN_OIDC_ISSUER", "")
             if cosign_oidc_issuer:
                 verify_cmd = [
                     cosign_bin, "verify",
@@ -124,4 +153,3 @@ class SigningMixin:
         except Exception as e:
             append_log(self.deployment, f"Cosign signing error (non-fatal): {e!s}\n")
             update_stage(self.deployment, 'Sign', 'skipped')
-

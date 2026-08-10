@@ -166,7 +166,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         )
                     )
 
-            for domain_obj in service.domains.all():
+            for domain_obj in service.domain_instances.all():
                 value = domain_obj.domain_name.strip()
                 if not value:
                     continue

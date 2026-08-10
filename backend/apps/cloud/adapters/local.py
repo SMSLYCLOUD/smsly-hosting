@@ -584,11 +584,11 @@ class LocalAdapter(BaseCloudAdapter):
             "cap_add": ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
             "pids_limit": 1024,
             "read_only": True,
-            "tmpfs": {"/tmp": "size=100m", "/run": "size=20m"},
-            "ulimits": {
-                "nofile": {"soft": 1024, "hard": 2048},
-                "fsize": {"soft": 512000000, "hard": 512000000},
-            },
+            "tmpfs": {"/tmp": "size=100m", "/run": "size=20m", "/app/.next/cache": "size=256m"},
+            "ulimits": [
+                {"Name": "nofile", "Soft": 1024, "Hard": 2048},
+                {"Name": "fsize", "Soft": 512000000, "Hard": 512000000},
+            ],
             **run_kwargs,
         }
         if docker_healthcheck is not None:

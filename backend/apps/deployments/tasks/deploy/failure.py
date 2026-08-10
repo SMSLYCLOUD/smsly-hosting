@@ -193,7 +193,7 @@ def _handle_failure(_task: Any, deployment: Deployment | None, error_msg: str, r
                         "Triggering self-healing for remote deployment %s on server %s",
                         deployment.id, target_server.name,
                     )
-                    from .tasks_deploy_remote import self_heal_remote_deployment
+                    from ..deployment.tasks_deploy_remote import self_heal_remote_deployment
                     self_heal_remote_deployment.delay(
                         deployment_id=str(deployment.id),
                         server_id=str(target_server.id),
