@@ -63,7 +63,6 @@ _backup_encryption_required = BackupService._backup_encryption_required
 _broadcast_progress = BackupService._broadcast_progress
 _crypto_chunk_size = BackupService._crypto_chunk_size
 _decode_backup_key = BackupService._decode_backup_key
-_decode_fernet_token_to_file = BackupService._decode_fernet_token_to_file
 _decrypt_chunked_backup = BackupService._decrypt_chunked_backup
 _decrypt_legacy_fernet_backup = BackupService._decrypt_legacy_fernet_backup
 _decrypt_v2_chunked_backup = BackupService._decrypt_v2_chunked_backup
@@ -105,7 +104,6 @@ __all__ = [
     "_copy_file_to_container",
     "_crypto_chunk_size",
     "_decode_backup_key",
-    "_decode_fernet_token_to_file",
     "_decrypt_chunked_backup",
     "_decrypt_legacy_fernet_backup",
     "_decrypt_v2_chunked_backup",
