@@ -161,6 +161,32 @@ def get_user_from_token(token_key: str):
             pass
     return AnonymousUser()
 
+
+@database_sync_to_async
+def get_user_from_session_key(session_key: str):
+    """
+    Authenticate a user via Django session key.
+    This mirrors what Django's AuthenticationMiddleware does for HTTP requests
+    but works for WebSocket connections where the session cookie is the only
+    available credential (e.g. when the auth_token cookie is stale or missing).
+    """
+    try:
+        from django.contrib.auth import get_user_model
+        from django.contrib.sessions.models import Session
+        import json
+
+        session = Session.objects.get(session_key=session_key)
+        session_data = session.get_decoded()
+        user_id = session_data.get('_auth_user_id')
+        if user_id is None:
+            return AnonymousUser()
+
+        User = get_user_model()
+        user = User.objects.get(pk=user_id, is_active=True)
+        return user
+    except Exception:
+        return AnonymousUser()
+
 class QueryStringAuthMiddleware:
     """
     Custom middleware to authenticate users for WebSocket connections.
@@ -190,6 +216,7 @@ class QueryStringAuthMiddleware:
     # browser refuses to set it on plain HTTP. In dev the plain
     # ``auth_token`` name is used instead.
     _COOKIE_NAMES = ('__Host-auth_token', 'auth_token')
+    _SESSION_COOKIE_NAMES = ('__Host-sessionid', 'sessionid', '__sessionid')
 
     def __init__(self, app):
         self.app = app
@@ -208,6 +235,18 @@ class QueryStringAuthMiddleware:
         if token_key:
             close_old_connections()
             scope['user'] = await get_user_from_token(token_key)
+
+        # 4. Fallback: try Django session cookie if user is still anonymous.
+        #    This handles the case where the user authenticated via the allauth
+        #    login flow (session-based) and the auth_token cookie is stale or
+        #    missing.  Django's session cookie is the canonical session
+        #    credential; the WS upgrade request carries it automatically.
+        user = scope.get('user')
+        if not user or getattr(user, 'is_anonymous', True):
+            session_key = self._extract_session_cookie(scope)
+            if session_key:
+                close_old_connections()
+                scope['user'] = await get_user_from_session_key(session_key)
 
         return await self.app(scope, receive, send)
 
@@ -237,5 +276,28 @@ class QueryStringAuthMiddleware:
                     return value
             # Cookie header was present but carried no recognized
             # auth cookie — do not fall through to a different header.
+            return None
+        return None
+
+    @classmethod
+    def _extract_session_cookie(cls, scope):
+        """Return the Django session key from the WS upgrade's ``Cookie`` header.
+
+        Returns ``None`` if the header is missing or carries no recognized
+        session cookie name.
+        """
+        for raw_name, raw_value in scope.get('headers', []):
+            if raw_name.lower() != b'cookie':
+                continue
+            try:
+                header = raw_value.decode('latin-1')
+            except UnicodeDecodeError:
+                return None
+            for chunk in header.split(';'):
+                name, sep, value = chunk.strip().partition('=')
+                if not sep:
+                    continue
+                if name in cls._SESSION_COOKIE_NAMES:
+                    return value
             return None
         return None
