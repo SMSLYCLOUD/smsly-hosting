@@ -573,6 +573,8 @@ services:
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     - /opt/smsly-hosting/cosign-keys:/opt/smsly-hosting/cosign-keys:z
     - backups_data:/app/backups
+    - caddy_logs:/var/log/caddy:ro
+    - traefik_logs:/var/log/traefik:ro
     # Mount auth directory so the signal can sync htpasswd when registry
     # credentials change via the Settings UI. The entrypoint chowns this
     # to UID 1000 (smsly) so the Django process can write htpasswd.
@@ -657,6 +659,7 @@ services:
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     - backups_data:/app/backups
+    - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
     healthcheck:
       test:
@@ -723,6 +726,8 @@ services:
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     - backups_data:/app/backups
+    - caddy_logs:/var/log/caddy:ro
+    - traefik_logs:/var/log/traefik:ro
     healthcheck:
       test:
       - CMD-SHELL
@@ -787,6 +792,8 @@ services:
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     - backups_data:/app/backups
+    - caddy_logs:/var/log/caddy:ro
+    - traefik_logs:/var/log/traefik:ro
     healthcheck:
       test:
       - CMD-SHELL
@@ -940,6 +947,7 @@ services:
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - backups_data:/app/backups
+    - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
     healthcheck:
       test:
@@ -1001,6 +1009,8 @@ services:
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - backups_data:/app/backups
+    - caddy_logs:/var/log/caddy:ro
+    - traefik_logs:/var/log/traefik:ro
     healthcheck:
       test:
       - CMD-SHELL
@@ -1327,6 +1337,7 @@ services:
       context: .
       dockerfile: infrastructure/caddy/Dockerfile
     restart: unless-stopped
+    command: sh -c "umask 0022 && caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
     ports:
       - "80:80"
       - "443:443"
