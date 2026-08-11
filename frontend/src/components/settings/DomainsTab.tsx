@@ -152,7 +152,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const handleSaveStagingDomain = async () => {
         setSavingStaging(true);
         try {
-            const updated = await servicesApi.update(service.id, { staging_domain: stagingDomain.trim() || null });
+            const updated = await servicesApi.update(service.id, { staging_domain: stagingDomain.trim() || undefined });
             setService(updated);
             toast({ title: 'Staging domain saved', description: stagingDomain.trim() ? `Staging URL: https://${stagingDomain.trim()}` : 'Staging URL will be auto-generated.' });
         } catch (err: any) {
