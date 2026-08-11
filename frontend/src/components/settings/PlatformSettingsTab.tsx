@@ -80,7 +80,7 @@ export function PlatformSettingsTab() {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-medium">Platform Global Settings</h3>

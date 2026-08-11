@@ -212,7 +212,7 @@ export function MtlsTab() {
   const ecosystemHealthy = health?.ecosystem?.spire_server_healthy && health?.ecosystem?.spire_agent_healthy;
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6">
       {/* Health Status */}
       <Card>
         <CardHeader>
