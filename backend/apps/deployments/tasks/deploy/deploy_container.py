@@ -33,7 +33,8 @@ from .state import _mark_deployment_active, _post_deploy_success
 logger = logging.getLogger(__name__)
 
 
-def _deploy_container(deployment: Deployment, provider: CloudProvider, image_name: str) -> None:
+def _deploy_container(deployment: Deployment, provider: CloudProvider, image_name: str,
+                      staged_only: bool = False) -> None:
     from ..deployment.tasks_deploy import _post_deploy_monitor
     # pylint: disable=too-many-locals, R0914
     update_stage(deployment, 'Deploy', 'running')
@@ -72,6 +73,22 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                         deployment, service,
                         timeout_seconds=DEPLOY_CONTAINER_TIMEOUT,
                     )
+
+            if staged_only:
+                staging_url = service.generate_staging_url(deployment.commit_hash or '')
+                deployment.status = Deployment.Status.STAGED
+                deployment.staging_url = staging_url
+                deployment.staged_at = timezone.now()
+                deployment.container_id = container_name
+                deployment.save(update_fields=['status', 'staging_url', 'staged_at', 'container_id'])
+                broadcast_status(deployment)
+                _post_deploy_success(deployment, service)
+                append_log(
+                    deployment,
+                    f"[STAGED] Compose deployment staged for review.\n"
+                    f"Preview URL: {staging_url}\n"
+                )
+                return
 
             deployment.status = Deployment.Status.ACTIVE
             deployment.finished_at = timezone.now()
@@ -295,6 +312,23 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             )
 
         _mark_deployment_active(deployment, "local", "127.0.0.1", resource.resource_id)
+
+        if staged_only:
+            staging_url = service.generate_staging_url(deployment.commit_hash or '')
+            deployment.status = Deployment.Status.STAGED
+            deployment.staging_url = staging_url
+            deployment.staged_at = timezone.now()
+            deployment.container_id = resource.resource_id
+            deployment.save(update_fields=['status', 'staging_url', 'staged_at', 'container_id'])
+            broadcast_status(deployment)
+            _post_deploy_success(deployment, service)
+            append_log(
+                deployment,
+                f"[STAGED] Deployment staged for review.\n"
+                f"Preview URL: {staging_url}\n"
+                f"Container: {resource.resource_id}\n"
+            )
+            return
 
         deployment.status = Deployment.Status.ACTIVE
         deployment.container_id = resource.resource_id

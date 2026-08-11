@@ -197,7 +197,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         else:
             raise ValueError(f"Unsupported deploy type: {service.deploy_type}")
 
-        _deploy_container(deployment, provider, image_name)
+        _deploy_container(deployment, provider, image_name,
+                          staged_only=skip_review and not deployment.is_rollback)
 
     except PipelineError as e:
         _handle_failure(self, deployment, str(e), "Pipeline Failure")

@@ -192,6 +192,10 @@ class Service(TimeStampedModel):
     )
     domain_verified = models.BooleanField(default=False)  # type: ignore[var-annotated]
     verification_token = models.CharField(max_length=64, blank=True)  # type: ignore[var-annotated]
+    staging_domain = models.CharField(  # type: ignore[var-annotated]
+        max_length=255, blank=True, null=True,
+        help_text="Custom staging domain for webhook deployments (e.g. staging.example.com). "
+                  "If blank, auto-generated from service name + base domain.")
 
     # Resource Limits (Simulated for now)
     cpu_cores = models.DecimalField(  # type: ignore[var-annotated]
@@ -548,6 +552,24 @@ class Service(TimeStampedModel):
             return f"http://{self.public_domain}"
         except ValueError:
             return f"https://{self.public_domain}"
+
+    def generate_staging_url(self, commit_hash: str = "") -> str:
+        """Generate a staging preview URL for webhook deployments.
+
+        Uses ``staging_domain`` if set, otherwise auto-generates one:
+        ``staging-{slug}-{short_hash}.{base_domain}``
+        """
+        import re, hashlib
+        base_domain = self.default_public_base_domain()
+        if self.staging_domain:
+            return f"https://{self.staging_domain}"
+        safe_slug = re.sub(r'[^a-z0-9]+', '-', self.slug.lower()).strip('-')[:30]
+        short_hash = (commit_hash or '').strip()[:6]
+        if not short_hash:
+            short_hash = hashlib.sha256(f"{self.id}".encode()).hexdigest()[:6]
+        slug = f"staging-{safe_slug}-{short_hash}"
+        slug = re.sub(r'-+', '-', slug).strip('-')
+        return f"https://{slug}.{base_domain}"
 
     @classmethod
     def default_public_base_domain(cls) -> str:

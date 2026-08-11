@@ -31,6 +31,7 @@ class Deployment(TimeStampedModel):
         DEPLOYING = 'DEPLOYING', _('Deploying')
         HEALTH_CHECK = 'HEALTH_CHECK', _('Health Check')
         HEALTH_CHECK_FAILED = 'HEALTH_CHECK_FAILED', _('Health Check Failed')
+        STAGED = 'STAGED', _('Staged')
         ACTIVE = 'ACTIVE', _('Active')
         FAILED = 'FAILED', _('Failed')
         CANCELLED = 'CANCELLED', _('Cancelled')
@@ -135,6 +136,14 @@ class Deployment(TimeStampedModel):
         help_text="Per-deployment registry override {url, username, password} "
                   "— builder uses this instead of the scoped chain"
     )
+
+    # Staging / blue-green promote flow
+    staging_url = models.URLField(  # type: ignore[var-annotated]
+        blank=True, null=True,
+        help_text="Temporary staging URL where the green container can be previewed before promote")
+    staged_at = models.DateTimeField(  # type: ignore[var-annotated]
+        null=True, blank=True,
+        help_text="When the deployment entered STAGED status (auto-promote timer starts)")
 
     # GitHub Deployments API
     github_deployment_id = models.BigIntegerField(  # type: ignore[var-annotated]

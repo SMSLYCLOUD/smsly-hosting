@@ -374,3 +374,44 @@ class LifecycleActionsMixin:
         except Service.DoesNotExist:
             return Response({'error': 'Service not found'},
                             status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['post'])
+    def promote(self, request, pk=None):
+        """
+        Promote a STAGED deployment to ACTIVE (swap green container to live).
+        POST /api/v1/deployments/{id}/promote/
+        """
+        deployment = self.get_object()
+
+        if deployment.status != Deployment.Status.STAGED:
+            return Response(
+                {'error': f'Cannot promote deployment in {deployment.status} status. '
+                          'Only STAGED deployments can be promoted.'},
+                status=status.HTTP_409_CONFLICT)
+
+        if not deployment.green_container_id:
+            return Response(
+                {'error': 'No green container found on this deployment.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        from ...tasks.deploy.helpers import _do_promote
+        from ...tasks.deploy.providers import _resolve_provider_for_service
+
+        provider = _resolve_provider_for_service(deployment.service, prefer_local=True)
+        if not provider:
+            return Response(
+                {'error': 'No active cloud provider configured'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            _do_promote(deployment, provider)
+        except Exception as exc:
+            logger.exception("Promote failed for deployment %s: %s", deployment.id, exc)
+            return Response(
+                {'error': f'Promote failed: {exc}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({
+            'message': 'Deployment promoted to ACTIVE',
+            'deployment': DeploymentSerializer(deployment).data,
+        })

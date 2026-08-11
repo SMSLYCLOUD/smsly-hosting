@@ -311,6 +311,17 @@ class PlatformConfig(models.Model):
         help_text="Require encryption for server backups. "
                   "Auto-enabled in production (DEBUG=False) via settings.")
 
+    # ── Auto-Scaling ──────────────────────────────────────────────────
+    scale_max_replicas = models.PositiveIntegerField(
+        default=5,
+        help_text="Maximum number of replica containers allowed per service")
+    scale_cpu_high = models.PositiveIntegerField(
+        default=80,
+        help_text="CPU usage percentage above which a new replica is spawned")
+    scale_cooldown_min = models.PositiveIntegerField(
+        default=5,
+        help_text="Minimum minutes between consecutive scale-up operations")
+
     # ── Device Trust (Beta) ────────────────────────────────────────────
     enforce_device_trust = models.BooleanField(
         default=False,
