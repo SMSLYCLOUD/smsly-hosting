@@ -11,27 +11,43 @@ import { Loader2, Shield, Key, Smartphone, Trash2, AlertTriangle } from "lucide-
 import { Badge } from "@/components/ui/badge";
 import api from "@/lib/api";
 
-interface SecurityTabProps {
-  currentPassword: string;
-  setCurrentPassword: (v: string) => void;
-  newPassword: string;
-  setNewPassword: (v: string) => void;
-  confirmPassword: string;
-  setConfirmPassword: (v: string) => void;
-  changingPassword: boolean;
-  handleChangePassword: () => void;
-}
-
-export function SecurityTab({
-  currentPassword, setCurrentPassword,
-  newPassword, setNewPassword,
-  confirmPassword, setConfirmPassword,
-  changingPassword, handleChangePassword,
-}: SecurityTabProps) {
+export function SecurityTab() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState<any[]>([]);
   const [recoveryPhrase, setRecoveryPhrase] = useState<string | null>(null);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  const handleChangePassword = async () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      toast({ title: "Error", description: "Please fill all password fields.", variant: "destructive" });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: "Error", description: "New passwords do not match.", variant: "destructive" });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({ title: "Error", description: "Password must be at least 8 characters.", variant: "destructive" });
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await api.post("/auth/password/change/", { old_password: currentPassword, new_password1: newPassword, new_password2: confirmPassword });
+      toast({ title: "Password changed", description: "Your password has been updated." });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      const detail = err?.response?.data?.old_password?.[0] || err?.response?.data?.new_password2?.[0] || "Failed to change password.";
+      toast({ title: "Error", description: detail, variant: "destructive" });
+    } finally {
+      setChangingPassword(false);
+    }
+  };
 
   const fetchDevices = async () => {
     try {
