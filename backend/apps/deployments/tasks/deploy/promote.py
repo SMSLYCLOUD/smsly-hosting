@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
+from celery import shared_task
 from django.utils import timezone
 
 from apps.cloud.models import CloudProvider
@@ -15,6 +17,8 @@ from apps.deployments.utils import (
 from .state import _mark_deployment_active, _post_deploy_success
 
 logger = logging.getLogger(__name__)
+
+AUTO_PROMOTE_HOURS = 12
 
 
 def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
@@ -78,3 +82,36 @@ def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
         _wait_for_local_route_ready(
             deployment, service, timeout_seconds=route_timeout,
         )
+
+
+@shared_task(
+    name="apps.deployments.tasks.auto_promote_staged_deployments",
+    soft_time_limit=300,
+    time_limit=330,
+)
+def auto_promote_staged_deployments():
+    """Auto-promote deployments that have been in STAGED status for > 12 hours."""
+    threshold = timezone.now() - timedelta(hours=AUTO_PROMOTE_HOURS)
+    staged = Deployment.objects.filter(
+        status=Deployment.Status.STAGED,
+        staged_at__lte=threshold,
+    ).select_related('service')
+
+    promoted = 0
+    for deployment in staged:
+        try:
+            from .providers import _resolve_provider_for_service
+            provider = _resolve_provider_for_service(deployment.service, prefer_local=True)
+            if not provider:
+                logger.warning("Auto-promote: no provider for %s, skipping", deployment.service.name)
+                continue
+            _do_promote(deployment, provider)
+            append_log(
+                deployment,
+                f"[AUTO-PROMOTE] Deployment auto-promoted after {AUTO_PROMOTE_HOURS} hours.\n"
+            )
+            promoted += 1
+        except Exception as exc:
+            logger.exception("Auto-promote failed for deployment %s: %s", deployment.id, exc)
+
+    return {'promoted': promoted}

@@ -63,6 +63,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.cloud.views.code_analysis  # noqa: F401
     import apps.autoscaler.services.legacy_autoscaler  # noqa: F401
     import apps.autoscaler.services.tasks_autoscale  # noqa: F401
+    import apps.deployments.tasks.deploy.promote  # noqa: F401  # auto_promote_staged_deployments
     import apps.deployments.services.redis_failover_recovery  # noqa: F401
     # -- Tasks in subpackages not auto-discovered (not {app}.tasks) --
     import apps.deployments.tasks.ai.tasks_ai  # noqa: F401  # analyze_failure_task
@@ -122,6 +123,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.delete_service_task': {'queue': 'deploy'},
     'apps.deployments.tasks.recover_stalled_deletions': {'queue': 'deploy'},
     'apps.deployments.tasks.recover_redis_failover': {'queue': 'deploy'},
+    'apps.deployments.tasks.auto_promote_staged_deployments': {'queue': 'deploy'},
     # -- Tasks re-exported from specialized modules (name= resolves to tasks.*) --
     'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
@@ -230,6 +232,12 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.recover_redis_failover',
         'schedule': 300.0,
         'options': {'expires': 300.0},
+    },
+    # Auto-promote deployments stuck in STAGED for > 12 hours
+    'auto-promote-staged-every-15m': {
+        'task': 'apps.deployments.tasks.auto_promote_staged_deployments',
+        'schedule': 900.0,
+        'options': {'expires': 600.0},
     },
     # Intelligence runtime anomaly scan every 3 minutes
     'detect-runtime-anomalies-every-180s': {

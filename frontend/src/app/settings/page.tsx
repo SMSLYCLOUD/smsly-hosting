@@ -1180,58 +1180,69 @@ export default function SettingsPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-sky-500" /> Auto-Scaling Configuration</CardTitle>
                 <CardDescription>
-                  These environment variables control how the SMSLY autoscaler adjusts replicas across your services.
-                  They are set in your <code className="text-xs font-mono bg-muted px-1 rounded">.env</code> file on the host.
+                  Control how the SMSLY autoscaler adjusts replicas across your services. Changes take effect immediately.
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Variable</TableHead>
-                      <TableHead>Purpose</TableHead>
-                      <TableHead>Current Value</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow>
-                      <TableCell className="font-mono text-xs">SCALE_MAX_REPLICAS</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        Maximum number of replica containers allowed per service
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="font-mono">
-                          {systemConfig?.SCALE_MAX_REPLICAS ?? 'Not set'}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell className="font-mono text-xs">SCALE_CPU_HIGH</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        CPU usage percentage above which a new replica is spawned
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="font-mono">
-                          {systemConfig?.SCALE_CPU_HIGH != null ? `${systemConfig.SCALE_CPU_HIGH}%` : 'Not set'}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell className="font-mono text-xs">SCALE_COOLDOWN_MIN</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        Minimum minutes between consecutive scale-up operations
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="font-mono">
-                          {systemConfig?.SCALE_COOLDOWN_MIN != null ? `${systemConfig.SCALE_COOLDOWN_MIN} min` : 'Not set'}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-                <p className="text-xs text-muted-foreground mt-4">
-                  These values are read from the <code className="font-mono bg-muted px-1 rounded">.env</code> file at startup. To change them, edit the file and restart the SMSLY platform.
-                </p>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Max Replicas</label>
+                      <p className="text-xs text-muted-foreground">Maximum replica containers per service</p>
+                      <input
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={systemConfig?.SCALE_MAX_REPLICAS ?? 5}
+                        onChange={(e) => setSystemConfig({ ...systemConfig, SCALE_MAX_REPLICAS: parseInt(e.target.value) || 5 })}
+                        className="w-full px-3 py-2 text-sm rounded-lg bg-background border border-border font-mono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">CPU High (%)</label>
+                      <p className="text-xs text-muted-foreground">CPU% above which a new replica spawns</p>
+                      <input
+                        type="number"
+                        min={10}
+                        max={100}
+                        value={systemConfig?.SCALE_CPU_HIGH ?? 80}
+                        onChange={(e) => setSystemConfig({ ...systemConfig, SCALE_CPU_HIGH: parseInt(e.target.value) || 80 })}
+                        className="w-full px-3 py-2 text-sm rounded-lg bg-background border border-border font-mono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Cooldown (min)</label>
+                      <p className="text-xs text-muted-foreground">Minutes between scale-up operations</p>
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={systemConfig?.SCALE_COOLDOWN_MIN ?? 5}
+                        onChange={(e) => setSystemConfig({ ...systemConfig, SCALE_COOLDOWN_MIN: parseInt(e.target.value) || 5 })}
+                        className="w-full px-3 py-2 text-sm rounded-lg bg-background border border-border font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      onClick={async () => {
+                        try {
+                          const result = await systemApi.updateConfig({
+                            SCALE_MAX_REPLICAS: systemConfig?.SCALE_MAX_REPLICAS,
+                            SCALE_CPU_HIGH: systemConfig?.SCALE_CPU_HIGH,
+                            SCALE_COOLDOWN_MIN: systemConfig?.SCALE_COOLDOWN_MIN,
+                          });
+                          setSystemConfig(result);
+                          toast({ title: "Saved", description: "Auto-scaling config updated." });
+                        } catch (err) {
+                          toast({ title: "Failed", description: "Could not save config.", variant: "destructive" });
+                        }
+                      }}
+                    >
+                      Save Changes
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>

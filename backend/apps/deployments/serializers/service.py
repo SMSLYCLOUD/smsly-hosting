@@ -247,6 +247,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'build_command', 'start_command', 'root_directory',
             'internal_port',
             'public_domain', 'public_domain_hidden', 'domain_verified',
+            'staging_domain',
             'custom_domains',
             'cpu_cores', 'memory_mb',
             'autoscale_enabled', 'min_replicas', 'max_replicas',

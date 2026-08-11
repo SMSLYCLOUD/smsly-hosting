@@ -422,6 +422,39 @@ class PlatformConfig(models.Model):
     smsly_strict_ssh_host_key_check = models.BooleanField(
         default=False,
         help_text="Strict SSH host-key verification for provisioner")
+    grid_allow_control_plane_workloads = models.BooleanField(
+        default=True,
+        help_text="Allow user workloads on the control-plane / primary node")
+    allow_insecure_inter_node_tls = models.BooleanField(
+        default=False,
+        help_text="Skip TLS verification for inter-node HTTP (dev only)")
+    smsly_disable_signature_check = models.BooleanField(
+        default=False,
+        help_text="Globally disable HMAC signature verification (not recommended)")
+
+    # ── Limits ───────────────────────────────────────────────────────────
+    max_upload_size = models.PositiveIntegerField(
+        default=104857600,
+        help_text="Maximum upload size in bytes (default 100 MB)")
+    smsly_max_file_read_size = models.PositiveIntegerField(
+        default=10485760,
+        help_text="Max file size for container file_read (default 10 MB)")
+    caddy_daily_cert_cap = models.PositiveIntegerField(
+        default=20,
+        help_text="Per-apex daily cap for new TLS certificate issuance")
+
+    # ── Rate Limiting ────────────────────────────────────────────────────
+    api_rate_limit = models.PositiveIntegerField(
+        default=10000,
+        help_text="Per-IP per-minute API rate limit")
+    api_rate_limit_fail_closed = models.BooleanField(
+        default=False,
+        help_text="Fail closed if rate-limit check errors")
+
+    # ── Logging ──────────────────────────────────────────────────────────
+    django_log_level = models.CharField(
+        max_length=10, default='INFO',
+        help_text="Django log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
 
     # ── Traffic Geo ────────────────────────────────────────────────────────
     traffic_geo_enabled = models.BooleanField(

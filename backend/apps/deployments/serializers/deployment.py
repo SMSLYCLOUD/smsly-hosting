@@ -17,6 +17,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
             'build_logs', 'runtime_logs_url', 'pipeline_stages',
             'ai_diagnosis', 'review_summary', 'vulnerability_report',
             'container_id', 'remote_deployment_id', 'green_container_id',
+            'staging_url', 'staged_at',
             'started_at', 'finished_at', 'duration_seconds',
             'is_rollback', 'source_node', 'rollback_from',
             'target_server', 'target_is_local',
@@ -28,7 +29,8 @@ class DeploymentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'container_id', 'remote_deployment_id',
-            'green_container_id', 'target_server', 'target_is_local',
+            'green_container_id', 'staging_url', 'staged_at',
+            'target_server', 'target_is_local',
             'verified_target_type', 'verified_host_ip',
             'verified_runtime_id', 'verified_at',
             'started_at', 'finished_at', 'created_at', 'updated_at',

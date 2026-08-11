@@ -155,6 +155,39 @@ class SystemConfigView(GenericAPIView):
                 {'action': key, 'label': spec['label']}
                 for key, spec in MAINTENANCE_ACTIONS.items()
             ],
+
+            # Auto-scaling config (DB-backed)
+            **self._get_autoscaling_config(),
+        })
+
+    def _get_autoscaling_config(self):
+        pc, _ = PlatformConfig.objects.get_or_create(pk=1)
+        return {
+            'SCALE_MAX_REPLICAS': pc.scale_max_replicas,
+            'SCALE_CPU_HIGH': pc.scale_cpu_high,
+            'SCALE_COOLDOWN_MIN': pc.scale_cooldown_min,
+        }
+
+    def patch(self, request):
+        if not request.user.is_superuser:
+            return Response({'error': 'Admin only'}, status=403)
+        data = request.data
+        pc, _ = PlatformConfig.objects.get_or_create(pk=1)
+        changed = []
+        if 'SCALE_MAX_REPLICAS' in data:
+            pc.scale_max_replicas = int(data['SCALE_MAX_REPLICAS'])
+            changed.append('SCALE_MAX_REPLICAS')
+        if 'SCALE_CPU_HIGH' in data:
+            pc.scale_cpu_high = int(data['SCALE_CPU_HIGH'])
+            changed.append('SCALE_CPU_HIGH')
+        if 'SCALE_COOLDOWN_MIN' in data:
+            pc.scale_cooldown_min = int(data['SCALE_COOLDOWN_MIN'])
+            changed.append('SCALE_COOLDOWN_MIN')
+        pc.save(update_fields=['scale_max_replicas', 'scale_cpu_high', 'scale_cooldown_min'] if changed else [])
+        return Response({
+            'status': 'ok',
+            'updated': changed,
+            **self._get_autoscaling_config(),
         })
 
     def _get_storage_metrics(self):

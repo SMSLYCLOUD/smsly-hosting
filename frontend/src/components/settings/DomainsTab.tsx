@@ -26,6 +26,8 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const [loading, setLoading] = useState(true);
     const [adding, setAdding] = useState(false);
     const [serverIp, setServerIp] = useState<string>('');
+    const [stagingDomain, setStagingDomain] = useState(service.staging_domain || '');
+    const [savingStaging, setSavingStaging] = useState(false);
 
     const defaultDomain = service.public_domain || `${service.name}.cloud.smsly.cloud`;
 
@@ -147,6 +149,19 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
         toast({ title: "Copied!", description: text });
     };
 
+    const handleSaveStagingDomain = async () => {
+        setSavingStaging(true);
+        try {
+            const updated = await servicesApi.update(service.id, { staging_domain: stagingDomain.trim() || null });
+            setService(updated);
+            toast({ title: 'Staging domain saved', description: stagingDomain.trim() ? `Staging URL: https://${stagingDomain.trim()}` : 'Staging URL will be auto-generated.' });
+        } catch (err: any) {
+            toast({ title: 'Failed to save', description: err?.response?.data?.error || 'Could not save staging domain.', variant: 'destructive' });
+        } finally {
+            setSavingStaging(false);
+        }
+    };
+
     if (loading) return <div className="p-4 text-center">Loading domains...</div>;
 
     return (
@@ -204,6 +219,30 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                             The default domain will not serve traffic. Only custom domains are active.
                         </p>
                     )}
+                </div>
+
+                {/* Staging Domain */}
+                <div className="mb-8">
+                    <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Staging Domain</h4>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-3">
+                        Custom domain for webhook deployments. Pushes will deploy to this URL for review before going live.
+                        If blank, auto-generated as <code>staging-{service.name}-{'<hash>'}.{service.public_domain?.split('.').slice(1).join('.') || 'cloud.smsly.cloud'}</code>.
+                    </p>
+                    <div className="flex gap-2">
+                        <Input
+                            placeholder={`staging-${service.name}.example.com`}
+                            value={stagingDomain}
+                            onChange={(e) => setStagingDomain(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSaveStagingDomain()}
+                            disabled={savingStaging}
+                        />
+                        <Button onClick={handleSaveStagingDomain} disabled={savingStaging}>
+                            {savingStaging ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Globe className="w-4 h-4 mr-2" />}
+                            Save
+                        </Button>
+                    </div>
                 </div>
 
                 {/* Custom Domains */}

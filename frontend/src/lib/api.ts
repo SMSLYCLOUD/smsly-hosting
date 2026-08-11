@@ -325,6 +325,7 @@ export interface Service {
   domain_instances?: { domain: string; verified: boolean }[];
   domain_verified?: boolean;
   verification_token?: string;
+  staging_domain?: string;
   created_at?: string;
   cpu_cores?: number;
   memory_mb?: number;
@@ -436,6 +437,8 @@ export interface Deployment {
   pipeline_stages?: { name: string; status: string; duration?: number }[];
   ai_diagnosis?: string;
   duration_seconds?: number;
+  staging_url?: string;
+  staged_at?: string;
   created_at: string;
   finished_at?: string;
   is_rollback?: boolean;
@@ -896,6 +899,10 @@ export const systemApi = {
   },
   getConfig: async (): Promise<{ ALLOW_REGISTRATION: boolean; require_email_verification: boolean; [key: string]: unknown }> => {
     const response = await api.get('/system/config/');
+    return response.data;
+  },
+  updateConfig: async (data: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const response = await api.patch('/system/config/', data);
     return response.data;
   },
   runMaintenance: async (action: 'clear' | 'refresh' | 'update' | 'registry_gc' | 'build_cache') => {
