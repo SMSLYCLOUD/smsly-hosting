@@ -158,7 +158,52 @@ class SystemConfigView(GenericAPIView):
 
             # Auto-scaling config (DB-backed)
             **self._get_autoscaling_config(),
+
+            # Platform config (DB-backed)
+            **self._get_platform_config(),
         })
+
+    # Field mapping: API key → (PlatformConfig field, type)
+    _PC_FIELDS = {
+        # Auto-scaling
+        'SCALE_MAX_REPLICAS': ('scale_max_replicas', int),
+        'SCALE_CPU_HIGH': ('scale_cpu_high', int),
+        'SCALE_COOLDOWN_MIN': ('scale_cooldown_min', int),
+        # Email
+        'SMTP_HOST': ('smtp_host', str),
+        'SMTP_PORT': ('smtp_port', int),
+        'SMTP_USERNAME': ('smtp_username', str),
+        'SMTP_PASSWORD': ('smtp_password', str),
+        'SMTP_USE_TLS': ('smtp_use_tls', bool),
+        'SMTP_FROM_EMAIL': ('smtp_from_email', str),
+        'SMTP_FROM_NAME': ('smtp_from_name', str),
+        # Limits
+        'MAX_UPLOAD_SIZE': ('max_upload_size', int),
+        'SMSLY_MAX_FILE_READ_SIZE': ('smsly_max_file_read_size', int),
+        'CADDY_DAILY_CERT_CAP': ('caddy_daily_cert_cap', int),
+        # Rate Limiting
+        'API_RATE_LIMIT': ('api_rate_limit', int),
+        'API_RATE_LIMIT_FAIL_CLOSED': ('api_rate_limit_fail_closed', bool),
+        # Logging
+        'DJANGO_LOG_LEVEL': ('django_log_level', str),
+        # Feature flags / Security
+        'GRID_ALLOW_CONTROL_PLANE_WORKLOADS': ('grid_allow_control_plane_workloads', bool),
+        'ALLOW_INSECURE_INTER_NODE_TLS': ('allow_insecure_inter_node_tls', bool),
+        'SMSLY_DISABLE_SIGNATURE_CHECK': ('smsly_disable_signature_check', bool),
+        'SMSLY_DISABLE_TIER_GATES': ('smsly_disable_tier_gates', bool),
+        'ENABLE_LEGACY_TUNNEL_API': ('enable_legacy_tunnel_api', bool),
+        'SMSLY_STRICT_SSH_HOST_KEY_CHECK': ('smsly_strict_ssh_host_key_check', bool),
+        'ENFORCE_DEVICE_TRUST': ('enforce_device_trust', bool),
+    }
+
+    _PC_SECRET_FIELDS = {'SMTP_PASSWORD', 'SMSLY_INTERNAL_API_KEY', 'REGISTRY_PASSWORD'}
+
+    def _get_platform_config(self):
+        pc, _ = PlatformConfig.objects.get_or_create(pk=1)
+        result = {}
+        for api_key, (field, _) in self._PC_FIELDS.items():
+            result[api_key] = getattr(pc, field, None)
+        return result
 
     def _get_autoscaling_config(self):
         pc, _ = PlatformConfig.objects.get_or_create(pk=1)
@@ -174,20 +219,25 @@ class SystemConfigView(GenericAPIView):
         data = request.data
         pc, _ = PlatformConfig.objects.get_or_create(pk=1)
         changed = []
-        if 'SCALE_MAX_REPLICAS' in data:
-            pc.scale_max_replicas = int(data['SCALE_MAX_REPLICAS'])
-            changed.append('SCALE_MAX_REPLICAS')
-        if 'SCALE_CPU_HIGH' in data:
-            pc.scale_cpu_high = int(data['SCALE_CPU_HIGH'])
-            changed.append('SCALE_CPU_HIGH')
-        if 'SCALE_COOLDOWN_MIN' in data:
-            pc.scale_cooldown_min = int(data['SCALE_COOLDOWN_MIN'])
-            changed.append('SCALE_COOLDOWN_MIN')
-        pc.save(update_fields=['scale_max_replicas', 'scale_cpu_high', 'scale_cooldown_min'] if changed else [])
+        update_fields = []
+        for api_key, (field, cast_type) in self._PC_FIELDS.items():
+            if api_key in data:
+                raw = data[api_key]
+                if cast_type == bool:
+                    setattr(pc, field, bool(raw))
+                elif cast_type == int:
+                    setattr(pc, field, int(raw))
+                else:
+                    setattr(pc, field, str(raw) if raw is not None else '')
+                changed.append(api_key)
+                update_fields.append(field)
+        if update_fields:
+            pc.save(update_fields=update_fields)
+            pc.clear_cache()
         return Response({
             'status': 'ok',
             'updated': changed,
-            **self._get_autoscaling_config(),
+            **self._get_platform_config(),
         })
 
     def _get_storage_metrics(self):

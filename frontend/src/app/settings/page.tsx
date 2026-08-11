@@ -108,7 +108,7 @@ const SETTINGS_SECTIONS = [
   { value: "providers", label: "Cloud", icon: Cloud },
   { value: "ai", label: "AI", icon: Sparkles },
   { value: "oauth", label: "OAuth", icon: Key },
-  { value: "autoscaling", label: "Auto-Scaling", icon: Cloud },
+  { value: "autoscaling", label: "Platform Config", icon: Cloud },
   { value: "cloud-storage", label: "Cloud Storage", icon: Cloud },
   { value: "backups", label: "Backups", icon: Cloud },
   { value: "database-replicas", label: "Database", icon: Database },
@@ -1241,6 +1241,158 @@ export default function SettingsPage() {
                     >
                       Save Changes
                     </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Email Configuration */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">Email (SMTP)</CardTitle>
+                <CardDescription>Configure outgoing email for alerts and notifications.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>SMTP Host</Label>
+                      <Input value={systemConfig?.SMTP_HOST ?? ''} placeholder="smtp.gmail.com" onChange={(e) => setSystemConfig({ ...systemConfig, SMTP_HOST: e.target.value })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>SMTP Port</Label>
+                      <Input type="number" value={systemConfig?.SMTP_PORT ?? 587} onChange={(e) => setSystemConfig({ ...systemConfig, SMTP_PORT: parseInt(e.target.value) || 587 })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Username</Label>
+                      <Input value={systemConfig?.SMTP_USERNAME ?? ''} onChange={(e) => setSystemConfig({ ...systemConfig, SMTP_USERNAME: e.target.value })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Password</Label>
+                      <Input type="password" value={systemConfig?.SMTP_PASSWORD ?? ''} onChange={(e) => setSystemConfig({ ...systemConfig, SMTP_PASSWORD: e.target.value })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>From Email</Label>
+                      <Input value={systemConfig?.SMTP_FROM_EMAIL ?? ''} placeholder="noreply@smsly.cloud" onChange={(e) => setSystemConfig({ ...systemConfig, SMTP_FROM_EMAIL: e.target.value })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>From Name</Label>
+                      <Input value={systemConfig?.SMTP_FROM_NAME ?? 'SMSLY'} onChange={(e) => setSystemConfig({ ...systemConfig, SMTP_FROM_NAME: e.target.value })} />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Switch checked={systemConfig?.SMTP_USE_TLS ?? true} onCheckedChange={(v) => setSystemConfig({ ...systemConfig, SMTP_USE_TLS: v })} />
+                    <Label>Enable STARTTLS</Label>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button onClick={async () => {
+                      try {
+                        const result = await systemApi.updateConfig({ SMTP_HOST: systemConfig?.SMTP_HOST, SMTP_PORT: systemConfig?.SMTP_PORT, SMTP_USERNAME: systemConfig?.SMTP_USERNAME, SMTP_PASSWORD: systemConfig?.SMTP_PASSWORD, SMTP_USE_TLS: systemConfig?.SMTP_USE_TLS, SMTP_FROM_EMAIL: systemConfig?.SMTP_FROM_EMAIL, SMTP_FROM_NAME: systemConfig?.SMTP_FROM_NAME });
+                        setSystemConfig(result);
+                        toast({ title: "Saved", description: "Email config updated." });
+                      } catch { toast({ title: "Failed", variant: "destructive" }); }
+                    }}>Save Email</Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Limits & Rate Limiting */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">Limits & Rate Limiting</CardTitle>
+                <CardDescription>Control upload sizes, cert caps, and API rate limits.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label>Max Upload Size (bytes)</Label>
+                      <Input type="number" value={systemConfig?.MAX_UPLOAD_SIZE ?? 104857600} onChange={(e) => setSystemConfig({ ...systemConfig, MAX_UPLOAD_SIZE: parseInt(e.target.value) || 104857600 })} />
+                      <p className="text-xs text-muted-foreground">Default 100 MB</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Max File Read (bytes)</Label>
+                      <Input type="number" value={systemConfig?.SMSLY_MAX_FILE_READ_SIZE ?? 10485760} onChange={(e) => setSystemConfig({ ...systemConfig, SMSLY_MAX_FILE_READ_SIZE: parseInt(e.target.value) || 10485760 })} />
+                      <p className="text-xs text-muted-foreground">Default 10 MB</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Daily Cert Cap</Label>
+                      <Input type="number" value={systemConfig?.CADDY_DAILY_CERT_CAP ?? 20} onChange={(e) => setSystemConfig({ ...systemConfig, CADDY_DAILY_CERT_CAP: parseInt(e.target.value) || 20 })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>API Rate Limit (req/min per IP)</Label>
+                      <Input type="number" value={systemConfig?.API_RATE_LIMIT ?? 10000} onChange={(e) => setSystemConfig({ ...systemConfig, API_RATE_LIMIT: parseInt(e.target.value) || 10000 })} />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Switch checked={systemConfig?.API_RATE_LIMIT_FAIL_CLOSED ?? false} onCheckedChange={(v) => setSystemConfig({ ...systemConfig, API_RATE_LIMIT_FAIL_CLOSED: v })} />
+                    <Label>Fail closed on rate-limit error</Label>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button onClick={async () => {
+                      try {
+                        const result = await systemApi.updateConfig({ MAX_UPLOAD_SIZE: systemConfig?.MAX_UPLOAD_SIZE, SMSLY_MAX_FILE_READ_SIZE: systemConfig?.SMSLY_MAX_FILE_READ_SIZE, CADDY_DAILY_CERT_CAP: systemConfig?.CADDY_DAILY_CERT_CAP, API_RATE_LIMIT: systemConfig?.API_RATE_LIMIT, API_RATE_LIMIT_FAIL_CLOSED: systemConfig?.API_RATE_LIMIT_FAIL_CLOSED });
+                        setSystemConfig(result);
+                        toast({ title: "Saved", description: "Limits config updated." });
+                      } catch { toast({ title: "Failed", variant: "destructive" }); }
+                    }}>Save Limits</Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Logging & Security */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">Logging & Security Toggles</CardTitle>
+                <CardDescription>Control log verbosity and security feature flags.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Django Log Level</Label>
+                    <select value={systemConfig?.DJANGO_LOG_LEVEL ?? 'INFO'} onChange={(e) => setSystemConfig({ ...systemConfig, DJANGO_LOG_LEVEL: e.target.value })} className="w-full px-3 py-2 text-sm rounded-lg bg-background border border-border">
+                      <option value="DEBUG">DEBUG</option>
+                      <option value="INFO">INFO</option>
+                      <option value="WARNING">WARNING</option>
+                      <option value="ERROR">ERROR</option>
+                      <option value="CRITICAL">CRITICAL</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {([
+                      ['GRID_ALLOW_CONTROL_PLANE_WORKLOADS', 'Allow workloads on primary node'],
+                      ['SMSLY_DISABLE_SIGNATURE_CHECK', 'Disable HMAC signature check'],
+                      ['SMSLY_DISABLE_TIER_GATES', 'Disable billing tier gates'],
+                      ['ENABLE_LEGACY_TUNNEL_API', 'Enable legacy tunnel API'],
+                      ['SMSLY_STRICT_SSH_HOST_KEY_CHECK', 'Strict SSH host-key check'],
+                      ['ENFORCE_DEVICE_TRUST', 'Enforce device trust (beta)'],
+                      ['ALLOW_INSECURE_INTER_NODE_TLS', 'Allow insecure inter-node TLS'],
+                    ] as [string, string][]).map(([k, label]) => (
+                      <div key={k} className="flex items-center gap-3">
+                        <Switch checked={!!systemConfig?.[k]} onCheckedChange={(v) => setSystemConfig({ ...systemConfig, [k]: v })} />
+                        <Label className="text-sm">{label}</Label>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-end">
+                    <Button onClick={async () => {
+                      try {
+                        const result = await systemApi.updateConfig({
+                          DJANGO_LOG_LEVEL: systemConfig?.DJANGO_LOG_LEVEL,
+                          GRID_ALLOW_CONTROL_PLANE_WORKLOADS: systemConfig?.GRID_ALLOW_CONTROL_PLANE_WORKLOADS,
+                          SMSLY_DISABLE_SIGNATURE_CHECK: systemConfig?.SMSLY_DISABLE_SIGNATURE_CHECK,
+                          SMSLY_DISABLE_TIER_GATES: systemConfig?.SMSLY_DISABLE_TIER_GATES,
+                          ENABLE_LEGACY_TUNNEL_API: systemConfig?.ENABLE_LEGACY_TUNNEL_API,
+                          SMSLY_STRICT_SSH_HOST_KEY_CHECK: systemConfig?.SMSLY_STRICT_SSH_HOST_KEY_CHECK,
+                          ENFORCE_DEVICE_TRUST: systemConfig?.ENFORCE_DEVICE_TRUST,
+                          ALLOW_INSECURE_INTER_NODE_TLS: systemConfig?.ALLOW_INSECURE_INTER_NODE_TLS,
+                        });
+                        setSystemConfig(result);
+                        toast({ title: "Saved", description: "Security toggles updated." });
+                      } catch { toast({ title: "Failed", variant: "destructive" }); }
+                    }}>Save Security</Button>
                   </div>
                 </div>
               </CardContent>
