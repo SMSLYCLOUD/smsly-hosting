@@ -82,6 +82,13 @@ export default function ReplicationPage() {
     // Local HA status (independent of mesh)
     const [localHealth, setLocalHealth] = useState<{ primary: { name: string; status: string } | null; local_replicas: { name: string; host: string; port: number; status: string; lag_seconds: number | null }[] } | null>(null);
 
+    // Redis HA status (independent of mesh)
+    const [redisHealth, setRedisHealth] = useState<{
+        primary: { name: string; status: string; role: string | null; connected_slaves: number } | null;
+        replica: { name: string; status: string; role: string | null; master_link_status: string | null; lag_seconds: number | null } | null;
+        sentinels: { name: string; status: string; ip: string; port: number }[];
+    } | null>(null);
+
     const fetchMeshes = useCallback(async () => {
         try {
             const res = await api.get('/mesh/');
@@ -157,6 +164,17 @@ export default function ReplicationPage() {
     }, []);
 
     useEffect(() => { fetchLocalHealth(); }, [fetchLocalHealth]);
+
+    const fetchRedisHealth = useCallback(async () => {
+        try {
+            const res = await api.get('/replication/redis-health/');
+            setRedisHealth(res.data);
+        } catch {
+            // silently ignore — Redis HA may not be running
+        }
+    }, []);
+
+    useEffect(() => { fetchRedisHealth(); }, [fetchRedisHealth]);
 
     const runPreflight = async (wgAddress: string) => {
         setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'testing' } }));
@@ -634,6 +652,117 @@ export default function ReplicationPage() {
                                     </div>
                                 </div>
                             ))}
+                        </div>
+                    )}
+
+                    {/* Redis HA Status — always shown when available, independent of mesh */}
+                    {redisHealth && (redisHealth.primary || redisHealth.replica || redisHealth.sentinels.length > 0) && (
+                        <div className="space-y-4 mt-6">
+                            <h2 className="text-lg font-bold flex items-center gap-2">
+                                <Zap className="text-amber-500" size={20} />
+                                Redis HA Stack
+                            </h2>
+                            <p className="text-sm text-muted-foreground -mt-2">
+                                Redis primary, replica, and 3 sentinels running on this host.
+                            </p>
+
+                            {/* Redis Primary */}
+                            {redisHealth.primary && (
+                                <div className="bg-card border-2 border-amber-500/30 rounded-xl p-5">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                                                <Crown className="text-amber-500" size={20} />
+                                            </div>
+                                            <div>
+                                                <h3 className="font-bold flex items-center gap-2">
+                                                    {redisHealth.primary.name}
+                                                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
+                                                        redisHealth.primary.status === 'OK'
+                                                            ? 'bg-emerald-500/10 text-emerald-500'
+                                                            : 'bg-red-500/10 text-red-500'
+                                                    }`}>
+                                                        {redisHealth.primary.status === 'OK' ? 'Healthy' : redisHealth.primary.status}
+                                                    </span>
+                                                </h3>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Primary (writes) — {redisHealth.primary.connected_slaves} connected replica{redisHealth.primary.connected_slaves !== 1 ? 's' : ''}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        {redisHealth.primary.role && (
+                                            <div className="text-right">
+                                                <p className="text-xs text-muted-foreground">Role</p>
+                                                <p className="font-bold text-sm text-amber-500">{redisHealth.primary.role}</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Redis Replica */}
+                            {redisHealth.replica && (
+                                <div className="bg-card border border-border rounded-xl p-5">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                                                <Server className="text-blue-500" size={20} />
+                                            </div>
+                                            <div>
+                                                <h3 className="font-bold flex items-center gap-2">
+                                                    {redisHealth.replica.name}
+                                                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
+                                                        redisHealth.replica.status === 'OK'
+                                                            ? 'bg-emerald-500/10 text-emerald-500'
+                                                            : 'bg-red-500/10 text-red-500'
+                                                    }`}>
+                                                        {redisHealth.replica.status === 'OK' ? 'Healthy' : redisHealth.replica.status}
+                                                    </span>
+                                                </h3>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Replica (reads) — master link: {redisHealth.replica.master_link_status || 'unknown'}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        {redisHealth.replica.lag_seconds != null && (
+                                            <div className="text-right">
+                                                <p className="text-xs text-muted-foreground">Last IO</p>
+                                                <p className="font-bold text-sm text-emerald-500">{redisHealth.replica.lag_seconds}s</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Sentinels */}
+                            {redisHealth.sentinels.length > 0 && (
+                                <div className="bg-card border border-border rounded-xl p-5">
+                                    <div className="flex items-center gap-3 mb-3">
+                                        <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                                            <Eye className="text-purple-500" size={20} />
+                                        </div>
+                                        <div>
+                                            <h3 className="font-bold">Sentinels</h3>
+                                            <p className="text-xs text-muted-foreground">
+                                                {redisHealth.sentinels.filter(s => s.status === 'OK').length}/{redisHealth.sentinels.length} healthy
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {redisHealth.sentinels.map((s) => (
+                                            <div key={s.name} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-background">
+                                                <span className={`w-2 h-2 rounded-full ${s.status === 'OK' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                                                <span className="text-xs font-mono">{s.name}</span>
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                                                    s.status === 'OK' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'
+                                                }`}>
+                                                    {s.status === 'OK' ? 'OK' : 'DOWN'}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 

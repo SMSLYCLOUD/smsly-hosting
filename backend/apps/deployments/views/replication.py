@@ -440,6 +440,85 @@ class ReplicationViewSet(viewsets.ViewSet):
             "local_replicas": local_replicas,
         })
 
+    @action(detail=False, methods=["get"], url_path="redis-health")
+    def redis_health(self, request):
+        """Return Redis HA health status (primary, replica, sentinels).
+
+        This endpoint does NOT require a mesh — it reports on the local
+        Redis HA stack running as Docker containers on the same host.
+        """
+        import os
+        from redis.sentinel import Sentinel
+
+        REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+        SENTINEL_PASSWORD = os.environ.get("SENTINEL_PASSWORD", "")
+        SENTINEL_HOSTS = [
+            ("redis-sentinel-1", 26379),
+            ("redis-sentinel-2", 26379),
+            ("redis-sentinel-3", 26379),
+        ]
+
+        result = {
+            "primary": {"name": "redis-primary", "status": "UNKNOWN", "role": None, "connected_slaves": 0},
+            "replica": {"name": "redis-replica", "status": "UNKNOWN", "role": None, "master_link_status": None, "lag_seconds": None},
+            "sentinels": [],
+        }
+
+        try:
+            sentinel = Sentinel(SENTINEL_HOSTS, socket_timeout=3, sentinel_kwargs={"password": SENTINEL_PASSWORD} if SENTINEL_PASSWORD else None)
+
+            # Discover master
+            master_addr = sentinel.discover_master("mymaster")
+            result["primary"]["name"] = f"redis-primary ({master_addr[0]}:{master_addr[1]})"
+
+            # Connect to master
+            master = sentinel.master_for("mymaster", socket_timeout=3, password=REDIS_PASSWORD)
+            info = master.info("replication")
+            result["primary"]["role"] = info.get("role")
+            result["primary"]["connected_slaves"] = info.get("connected_slaves", 0)
+            result["primary"]["status"] = "OK" if info.get("role") == "master" else f"UNEXPECTED: {info.get('role')}"
+
+            # Connect to replica
+            replica = sentinel.slave_for("mymaster", socket_timeout=3, password=REDIS_PASSWORD)
+            rinfo = replica.info("replication")
+            result["replica"]["role"] = rinfo.get("role")
+            result["replica"]["master_link_status"] = rinfo.get("master_link_status")
+            result["replica"]["lag_seconds"] = rinfo.get("master_last_io_seconds_ago")
+            result["replica"]["status"] = (
+                "OK" if rinfo.get("role") == "slave" and rinfo.get("master_link_status") == "up"
+                else f"ERROR: role={rinfo.get('role')} link={rinfo.get('master_link_status')}"
+            )
+
+            master.close()
+            replica.close()
+
+            # Sentinel info
+            for i, (host, port) in enumerate(SENTINEL_HOSTS):
+                try:
+                    # Sentinel state via redis-cli-like commands via Sentinel
+                    s = Sentinel([(host, port)], socket_timeout=2,
+                                 sentinel_kwargs={"password": SENTINEL_PASSWORD} if SENTINEL_PASSWORD else None)
+                    s.discover_master("mymaster")
+                    result["sentinels"].append({
+                        "name": host,
+                        "status": "OK",
+                        "ip": host,
+                        "port": port,
+                    })
+                except Exception as exc:
+                    result["sentinels"].append({
+                        "name": host,
+                        "status": f"ERROR: {exc}",
+                        "ip": host,
+                        "port": port,
+                    })
+
+        except Exception as exc:
+            result["primary"]["status"] = f"ERROR: {exc}"
+            result["replica"]["status"] = f"ERROR: {exc}"
+
+        return Response(result)
+
     @action(detail=False, methods=["post"])
     def reinitialize(self, request):
         """Reinitialize a failed/lagging replica."""
