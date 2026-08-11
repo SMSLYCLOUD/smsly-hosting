@@ -42,7 +42,6 @@ export const PROTECTED_PREFIXES = [
   "/restore",
   "/addons",
   "/mcp",
-  "/settings",
 ] as const;
 
 export function isProtectedPath(pathname: string): boolean {
