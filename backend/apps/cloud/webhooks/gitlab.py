@@ -43,7 +43,7 @@ class GitLabWebhookHandler:
         if not repo_url or not branch:
             return {'message': 'Missing repo URL or branch', 'triggered': False}
 
-        from ..services.repo_matcher import match_service_repo
+        from apps.deployments.services.repo_matcher import match_service_repo
         candidates = Service.objects.filter(
             branch=branch, deploy_type='GIT', is_preview=False,
         )
@@ -86,7 +86,7 @@ class GitLabWebhookHandler:
             return False
 
         # Find the parent service deployed from the target branch
-        from ..services.repo_matcher import match_service_repo
+        from apps.deployments.services.repo_matcher import match_service_repo
         candidates = Service.objects.filter(
             branch=target_branch, deploy_type='GIT', is_preview=False,
         )

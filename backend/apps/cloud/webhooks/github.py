@@ -115,7 +115,7 @@ class GitHubWebhookHandler:
         commit_message = payload.get('head_commit', {}).get('message', '')
 
         # Find services listening to this repo/branch — exact owner/repo match
-        from ..services.repo_matcher import match_service_repo
+        from apps.deployments.services.repo_matcher import match_service_repo
         candidates = Service.objects.filter(
             branch=branch, deploy_type='GIT', is_preview=False,
         )
@@ -192,7 +192,7 @@ class GitHubWebhookHandler:
             return False
 
         # Find the Parent Service (the one deployed from the base branch)
-        from ..services.repo_matcher import match_service_repo
+        from apps.deployments.services.repo_matcher import match_service_repo
         candidates = Service.objects.filter(
             branch=base_ref, deploy_type='GIT', is_preview=False,
         )

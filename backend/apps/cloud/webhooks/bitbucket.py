@@ -50,7 +50,7 @@ class BitbucketWebhookHandler:
             return False
 
         repo = payload.get('repository', {}) or {}
-        from ..services.repo_matcher import match_service_repo
+        from apps.deployments.services.repo_matcher import match_service_repo
         candidates = Service.objects.filter(
             branch=branch, deploy_type='GIT', is_preview=False,
         )
@@ -114,7 +114,7 @@ class BitbucketWebhookHandler:
             return False
 
         # Find parent service on the target branch
-        from ..services.repo_matcher import match_service_repo
+        from apps.deployments.services.repo_matcher import match_service_repo
         candidates = Service.objects.filter(
             branch=target_branch, deploy_type='GIT', is_preview=False,
         )
