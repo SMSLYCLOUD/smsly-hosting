@@ -20,13 +20,15 @@ import {
   RotateCcw,
   ShieldAlert,
   Loader2,
-  Plus
+  Plus,
+  Scaling
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Service, servicesApi, addonsApi, scalingApi } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
 import { usePermissions, PERMISSION } from '@/hooks/usePermissions';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
 
 import { motion } from 'framer-motion';
 import Link from 'next/link';
@@ -283,18 +285,29 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
                   <Activity size={12} fill={service.autoscale_enabled !== false ? 'currentColor' : 'none'} />
                 </Button>
               )}
-              {/* Manual scale up */}
+              {/* Scale menu */}
               {!service.isAddon && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground hover:text-purple-500"
-                  title="Scale up (spawn replica)"
-                  disabled={actionLoading === service.id}
-                  onClick={() => handleManualScale(service.id, service.name)}
-                >
-                  <Plus size={12} />
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-purple-500"
+                      title="Scale service"
+                      disabled={actionLoading === service.id}
+                    >
+                      <Plus size={12} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuItem onClick={() => handleManualScale(service.id, service.name)}>
+                      <Scaling size={14} className="mr-2" /> New Replica (Horizontal)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => router.push(`/services/${service.id}?tab=general`)}>
+                      <Activity size={14} className="mr-2" /> More Resources (Vertical)
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
               <Button
                 variant="ghost"
