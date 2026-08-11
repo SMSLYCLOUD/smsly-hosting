@@ -20,14 +20,14 @@ on:
         required: false
         default: "latest"
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
     paths:
       - "charts/smsly-hosting/**"
       - ".github/workflows/deploy-helm.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   helm-deploy:
@@ -114,7 +114,7 @@ jobs:
             cd /opt/smsly-hosting
 
             echo "=== Pulling latest code ==="
-            git pull origin main
+            git pull origin master
 
             echo "=== Building images ==="
             docker compose build backend frontend
