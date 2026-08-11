@@ -14,7 +14,7 @@ import {
 } from 'recharts';
 import { ChartContainer } from '@/components/ui/chart-container';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { autoscalerApi, scalingApi, servicesApi, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService } from '@/lib/api';
+import { autoscalerApi, scalingApi, servicesApi, type Service, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -87,15 +87,19 @@ export default function AutoscalerPage() {
   });
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [savingAlertConfig, setSavingAlertConfig] = useState(false);
+  const [servicesList, setServicesList] = useState<Service[]>([]);
+  const [togglingService, setTogglingService] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
-      const [s, h] = await Promise.all([
+      const [s, h, svcList] = await Promise.all([
         autoscalerApi.getStatus(),
-        autoscalerApi.getHistory(historyDuration)
+        autoscalerApi.getHistory(historyDuration),
+        servicesApi.list(),
       ]);
       setStatus(s);
       setHistory(h);
+      setServicesList(svcList);
 
       // Initialize local config from status if not edited
       if (!localConfig && s) {
@@ -159,6 +163,20 @@ export default function AutoscalerPage() {
       fetchData();
     } catch (err) {
       toast({ title: "Save Failed", description: "Could not update configuration.", variant: "destructive" });
+    }
+  };
+
+  const handleToggleAutoscale = async (serviceId: string, current: boolean | undefined) => {
+    const next = current === false ? true : false;
+    setTogglingService(serviceId);
+    try {
+      await servicesApi.update(serviceId, { autoscale_enabled: next } as any);
+      setServicesList(prev => prev.map(s => s.id === serviceId ? { ...s, autoscale_enabled: next } : s));
+      toast({ title: next ? 'Auto-scaling enabled' : 'Auto-scaling disabled' });
+    } catch (err) {
+      toast({ title: 'Failed to toggle auto-scaling', variant: 'destructive' });
+    } finally {
+      setTogglingService(null);
     }
   };
 
@@ -385,6 +403,19 @@ export default function AutoscalerPage() {
                            )}>
                              P{svc.priority}
                            </span>
+                           {(() => {
+                             const matched = servicesList.find(s => s.name === svc.app || s.name === name);
+                             if (!matched) return null;
+                             return (
+                               <Switch
+                                 checked={matched.autoscale_enabled !== false}
+                                 onCheckedChange={() => handleToggleAutoscale(matched.id, matched.autoscale_enabled)}
+                                 disabled={togglingService === matched.id}
+                                 className="scale-75"
+                                 title={matched.autoscale_enabled !== false ? 'Auto-scaling ON' : 'Auto-scaling OFF'}
+                               />
+                             );
+                           })()}
                         </div>
                       </div>
                       <div className="text-right">

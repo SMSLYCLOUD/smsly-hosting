@@ -20,7 +20,7 @@ import {
   RotateCcw,
   ShieldAlert,
   Loader2,
-  Scaling
+  Plus
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -293,7 +293,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
                   disabled={actionLoading === service.id}
                   onClick={() => handleManualScale(service.id, service.name)}
                 >
-                  <Scaling size={12} />
+                  <Plus size={12} />
                 </Button>
               )}
               <Button

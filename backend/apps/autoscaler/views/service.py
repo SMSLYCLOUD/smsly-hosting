@@ -98,7 +98,13 @@ class ScalingViewSet(viewsets.GenericViewSet):
             candidates = candidates.exclude(is_primary=True)
 
         if not candidates.exists():
-            return Response({'error': 'No available nodes'}, status=400)
+            if not allow_control_plane:
+                candidates = ManagedServer.objects.filter(
+                    status=ManagedServer.Status.ONLINE,
+                    allow_user_workloads=True,
+                )
+            if not candidates.exists():
+                return Response({'error': 'No available nodes'}, status=400)
 
         scorer = NodeScorer()
         best = scorer.best(candidates)
