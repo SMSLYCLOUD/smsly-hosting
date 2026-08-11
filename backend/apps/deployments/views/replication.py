@@ -407,6 +407,39 @@ class ReplicationViewSet(viewsets.ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=False, methods=["get"], url_path="local-health")
+    def local_health(self, request):
+        """Return health status of local postgres-replica containers.
+
+        This endpoint does NOT require a mesh — it reports on the local
+        HA stack (primary + replica) running as Docker containers on the
+        same host.
+        """
+        local_replicas = _get_local_replica_health()
+
+        # Also probe the primary directly so the page can show both sides
+        primary_info = {"name": "smsly-postgres-primary", "status": "UNKNOWN"}
+        try:
+            from ..services import database_replica_service as svc
+
+            class _PrimaryProbe:
+                host = "smsly-postgres-primary"
+                port = 5432
+                username = "postgres"
+                password = ""
+                database = "smsly_hosting"
+                ssl_mode = "disable"
+
+            ok, err, _lag = svc.test_connection(_PrimaryProbe())
+            primary_info["status"] = "OK" if ok else f"ERROR: {err}"
+        except Exception as exc:
+            primary_info["status"] = f"ERROR: {exc}"
+
+        return Response({
+            "primary": primary_info,
+            "local_replicas": local_replicas,
+        })
+
     @action(detail=False, methods=["post"])
     def reinitialize(self, request):
         """Reinitialize a failed/lagging replica."""

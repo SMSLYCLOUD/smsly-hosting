@@ -79,6 +79,9 @@ export default function ReplicationPage() {
     const [externalReplicas, setExternalReplicas] = useState<DatabaseReplica[]>([]);
     const [showExternalForm, setShowExternalForm] = useState(false);
 
+    // Local HA status (independent of mesh)
+    const [localHealth, setLocalHealth] = useState<{ primary: { name: string; status: string } | null; local_replicas: { name: string; host: string; port: number; status: string; lag_seconds: number | null }[] } | null>(null);
+
     const fetchMeshes = useCallback(async () => {
         try {
             const res = await api.get('/mesh/');
@@ -143,6 +146,17 @@ export default function ReplicationPage() {
     }, []);
 
     useEffect(() => { fetchExternalReplicas(); }, [fetchExternalReplicas]);
+
+    const fetchLocalHealth = useCallback(async () => {
+        try {
+            const res = await api.get('/replication/local-health/');
+            setLocalHealth(res.data);
+        } catch {
+            // silently ignore — local HA may not be running
+        }
+    }, []);
+
+    useEffect(() => { fetchLocalHealth(); }, [fetchLocalHealth]);
 
     const runPreflight = async (wgAddress: string) => {
         setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'testing' } }));
@@ -549,6 +563,77 @@ export default function ReplicationPage() {
                                     <ExternalLink size={16} className="mr-2" /> Add External Database
                                 </Button>
                             </div>
+                        </div>
+                    )}
+
+                    {/* Local HA Status — always shown when available, independent of mesh */}
+                    {localHealth && (localHealth.primary || localHealth.local_replicas.length > 0) && (
+                        <div className="space-y-4 mt-6">
+                            <h2 className="text-lg font-bold flex items-center gap-2">
+                                <Server className="text-emerald-500" size={20} />
+                                Local HA Stack
+                            </h2>
+                            <p className="text-sm text-muted-foreground -mt-2">
+                                PostgreSQL primary and replica running on this host.
+                            </p>
+
+                            {/* Primary */}
+                            {localHealth.primary && (
+                                <div className="bg-card border-2 border-emerald-500/30 rounded-xl p-5">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                                                <Crown className="text-emerald-500" size={20} />
+                                            </div>
+                                            <div>
+                                                <h3 className="font-bold flex items-center gap-2">
+                                                    {localHealth.primary.name}
+                                                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
+                                                        localHealth.primary.status === 'OK'
+                                                            ? 'bg-emerald-500/10 text-emerald-500'
+                                                            : 'bg-red-500/10 text-red-500'
+                                                    }`}>
+                                                        {localHealth.primary.status === 'OK' ? 'Healthy' : localHealth.primary.status}
+                                                    </span>
+                                                </h3>
+                                                <p className="text-xs text-muted-foreground">Primary (writes)</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Replicas */}
+                            {localHealth.local_replicas.map((r) => (
+                                <div key={r.host} className="bg-card border border-border rounded-xl p-5">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                                                <Server className="text-blue-500" size={20} />
+                                            </div>
+                                            <div>
+                                                <h3 className="font-bold flex items-center gap-2">
+                                                    {r.name}
+                                                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
+                                                        r.status === 'OK'
+                                                            ? 'bg-emerald-500/10 text-emerald-500'
+                                                            : 'bg-red-500/10 text-red-500'
+                                                    }`}>
+                                                        {r.status === 'OK' ? 'Healthy' : r.status}
+                                                    </span>
+                                                </h3>
+                                                <p className="text-xs text-muted-foreground">Replica (reads) — {r.host}:{r.port}</p>
+                                            </div>
+                                        </div>
+                                        {r.lag_seconds != null && (
+                                            <div className="text-right">
+                                                <p className="text-xs text-muted-foreground">Replication Lag</p>
+                                                <p className="font-bold text-sm text-emerald-500">{r.lag_seconds.toFixed(2)}s</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     )}
 
