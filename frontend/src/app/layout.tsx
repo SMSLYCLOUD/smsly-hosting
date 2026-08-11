@@ -32,6 +32,7 @@ import { SpaceOpsBackground } from "@/components/effects/SpaceOpsBackground";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import FloatingAILoader from "@/components/ai/FloatingAILoader";
+import { CommandPalette } from "@/components/CommandPalette";
 
 // FloatingAI ships in a deferred chunk so it never blocks first paint.
 // ``next/dynamic({ ssr: false })`` is not allowed in Server Components in
@@ -60,6 +61,7 @@ export default function RootLayout({
                 <ConfirmProvider>
                   <SpaceOpsProvider>
                   <SpaceOpsBackground />
+                  <CommandPalette />
                   <Navbar />
                   <main className="min-h-[calc(100vh-3.5rem)] flex flex-col">
                     <div className="flex-1">

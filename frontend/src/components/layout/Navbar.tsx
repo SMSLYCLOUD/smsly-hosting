@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { featureFlags } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
 import { usePathname, useRouter } from 'next/navigation';
-import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare, Plug } from 'lucide-react';
+import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare, Plug, Search } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -218,6 +218,19 @@ export function Navbar() {
           )}
 
           <div className="w-px h-6 bg-border mx-2" />
+
+          <button
+            onClick={() => {
+              document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }));
+            }}
+            className="flex items-center gap-2 h-9 rounded-lg border border-border bg-white/5 px-3 text-sm text-muted-foreground hover:bg-white/10 transition-colors"
+          >
+            <Search className="h-4 w-4" />
+            <span className="hidden lg:inline">Search</span>
+            <kbd className="pointer-events-none hidden select-none rounded border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground lg:inline">
+              <span className="text-xs">&#8984;</span>K
+            </kbd>
+          </button>
 
           <ModeToggle />
 

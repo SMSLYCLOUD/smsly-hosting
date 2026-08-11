@@ -24,7 +24,7 @@ interface OAuthCreds {
   bitbucket: { configured: boolean; client_id?: string };
 }
 
-export function OAuthTab() {
+export function OAuthTab({ provider }: { provider?: "github" | "google" | "gitlab" | "bitbucket" }) {
   const { toast } = useToast();
   const [status, setStatus] = useState<OAuthStatus>({ github: false, google: false, gitlab: false, bitbucket: false });
   const [creds, setCreds] = useState<OAuthCreds>({
@@ -153,6 +153,7 @@ export function OAuthTab() {
   return (
     <div className="space-y-6">
       {/* GitHub OAuth */}
+      {(!provider || provider === "github") && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -211,8 +212,10 @@ export function OAuthTab() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Google OAuth */}
+      {(!provider || provider === "google") && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -276,8 +279,10 @@ export function OAuthTab() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* GitLab OAuth */}
+      {(!provider || provider === "gitlab") && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -320,8 +325,10 @@ export function OAuthTab() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Bitbucket OAuth */}
+      {(!provider || provider === "bitbucket") && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -364,6 +371,7 @@ export function OAuthTab() {
           </div>
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }
