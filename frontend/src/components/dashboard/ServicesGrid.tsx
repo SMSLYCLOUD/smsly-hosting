@@ -19,11 +19,12 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldAlert,
-  Loader2
+  Loader2,
+  Scaling
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Service, servicesApi, addonsApi } from '@/lib/api';
+import { Service, servicesApi, addonsApi, scalingApi } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
 import { usePermissions, PERMISSION } from '@/hooks/usePermissions';
 
@@ -90,6 +91,34 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
       await servicesApi.recheckHealth(serviceId, true);
     } catch (err) {
       console.error('Recheck failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleToggleAutoscale = async (serviceId: string, current: boolean | undefined) => {
+    const next = current === false ? true : false;
+    setActionLoading(serviceId);
+    try {
+      await servicesApi.update(serviceId, { autoscale_enabled: next } as any);
+      toast({ title: next ? 'Auto-scaling enabled' : 'Auto-scaling disabled' });
+    } catch (err) {
+      console.error('Toggle autoscale failed:', err);
+      toast({ title: 'Failed to toggle auto-scaling', variant: 'destructive' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleManualScale = async (serviceId: string, serviceName: string) => {
+    if (!await confirm({ title: 'Scale up?', message: `Spawning an extra replica for "${serviceName}" now.`, confirmText: 'Scale up' })) return;
+    setActionLoading(serviceId);
+    try {
+      await scalingApi.spawnReplica(serviceId);
+      toast({ title: 'Replica spawned', description: `A new replica of ${serviceName} is starting.` });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.detail || err.message || 'Scale-up failed';
+      toast({ title: 'Scale-up failed', description: String(msg), variant: 'destructive' });
     } finally {
       setActionLoading(null);
     }
@@ -240,7 +269,33 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
                 </Button>
               )}
             </div>
-            <div className="grid grid-cols-4 gap-1 shrink-0 ml-auto">
+            <div className="grid grid-cols-6 gap-1 shrink-0 ml-auto">
+              {/* Auto-scale toggle */}
+              {!service.isAddon && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={`h-7 w-7 ${service.autoscale_enabled !== false ? 'text-emerald-500' : 'text-muted-foreground hover:text-emerald-500'}`}
+                  title={service.autoscale_enabled !== false ? 'Auto-scaling ON (click to disable)' : 'Auto-scaling OFF (click to enable)'}
+                  disabled={actionLoading === service.id}
+                  onClick={() => handleToggleAutoscale(service.id, service.autoscale_enabled)}
+                >
+                  <Activity size={12} fill={service.autoscale_enabled !== false ? 'currentColor' : 'none'} />
+                </Button>
+              )}
+              {/* Manual scale up */}
+              {!service.isAddon && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-purple-500"
+                  title="Scale up (spawn replica)"
+                  disabled={actionLoading === service.id}
+                  onClick={() => handleManualScale(service.id, service.name)}
+                >
+                  <Scaling size={12} />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"

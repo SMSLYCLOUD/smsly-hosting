@@ -331,6 +331,7 @@ export interface Service {
   min_replicas?: number;
   max_replicas?: number;
   autoscale_cpu_target?: number;
+  autoscale_enabled?: boolean;
   vpa_enabled?: boolean;
   buildpack?: 'NIXPACKS' | 'DOCKER' | 'STATIC';
   root_directory?: string;
