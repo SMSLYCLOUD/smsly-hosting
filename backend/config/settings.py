@@ -402,6 +402,11 @@ if DOMAIN and DOMAIN != 'localhost':
 
 # Internal grid services (e.g. smsly-frontend-node1-a37373.grid.smsly.cloud)
 _GRID_DOMAIN = config('GRID_DOMAIN', default='grid.smsly.cloud')
+GRID_ALLOW_CONTROL_PLANE_WORKLOADS = config(
+    'GRID_ALLOW_CONTROL_PLANE_WORKLOADS',
+    default=False,
+    cast=bool,
+)
 if _GRID_DOMAIN:
     _grid_wildcard2 = f'.{_GRID_DOMAIN}'
     if _grid_wildcard2 not in ALLOWED_HOSTS:
