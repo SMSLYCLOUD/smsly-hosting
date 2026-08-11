@@ -404,7 +404,7 @@ if DOMAIN and DOMAIN != 'localhost':
 _GRID_DOMAIN = config('GRID_DOMAIN', default='grid.smsly.cloud')
 GRID_ALLOW_CONTROL_PLANE_WORKLOADS = config(
     'GRID_ALLOW_CONTROL_PLANE_WORKLOADS',
-    default=False,
+    default=True,
     cast=bool,
 )
 if _GRID_DOMAIN:
