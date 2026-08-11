@@ -24,7 +24,7 @@ interface OAuthCreds {
   bitbucket: { configured: boolean; client_id?: string };
 }
 
-export function OAuthTab({ provider }: { provider?: "github" | "google" | "gitlab" | "bitbucket" }) {
+export function OAuthTab({ provider }: { provider?: string }) {
   const { toast } = useToast();
   const [status, setStatus] = useState<OAuthStatus>({ github: false, google: false, gitlab: false, bitbucket: false });
   const [creds, setCreds] = useState<OAuthCreds>({

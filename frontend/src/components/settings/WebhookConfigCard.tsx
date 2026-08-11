@@ -17,7 +17,7 @@ interface WebhookConfig {
   domain: string;
 }
 
-export function WebhookConfigCard({ provider }: { provider?: "github" | "gitlab" | "bitbucket" }) {
+export function WebhookConfigCard({ provider }: { provider?: string }) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
