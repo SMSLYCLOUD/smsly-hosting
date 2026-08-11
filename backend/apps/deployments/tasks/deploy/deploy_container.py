@@ -226,6 +226,20 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 "[HEALTH-CHECK] Using image/native health checks (or running-state readiness).\n",
             )
 
+        # For staged deployments, inject the staging domain into the env
+        # so the green container's Traefik labels route the staging URL.
+        if staged_only and deployment.staging_url:
+            from urllib.parse import urlparse
+            staging_host = urlparse(deployment.staging_url).hostname or ''
+            if staging_host:
+                existing_custom = env_vars.get('CUSTOM_DOMAINS', '')
+                custom_list = [d.strip() for d in existing_custom.split(',') if d.strip()]
+                if staging_host not in custom_list:
+                    custom_list.append(staging_host)
+                env_vars['CUSTOM_DOMAINS'] = ','.join(custom_list)
+                # Also signal the adapter this is a staged deployment
+                env_vars['STAGING_DOMAIN'] = staging_host
+
         resource = compute.deploy_container(
             name=service.name,
             image=image_name,

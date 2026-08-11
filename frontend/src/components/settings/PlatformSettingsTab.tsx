@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
-import { Loader2, Save, Server, Shield, Globe, Database, Activity, CreditCard, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, Save, Server, Shield, Globe, Database, Activity, CreditCard, AlertTriangle, CheckCircle2, XCircle, Clock } from "lucide-react";
 import api, { infisicalApi } from "@/lib/api";
 
 export function PlatformSettingsTab() {
@@ -155,6 +155,45 @@ export function PlatformSettingsTab() {
                 value={config.ecosystem_wave_recheck_seconds || 15}
                 onChange={(e) => handleChange("ecosystem_wave_recheck_seconds", parseInt(e.target.value))}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Deploy Pipeline Settings */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <Clock className="h-5 w-5" />
+              <span>Deploy Pipeline</span>
+            </CardTitle>
+            <CardDescription>Configure auto-review and auto-promote timeouts for deployments.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Auto-Review Hours (0-72)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="72"
+                value={config.auto_review_hours ?? 2}
+                onChange={(e) => handleChange("auto_review_hours", parseInt(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Auto-approve deployments in REVIEW status after this many hours. Set to 0 to disable.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Auto-Promote Hours (0-168)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="168"
+                value={config.auto_promote_hours ?? 12}
+                onChange={(e) => handleChange("auto_promote_hours", parseInt(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Auto-promote deployments in STAGED status after this many hours. Set to 0 to disable.
+              </p>
             </div>
           </CardContent>
         </Card>

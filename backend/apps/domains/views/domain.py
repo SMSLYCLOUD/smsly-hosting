@@ -62,6 +62,9 @@ class DomainConfigView(GenericAPIView):
             'sentry_traces_sample_rate': config.sentry_traces_sample_rate,
             'sentry_profiles_sample_rate': config.sentry_profiles_sample_rate,
             'sentry_environment': config.sentry_environment,
+            # Deploy Pipeline
+            'auto_review_hours': config.auto_review_hours,
+            'auto_promote_hours': config.auto_promote_hours,
             # Feature Flags
             'smsly_disable_tier_gates': config.smsly_disable_tier_gates,
             'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
@@ -256,6 +259,17 @@ class DomainConfigView(GenericAPIView):
                 config.crowdsec_bouncer_key = str(data.get('crowdsec_bouncer_key') or '').strip()
             if 'crowdsec_enroll_key' in data:
                 config.crowdsec_enroll_key = str(data.get('crowdsec_enroll_key') or '').strip()
+            # Deploy Pipeline
+            if 'auto_review_hours' in data:
+                try:
+                    config.auto_review_hours = max(0, min(72, int(data['auto_review_hours'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'auto_promote_hours' in data:
+                try:
+                    config.auto_promote_hours = max(0, min(168, int(data['auto_promote_hours'])))
+                except (TypeError, ValueError):
+                    pass
             # Feature Flags
             for _field in ('smsly_disable_tier_gates', 'enable_legacy_tunnel_api', 'smsly_strict_ssh_host_key_check'):
                 if _field in data:

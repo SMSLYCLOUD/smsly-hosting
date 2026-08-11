@@ -124,6 +124,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.recover_stalled_deletions': {'queue': 'deploy'},
     'apps.deployments.tasks.recover_redis_failover': {'queue': 'deploy'},
     'apps.deployments.tasks.auto_promote_staged_deployments': {'queue': 'deploy'},
+    'apps.deployments.tasks.auto_review_deployments': {'queue': 'deploy'},
     # -- Tasks re-exported from specialized modules (name= resolves to tasks.*) --
     'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
@@ -233,9 +234,15 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
-    # Auto-promote deployments stuck in STAGED for > 12 hours
+    # Auto-promote deployments stuck in STAGED for > configured hours
     'auto-promote-staged-every-15m': {
         'task': 'apps.deployments.tasks.auto_promote_staged_deployments',
+        'schedule': 900.0,
+        'options': {'expires': 600.0},
+    },
+    # Auto-approve deployments stuck in REVIEW for > configured hours
+    'auto-review-pending-every-15m': {
+        'task': 'apps.deployments.tasks.auto_review_deployments',
         'schedule': 900.0,
         'options': {'expires': 600.0},
     },

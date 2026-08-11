@@ -483,10 +483,27 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.hc_timeout': str(hc_timeout),
             'smsly.blue_green.restart_policy': restart_policy,
         }
+
+        # Check if this is a staged deployment (green candidate with staging domain)
+        is_staged_green = stage_before_cutover and bool(env.get('STAGING_DOMAIN'))
+
         # Traefik routing metadata
-        if stage_before_cutover:
+        if stage_before_cutover and not is_staged_green:
             # Green candidates should not receive traffic until promotion.
             labels['traefik.enable'] = 'false'
+        elif is_staged_green:
+            # Staged green: receive traffic ONLY on the staging domain
+            staging_domain = env.get('STAGING_DOMAIN', '')
+            staging_host_rule = f'Host(`{staging_domain}`)'
+            labels.update(self._get_traefik_labels(f"{name}-staging", staging_host_rule, port, is_public, network_name=network_name))
+            self._apply_router_special_labels(labels, f"{name}-staging", env)
+            if platform_hc_enabled and hc_primary_path:
+                staging_router = f"{name}-staging"
+                labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.path'] = hc_primary_path
+                labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
+                labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
+            # Also store the staging domain metadata for promote-time cleanup
+            labels['smsly.blue_green.staging_domain'] = staging_domain
         else:
             labels.update(self._get_traefik_labels(name, host_rule, port, is_public, network_name=network_name))
             self._apply_router_special_labels(labels, name, env)

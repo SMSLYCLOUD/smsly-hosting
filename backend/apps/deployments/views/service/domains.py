@@ -302,6 +302,25 @@ class DomainActionsMixin:
         if Addon.objects.filter(public_domain=domain).exists():
             return Response(status=status.HTTP_200_OK)
 
+        # 5. Check against STAGED deployment staging URLs
+        from ...models import Deployment
+        if Deployment.objects.filter(
+            status=Deployment.Status.STAGED,
+            staging_url__icontains=domain,
+        ).exists():
+            return Response(status=status.HTTP_200_OK)
+
+        # 6. Check against auto-generated staging domains (staging-{slug}-{hash}.{base})
+        # Match pattern: staging-*.{base_domain}
+        try:
+            base_domain = Service.default_public_base_domain()
+            if domain.endswith(f".{base_domain}"):
+                prefix = domain.rsplit(f".{base_domain}", 1)[0]
+                if prefix.startswith("staging-"):
+                    return Response(status=status.HTTP_200_OK)
+        except Exception:
+            pass
+
         logger.warning("check_domain: unauthorized domain attempt: %s", domain)
         return Response(status=status.HTTP_404_NOT_FOUND)
 

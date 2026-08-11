@@ -451,6 +451,14 @@ class PlatformConfig(models.Model):
         default=False,
         help_text="Fail closed if rate-limit check errors")
 
+    # ── Deploy Pipeline ──────────────────────────────────────────────────
+    auto_review_hours = models.PositiveIntegerField(
+        default=2,
+        help_text="Auto-approve deployments in REVIEW status after this many hours (0 = disabled)")
+    auto_promote_hours = models.PositiveIntegerField(
+        default=12,
+        help_text="Auto-promote deployments in STAGED status after this many hours (0 = disabled)")
+
     # ── Logging ──────────────────────────────────────────────────────────
     django_log_level = models.CharField(
         max_length=10, default='INFO',

@@ -18,7 +18,13 @@ from .state import _mark_deployment_active, _post_deploy_success
 
 logger = logging.getLogger(__name__)
 
-AUTO_PROMOTE_HOURS = 12
+def _get_config_hours(field: str, default: int) -> int:
+    """Read deploy timing from PlatformConfig, falling back to default."""
+    try:
+        from apps.deployments.models import PlatformConfig
+        return getattr(PlatformConfig.load(), field, default) or default
+    except Exception:
+        return default
 
 
 def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
@@ -90,8 +96,12 @@ def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
     time_limit=330,
 )
 def auto_promote_staged_deployments():
-    """Auto-promote deployments that have been in STAGED status for > 12 hours."""
-    threshold = timezone.now() - timedelta(hours=AUTO_PROMOTE_HOURS)
+    """Auto-promote deployments in STAGED status for longer than configured hours."""
+    hours = _get_config_hours('auto_promote_hours', 12)
+    if hours <= 0:
+        return {'promoted': 0, 'skipped': 'disabled'}
+
+    threshold = timezone.now() - timedelta(hours=hours)
     staged = Deployment.objects.filter(
         status=Deployment.Status.STAGED,
         staged_at__lte=threshold,
@@ -108,10 +118,60 @@ def auto_promote_staged_deployments():
             _do_promote(deployment, provider)
             append_log(
                 deployment,
-                f"[AUTO-PROMOTE] Deployment auto-promoted after {AUTO_PROMOTE_HOURS} hours.\n"
+                f"[AUTO-PROMOTE] Deployment auto-promoted after {hours} hours.\n"
             )
             promoted += 1
         except Exception as exc:
             logger.exception("Auto-promote failed for deployment %s: %s", deployment.id, exc)
 
     return {'promoted': promoted}
+
+
+@shared_task(
+    name="apps.deployments.tasks.auto_review_deployments",
+    soft_time_limit=300,
+    time_limit=330,
+)
+def auto_review_deployments():
+    """Auto-approve deployments stuck in REVIEW status for longer than configured hours."""
+    hours = _get_config_hours('auto_review_hours', 2)
+    if hours <= 0:
+        return {'approved': 0, 'skipped': 'disabled'}
+
+    threshold = timezone.now() - timedelta(hours=hours)
+    reviews = Deployment.objects.filter(
+        status=Deployment.Status.REVIEW,
+        created_at__lte=threshold,
+    ).select_related('service')
+
+    approved = 0
+    for deployment in reviews:
+        try:
+            from ..views._helpers import _resolve_provider_for_target
+            provider = _resolve_provider_for_target(
+                deployment.service,
+                target_is_local=bool(getattr(deployment, 'target_is_local', False)),
+            )
+            if not provider:
+                logger.warning("Auto-review: no provider for %s, skipping", deployment.service.name)
+                continue
+
+            deployment.status = Deployment.Status.BUILDING
+            deployment.started_at = timezone.now()
+            deployment.save(update_fields=['status', 'started_at'])
+
+            from .build import resume_deploy_task
+            resume_deploy_task.delay(
+                deployment_id=str(deployment.id),
+                provider_id=str(provider.id),
+            )
+
+            append_log(
+                deployment,
+                f"[AUTO-REVIEW] Deployment auto-approved after {hours} hours. Build starting.\n"
+            )
+            approved += 1
+        except Exception as exc:
+            logger.exception("Auto-review failed for deployment %s: %s", deployment.id, exc)
+
+    return {'approved': approved}
