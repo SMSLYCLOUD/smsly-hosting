@@ -29,7 +29,7 @@ export default function TermsPage() {
 
         <h2>1. Acceptance of Terms</h2>
         <p>
-          By accessing or using Grid (&quot;the Service&quot;), operated by TruLay (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;), you agree to be bound by these Terms of Service (&quot;Terms&quot;). If you do not agree to these Terms, do not use the Service.
+          By accessing or using Grid (&quot;the Service&quot;), operated by Trulay (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;), you agree to be bound by these Terms of Service (&quot;Terms&quot;). If you do not agree to these Terms, do not use the Service.
         </p>
         <p>
           These Terms apply to all visitors, users, and others who access or use the Service. By using the Service on behalf of an organization, you represent that you have the authority to bind that organization to these Terms.
@@ -80,7 +80,7 @@ export default function TermsPage() {
 
         <h2>6. Open Source License</h2>
         <p>
-          Grid is released under the MIT License. You are free to use, modify, and distribute the software in accordance with the license terms. The open-source nature of Grid does not alter these Terms for the hosted Service provided by TruLay.
+          Grid is released under the MIT License. You are free to use, modify, and distribute the software in accordance with the license terms. The open-source nature of Grid does not alter these Terms for the hosted Service provided by Trulay.
         </p>
 
         <h2>7. Service Availability</h2>
@@ -107,12 +107,12 @@ export default function TermsPage() {
 
         <h2>9. Intellectual Property</h2>
         <p>
-          The Service, including its design, code, features, and documentation, is owned by TruLay and protected by copyright, trademark, and other intellectual property laws. You may not copy, modify, distribute, or reverse-engineer any part of the Service except as permitted by the open-source license.
+          The Service, including its design, code, features, and documentation, is owned by Trulay and protected by copyright, trademark, and other intellectual property laws. You may not copy, modify, distribute, or reverse-engineer any part of the Service except as permitted by the open-source license.
         </p>
 
         <h2>10. Limitation of Liability</h2>
         <p>
-          To the maximum extent permitted by law, TruLay and its affiliates shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including but not limited to:
+          To the maximum extent permitted by law, Trulay and its affiliates shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including but not limited to:
         </p>
         <ul>
           <li>Loss of profits, data, business, or goodwill</li>
@@ -131,7 +131,7 @@ export default function TermsPage() {
 
         <h2>12. Indemnification</h2>
         <p>
-          You agree to indemnify, defend, and hold harmless TruLay and its officers, directors, employees, and agents from any claims, damages, losses, liabilities, and expenses (including legal fees) arising from:
+          You agree to indemnify, defend, and hold harmless Trulay and its officers, directors, employees, and agents from any claims, damages, losses, liabilities, and expenses (including legal fees) arising from:
         </p>
         <ul>
           <li>Your use of the Service</li>
@@ -155,7 +155,7 @@ export default function TermsPage() {
 
         <h2>15. Governing Law</h2>
         <p>
-          These Terms shall be governed by and construed in accordance with the laws of the jurisdiction in which TruLay operates, without regard to its conflict of law provisions. Any disputes shall be resolved in the courts of competent jurisdiction in that jurisdiction.
+          These Terms shall be governed by and construed in accordance with the laws of the jurisdiction in which Trulay operates, without regard to its conflict of law provisions. Any disputes shall be resolved in the courts of competent jurisdiction in that jurisdiction.
         </p>
 
         <h2>16. Severability</h2>
@@ -165,7 +165,7 @@ export default function TermsPage() {
 
         <h2>17. Contact</h2>
         <p>
-          If you have questions about these Terms, please contact us at <a href="mailto:legal@trulay.co">legal@trulay.co</a> or visit our <Link href="https://github.com/SMSLYCLOUD/smsly-hosting">GitHub repository</Link>.
+          If you have questions about these Terms, please contact us at <a href="mailto:legal@Trulay.co">legal@Trulay.co</a> or visit our <Link href="https://github.com/SMSLYCLOUD/smsly-hosting">GitHub repository</Link>.
         </p>
       </div>
     </main>

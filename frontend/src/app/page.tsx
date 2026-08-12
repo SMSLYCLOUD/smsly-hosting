@@ -1212,7 +1212,7 @@ export default function Home() {
             </section>
 
             {/* ============================================
-                ECOSYSTEM — Secured by TruLay
+                ECOSYSTEM — Secured by Trulay
                ============================================ */}
             <section className="py-24 bg-slate-950 relative overflow-hidden">
                 <div className="absolute inset-0 opacity-[0.03]" style={{
@@ -1227,15 +1227,15 @@ export default function Home() {
                             The Ecosystem Behind Grid
                         </div>
                         <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-6">
-                            Secured by TruLay
+                            Secured by Trulay
                         </h2>
                         <p className="text-lg text-slate-400 max-w-3xl mx-auto font-medium leading-relaxed">
-                            Grid is one product in the TruLay ecosystem — the trust layer for internet
+                            Grid is one product in the Trulay ecosystem — the trust layer for internet
                             communications, building the tools modern businesses need to communicate, verify, deploy, and grow.
                         </p>
                     </div>
 
-                    {/* TruLay Pillars */}
+                    {/* Trulay Pillars */}
                     <ScrollReveal variant="staggerContainer">
                         <div className="grid md:grid-cols-5 gap-4 mb-16">
                             {ecosystemPillars.map((pillar, i) => (
@@ -1261,12 +1261,12 @@ export default function Home() {
 
                     <div className="text-center mt-10">
                         <Link
-                            href="https://trulay.co"
+                            href="https://Trulay.co"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold rounded-xl hover:bg-emerald-500/20 transition-all"
                         >
-                            Explore TruLay <ArrowUpRight className="w-4 h-4" />
+                            Explore Trulay <ArrowUpRight className="w-4 h-4" />
                         </Link>
                     </div>
                 </div>

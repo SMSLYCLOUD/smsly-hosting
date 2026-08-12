@@ -111,15 +111,15 @@ export default function ContactPage() {
             <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-6">
               <h3 className="font-bold text-slate-900 dark:text-white mb-4">Other Ways to Reach Us</h3>
               <div className="space-y-4">
-                <a href="mailto:sales@trulay.co" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                <a href="mailto:sales@Trulay.co" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                   <Mail className="w-5 h-5" />
-                  sales@trulay.co
+                  sales@Trulay.co
                 </a>
-                <a href="mailto:community@trulay.co?subject=Community%20Access" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                <a href="mailto:community@Trulay.co?subject=Community%20Access" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                   <MessageCircle className="w-5 h-5" />
                   Discord Community
                 </a>
-                <a href="mailto:sales@trulay.co?subject=Demo%20Request" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                <a href="mailto:sales@Trulay.co?subject=Demo%20Request" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                   <Calendar className="w-5 h-5" />
                   Schedule a Demo
                 </a>

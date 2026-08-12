@@ -150,7 +150,7 @@ export function Navbar() {
               {!user && (
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <span className="text-[8px] font-bold text-emerald-500 tracking-[0.15em] uppercase">Secured By</span>
-                  <span className="text-[9px] font-extrabold text-white/70 tracking-[0.05em] uppercase">TruLay</span>
+                  <span className="text-[9px] font-extrabold text-white/70 tracking-[0.05em] uppercase">Trulay</span>
                 </div>
               )}
             </div>

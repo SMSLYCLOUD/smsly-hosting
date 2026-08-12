@@ -35,7 +35,7 @@ export function Footer() {
                                 <span className="font-bold text-xl text-slate-900 dark:text-white tracking-tight leading-none">Grid</span>
                                 <div className="flex items-center gap-1 mt-1">
                                     <span className="text-[7px] font-bold text-emerald-500 tracking-[0.1em] uppercase">Secured By</span>
-                                    <span className="text-[8px] font-extrabold text-slate-500 dark:text-slate-400 tracking-[0.05em] uppercase">TruLay</span>
+                                    <span className="text-[8px] font-extrabold text-slate-500 dark:text-slate-400 tracking-[0.05em] uppercase">Trulay</span>
                                 </div>
                             </div>
                         </div>
@@ -88,7 +88,7 @@ export function Footer() {
                         <span className="text-slate-300 dark:text-slate-700 mx-2">|</span>
                         <span className="flex items-center gap-1.5 group">
                           Built with <span className="text-rose-500 animate-pulse">❤️</span> by 
-                          <Link href="https://trulay.co" target="_blank" className="font-bold text-slate-700 dark:text-slate-300 hover:text-emerald-500 transition-colors">TruLay</Link>
+                          <Link href="https://Trulay.co" target="_blank" className="font-bold text-slate-700 dark:text-slate-300 hover:text-emerald-500 transition-colors">Trulay</Link>
                         </span>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-400">

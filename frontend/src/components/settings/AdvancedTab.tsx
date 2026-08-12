@@ -14,7 +14,7 @@ import { Save, AlertTriangle, Check, Loader2 } from 'lucide-react';
 export function AdvancedTab({ service }: { service: Service }) {
     const confirm = useConfirm();
     const [config, setConfig] = useState<{ docker_image: string; start_command: string; restart_policy: string }>({
-        docker_image: service.docker_image || `registry.trulay.co/${service.name}`,
+        docker_image: service.docker_image || `registry.Trulay.co/${service.name}`,
         start_command: service.start_command || '',
         restart_policy: service.restart_policy || 'unless-stopped',
     });

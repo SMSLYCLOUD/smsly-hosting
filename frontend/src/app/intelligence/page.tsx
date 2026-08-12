@@ -407,7 +407,7 @@ export default function IntelligencePage() {
                          { id: "deepseek", label: "DeepSeek" },
                          { id: "jules", label: "Jules", hasUrl: true },
                          { id: "localllm", label: "Local LLM", hasUrl: true },
-                          { id: "smslycloud", label: "TruLay Cloud" },
+                          { id: "smslycloud", label: "Trulay Cloud" },
                          { id: "freemodel", label: "FreeModel.dev", hasUrl: true },
                          { id: "opencode", label: "OpenCode", hasUrl: true },
                          { id: "mistral", label: "Mistral", hasUrl: true },

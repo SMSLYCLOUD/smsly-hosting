@@ -23,34 +23,34 @@ const suggestionsMap: Record<SuggestionContext, Suggestion> = {
         icon: Sparkles,
         color: "text-amber-600 dark:text-amber-400",
         bg: "bg-amber-500/10 border-amber-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "Explore Ignite"
     },
     services: {
         title: "Ecosystem Insight",
-        description: "Scale smarter. Connect your backend services securely to TruLay Communication APIs without leaving the private network.",
+        description: "Scale smarter. Connect your backend services securely to Trulay Communication APIs without leaving the private network.",
         icon: Lightbulb,
         color: "text-blue-600 dark:text-blue-400",
         bg: "bg-blue-500/10 border-blue-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "View Communication APIs"
     },
     networking: {
         title: "Security Recommendation",
-        description: "Enforce zero-trust access. Use TruLay Identity to wrap your exposed tunnels and dev domains with SilentOTP and Abuse Prevention.",
+        description: "Enforce zero-trust access. Use Trulay Identity to wrap your exposed tunnels and dev domains with SilentOTP and Abuse Prevention.",
         icon: Lightbulb,
         color: "text-emerald-600 dark:text-emerald-400",
         bg: "bg-emerald-500/10 border-emerald-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "Enable Identity"
     },
     addons: {
         title: "Pro Tip: Seamless Integration",
-        description: "Your addons run inside the isolated Grid mesh. Connect them securely to your TruLay Identity layers for compliant, highly-available data isolation.",
+        description: "Your addons run inside the isolated Grid mesh. Connect them securely to your Trulay Identity layers for compliant, highly-available data isolation.",
         icon: Lightbulb,
         color: "text-purple-600 dark:text-purple-400",
         bg: "bg-purple-500/10 border-purple-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "Learn more"
     },
     intelligence: {
@@ -59,16 +59,16 @@ const suggestionsMap: Record<SuggestionContext, Suggestion> = {
         icon: Sparkles,
         color: "text-violet-600 dark:text-violet-400",
         bg: "bg-violet-500/10 border-violet-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "View Analytics integration"
     },
     marketplace: {
         title: "Explore the Ecosystem",
-        description: "Grid natively supports 35+ addons, but you can also integrate external services like TruLay managed email and voice APIs in one click.",
+        description: "Grid natively supports 35+ addons, but you can also integrate external services like Trulay managed email and voice APIs in one click.",
         icon: Lightbulb,
         color: "text-indigo-600 dark:text-indigo-400",
         bg: "bg-indigo-500/10 border-indigo-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "See all integrations"
     },
     billing: {
@@ -77,25 +77,25 @@ const suggestionsMap: Record<SuggestionContext, Suggestion> = {
         icon: Lightbulb,
         color: "text-emerald-600 dark:text-emerald-400",
         bg: "bg-emerald-500/10 border-emerald-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "View architecture guide"
     },
     settings: {
         title: "Pro Tip: Platform Audits",
-        description: "Enable TruLay Identity audit logs to track every user action, token issuance, and setting change across your ecosystem.",
+        description: "Enable Trulay Identity audit logs to track every user action, token issuance, and setting change across your ecosystem.",
         icon: Lightbulb,
         color: "text-blue-600 dark:text-blue-400",
         bg: "bg-blue-500/10 border-blue-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "Configure audits"
     },
     general: {
         title: "Platform Tip",
-        description: "Grid connects seamlessly with the full TruLay ecosystem — the trust layer for internet communications and identity.",
+        description: "Grid connects seamlessly with the full Trulay ecosystem — the trust layer for internet communications and identity.",
         icon: Lightbulb,
         color: "text-slate-600 dark:text-slate-400",
         bg: "bg-slate-500/10 border-slate-500/20",
-        href: "https://trulay.co",
+        href: "https://Trulay.co",
         cta: "Learn more"
     }
 };

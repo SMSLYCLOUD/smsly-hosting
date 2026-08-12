@@ -29,7 +29,7 @@ export default function PrivacyPage() {
 
         <h2>1. Introduction</h2>
         <p>
-          Grid (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) is a free, open-source Platform-as-a-Service operated by TruLay. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use the Grid platform, website, and related services (collectively, the &quot;Service&quot;).
+          Grid (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) is a free, open-source Platform-as-a-Service operated by Trulay. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use the Grid platform, website, and related services (collectively, the &quot;Service&quot;).
         </p>
         <p>
           Since Grid is self-hosted, your application data, environment variables, and deployments remain on your own infrastructure. We do not have access to your data unless you explicitly grant it.
@@ -130,7 +130,7 @@ export default function PrivacyPage() {
           <li><strong>Objection</strong> — Object to processing of your personal data</li>
         </ul>
         <p>
-          Since Grid is self-hosted, most of these rights are exercised directly on your own instance. For account-level requests, contact us at <a href="mailto:privacy@trulay.co">privacy@trulay.co</a>.
+          Since Grid is self-hosted, most of these rights are exercised directly on your own instance. For account-level requests, contact us at <a href="mailto:privacy@Trulay.co">privacy@Trulay.co</a>.
         </p>
 
         <h2>9. Changes to This Policy</h2>
@@ -140,7 +140,7 @@ export default function PrivacyPage() {
 
         <h2>10. Contact Us</h2>
         <p>
-          If you have questions about this Privacy Policy, please contact us at <a href="mailto:privacy@trulay.co">privacy@trulay.co</a> or visit our <Link href="https://github.com/SMSLYCLOUD/smsly-hosting">GitHub repository</Link>.
+          If you have questions about this Privacy Policy, please contact us at <a href="mailto:privacy@Trulay.co">privacy@Trulay.co</a> or visit our <Link href="https://github.com/SMSLYCLOUD/smsly-hosting">GitHub repository</Link>.
         </p>
       </div>
     </main>

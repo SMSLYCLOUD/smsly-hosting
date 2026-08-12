@@ -346,7 +346,7 @@ Internal network (Docker, encrypted WireGuard mesh):
         <h2>Reporting Vulnerabilities</h2>
 
         <p>
-          If you discover a security vulnerability in Grid, please report it responsibly. Do not open a public GitHub issue for security vulnerabilities. Instead, email <a href="mailto:security@trulay.co">security@trulay.co</a> with:
+          If you discover a security vulnerability in Grid, please report it responsibly. Do not open a public GitHub issue for security vulnerabilities. Instead, email <a href="mailto:security@Trulay.co">security@Trulay.co</a> with:
         </p>
 
         <ul>

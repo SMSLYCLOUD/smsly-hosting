@@ -7,22 +7,22 @@ import { m, AnimatePresence } from 'framer-motion';
 const products = [
     {
         id: 'sms-apis',
-        title: 'TruLay Communication APIs',
+        title: 'Trulay Communication APIs',
         description: 'SMS, WhatsApp, Voice, Email — global messaging for your apps.',
         icon: MessageSquare,
         color: 'text-blue-500',
         bg: 'bg-blue-500/10',
-        href: 'https://trulay.co',
+        href: 'https://Trulay.co',
         cta: 'Get API keys'
     },
     {
         id: 'identity',
-        title: 'TruLay Identity & Trust',
+        title: 'Trulay Identity & Trust',
         description: 'SilentOTP, verification, abuse prevention, and media integrity.',
         icon: Fingerprint,
         color: 'text-emerald-500',
         bg: 'bg-emerald-500/10',
-        href: 'https://trulay.co',
+        href: 'https://Trulay.co',
         cta: 'Secure your app'
     },
     {
@@ -32,7 +32,7 @@ const products = [
         icon: TrendingUp,
         color: 'text-amber-500',
         bg: 'bg-amber-500/10',
-        href: 'https://trulay.co',
+        href: 'https://Trulay.co',
         cta: 'Grow faster'
     }
 ];

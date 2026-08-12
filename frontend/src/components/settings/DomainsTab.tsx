@@ -29,7 +29,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const [stagingDomain, setStagingDomain] = useState(service.staging_domain || '');
     const [savingStaging, setSavingStaging] = useState(false);
 
-    const defaultDomain = service.public_domain || `${service.name}.cloud.trulay.co`;
+    const defaultDomain = service.public_domain || `${service.name}.cloud.Trulay.co`;
 
     // Fetch server IP from system config
     useEffect(() => {
@@ -228,7 +228,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     </div>
                     <p className="text-xs text-muted-foreground mb-3">
                         Custom domain for webhook deployments. Pushes will deploy to this URL for review before going live.
-                        If blank, auto-generated as <code>staging-{service.name}-{'<hash>'}.{service.public_domain?.split('.').slice(1).join('.') || 'cloud.trulay.co'}</code>.
+                        If blank, auto-generated as <code>staging-{service.name}-{'<hash>'}.{service.public_domain?.split('.').slice(1).join('.') || 'cloud.Trulay.co'}</code>.
                     </p>
                     <div className="flex gap-2">
                         <Input

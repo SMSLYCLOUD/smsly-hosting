@@ -52,7 +52,7 @@ export default function LicensingPage() {
     <div className="space-y-6 max-w-4xl mx-auto p-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Platform Licensing</h2>
-        <p className="text-muted-foreground">Manage your TruLay platform license and tier.</p>
+        <p className="text-muted-foreground">Manage your Trulay platform license and tier.</p>
       </div>
 
       <Card className={isEnterprise ? "border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.1)]" : ""}>
