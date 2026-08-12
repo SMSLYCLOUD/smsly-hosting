@@ -472,7 +472,7 @@ export default function DomainsPage() {
                   <Input
                     value={formData.target}
                     onChange={e => setFormData({ ...formData, target: e.target.value })}
-                    placeholder="e.g. myapp.cloud.smsly.cloud"
+                    placeholder="e.g. myapp.cloud.trulay.co"
                     className="bg-black/30 border-white/10 text-white focus:border-indigo-500"
                   />
                 </div>

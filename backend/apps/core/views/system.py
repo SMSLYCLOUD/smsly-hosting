@@ -169,6 +169,8 @@ class SystemConfigView(GenericAPIView):
         'SCALE_MAX_REPLICAS': ('scale_max_replicas', int),
         'SCALE_CPU_HIGH': ('scale_cpu_high', int),
         'SCALE_COOLDOWN_MIN': ('scale_cooldown_min', int),
+        'NODE_SCORER_MIN_SCORE': ('node_scorer_min_score', int),
+        'NODE_MIN_FREE_RAM_PCT': ('node_min_free_ram_pct', int),
         # Email
         'SMTP_HOST': ('smtp_host', str),
         'SMTP_PORT': ('smtp_port', int),
@@ -211,6 +213,8 @@ class SystemConfigView(GenericAPIView):
             'SCALE_MAX_REPLICAS': pc.scale_max_replicas,
             'SCALE_CPU_HIGH': pc.scale_cpu_high,
             'SCALE_COOLDOWN_MIN': pc.scale_cooldown_min,
+            'NODE_SCORER_MIN_SCORE': pc.node_scorer_min_score,
+            'NODE_MIN_FREE_RAM_PCT': pc.node_min_free_ram_pct,
         }
 
     def patch(self, request):

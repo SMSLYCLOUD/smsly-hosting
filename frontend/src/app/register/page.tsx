@@ -31,7 +31,7 @@ export default function RegisterPage() {
   const BACKEND_URL =
     typeof window !== "undefined"
       ? window.location.origin
-      : process.env.NEXT_PUBLIC_API_URL || "https://cloud.smsly.cloud";
+      : process.env.NEXT_PUBLIC_API_URL || "https://cloud.trulay.co";
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();

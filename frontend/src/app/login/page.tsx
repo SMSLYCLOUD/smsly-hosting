@@ -19,7 +19,7 @@ export default function LoginPage() {
   // Use absolute URL for production - NEXT_PUBLIC vars are baked at build time
   const BACKEND_URL = typeof window !== 'undefined'
     ? window.location.origin
-    : process.env.NEXT_PUBLIC_API_URL || "https://cloud.smsly.cloud";
+    : process.env.NEXT_PUBLIC_API_URL || "https://cloud.trulay.co";
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -180,7 +180,7 @@ export default function LoginPage() {
                   <Input
                     id="username"
                     type="text"
-                    placeholder="admin or admin@smsly.cloud"
+                    placeholder="admin or admin@trulay.co"
                     required
                     value={formData.username}
                     onChange={(e) => setFormData({ ...formData, username: e.target.value })}

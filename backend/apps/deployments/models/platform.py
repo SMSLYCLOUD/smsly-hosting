@@ -321,6 +321,13 @@ class PlatformConfig(models.Model):
     scale_cooldown_min = models.PositiveIntegerField(
         default=5,
         help_text="Minimum minutes between consecutive scale-up operations")
+    node_scorer_min_score = models.PositiveIntegerField(
+        default=20,
+        help_text="Minimum weighted resource score (0-100) for a node to be accepted for spawning. "
+                  "Composite of 40% free mem + 40% free CPU + 20% free disk.")
+    node_min_free_ram_pct = models.PositiveIntegerField(
+        default=20,
+        help_text="Minimum free RAM percentage on a node before refusing to spawn a replica")
 
     # ── Device Trust (Beta) ────────────────────────────────────────────
     enforce_device_trust = models.BooleanField(

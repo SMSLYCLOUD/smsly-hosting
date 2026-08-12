@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2, Sparkles, Send } from "lucide-react";
 import { aiApi } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,9 @@ export function AiTab() {
   const [aiKeys, setAiKeys] = useState<Record<string, string>>({});
   const [aiModels, setAiModels] = useState<Record<string, string>>({});
   const [aiUrls, setAiUrls] = useState<Record<string, string>>({});
+  const [testPrompt, setTestPrompt] = useState("");
+  const [testResult, setTestResult] = useState<{ response: string; provider: string; mode: string } | null>(null);
+  const [testingPrompt, setTestingPrompt] = useState(false);
 
   const fetchAIConfig = useCallback(async () => {
     try {
@@ -69,6 +72,20 @@ export function AiTab() {
       toast({ title: "Test failed", description: "Could not reach AI provider.", variant: "destructive" });
     } finally {
       setTestingAI(false);
+    }
+  };
+
+  const handleTestPrompt = async () => {
+    if (!testPrompt.trim()) return;
+    setTestingPrompt(true);
+    setTestResult(null);
+    try {
+      const result = await aiApi.testPrompt(testPrompt);
+      setTestResult(result);
+    } catch (err: any) {
+      setTestResult({ response: `Error: ${err?.response?.data?.error || err.message}`, provider: "Error", mode: "error" });
+    } finally {
+      setTestingPrompt(false);
     }
   };
 
@@ -199,6 +216,49 @@ export function AiTab() {
           <p className="text-xs text-muted-foreground">
             Set keys and models above, or via env vars (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY, JULES_API_KEY, FREEMODEL_API_KEY, OPENCODE_API_KEY, MISTRAL_API_KEY, NVIDIA_API_KEY, CLOUDFLARE_API_KEY), or admin panel.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Send className="h-5 w-5 text-primary" /> Test AI Engine
+          </CardTitle>
+          <CardDescription>
+            Send a test prompt to verify your configured providers and see how the active mode handles it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Input
+              type="text"
+              value={testPrompt}
+              onChange={(e) => setTestPrompt(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleTestPrompt()}
+              placeholder="Ask something... e.g. 'What stack does a Django app use?'"
+              className="flex-1"
+            />
+            <Button
+              onClick={handleTestPrompt}
+              disabled={testingPrompt || !testPrompt.trim()}
+              className="sm:w-32"
+            >
+              {testingPrompt ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
+              {testingPrompt ? "Testing..." : "Send"}
+            </Button>
+          </div>
+
+          {testResult && (
+            <div className="rounded-md bg-muted p-4 mt-4 border">
+              <div className="flex items-center gap-2 mb-3">
+                <Badge variant="outline">{testResult.provider}</Badge>
+                <Badge variant="secondary">{testResult.mode}</Badge>
+              </div>
+              <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                {testResult.response}
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

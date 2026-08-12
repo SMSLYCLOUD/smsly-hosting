@@ -1,4 +1,6 @@
 """Auto-scaling API: analyze services and manage replicas."""
+import logging
+
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, serializers, viewsets
@@ -7,9 +9,11 @@ from rest_framework.response import Response
 
 from apps.deployments.models.core import ManagedServer, Service
 from apps.autoscaler.models.replica import ServiceReplica
-from apps.deployments.services.node_scorer import NodeScorer
+from apps.deployments.services.node_scorer import NodeScorer, _get_min_score
 from apps.deployments.services.spawning_service import SpawningService
 from apps.teams.permissions import get_team_q_filter
+
+logger = logging.getLogger(__name__)
 
 
 class ServiceReplicaSerializer(serializers.ModelSerializer):
@@ -109,7 +113,24 @@ class ScalingViewSet(viewsets.GenericViewSet):
         scorer = NodeScorer()
         best = scorer.best(candidates)
         if not best:
-            return Response({'error': 'All nodes too loaded'}, status=400)
+            min_score = _get_min_score()
+            # Log scores for every candidate so operators can see why
+            ranked = scorer.score(candidates)
+            for node, score, resources in ranked:
+                logger.warning(
+                    "Spawn rejected — node %s scored %.1f (min=%d): "
+                    "mem=%.0f%% cpu=%.0f%% disk=%.0f%%",
+                    node.name, score, min_score,
+                    resources['mem'], resources['cpu'], resources['disk'],
+                )
+            return Response({
+                'error': 'All nodes too loaded',
+                'min_score': min_score,
+                'node_scores': [
+                    {'node': n.name, 'score': round(s, 1), **r}
+                    for n, s, r in ranked
+                ],
+            }, status=400)
 
         replica = ServiceReplica.objects.create(
             service=service, node=best, status='SPAWNING',

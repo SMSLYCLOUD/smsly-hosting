@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import {
   Settings as SettingsIcon, Users, Cloud, Globe,
   Server, CreditCard, Activity, GitBranch, HardDrive,
+  Brain, Building2,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
@@ -39,7 +40,13 @@ const SETTINGS_SECTIONS = [
     value: "account",
     label: "Account",
     icon: Users,
-    tooltip: "Profile, password, 2FA, API keys, and team management",
+    tooltip: "Profile, password, and 2FA settings",
+  },
+  {
+    value: "teams",
+    label: "Teams",
+    icon: Building2,
+    tooltip: "Organizations, team members, and RBAC",
   },
   {
     value: "git",
@@ -63,7 +70,13 @@ const SETTINGS_SECTIONS = [
     value: "platform",
     label: "Platform",
     icon: Globe,
-    tooltip: "Global settings, autoscaling, mTLS, and AI providers",
+    tooltip: "Global settings, autoscaling, and mTLS",
+  },
+  {
+    value: "ai",
+    label: "AI",
+    icon: Brain,
+    tooltip: "AI providers, models, API keys, and engine testing",
   },
   {
     value: "storage",
@@ -102,7 +115,7 @@ function SettingsContent() {
 
         <Tabs defaultValue={defaultTab} className="space-y-6">
           <div className="rounded-xl border border-border/70 bg-card/80 p-2 backdrop-blur-sm">
-            <TabsList className="h-auto w-full grid grid-cols-8 gap-2 bg-transparent p-0">
+            <TabsList className="h-auto w-full grid grid-cols-10 gap-2 bg-transparent p-0">
               {SETTINGS_SECTIONS.map((section) => {
                 const Icon = section.icon;
                 return (
@@ -128,9 +141,12 @@ function SettingsContent() {
               <SecurityTab />
               <Separator />
               <ApiKeysTab />
-              <Separator />
-              <TeamsTab />
             </div>
+          </TabsContent>
+
+          {/* Teams */}
+          <TabsContent value="teams">
+            <TeamsTab />
           </TabsContent>
 
           {/* Git & Deploy */}
@@ -203,9 +219,12 @@ function SettingsContent() {
               <PlatformConfigTab />
               <Separator />
               <MtlsTab />
-              <Separator />
-              <AiTab />
             </div>
+          </TabsContent>
+
+          {/* AI */}
+          <TabsContent value="ai">
+            <AiTab />
           </TabsContent>
 
           {/* Storage & Backups */}

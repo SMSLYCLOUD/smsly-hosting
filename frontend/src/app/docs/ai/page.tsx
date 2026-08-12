@@ -141,7 +141,7 @@ export default function AiDocsPage() {
                                 <tr><td className="p-3">Alibaba (Qwen)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">qwen-max</td></tr>
                                 <tr><td className="p-3">Jules (Google)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">jules-latest</td></tr>
                                 <tr><td className="p-3">Local LLM (Ollama / vLLM / LM Studio)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">local-model</td></tr>
-                                <tr><td className="p-3">SMSLY Cloud</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">smsly-latest</td></tr>
+                                <tr><td className="p-3">TruLay Cloud</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">smsly-latest</td></tr>
                                 <tr><td className="p-3">FreeModel.dev</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">gpt-4o-mini</td></tr>
                                 <tr><td className="p-3">OpenCode API</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">opencode-latest</td></tr>
                                 <tr><td className="p-3">Mistral (La Plateforme)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">mistral-small-latest</td></tr>

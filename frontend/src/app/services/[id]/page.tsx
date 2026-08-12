@@ -478,13 +478,13 @@ export default function ServiceDetailPage() {
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Public Domain</span>
                                 <a
-                                    href={`https://${service.public_domain || `${service.name}.cloud.smsly.cloud`}`}
+                                    href={`https://${service.public_domain || `${service.name}.cloud.trulay.co`}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="font-mono text-primary hover:underline flex items-center gap-1"
                                 >
                                     <Globe className="w-3 h-3" />
-                                    {service.public_domain || `${service.name}.cloud.smsly.cloud`}
+                                    {service.public_domain || `${service.name}.cloud.trulay.co`}
                                 </a>
                             </div>
                             <div className="flex justify-between border-b border-border pb-3 gap-4">
@@ -553,7 +553,7 @@ export default function ServiceDetailPage() {
                             <div className="flex justify-between items-center border-b border-border pb-3">
                                 <div>
                                     <span className="text-muted-foreground font-medium">Public Domain Routing</span>
-                                    <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">When hidden, the default cloud.smsly.cloud domain will return 404.</p>
+                                    <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">When hidden, the default cloud.trulay.co domain will return 404.</p>
                                 </div>
                                 <button
                                     onClick={async () => {
@@ -799,7 +799,7 @@ export default function ServiceDetailPage() {
             {activeTab === 'router' && (
                 <AiRouterTab
                     serviceId={service.id}
-                    serviceDomain={service.public_domain || `${service.name}.cloud.smsly.cloud`}
+                    serviceDomain={service.public_domain || `${service.name}.cloud.trulay.co`}
                 />
             )}
 

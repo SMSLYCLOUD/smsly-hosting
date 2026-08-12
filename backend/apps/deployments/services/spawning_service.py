@@ -8,6 +8,19 @@ import shlex
 from django.utils import timezone
 
 from .container_runtime import get_runtime_for_container
+
+# Fallback defaults — used only when PlatformConfig DB values are unavailable
+_FALLBACK_MIN_FREE_RAM_PCT = int(os.environ.get("NODE_MIN_FREE_RAM_PCT", "20"))
+
+
+def _get_min_free_ram_pct() -> int:
+    """Read node_min_free_ram_pct from PlatformConfig, falling back to env var."""
+    try:
+        from apps.deployments.models.platform import PlatformConfig
+        pc, _ = PlatformConfig.objects.get_or_create(pk=1)
+        return pc.node_min_free_ram_pct or _FALLBACK_MIN_FREE_RAM_PCT
+    except Exception:
+        return _FALLBACK_MIN_FREE_RAM_PCT
 from .mtls_integration import (
     is_mtls_enabled,
     get_mtls_labels,
@@ -396,8 +409,14 @@ class SpawningService:
             pass  # not Linux — skip check
 
     def _check_node_capacity(self, ssh, node, service):
-        """Verify node has enough free RAM to run another replica."""
+        """Verify node has enough free RAM to run another replica.
+
+        Checks two conditions:
+        1. Absolute: available_mb >= service's memory_mb (or 128 MB default)
+        2. Relative: free_pct >= node_min_free_ram_pct from PlatformConfig
+        """
         min_ram_mb = getattr(service, 'memory_mb', None) or 128
+        min_free_pct = _get_min_free_ram_pct()
         try:
             out, _, _ = ssh.exec_command(
                 "free -m | awk '/^Mem:/{print ($4+$7) \" \" $2}'",
@@ -409,14 +428,31 @@ class SpawningService:
                 available_mb, total_mb = int(parts[0]), int(parts[1])
                 free_pct = (available_mb / total_mb * 100) if total_mb > 0 else 0
                 if available_mb < min_ram_mb:
-                    logger.warning("Node %s: %d MB free (need %d)", node.name, available_mb, min_ram_mb)
+                    logger.warning(
+                        "Node %s capacity REJECTED: %d MB free < %d MB required "
+                        "(service=%s, total=%d MB, %.0f%% free)",
+                        node.name, available_mb, min_ram_mb,
+                        service.name, total_mb, free_pct,
+                    )
                     return False
-                if free_pct < 20:
-                    logger.warning("Node %s: only %.0f%% RAM free", node.name, free_pct)
+                if free_pct < min_free_pct:
+                    logger.warning(
+                        "Node %s capacity REJECTED: %.0f%% RAM free < %d%% minimum "
+                        "(service=%s, available=%d MB of %d MB)",
+                        node.name, free_pct, min_free_pct,
+                        service.name, available_mb, total_mb,
+                    )
                     return False
-                logger.info("Node %s OK: %d MB free (%.0f%%), %s needs %d MB",
-                            node.name, available_mb, free_pct, service.name, min_ram_mb)
+                logger.info(
+                    "Node %s capacity OK: %d MB free (%.0f%%), %s needs %d MB",
+                    node.name, available_mb, free_pct, service.name, min_ram_mb,
+                )
                 return True
+            else:
+                logger.warning(
+                    "Node %s capacity check: unexpected free output: %r",
+                    node.name, out,
+                )
         except Exception as exc:
             logger.warning("Capacity check failed for %s: %s", node.name, exc)
         return False  # safer to refuse if we can't check

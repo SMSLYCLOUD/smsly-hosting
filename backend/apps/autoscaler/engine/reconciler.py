@@ -151,11 +151,38 @@ class Reconciler:
 
             scorer = NodeScorer()
             scores = scorer.score(candidates)
-            for node, score, _resources in scores:
+
+            # Separate nodes into qualified (score >= min_score) and
+            # fallback (score < min_score but not -1/unreachable).
+            # The Prometheus score is predictive; the SSH capacity check
+            # in SpawningService.spawn() is the ground truth.  When all
+            # nodes score low we still try the best one as a fallback.
+            from apps.deployments.services.node_scorer import _get_min_score
+            min_score = _get_min_score()
+            qualified = [(n, s, r) for n, s, r in scores if s >= min_score]
+            fallback = [(n, s, r) for n, s, r in scores if 0 <= s < min_score]
+
+            if not qualified and not fallback:
+                logger.warning(
+                    "All %d remote nodes unreachable (score=-1) for %s",
+                    len(scores), self.service.name,
+                )
+                return ScaleResult(rec, applied=False,
+                                   error='All remote nodes unreachable')
+
+            nodes_to_try = qualified + fallback
+            if not qualified:
+                best_node, best_score, best_res = fallback[0]
+                logger.warning(
+                    "All nodes below min_score=%d for %s — trying best "
+                    "node %s (score=%.1f) as fallback",
+                    min_score, self.service.name,
+                    best_node.name, best_score,
+                )
+
+            for node, score, resources in nodes_to_try:
                 if spawned >= remaining:
                     break
-                if score < 20:
-                    continue
                 replica = ServiceReplica.objects.create(
                     service=self.service, node=node,
                     spawn_reason=rec.reason, status='SPAWNING',
@@ -163,10 +190,20 @@ class Reconciler:
                 try:
                     spawner.spawn(self.service, node, replica)
                     spawned += 1
-                    logger.info("Auto-scaled %s: spawned on %s", self.service.name, node.name)
+                    logger.info(
+                        "Auto-scaled %s: spawned on %s (score=%.1f, "
+                        "mem=%.0f%% cpu=%.0f%% disk=%.0f%%)",
+                        self.service.name, node.name, score,
+                        resources['mem'], resources['cpu'], resources['disk'],
+                    )
                 except Exception as exc:
-                    logger.warning("Remote spawn failed for %s on %s: %s",
-                                   self.service.name, node.name, exc)
+                    logger.warning(
+                        "Remote spawn failed for %s on %s (score=%.1f, "
+                        "mem=%.0f%% cpu=%.0f%% disk=%.0f%%): %s",
+                        self.service.name, node.name, score,
+                        resources['mem'], resources['cpu'], resources['disk'],
+                        exc,
+                    )
                     try:
                         spawner.destroy(replica)
                     except Exception as exc:

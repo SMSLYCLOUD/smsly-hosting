@@ -91,7 +91,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                             <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
                                 <span className="flex items-center gap-1.5">
                                     <Globe size={12} />
-                                    {service.public_domain || `${service.name}.smsly.cloud`}
+                                    {service.public_domain || `${service.name}.cloud.trulay.co`}
                                 </span>
                                 <span className="flex items-center gap-1.5">
                                     <GitCommit size={12} />
