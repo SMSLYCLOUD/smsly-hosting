@@ -207,7 +207,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         });
     };
 
-    const cancellableStatuses = ['QUEUED', 'REVIEW', 'BUILDING', 'FAILED'];
+    const cancellableStatuses = ['QUEUED', 'REVIEW', 'BUILDING', 'FAILED', 'STAGED'];
     const cancellableIds = deployments.filter(d => cancellableStatuses.includes(d.status)).map(d => d.id);
     const allSelected = cancellableIds.length > 0 && cancellableIds.every(id => selectedIds.has(id));
 
@@ -470,8 +470,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                                     )}
                                                 </Button>
                                             )}
-                                            {/* Cancel button for QUEUED / REVIEW / BUILDING */}
-                                            {['QUEUED', 'REVIEW', 'BUILDING'].includes(d.status) && (
+                                            {/* Cancel button for QUEUED / REVIEW / BUILDING / STAGED */}
+                                            {['QUEUED', 'REVIEW', 'BUILDING', 'STAGED'].includes(d.status) && (
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"

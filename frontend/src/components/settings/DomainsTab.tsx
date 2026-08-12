@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import api, { servicesApi, systemApi, Service } from '@/lib/api';
+import api, { servicesApi, systemApi, Service, Deployment } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
@@ -28,6 +28,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const [serverIp, setServerIp] = useState<string>('');
     const [stagingDomain, setStagingDomain] = useState(service.staging_domain || '');
     const [savingStaging, setSavingStaging] = useState(false);
+    const [stagedDeployment, setStagedDeployment] = useState<Deployment | null>(null);
 
     const defaultDomain = service.public_domain || `${service.name}.cloud.Trulay.co`;
 
@@ -37,6 +38,16 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
             .then((cfg: any) => setServerIp(cfg.server_ip || ''))
             .catch(() => {});
     }, []);
+
+    // Fetch active staged deployment
+    useEffect(() => {
+        servicesApi.getDeployments(service.id)
+            .then((deps: Deployment[]) => {
+                const staged = deps.find((d: Deployment) => d.status === 'STAGED' && d.staging_url);
+                setStagedDeployment(staged || null);
+            })
+            .catch(() => {});
+    }, [service.id]);
 
     const loadDomains = useCallback(async () => {
         try {
@@ -244,6 +255,65 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         </Button>
                     </div>
                 </div>
+
+                {/* Active Staging Deployment */}
+                {stagedDeployment && stagedDeployment.staging_url && (
+                    <div className="mb-8">
+                        <div className="flex items-center justify-between mb-3">
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Active Staged Deployment</h4>
+                            <span className="text-[10px] bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                STAGED
+                            </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mb-3">
+                            This staging URL is live and ready for review. Promote it to make it the production deployment.
+                        </p>
+                        <div className="flex items-center gap-3 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg mb-3">
+                            <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                            <span className="font-mono text-sm flex-1 text-amber-400">{stagedDeployment.staging_url.replace('https://', '')}</span>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => copyToClipboard(stagedDeployment.staging_url!.replace('https://', ''))}
+                            >
+                                <Copy size={14} />
+                            </Button>
+                            <a
+                                href={stagedDeployment.staging_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:text-primary/80"
+                            >
+                                <ExternalLink size={16} />
+                            </a>
+                        </div>
+                        <div className="p-3 bg-blue-500/5 border border-blue-500/20 rounded-lg">
+                            <p className="text-xs font-medium text-blue-400 mb-1">DNS Setup for Staging</p>
+                            <p className="text-xs text-muted-foreground mb-2">
+                                Point a CNAME record for the staging hostname to:
+                            </p>
+                            <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border">
+                                <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={() => copyToClipboard(defaultDomain)}
+                                >
+                                    <Copy size={14} />
+                                </Button>
+                            </div>
+                            <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{stagedDeployment.staging_url.replace('https://', '')}</span>
+                                <ArrowRight size={12} />
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
+                                <ArrowRight size={12} />
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Custom Domains */}
                 <div>

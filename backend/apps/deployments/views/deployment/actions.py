@@ -176,11 +176,12 @@ class LifecycleActionsMixin:
             Deployment.Status.REVIEW,
             Deployment.Status.BUILDING,
             Deployment.Status.AWAITING_APPROVAL,
+            Deployment.Status.STAGED,
         ):
             return Response(
                 {'error': f'Cannot cancel deployment in {deployment.status} '
-                          f'status. Only QUEUED, REVIEW, BUILDING, or AWAITING_APPROVAL '
-                          f'deployments can be cancelled.'},
+                          f'status. Only QUEUED, REVIEW, BUILDING, AWAITING_APPROVAL, '
+                          f'or STAGED deployments can be cancelled.'},
                 status=status.HTTP_409_CONFLICT)
 
         deployment.status = Deployment.Status.CANCELLED
@@ -247,6 +248,7 @@ class LifecycleActionsMixin:
                 Deployment.Status.REVIEW,
                 Deployment.Status.BUILDING,
                 Deployment.Status.FAILED,
+                Deployment.Status.STAGED,
             ]
         )
         count = qs.update(
