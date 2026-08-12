@@ -395,7 +395,7 @@ class LifecycleActionsMixin:
                 status=status.HTTP_400_BAD_REQUEST)
 
         from ...tasks.deploy.helpers import _do_promote
-        from ...tasks.deploy.providers import _resolve_provider_for_service
+        from ...tasks.deploy.provider import _resolve_provider_for_service
 
         provider = _resolve_provider_for_service(deployment.service, prefer_local=True)
         if not provider:
