@@ -109,7 +109,6 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
             )
             result = client.containers.get(container_id).exec_run(
                 ["bash", "-c", test_cmd],
-                timeout=10,
             )
             output = (result.output or b"").decode("utf-8", errors="replace").strip()
             if result.exit_code != 0 or "OK" not in output:
