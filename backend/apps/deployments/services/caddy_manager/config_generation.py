@@ -195,6 +195,33 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 lines.append("}")
                 blocks.append("\n".join(lines))
 
+        # Custom staging domain: only route if there's an active STAGED deployment
+        # using this service's custom staging domain
+        if getattr(service, "staging_domain", None):
+            staging_domain = str(service.staging_domain).strip()
+            if staging_domain:
+                try:
+                    staging_domain = normalize_domain(staging_domain)
+                except ValueError:
+                    staging_domain = ""
+                if staging_domain and staging_domain not in seen:
+                    from apps.deployments.models import Deployment
+                    has_staged = Deployment.objects.filter(
+                        service=service,
+                        status=Deployment.Status.STAGED,
+                        staging_url__icontains=staging_domain,
+                    ).exists()
+                    if has_staged:
+                        seen.add(staging_domain)
+                        lines = [f"{staging_domain} {{"]
+                        lines.append("    tls {")
+                        lines.append("        on_demand")
+                        lines.append("    }")
+                        lines.append("    reverse_proxy traefik:80")
+                        lines.append("    encode gzip")
+                        lines.append("}")
+                        blocks.append("\n".join(lines))
+
         from apps.deployments.models.addons import Addon
         for addon in Addon.objects.exclude(public_domain__isnull=True).exclude(public_domain="").only("id", "public_domain"):
             public_domain = ""
@@ -286,6 +313,33 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
                 continue
             if public_domain.endswith(suffix):
                 hosts.add(public_domain)
+
+        # Custom staging domains from Service.staging_domain
+        # Only include if there's an active STAGED deployment for the service
+        # using this custom staging domain
+        for service in Service.objects.filter(
+            staging_domain__isnull=False,
+        ).exclude(staging_domain="").select_related("server").only("id", "staging_domain", "server__is_primary"):
+            svr = getattr(service, "server", None)
+            if svr and not svr.is_primary:
+                continue
+            staging_domain = str(service.staging_domain).strip()
+            if not staging_domain:
+                continue
+            try:
+                staging_domain = normalize_domain(staging_domain)
+            except ValueError:
+                continue
+            if staging_domain.endswith(suffix):
+                # Only include if there's an active STAGED deployment using this domain
+                from apps.deployments.models import Deployment
+                has_staged = Deployment.objects.filter(
+                    service=service,
+                    status=Deployment.Status.STAGED,
+                    staging_url__icontains=staging_domain,
+                ).exists()
+                if has_staged:
+                    hosts.add(staging_domain)
 
         from urllib.parse import urlparse
         from apps.deployments.models import Deployment

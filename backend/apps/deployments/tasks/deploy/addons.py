@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
     from apps.addons.services.addon_provisioner import addon_provisioner
     from apps.deployments.models.addons import Addon
+    from apps.deployments.models.network_scope import ScopedNetwork as _Net
 
     addons = Addon.objects.filter(service=service, status='ACTIVE')
     for addon in addons:
@@ -64,6 +65,42 @@ def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
                     "[probe:%s] Repaired missing network alias %s for addon %s",
                     probe_id, hostname, container_name,
                 )
+
+            # Also ensure addon is on the service's scoped network so the
+            # service container (which may be on an isolated bridge) can
+            # resolve addon hostnames via Docker DNS.
+            project = getattr(service, 'project', None)
+            if project:
+                scoped_network = _Net.resolve_network_name(project)
+                if scoped_network and scoped_network != addon_provisioner.network_name:
+                    # Check the addon is connected to the scoped network
+                    scoped_inspect = subprocess.run(
+                        ['docker', 'inspect', '-f',
+                         '{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}',
+                         container_name],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    scoped_net_id = subprocess.run(
+                        ['docker', 'network', 'inspect', '-f', '{{.Id}}', scoped_network],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if (scoped_net_id.returncode == 0 and
+                            scoped_net_id.stdout.strip() not in scoped_inspect.stdout):
+                        scoped_alias = addon.name or f"{addon.addon_type.lower()}-{service.name}"
+                        scoped_connect = [
+                            'docker', 'network', 'connect', '--alias', scoped_alias,
+                            scoped_network, container_name,
+                        ]
+                        logger.debug("[probe:%s] Running: %s", probe_id, shlex.join(scoped_connect))
+                        subprocess.run(
+                            scoped_connect,
+                            capture_output=True, check=False, timeout=5,
+                        )
+                        logger.info(
+                            "[probe:%s] Connected addon %s to scoped network %s (alias: %s)",
+                            probe_id, container_name, scoped_network, scoped_alias,
+                        )
+
         except (subprocess.SubprocessError, OSError) as exc:
             logger.warning(
                 "[probe:%s] Addon network alias check failed for %s: %s",
