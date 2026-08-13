@@ -115,6 +115,12 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
         # --- Standard single-container deploy ---
         compute = ComputeService(provider)
 
+        # The adapter needs STAGING_DOMAIN before it creates the container;
+        # Docker labels cannot be added after creation.
+        if staged_only:
+            deployment.staging_url = service.generate_staging_url()
+            deployment.save(update_fields=['staging_url'])
+
         # Explicitly pull image before deployment to avoid 404/Not Found
         append_log(deployment, f"Pulling image {image_name}...\n")
         if not compute.pull_image(image_name):
@@ -328,18 +334,16 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
         _mark_deployment_active(deployment, "local", "127.0.0.1", resource.resource_id)
 
         if staged_only:
-            staging_url = service.generate_staging_url(deployment.commit_hash or '')
             deployment.status = Deployment.Status.STAGED
-            deployment.staging_url = staging_url
             deployment.staged_at = timezone.now()
             deployment.container_id = resource.resource_id
-            deployment.save(update_fields=['status', 'staging_url', 'staged_at', 'container_id'])
+            deployment.save(update_fields=['status', 'staged_at', 'container_id'])
             broadcast_status(deployment)
             _post_deploy_success(deployment, service)
             append_log(
                 deployment,
                 f"[STAGED] Deployment staged for review.\n"
-                f"Preview URL: {staging_url}\n"
+                f"Preview URL: {deployment.staging_url}\n"
                 f"Container: {resource.resource_id}\n"
             )
             return
