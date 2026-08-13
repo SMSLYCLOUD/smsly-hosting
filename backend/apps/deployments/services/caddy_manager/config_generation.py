@@ -287,6 +287,19 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
             if public_domain.endswith(suffix):
                 hosts.add(public_domain)
 
+        from urllib.parse import urlparse
+        from apps.deployments.models import Deployment
+        for dep in Deployment.objects.filter(
+            status=Deployment.Status.STAGED,
+            staging_url__isnull=False,
+        ).exclude(staging_url="").only("staging_url"):
+            try:
+                hostname = urlparse(dep.staging_url).hostname or ""
+                if hostname.endswith(suffix):
+                    hosts.add(hostname)
+            except Exception:
+                pass
+
     except Exception as exc:
         logger.warning("Could not load wildcard known hosts: %s", exc)
         return []

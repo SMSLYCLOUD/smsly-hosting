@@ -212,6 +212,15 @@ class LifecycleActionsMixin:
 
         deployment.save()
 
+        # Regenerate Caddyfile if this was a STAGED deployment (remove
+        # the staging domain from the @known_hosts wildcard matcher).
+        if deployment.status == Deployment.Status.CANCELLED:
+            try:
+                from ...tasks.deploy.helpers import _regenerate_caddyfile
+                _regenerate_caddyfile()
+            except Exception as exc:
+                logger.warning("Failed to regenerate Caddyfile after cancel: %s", exc)
+
         # Clean up orphaned build dir from analysis phase (REVIEW status only)
         if deployment.status == Deployment.Status.CANCELLED:
             import glob

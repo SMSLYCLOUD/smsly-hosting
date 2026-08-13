@@ -557,17 +557,15 @@ class Service(TimeStampedModel):
         """Generate a staging preview URL for webhook deployments.
 
         Uses ``staging_domain`` if set, otherwise auto-generates one:
-        ``staging-{slug}-{short_hash}.{base_domain}``
+        ``staging-{slug}.{base_domain}`` — persistent per-service so only
+        one DNS record is needed.
         """
-        import re, hashlib
+        import re
         base_domain = self.default_public_base_domain()
         if self.staging_domain:
             return f"https://{self.staging_domain}"
         safe_slug = re.sub(r'[^a-z0-9]+', '-', self.slug.lower()).strip('-')[:30]
-        short_hash = (commit_hash or '').strip()[:6]
-        if not short_hash:
-            short_hash = hashlib.sha256(f"{self.id}".encode()).hexdigest()[:6]
-        slug = f"staging-{safe_slug}-{short_hash}"
+        slug = f"staging-{safe_slug}"
         slug = re.sub(r'-+', '-', slug).strip('-')
         return f"https://{slug}.{base_domain}"
 
