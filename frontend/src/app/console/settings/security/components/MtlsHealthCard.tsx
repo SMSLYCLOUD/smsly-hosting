@@ -1,12 +1,12 @@
 // MtlsHealthCard Component
-// Shows platform-wide SPIRE/mTLS health status.
+// Shows platform-wide SPIRE/mTLS health status with dual trust domains.
 
 'use client';
 
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Shield, Server, Wifi, AlertTriangle } from 'lucide-react';
+import { Shield, ShieldCheck, ShieldOff, Server, Wifi, AlertTriangle } from 'lucide-react';
 import type { MtlsHealth } from '../types';
 
 interface Props {
@@ -41,13 +41,15 @@ export function MtlsHealthCard({ health, isLoading }: Props) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+          <p className="text-sm text-muted-foreground">
             Unable to connect to SPIRE infrastructure.
           </p>
         </CardContent>
       </Card>
     );
   }
+
+  const ecosystemHealthy = health.ecosystem?.spire_server_healthy && health.ecosystem?.spire_agent_healthy;
 
   return (
     <Card>
@@ -59,51 +61,52 @@ export function MtlsHealthCard({ health, isLoading }: Props) {
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 gap-4">
-          {/* SPIRE Server */}
-          <div className="flex items-center gap-3">
-            <Server className="h-4 w-4" style={{ color: 'var(--text-secondary)' }} />
+          {/* Ecosystem SPIRE */}
+          <div className="flex items-center gap-3 p-3 rounded-lg border">
+            {ecosystemHealthy ? (
+              <ShieldCheck className="h-5 w-5 text-emerald-500" />
+            ) : (
+              <ShieldOff className="h-5 w-5 text-red-500" />
+            )}
             <div>
-              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>SPIRE Server</p>
-              <Badge variant={health.spire_server_healthy ? 'default' : 'destructive'}>
-                {health.spire_server_healthy ? 'Healthy' : 'Unhealthy'}
-              </Badge>
+              <p className="text-sm font-medium">Ecosystem SPIRE</p>
+              <p className="text-xs text-muted-foreground">
+                Trust domain: {health.ecosystem?.trust_domain || "ecosystem.local"}
+              </p>
             </div>
+            <Badge variant={ecosystemHealthy ? "default" : "destructive"} className="ml-auto">
+              {ecosystemHealthy ? "Healthy" : "Unhealthy"}
+            </Badge>
           </div>
 
-          {/* SPIRE Agent */}
-          <div className="flex items-center gap-3">
-            <Wifi className="h-4 w-4" style={{ color: 'var(--text-secondary)' }} />
+          {/* Platform SPIRE */}
+          <div className="flex items-center gap-3 p-3 rounded-lg border">
+            {health.platform?.spire_server_healthy ? (
+              <ShieldCheck className="h-5 w-5 text-emerald-500" />
+            ) : (
+              <ShieldOff className="h-5 w-5 text-slate-400" />
+            )}
             <div>
-              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>SPIRE Agent</p>
-              <Badge variant={health.spire_agent_healthy ? 'default' : 'destructive'}>
-                {health.spire_agent_healthy ? 'Healthy' : 'Unhealthy'}
-              </Badge>
+              <p className="text-sm font-medium">Platform SPIRE</p>
+              <p className="text-xs text-muted-foreground">
+                Trust domain: {health.platform?.trust_domain || "platform.local"}
+              </p>
             </div>
+            <Badge variant={health.platform?.spire_server_healthy ? "default" : "secondary"}>
+              {health.platform?.spire_server_healthy ? "Healthy" : "N/A"}
+            </Badge>
           </div>
 
-          {/* Trust Domain */}
-          <div>
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Trust Domain</p>
-            <p className="text-sm font-mono">{health.trust_domain}</p>
-          </div>
-
-          {/* Services */}
-          <div>
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Services with mTLS</p>
-            <p className="text-sm font-semibold">
-              {health.mtls_enabled_services} / {health.total_services}
-            </p>
-          </div>
-
-          {/* Expired SVIDs */}
-          {health.expired_svids > 0 && (
-            <div className="col-span-2">
-              <Badge variant="destructive" className="flex items-center gap-1 w-fit">
+          {/* Summary stats */}
+          <div className="flex items-center gap-4 text-xs text-muted-foreground col-span-2">
+            <span>{health.mtls_enabled_services} / {health.total_services} services with mTLS</span>
+            {health.expired_svids > 0 && (
+              <span className="flex items-center gap-1 text-amber-600">
                 <AlertTriangle className="h-3 w-3" />
                 {health.expired_svids} expired SVID{health.expired_svids > 1 ? 's' : ''}
-              </Badge>
-            </div>
-          )}
+              </span>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>

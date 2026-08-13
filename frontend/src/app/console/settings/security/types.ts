@@ -8,6 +8,16 @@ export interface MtlsHealth {
   mtls_enabled_services: number;
   expired_svids: number;
   trust_domain: string;
+  platform?: {
+    spire_server_healthy: boolean;
+    spire_agent_healthy: boolean;
+    trust_domain: string;
+  };
+  ecosystem?: {
+    spire_server_healthy: boolean;
+    spire_agent_healthy: boolean;
+    trust_domain: string;
+  };
 }
 
 export interface MtlsConfig {
