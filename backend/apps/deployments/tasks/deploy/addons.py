@@ -108,6 +108,26 @@ def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
             )
 
 
+def _resolve_addon_ip(addon, client) -> str:
+    """Resolve an addon container's IP address on its primary Docker network.
+
+    Returns the IP string or empty string if resolution fails.
+    This allows probes to work under gVisor where Docker DNS is unavailable.
+    """
+    container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+    try:
+        container = client.containers.get(container_name)
+        container.reload()
+        networks = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+        for _net_data in networks.values():
+            ip = _net_data.get('IPAddress', '')
+            if ip:
+                return ip
+    except Exception:
+        pass
+    return ''
+
+
 def _probe_addon_connectivity(service, container_id: str) -> list[str]:
     from apps.deployments.models.addons import Addon
     from urllib.parse import urlparse as _urlparse
@@ -133,10 +153,16 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
         if not hostname or not port:
             continue
 
+        # Resolve addon IP on the host side — needed for gVisor containers
+        # where Docker DNS (127.0.0.11) is unreachable from inside the sandbox.
+        addon_ip = _resolve_addon_ip(addon, client)
+        # Prefer IP-based probe (works with both runc and gVisor)
+        probe_host = addon_ip if addon_ip else hostname
+
         try:
             test_cmd = (
                 "import socket,time; "
-                f"host={hostname!r}; port={port}; error=None; "
+                f"host={probe_host!r}; port={port}; error=None; "
                 "\nfor attempt in range(3):"
                 "\n try:"
                 "\n  s=socket.create_connection((host,port),5); s.close(); print('OK'); raise SystemExit(0)"

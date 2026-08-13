@@ -623,6 +623,41 @@ class LocalAdapter(BaseCloudAdapter):
         if container_runtime:
             create_kwargs["runtime"] = container_runtime
 
+        # When running under gVisor (runsc), the container's userspace TCP/IP
+        # stack cannot reach Docker's embedded DNS proxy at 127.0.0.11, so
+        # hostname-based addon connections fail.  Work around this by
+        # resolving addon hostnames to container IPs and injecting them into
+        # /etc/hosts via Docker's "extra_hosts" mechanism.
+        if container_runtime == "runsc":
+            try:
+                from apps.deployments.models.addons import Addon as _Addon
+                from urllib.parse import urlparse as _urlparse
+                extra_hosts = []
+                for _addon in _Addon.objects.filter(service_id=self.service_id, status='ACTIVE'):
+                    if not _addon.connection_url:
+                        continue
+                    _parsed = _urlparse(_addon.connection_url)
+                    _host = _parsed.hostname or ''
+                    _addon_container = f"smsly-addon-{_addon.addon_type.lower()}-{_addon.id}"
+                    try:
+                        _container = self.docker_client.containers.get(_addon_container)
+                        _container.reload()
+                        _net_info = (_container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                        _net_data = _net_info.get(network_name) or {}
+                        _ip = _net_data.get('IPAddress', '')
+                        if _ip and _host and _host != _ip:
+                            extra_hosts.append(f"{_host}:{_ip}")
+                    except Exception:
+                        pass
+                if extra_hosts:
+                    create_kwargs["extra_hosts"] = extra_hosts
+                    logger.info(
+                        "gVisor detected: injecting %d addon hostname->IP mappings into /etc/hosts: %s",
+                        len(extra_hosts), extra_hosts,
+                    )
+            except Exception as exc:
+                logger.warning("Failed to resolve addon IPs for gVisor extra_hosts: %s", exc)
+
         new_container = self.docker_client.containers.create(**create_kwargs)
         new_container.start()
         logger.info(
