@@ -33,6 +33,7 @@ def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
                 f"{container_name} is not running (cid={cid}, running={running}). "
                 f"The service cannot start without its addon."
             )
+
         probe_id = secrets.token_hex(4)
         try:
             from urllib.parse import urlparse as _urlparse
@@ -97,18 +98,17 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
 
         try:
             test_cmd = (
-                f"python3 -c \""
-                f"import socket; s=socket.socket(); s.settimeout(5); "
-                f"s.connect(('{hostname}', {port})); s.close(); print('OK')"
-                f"\" 2>/dev/null || "
-                f"python -c \""
-                f"import socket; s=socket.socket(); s.settimeout(5); "
-                f"s.connect(('{hostname}', {port})); s.close(); print('OK')"
-                f"\" 2>/dev/null || "
-                f"bash -c 'echo > /dev/tcp/{hostname}/{port}' 2>/dev/null && echo OK"
+                "import socket,time; "
+                f"host={hostname!r}; port={port}; error=None; "
+                "\nfor attempt in range(3):"
+                "\n try:"
+                "\n  s=socket.create_connection((host,port),5); s.close(); print('OK'); raise SystemExit(0)"
+                "\n except OSError as exc:"
+                "\n  error=exc; time.sleep(1)"
+                "\nraise SystemExit(f'{type(error).__name__}: {error}')"
             )
             result = client.containers.get(container_id).exec_run(
-                ["bash", "-c", test_cmd],
+                ["python", "-c", test_cmd],
             )
             output = (result.output or b"").decode("utf-8", errors="replace").strip()
             if result.exit_code != 0 or "OK" not in output:

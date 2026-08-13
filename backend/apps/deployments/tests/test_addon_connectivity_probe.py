@@ -28,5 +28,6 @@ def test_addon_connectivity_probe_uses_supported_exec_run_arguments(mock_docker_
 
     assert _probe_addon_connectivity(service, "container-id") == []
     args, kwargs = container.exec_run.call_args
-    assert args[0][0:2] == ["bash", "-c"]
+    assert args[0][0:2] == ["python", "-c"]
+    assert "range(3)" in args[0][2]
     assert "timeout" not in kwargs
