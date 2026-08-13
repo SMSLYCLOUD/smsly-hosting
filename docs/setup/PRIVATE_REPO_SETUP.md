@@ -1,4 +1,4 @@
-# Private Repo Setup — SMSLY Hosting
+# Private Repository Setup - Trulay Grid
 
 Since smsly-hosting is now a private repo, the VPS and Jules need authentication to access it.
 

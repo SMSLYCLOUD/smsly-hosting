@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { featureFlags } from '@/lib/featureFlags';
 import { logout as performLogout } from '@/lib/auth';
+import { useAuth } from '@/components/auth-provider';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: Home, tier: 'primary' },
@@ -53,17 +54,20 @@ const hiddenByFlag = new Set<string>([
 export function CommandPalette() {
   const [open, setOpen] = React.useState(false);
   const router = useRouter();
+  const { user, loading } = useAuth();
 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setOpen((prev) => !prev);
+        if (user && !loading) {
+          setOpen((prev) => !prev);
+        }
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [user, loading]);
 
   const navigate = React.useCallback(
     (href: string) => {
@@ -83,6 +87,10 @@ export function CommandPalette() {
   }, []);
 
   const filteredNav = navItems.filter((item) => !hiddenByFlag.has(item.href));
+
+  if (!user || loading) {
+    return null;
+  }
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>

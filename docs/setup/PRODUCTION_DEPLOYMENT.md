@@ -1,4 +1,4 @@
-# SMSLY (Grid) Production Deployment Guide
+# Trulay Grid Production Deployment Guide
 
 ## Prerequisites
 
@@ -13,11 +13,11 @@ Before deploying to production, ensure you have:
 
 ## DNS Configuration
 
-1. Create an `A` record in your DNS provider (example for `cloud.smsly.cloud`):
+1. Create an `A` record in your DNS provider (example for `grid.example.com`):
 
 ```text
 Type: A
-Name: cloud
+Name: grid
 Value: <YOUR_SERVER_IP>
 TTL: 300
 ```
@@ -25,7 +25,7 @@ TTL: 300
 2. Wait for propagation and verify:
 
 ```bash
-dig +short cloud.smsly.cloud
+dig +short grid.example.com
 ```
 
 ## 1. Environment Configuration
@@ -68,15 +68,15 @@ REDIS_PASSWORD=<generated-redis-password>
 GITHUB_WEBHOOK_SECRET=<generated-webhook-secret>
 
 # Domain (set to the dashboard hostname)
-DOMAIN=cloud.smsly.cloud
+DOMAIN=grid.example.com
 # Optional: override if your frontend origin differs from https://DOMAIN
-# SITE_URL=https://cloud.smsly.cloud
-ACME_EMAIL=admin@smsly.cloud
+# SITE_URL=https://grid.example.com
+ACME_EMAIL=admin@example.com
 
 # Hosts (keep these in sync with DOMAIN/SITE_URL)
-ALLOWED_HOSTS=cloud.smsly.cloud
-CSRF_TRUSTED_ORIGINS=https://cloud.smsly.cloud
-CORS_ALLOWED_ORIGINS=https://cloud.smsly.cloud
+ALLOWED_HOSTS=grid.example.com
+CSRF_TRUSTED_ORIGINS=https://grid.example.com
+CORS_ALLOWED_ORIGINS=https://grid.example.com
 
 # Database
 DATABASE_URL=postgres://smsly_admin:<POSTGRES_PASSWORD>@db:5432/smsly_hosting
@@ -96,7 +96,7 @@ The universal installer provisions **Caddy** and configures automatic Let's Encr
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/backend/install.sh -o /tmp/install.sh
-sudo USE_SSL=true DOMAIN=cloud.smsly.cloud ACME_EMAIL=admin@smsly.cloud bash /tmp/install.sh
+sudo USE_SSL=true DOMAIN=grid.example.com ACME_EMAIL=admin@example.com bash /tmp/install.sh
 ```
 
 Admin credentials are written to: `/opt/smsly-hosting/.credentials`
@@ -137,7 +137,7 @@ docker compose -f docker-compose.prod.yml ps
 curl http://localhost/health
 
 # Check SSL is working
-curl https://cloud.smsly.cloud/health
+curl https://grid.example.com/health
 ```
 
 ## 3. Enable Monitoring (Optional)
@@ -156,7 +156,7 @@ docker compose -f docker-compose.observability.yml up -d
 
 - [ ] `/health` endpoint returns 200 OK
 - [ ] SSL certificate issued by Let's Encrypt
-- [ ] Admin panel accessible at https://cloud.smsly.cloud/admin/
+- [ ] Admin panel accessible at https://grid.example.com/admin/
 - [ ] Test deployment creation via API
 - [ ] Verify Docker socket proxy is working (no direct socket mount)
 - [ ] Check logs: `docker compose -f docker-compose.prod.yml logs -f`
@@ -183,7 +183,7 @@ sudo bash install.sh --wipe
 ```
 
 - Deletes `/opt/smsly-hosting`
-- Removes SMSLY Docker containers, volumes, and networks
+- Removes Trulay Grid Docker containers, volumes, and networks (many retain legacy `smsly-*` names)
 - For automation/non-interactive runs: `FORCE_WIPE=1 sudo bash install.sh --wipe`
 
 ## 7. Disaster Recovery
@@ -217,7 +217,7 @@ docker compose -f docker-compose.prod.yml start backend celery
 
 ```bash
 # Add to cron (every 5 minutes)
-*/5 * * * * curl -f https://cloud.smsly.cloud/health || /usr/local/bin/alert.sh "Grid Down"
+*/5 * * * * curl -f https://grid.example.com/health || /usr/local/bin/alert.sh "Trulay Grid Down"
 ```
 
 ### View Logs
@@ -251,4 +251,4 @@ See [RUNBOOK.md](RUNBOOK.md) for common issues and solutions.
 
 - **Logs**: `/opt/smsly-hosting/` (mount Loki for centralized logging)
 - **Metrics**: Prometheus endpoint at `:8082/metrics`
-- **Health**: `https://cloud.smsly.cloud/health`
+- **Health**: `https://grid.example.com/health`

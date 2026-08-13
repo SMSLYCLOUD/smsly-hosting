@@ -1,6 +1,8 @@
-# SMSLY CLI
+# Trulay Grid CLI
 
-The SMSLY Command Line Interface (CLI) is used to interact with your Grid platform directly from the terminal.
+The Trulay Grid command-line interface is used to operate a Grid installation from the terminal.
+
+The package and executable remain `smsly` for compatibility. Renaming the command would break existing scripts, CI pipelines, and local configuration.
 
 ## Installation
 

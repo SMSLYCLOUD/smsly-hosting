@@ -1,10 +1,10 @@
 # Custom Domains & SSL
 
-Grid binds public traffic to services through Caddy, which auto-issues Let's Encrypt certificates on demand. Services can attach custom domains at two scopes: per-service (the common case) and global (rare, for apex + wildcard). SSL issuance is automatic for public hostnames; wildcard certs require a Cloudflare DNS-01 challenge.
+Trulay Grid binds public traffic to services through Caddy, which auto-issues Let's Encrypt certificates on demand. Services can attach custom domains at two scopes: per-service (the common case) and global (rare, for apex + wildcard). SSL issuance is automatic for public hostnames; wildcard certs require a Cloudflare DNS-01 challenge.
 
 ## Overview
 
-A Grid install has two layers of domain configuration:
+A Trulay Grid install has two layers of domain configuration:
 
 1. **Per-service** — `Service.custom_domains` (JSONField). A list of hostnames that the service should respond to. Each entry is verified independently.
 2. **Global** — `apps.domains.models.Domain`. A row that the platform manages as a singleton for the install. Used for the apex + wildcard cert when a wildcard is required.
@@ -73,7 +73,7 @@ The domain is retried on the next save (the platform does not auto-retry on a ti
 
 ## Caddy `ask` Endpoint
 
-Caddy does not know about Grid's domain database. When Caddy sees a request for an unknown hostname, it calls the platform's `ask` endpoint to ask "is this hostname yours?". The endpoint is `POST /caddy/ask/` (mounted at the platform root, not under `/api/v1/`).
+Caddy does not know about Trulay Grid's domain database. When Caddy sees a request for an unknown hostname, it calls the platform's `ask` endpoint to ask "is this hostname yours?". The active endpoint is `GET /api/v1/services/check-domain/?domain=<hostname>`.
 
 ### Authentication: `CaddySecretOrAdminPermission`
 

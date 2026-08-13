@@ -1,8 +1,8 @@
-# Contributing to SMSLY (Grid)
+# Contributing to Trulay Grid
 
-We are building the **Universal PaaS** for the world. Whether you are in San Francisco, Lagos, Berlin, or Tokyo, we want your code.
+We are building a self-hosted application platform for teams operating across clouds, regions, and bare-metal infrastructure.
 
-> **Brands:** The project is currently branded as **SMSLY**; the public-facing product name is **Grid**. **"Grid"** is a legacy code name. All three names still appear in older docs, scripts, and code; please prefer the current names in new material.
+> **Naming:** **Trulay** is the company and **Trulay Grid** is the product. Use **Grid** only as a compact product label. Do not rename `SMSLY_*`, `smsly-*`, repository paths, package names, Docker resources, Celery task names, database objects, or other compatibility identifiers without an explicit migration plan. See [Brand and Naming](docs/BRAND_AND_NAMING.md).
 
 ## 🌟 Bounty Program
 We incentivize critical features. Check our [Issues](https://github.com/SMSLYCLOUD/smsly-hosting/issues) for "Bounty" labels.

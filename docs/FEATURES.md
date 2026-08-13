@@ -1,7 +1,7 @@
-# Grid — Core Features
+# Trulay Grid - Core Features
 
 ## 1. Hot Functions (Serverless)
-Grid creates "Serverless" behavior on standard Docker/K8s containers.
+Trulay Grid creates "serverless" behavior on standard Docker/Kubernetes containers.
 - **Mechanism**: We mount your source code into a runtime container (e.g., `node:18-alpine` or `python:3.9-slim`).
 - **Dynamic Entrypoint**: A lightweight Python/Node script wraps your handler function and exposes it via HTTP on port 8000.
 - **Handler Signatures**: Node.js supports `fn(event)` or `fn(request, response)`. Python supports `handler(event)` or `handler(FunctionRequest)`.

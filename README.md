@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="docs/grid-logo.png" alt="Grid" width="400" />
+  <img src="docs/grid-logo.png" alt="Trulay Grid" width="400" />
 </p>
 
-<h1 align="center">Grid</h1>
-<p align="center"><strong>by SMSLY</strong></p>
+<h1 align="center">Trulay Grid</h1>
+<p align="center"><strong>The trust layer for internet communications</strong></p>
 
 <p align="center">
   <a href="https://github.com/SMSLYCLOUD/smsly-hosting/actions"><img src="https://github.com/SMSLYCLOUD/smsly-hosting/actions/workflows/test.yml/badge.svg" alt="CI/CD" /></a>
@@ -11,11 +11,13 @@
   <a href="https://github.com/SMSLYCLOUD/smsly-hosting"><img src="https://img.shields.io/badge/production-ready-brightgreen.svg" alt="Production Ready" /></a>
 </p>
 
-<p align="center"><em>The Self-Healing, Multi-Cloud PaaS — Deploy Anything, Anywhere.</em></p>
+<p align="center"><em>Self-hosted application delivery across your own infrastructure.</em></p>
 
 ---
 
-**Grid** is an open-source alternative to Vercel, Railway, and Heroku that runs on **your own infrastructure** — AWS, Azure, GCP, or bare metal. Enterprise-grade security, zero-downtime deployments, AI-powered observability, and automated disaster recovery, all out of the box.
+**Trulay Grid** is an open-source alternative to Vercel, Railway, and Heroku that runs on **your own infrastructure** - AWS, Azure, GCP, or bare metal. It combines application delivery, zero-downtime deployments, security controls, observability, and automated recovery in one control plane.
+
+> **Naming:** **Trulay** is the company and **Trulay Grid** is the product. The console may use the shorter name **Grid** where space is limited. Existing names such as `smsly-hosting`, `smsly`, `SMSLY_*`, Docker resources, package identifiers, database objects, and the `SMSLYCLOUD` GitHub organization are retained as compatibility contracts. See [Brand and Naming](docs/BRAND_AND_NAMING.md).
 
 ---
 
@@ -60,7 +62,7 @@ All identified gaps from the zero-trust audit have been addressed:
 ## 🚀 Features
 
 ### ⚡ Serverless Functions ("Hot Functions")
-Deploy code, not containers. Grid wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
+Deploy code, not containers. Trulay Grid wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
 
 ### 👁️ AI-Driven Observability & Live Topology
 - **3D City Topology**: Visualize your infrastructure as a living, breathing digital city with animated traffic and real-time connectivity states.
@@ -211,7 +213,7 @@ Lite Agents are lightweight worker nodes that connect to the master's database, 
 
 ## 🌐 Reverse Proxy
 
-SMSLY runs three different edge proxies, one per deployment surface. The active configuration for each is the single source of truth for that surface; do not mix them.
+Trulay Grid runs three different edge proxies, one per deployment surface. The active configuration for each is the single source of truth for that surface; do not mix them.
 
 | Deployment surface | Edge proxy | Source of truth | TLS |
 |--------------------|------------|-----------------|-----|
@@ -253,7 +255,7 @@ smsly-hosting/
 ├── caddy-config/             # Runtime Caddy configuration (auto-generated)
 ├── certs/                    # Registry TLS certificates
 ├── postgres/                 # PostgreSQL HA configs
-├── docker-compose.yml        # Development stack
+├── docker-compose.yml.archive # Archived legacy Compose definition
 ├── docker-compose.prod.yml   # Production stack (30+ services)
 ├── install.sh                # Universal installer (SEC-002: IP-mode SSL guard)
 ```
@@ -263,6 +265,7 @@ smsly-hosting/
 ## 📚 Documentation
 
 - [Developer Guide](docs/DEVELOPER_GUIDE.md)
+- [Brand and Naming](docs/BRAND_AND_NAMING.md)
 - [Frontend Guide](docs/FRONTEND_GUIDE.md)
 - [Production Deployment](docs/setup/PRODUCTION_DEPLOYMENT.md)
 - [Operations Runbook](docs/setup/RUNBOOK.md)
@@ -318,6 +321,6 @@ smsly-hosting/
 ---
 
 <p align="center">
-  <strong>Grid</strong> by <a href="https://github.com/SMSLYCLOUD">SMSLY</a><br />
-  <em>Deploy anything. Own everything.</em>
+  <strong>Trulay Grid</strong> by <a href="https://trulay.co">Trulay</a><br />
+  <em>The trust layer for internet communications.</em>
 </p>

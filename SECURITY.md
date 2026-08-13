@@ -10,7 +10,7 @@
 
 ## Reporting a Vulnerability
 
-**Please do not file a public issue.** Email security@smsly.cloud with:
+**Please do not file a public issue.** Email security@trulay.co with:
 
 1. A description of the vulnerability and its impact
 2. Steps to reproduce or a proof-of-concept
@@ -20,7 +20,7 @@ We aim to acknowledge within 48 hours and provide a remediation timeline within 
 
 ## Security Model
 
-SMSLY is a self-hosted PaaS control plane. The threat model assumes:
+Trulay Grid is a self-hosted PaaS control plane. The threat model assumes:
 
 - The host machine is trusted (operator's responsibility)
 - Internal Docker network traffic is partially trusted (HMAC-signed for control-plane calls)

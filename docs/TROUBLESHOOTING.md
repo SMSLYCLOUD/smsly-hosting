@@ -1,7 +1,7 @@
 # Troubleshooting Guide
 
 This guide covers common production issues and resolutions when operating
-SMSLY Hosting. Each scenario includes symptoms, diagnosis commands, and fixes.
+Trulay Grid. Each scenario includes symptoms, diagnosis commands, and fixes.
 
 ## Table of Contents
 

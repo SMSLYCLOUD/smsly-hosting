@@ -1,6 +1,6 @@
-# SMSLY (Grid) Operations Runbook
+# Trulay Grid Operations Runbook
 
-> "Grid" is a legacy code name for SMSLY; both still appear in older scripts and docs.
+> Trulay is the company and Trulay Grid is the product. Legacy `smsly-*` resource names remain operational compatibility identifiers.
 
 ## Quick Reference
 
@@ -53,21 +53,14 @@ docker compose -f docker-compose.prod.yml restart backend
 
 ### Apply Updates
 
-To update the platform to the latest version:
+To update the platform to the latest version, use the installer-managed update flow:
 
 ```bash
 cd /opt/smsly-hosting
-git pull origin main
-
-# Full rebuild (production compose only)
-docker compose -f docker-compose.prod.yml down
-docker compose -f docker-compose.prod.yml up -d --build --force-recreate
-
-# Run migrations
-docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
+sudo bash install.sh --update
 ```
 
-> **Important**: Always use `down` + `up --force-recreate` instead of just `up --build` to ensure clean state.
+> **Important:** Do not routinely run `down` or force-recreate edge services. The update script sequences builds, migrations, health checks, and service refreshes without intentionally dropping the full platform.
 
 ### Database Backup
 
@@ -199,7 +192,7 @@ open http://localhost:3001  # Grafana (admin/admin)
 Add to crontab (`crontab -e`):
 
 ```bash
-*/5 * * * * curl -f https://cloud.smsly.cloud/health || echo "Grid health check failed" | mail -s "Alert: Grid Down" admin@smsly.cloud
+*/5 * * * * curl -f https://grid.example.com/health || echo "Trulay Grid health check failed" | mail -s "Alert: Trulay Grid Down" admin@example.com
 ```
 
 ---
@@ -288,7 +281,7 @@ docker compose -f docker-compose.prod.yml logs -f backend
 
 4. Update DNS to point to new server
 
-5. Verify health: `curl https://cloud.smsly.cloud/health`
+5. Verify health: `curl https://grid.example.com/health`
 
 #### Scenario 3: Rollback After Failed Deployment
 
@@ -344,7 +337,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
 
 # 4. Verify health
-curl https://cloud.smsly.cloud/health
+curl https://grid.example.com/health
 ```
 
 ### Rollback Procedure

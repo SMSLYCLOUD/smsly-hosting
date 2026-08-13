@@ -24,4 +24,4 @@ If you have one.
 
 ---
 
-**Note:** For sensitive issues, email security@smsly.cloud instead of opening a public issue.
+**Note:** For sensitive issues, email security@trulay.co instead of opening a public issue.

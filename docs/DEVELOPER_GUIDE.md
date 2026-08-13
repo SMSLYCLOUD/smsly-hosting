@@ -1,6 +1,8 @@
-# SMSLY Hosting — Developer Guide
+# Trulay Grid - Developer Guide
 
 > Internal reference for contributors and AI agents. Covers architecture decisions, recent changes, and coding conventions.
+
+Product copy uses **Trulay Grid**. Legacy `SMSLY_*` environment variables, `smsly-*` resources, module paths, task names, and persisted identifiers remain unchanged unless a migration explicitly replaces them.
 
 ---
 

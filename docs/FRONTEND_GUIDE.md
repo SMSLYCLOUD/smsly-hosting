@@ -1,4 +1,4 @@
-# SMSLY Hosting — Frontend Developer Guide
+# Trulay Grid - Frontend Developer Guide
 
 > Internal reference for the Next.js 15 frontend.
 

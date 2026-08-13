@@ -1,6 +1,6 @@
-# Grid — Installation & Operations Guide
+# Trulay Grid - Installation & Operations Guide
 
-> **Grid by SMSLY** — The Self-Healing, Multi-Cloud PaaS.
+> **Trulay Grid** - self-hosted application delivery across your own infrastructure.
 
 ---
 
@@ -9,7 +9,7 @@
 1. [System Requirements](#system-requirements)
 2. [Fresh Installation](#fresh-installation)
 3. [Deployment Modes](#deployment-modes)
-4. [Updating Grid](#updating-Grid)
+4. [Updating Trulay Grid](#updating-trulay-grid)
 5. [Managing Services](#managing-services)
 6. [Database Operations](#database-operations)
 7. [SSL & Custom Domains](#ssl--custom-domains)
@@ -130,7 +130,7 @@ TTL: 300
 
 ---
 
-## Updating Grid
+## Updating Trulay Grid
 
 ### From the Terminal (SSH)
 
@@ -449,6 +449,6 @@ Data persists in Docker volumes and can be restored with `docker compose up -d`.
 ---
 
 <p align="center">
-  <strong>Grid</strong> by <a href="https://github.com/SMSLYCLOUD">SMSLY</a><br />
+  <strong>Trulay Grid</strong> by <a href="https://trulay.co">Trulay</a><br />
   <em>Deploy anything. Own everything.</em>
 </p>
