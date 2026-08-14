@@ -238,16 +238,14 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         <CardHeader>
           <CardTitle>Vertical Auto-Scaling (VPA)</CardTitle>
           <CardDescription>
-            Spawns replicas across different servers/nodes for fault isolation and geographic distribution.
+            Spawns replicas across different servers/nodes when the local server is at capacity. Disabled = HPA only (same server).
           </CardDescription>
         </CardHeader>
         <CardContent className="flex items-center justify-between">
           <div className="space-y-0.5">
             <Label className="text-base">Enable VPA</Label>
             <p className="text-sm text-muted-foreground">
-              Allows the cluster to recommend and apply resource limits.
-              <br />
-              <span className="text-xs text-yellow-500">Experimental: May cause pod restarts.</span>
+              When enabled, the autoscaler will also replicate to remote nodes for fault isolation and geographic distribution.
             </p>
           </div>
           <Switch checked={vpaEnabled} onCheckedChange={setVpaEnabled} />
