@@ -164,4 +164,5 @@ class NodeScorer:
     @staticmethod
     def _node_ip(node):
         raw = node.wg_address or node.private_ip or node.host or ''
-        return re.escape(raw)  # escape regex meta-chars for PromQL instance=~ pattern
+        # Prometheus RE2 regex: escape dots (the only meta-char in an IP/hostname)
+        return raw.replace('.', r'\.')
