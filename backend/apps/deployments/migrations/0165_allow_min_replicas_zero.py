@@ -1,5 +1,6 @@
 # Generated for min_replicas scale-to-zero support.
 
+from django.core.validators import MinValueValidator
 from django.db import migrations, models
 
 
@@ -13,6 +14,6 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='service',
             name='min_replicas',
-            field=models.IntegerField(default=1, validators=[models.MinValueValidator(0)]),
+            field=models.IntegerField(default=1, validators=[MinValueValidator(0)]),
         ),
     ]
