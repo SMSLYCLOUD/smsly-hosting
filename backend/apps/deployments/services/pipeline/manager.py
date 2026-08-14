@@ -43,9 +43,10 @@ class PipelineManager(
     _buildx_driver_lock = threading.Lock()
 
 
-    def __init__(self, deployment: Deployment):
+    def __init__(self, deployment: Deployment, staged_only: bool = False):
         self.deployment = deployment
         self.service = deployment.service
+        self.staged_only = staged_only
         self.build_dir = None
         self.source_dir = None
         self.image_name = None

@@ -211,13 +211,14 @@ def _wait_for_local_route_ready(
     service,
     timeout_seconds: int = 0,
     poll_seconds: int = 3,
+    host_override: str = "",
 ) -> bool:
     """
     Wait until Traefik has picked up host routing for this service.
 
     If timeout_seconds <= 0, polls indefinitely (capped by Celery task timeout).
     """
-    host = (service.public_domain or "").strip()
+    host = (host_override or service.public_domain or "").strip()
     if not host:
         return True
 

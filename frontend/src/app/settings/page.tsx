@@ -114,8 +114,8 @@ function SettingsContent() {
         />
 
         <Tabs defaultValue={defaultTab} className="space-y-6">
-          <div className="rounded-xl border border-border/70 bg-card/80 p-2 backdrop-blur-sm">
-            <TabsList className="h-auto w-full grid grid-cols-10 gap-2 bg-transparent p-0">
+          <div className="card-enterprise p-1">
+            <TabsList className="h-auto w-full grid grid-cols-10 gap-1 bg-transparent p-0">
               {SETTINGS_SECTIONS.map((section) => {
                 const Icon = section.icon;
                 return (
@@ -123,7 +123,7 @@ function SettingsContent() {
                     key={section.value}
                     value={section.value}
                     title={section.tooltip}
-                    className="h-9 items-center justify-center gap-2 rounded-md border border-transparent px-3 text-sm data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
+                    className="h-9 items-center justify-center gap-2 rounded border border-transparent px-3 text-sm data-[state=active]:border-primary/30 data-[state=active]:bg-primary/5 data-[state=active]:text-primary"
                   >
                     <Icon className="h-4 w-4" />
                     {section.label}

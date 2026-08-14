@@ -165,7 +165,6 @@ export default function ComparePage() {
             {/* HERO SECTION */}
             <section className="relative pt-32 pb-20 px-6 overflow-hidden bg-slate-950 text-white">
                 <div className="absolute inset-0 bg-[linear-gradient(to_right,#8882_1px,transparent_1px),linear-gradient(to_bottom,#8882_1px,transparent_1px)] bg-[size:48px_48px] opacity-10" />
-                <div className="absolute inset-0 bg-gradient-to-b from-transparent via-slate-950/50 to-slate-950" />
 
                 <div className="max-w-7xl mx-auto text-center relative z-10">
                     <motion.div
@@ -330,7 +329,6 @@ export default function ComparePage() {
 
             {/* MIGRATION CTA */}
             <section className="py-24 px-6 bg-slate-950 text-white relative overflow-hidden">
-                <div className="absolute inset-0 bg-gradient-to-br from-emerald-900/20 to-slate-900/20" />
                 <div className="max-w-4xl mx-auto text-center relative z-10">
                     <h2 className="text-3xl md:text-5xl font-extrabold mb-6">Ready to make the switch?</h2>
                     <p className="text-xl text-slate-400 mb-10 max-w-2xl mx-auto">

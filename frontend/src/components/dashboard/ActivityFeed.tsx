@@ -53,7 +53,7 @@ export function ActivityFeed() {
   }, []);
 
   return (
-    <Card className="card-premium rounded-xl h-full">
+    <Card className="card-enterprise h-full">
       <CardHeader className="flex flex-row items-center justify-between relative z-10">
         <CardTitle className="flex items-center gap-2">
           <Clock className="h-5 w-5 text-primary" />

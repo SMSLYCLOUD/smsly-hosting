@@ -69,9 +69,14 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     )
                 _regenerate_caddyfile()
                 if service.is_public:
+                    staging_host = ""
+                    if staged_only and staging_url:
+                        from urllib.parse import urlparse
+                        staging_host = urlparse(staging_url).hostname or ""
                     _wait_for_local_route_ready(
                         deployment, service,
                         timeout_seconds=DEPLOY_CONTAINER_TIMEOUT,
+                        host_override=staging_host,
                     )
 
             if staged_only:
@@ -285,8 +290,15 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 )
             if service.is_public:
                 route_timeout = _local_route_timeout_seconds(service)
+                staging_host = ""
+                if staged_only and deployment.staging_url:
+                    from urllib.parse import urlparse
+                    staging_host = urlparse(deployment.staging_url).hostname or ""
                 route_ready = _wait_for_local_route_ready(
-                    deployment, service, timeout_seconds=route_timeout,
+                    deployment,
+                    service,
+                    timeout_seconds=route_timeout,
+                    host_override=staging_host,
                 )
                 if not route_ready:
                     host = (service.public_domain or "").strip() or service.name
@@ -331,8 +343,6 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 "[ADDON-CONNECTIVITY] All addon connections verified from service container.\n",
             )
 
-        _mark_deployment_active(deployment, "local", "127.0.0.1", resource.resource_id)
-
         if staged_only:
             deployment.status = Deployment.Status.STAGED
             deployment.staged_at = timezone.now()
@@ -347,6 +357,8 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 f"Container: {resource.resource_id}\n"
             )
             return
+
+        _mark_deployment_active(deployment, "local", "127.0.0.1", resource.resource_id)
 
         deployment.status = Deployment.Status.ACTIVE
         deployment.container_id = resource.resource_id

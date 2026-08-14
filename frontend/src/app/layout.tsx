@@ -28,7 +28,7 @@ export const viewport: Viewport = {
 import { LazyMount } from "@/components/LazyMount";
 import { ThreeCompat } from "@/components/three-compat";
 import { ReactQueryProvider } from "@/components/react-query-provider";
-import { SpaceOpsBackground } from "@/components/effects/SpaceOpsBackground";
+import { OperationalMesh } from "@/components/effects/OperationalMesh";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import FloatingAILoader from "@/components/ai/FloatingAILoader";
@@ -47,11 +47,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="font-sans antialiased cloud-bg">
+      <body className="font-sans antialiased premium-bg">
         <ReactQueryProvider>
         <ThemeProvider
             attribute="class"
-            defaultTheme="system"
+            defaultTheme="dark"
             enableSystem
             disableTransitionOnChange
           >
@@ -60,7 +60,7 @@ export default function RootLayout({
               <TierProvider>
                 <ConfirmProvider>
                   <SpaceOpsProvider>
-                  <SpaceOpsBackground />
+                  <OperationalMesh />
                   <CommandPalette />
                   <Navbar />
                   <main className="min-h-[calc(100vh-3.5rem)] flex flex-col">

@@ -52,6 +52,17 @@ class ComposeNetworkingMixin:
 
     def _collect_compose_domains(self) -> list:
         """Collect primary + custom domains for compose routing."""
+        if getattr(self, "staged_only", False):
+            staging_url = self.deployment.staging_url or self.service.generate_staging_url()
+            from urllib.parse import urlparse
+            staging_host = urlparse(staging_url).hostname or ""
+            if not staging_host:
+                raise BuildError("Could not resolve staging hostname for Compose deployment")
+            if not self.deployment.staging_url:
+                self.deployment.staging_url = staging_url
+                self.deployment.save(update_fields=["staging_url"])
+            return [staging_host]
+
         domains = []
 
         primary = (self.service.public_domain or "").strip().lower()
@@ -377,4 +388,3 @@ class ComposeNetworkingMixin:
                     append_log(self.deployment, f"Docker network '{network_name}' created.\n")
         except Exception as e:
             append_log(self.deployment, f"Warning: could not ensure Docker network '{network_name}': {e}\n")
-

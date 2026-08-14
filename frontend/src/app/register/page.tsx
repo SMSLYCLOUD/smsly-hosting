@@ -5,16 +5,9 @@ import Link from "next/link";
 import Image from "next/image";
 import { Github, Chrome, Loader2, GitBranch, Code2 } from "lucide-react";
 import { resetRedirectGuard } from "@/lib/paths";
+import { GridCard } from "@/components/ui/GridCard";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -58,9 +51,6 @@ export default function RegisterPage() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        // Rate-limit responses use the shared {error, code, status} envelope
-        // with code="throttled" and an optional wait_seconds field. Show a
-        // distinct message instead of the generic "check your input" fallback.
         if (response.status === 429 || payload?.code === "throttled") {
           const waitSec = Number(payload?.wait_seconds);
           setError(
@@ -83,11 +73,6 @@ export default function RegisterPage() {
         return;
       }
 
-      // The auth token is delivered as an HttpOnly cookie by the
-      // backend's Set-Cookie header; the browser stores and attaches
-      // it automatically on subsequent requests because of
-      // ``credentials: "include"``. We do not write the token to
-      // localStorage — the cookie is the only credential.
       const data = await response.json().catch(() => ({}));
       if (!data?.key && !data?.token) {
         setError("Account created, but token retrieval failed. Please log in.");
@@ -105,64 +90,60 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col relative overflow-x-hidden cloud-bg">
-      {/* Decorative Orbs */}
-      <div className="floating-orb w-[400px] h-[400px] bg-primary/10 -top-20 -left-20" />
-      <div className="floating-orb w-[300px] h-[300px] bg-cyan-500/10 bottom-20 right-20" style={{ animationDelay: '-4s' }} />
-
+    <div className="min-h-screen flex flex-col relative overflow-x-hidden premium-bg">
       <div className="flex-1 flex items-center justify-center p-4 relative z-10">
-        <Card className="w-full max-w-md card-premium rounded-2xl">
-          <CardHeader className="text-center space-y-2">
+        <GridCard className="w-full max-w-md rounded border border-border bg-card">
+          <div className="p-6 text-center space-y-2">
             <div className="mx-auto mb-4 flex flex-col items-center gap-2">
               <Image
                 src="/images/logo.png"
                 alt="Grid"
                 width={190}
                 height={78}
-                className="h-20 w-auto max-w-full rounded-xl object-contain shadow-md"
+                className="h-20 w-auto max-w-full rounded object-contain"
               />
             </div>
-            <CardTitle className="text-2xl font-bold tracking-tight">Create an account</CardTitle>
-            <CardDescription>
+            <h2 className="text-2xl font-bold tracking-tight">Create an account</h2>
+            <p className="text-sm text-muted-foreground">
               Sign up for Grid to deploy your applications.
-            </CardDescription>
-          </CardHeader>
+            </p>
+          </div>
 
-          <CardContent className="space-y-4">
-            <Button variant="outline" className="w-full h-11 relative" asChild>
-              <a href={`${BACKEND_URL}/accounts/github/login/`}>
-                <Github className="mr-2 h-4 w-4" />
+          <div className="px-6 pb-6">
+            {/* Social signup buttons with grid separators */}
+            <div className="rounded overflow-hidden border border-border mb-4">
+              <a
+                href={`${BACKEND_URL}/accounts/github/login/`}
+                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
+              >
+                <Github className="h-4 w-4" />
                 Sign up with GitHub
               </a>
-            </Button>
-            <Button variant="outline" className="w-full h-11 relative" asChild>
-              <a href={`${BACKEND_URL}/accounts/google/login/`}>
-                <Chrome className="mr-2 h-4 w-4" />
+              <a
+                href={`${BACKEND_URL}/accounts/google/login/`}
+                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
+              >
+                <Chrome className="h-4 w-4" />
                 Sign up with Google
               </a>
-            </Button>
-            <Button variant="outline" className="w-full h-11 relative" asChild>
-              <a href={`${BACKEND_URL}/accounts/gitlab/login/`}>
-                <GitBranch className="mr-2 h-4 w-4 text-orange-500" />
+              <a
+                href={`${BACKEND_URL}/accounts/gitlab/login/`}
+                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
+              >
+                <GitBranch className="h-4 w-4 text-orange-500" />
                 Sign up with GitLab
               </a>
-            </Button>
-            <Button variant="outline" className="w-full h-11 relative" asChild>
-              <a href={`${BACKEND_URL}/accounts/bitbucket_oauth2/login/`}>
-                <Code2 className="mr-2 h-4 w-4 text-blue-500" />
+              <a
+                href={`${BACKEND_URL}/accounts/bitbucket_oauth2/login/`}
+                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition"
+              >
+                <Code2 className="h-4 w-4 text-blue-500" />
                 Sign up with Bitbucket
               </a>
-            </Button>
+            </div>
 
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">
-                  Or continue with email
-                </span>
-              </div>
+            <div className="text-center text-xs uppercase text-muted-foreground mb-4">
+              Or continue with email
             </div>
 
             <form onSubmit={handleRegister} className="space-y-3">
@@ -211,14 +192,14 @@ export default function RegisterPage() {
               </div>
 
               {error && (
-                <div className="text-sm text-red-500 bg-red-50 dark:bg-red-950/50 p-3 rounded-md">
+                <div className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 p-3 rounded">
                   {error}
                 </div>
               )}
 
               <Button
                 type="submit"
-                className="w-full h-11 btn-shimmer bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-semibold shadow-lg shadow-emerald-500/20"
+                className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded transition"
                 disabled={isSubmitting}
               >
                 {isSubmitting ? (
@@ -231,15 +212,15 @@ export default function RegisterPage() {
                 )}
               </Button>
             </form>
-          </CardContent>
+          </div>
 
-          <CardFooter className="flex justify-center text-sm text-muted-foreground">
+          <div className="px-6 pb-6 text-center text-sm text-muted-foreground">
             Already have an account?&nbsp;
             <Link href="/login" className="underline hover:text-primary">
               Sign in
             </Link>
-          </CardFooter>
-        </Card>
+          </div>
+        </GridCard>
       </div>
     </div>
   );

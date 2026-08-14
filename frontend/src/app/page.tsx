@@ -11,7 +11,6 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { ScrollReveal, StaggerChild, ParallaxReveal } from "@/components/ui/ScrollReveal";
 import dynamic from "next/dynamic";
-const NatureBackground = dynamic(() => import("@/components/effects/NatureBackground").then(m => m.NatureBackground), { ssr: false });
 const EcosystemDeployVisual = dynamic(() => import("@/components/effects/EcosystemDeployVisual").then(m => m.EcosystemDeployVisual), { ssr: false });
 
 // ============================================
@@ -678,13 +677,9 @@ export default function Home() {
         <main className="min-h-screen relative overflow-x-hidden">
 
             {/* ============================================
-                HERO — Atmospheric cloud sky, one clear message
+                HERO — Operational grid, one clear message
                ============================================ */}
-            <section className="relative min-h-[70vh] md:min-h-[78vh] pt-32 pb-28 md:pb-32 overflow-hidden bg-white dark:bg-slate-950">
-                <div className="absolute inset-0 pointer-events-none" aria-hidden>
-                    <NatureBackground />
-                </div>
-
+            <section className="relative min-h-[70vh] md:min-h-[78vh] pt-32 pb-28 md:pb-32 overflow-hidden">
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10"
                     onMouseEnter={() => setIsHovered(true)}
                     onMouseLeave={() => setIsHovered(false)}
@@ -762,7 +757,7 @@ export default function Home() {
                         transition={{ delay: 0.3, duration: 0.5 }}
                         className="mt-10 flex flex-col sm:flex-row gap-4 justify-center items-center"
                     >
-                        <Link href="/register" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-base font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 dark:shadow-emerald-500/20 hover:-translate-y-0.5">
+                        <Link href="/register" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-base font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-all hover:-translate-y-0.5">
                             Get Grid Free <ArrowRight className="w-5 h-5" />
                         </Link>
                         <Link href="/docs" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-base font-bold text-slate-700 dark:text-slate-200 bg-white dark:bg-white/5 border-2 border-slate-200 dark:border-slate-700 rounded-xl hover:border-emerald-300 dark:hover:border-emerald-500/30 transition-all hover:-translate-y-0.5">
@@ -900,8 +895,6 @@ export default function Home() {
                     backgroundImage: 'linear-gradient(to right, #fff 1px, transparent 1px), linear-gradient(to bottom, #fff 1px, transparent 1px)',
                     backgroundSize: '60px 60px',
                 }} />
-                <div className="absolute top-1/4 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
-                <div className="absolute bottom-1/4 left-1/4 w-64 h-64 bg-violet-500/5 rounded-full blur-3xl pointer-events-none" />
 
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16">
@@ -927,7 +920,6 @@ export default function Home() {
                                         transition={{ type: "spring", stiffness: 300, damping: 20 }}
                                         className="group relative bg-slate-900/80 p-8 rounded-2xl border border-slate-800 h-full"
                                     >
-                                        <div className={`absolute -top-16 -right-16 w-32 h-32 bg-gradient-to-bl ${feat.color} opacity-[0.06] rounded-full blur-2xl pointer-events-none`} />
                                         <div className="relative z-10">
                                             <div className={`w-12 h-12 rounded-xl ${feat.bg} flex items-center justify-center mb-6`}>
                                                 <feat.icon className={`w-6 h-6 bg-gradient-to-br ${feat.color} text-white`} />
@@ -1007,7 +999,6 @@ export default function Home() {
                                         transition={{ type: "spring", stiffness: 400, damping: 25 }}
                                         className="group relative bg-white dark:bg-white/5 p-8 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 h-full"
                                     >
-                                        <div className={`absolute -top-16 -right-16 w-32 h-32 bg-gradient-to-bl ${feat.color} opacity-[0.04] rounded-full blur-2xl pointer-events-none`} />
                                         <div className="relative z-10">
                                             <div className={`w-12 h-12 rounded-xl ${feat.bg} flex items-center justify-center mb-6`}>
                                                 <feat.icon className={`w-6 h-6 bg-gradient-to-br ${feat.color} text-white`} />
@@ -1382,7 +1373,6 @@ export default function Home() {
                ============================================ */}
             <section className="py-24 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white text-center relative overflow-hidden">
                 <div className="absolute inset-0">
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl" />
                 </div>
                 <ScrollReveal variant="scaleIn">
                     <div className="relative max-w-4xl mx-auto px-4 z-10">
@@ -1398,7 +1388,7 @@ export default function Home() {
                             No credit card required.
                         </p>
                         <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                            <Link href="/register" className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-emerald-500 text-white text-lg font-bold rounded-xl hover:bg-emerald-400 transition-colors shadow-xl shadow-emerald-500/20">
+                            <Link href="/register" className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-emerald-500 text-white text-lg font-bold rounded-xl hover:bg-emerald-400 transition-colors">
                                 Install Grid Now <ArrowRight className="w-5 h-5" />
                             </Link>
                             <Link href="/docs" className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-transparent border-2 border-slate-600 text-white text-lg font-bold rounded-xl hover:bg-slate-800 transition-colors">

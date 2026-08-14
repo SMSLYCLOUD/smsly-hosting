@@ -367,7 +367,8 @@ class LocalAdapter(BaseCloudAdapter):
         old_container = None
         with contextlib.suppress(docker.errors.NotFound):
             old_container = self.docker_client.containers.get(name)
-        stage_before_cutover = old_container is not None
+        hold_for_staging = bool(str(env.get('STAGING_DOMAIN', '')).strip())
+        stage_before_cutover = old_container is not None or hold_for_staging
 
         # Traefik routing metadata
         domain = env.get('PUBLIC_DOMAIN', f"{name}.localhost")
@@ -385,12 +386,15 @@ class LocalAdapter(BaseCloudAdapter):
         from apps.domains.utils import normalize_domain
         all_domains = [normalize_domain(domain, allow_ip=True)]
         custom = env.get('CUSTOM_DOMAINS', '')
+        staging_domain = str(env.get('STAGING_DOMAIN', '') or '').strip().lower()
         if custom:
             for d in custom.split(','):
                 d = d.strip()
                 if d:
                     try:
-                        all_domains.append(normalize_domain(d, allow_ip=True))
+                        normalized = normalize_domain(d, allow_ip=True)
+                        if normalized != staging_domain:
+                            all_domains.append(normalized)
                     except ValueError:
                         logger.warning("Skipping invalid custom domain: %s", d)
         host_rule = ' || '.join(f'Host(`{d}`)' for d in all_domains)
@@ -485,7 +489,7 @@ class LocalAdapter(BaseCloudAdapter):
         }
 
         # Check if this is a staged deployment (green candidate with staging domain)
-        is_staged_green = stage_before_cutover and bool(env.get('STAGING_DOMAIN'))
+        is_staged_green = hold_for_staging
 
         # Traefik routing metadata
         if stage_before_cutover and not is_staged_green:
@@ -741,13 +745,20 @@ class LocalAdapter(BaseCloudAdapter):
                 )
             raise RuntimeError(detail)
 
-        if stage_before_cutover:
+        if stage_before_cutover and not hold_for_staging:
             logger.info(
                 "Green container %s is healthy; promoting as %s",
                 container_name,
                 name,
             )
             return self.promote_container(name, new_container.id)
+
+        if hold_for_staging:
+            logger.info(
+                "Green container %s is healthy and held for staging review",
+                container_name,
+            )
+            return new_container.id
 
         logger.info("Container %s is healthy and serving traffic", name)
         return new_container.id

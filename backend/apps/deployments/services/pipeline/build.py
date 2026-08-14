@@ -181,7 +181,10 @@ class BuildMixin:
         )
 
         # Project name = service name (so containers are namespaced)
-        project_name = self.service.name.lower().replace(' ', '-')
+        live_project_name = self.service.name.lower().replace(' ', '-')
+        project_name = live_project_name
+        if getattr(self, "staged_only", False):
+            project_name = f"{live_project_name}-staging-{str(self.deployment.id)[:8]}"
 
         # Validate compose file and resolve main service
         try:
@@ -1016,4 +1019,3 @@ class BuildMixin:
                         "Docker cache corruption detected after automatic recovery attempt."
                     ) from e
                 raise BuildError("Command failed") from e
-

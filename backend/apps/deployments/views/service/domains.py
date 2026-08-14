@@ -305,7 +305,10 @@ class DomainActionsMixin:
         # 5. Check against STAGED deployment staging URLs
         from ...models import Deployment
         if Deployment.objects.filter(
-            status=Deployment.Status.STAGED,
+            status__in=(
+                Deployment.Status.HEALTH_CHECK,
+                Deployment.Status.STAGED,
+            ),
             staging_url__icontains=domain,
         ).exists():
             return Response(status=status.HTTP_200_OK)

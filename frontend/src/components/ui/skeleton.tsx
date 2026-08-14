@@ -27,10 +27,10 @@ export function Skeleton({ className, style }: SkeletonProps) {
 
 export function SkeletonCard() {
     return (
-        <div className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-xl space-y-4">
+        <div className="p-6 rounded border border-border bg-card space-y-4">
             <div className="flex items-center justify-between">
                 <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-8 w-8 rounded-full" />
+                <Skeleton className="h-8 w-8 rounded" />
             </div>
             <Skeleton className="h-8 w-16" />
             <Skeleton className="h-3 w-32" />
@@ -71,8 +71,8 @@ export function SkeletonDashboard() {
             </div>
 
             {/* Content Grid */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-                <div className="col-span-4 p-6 rounded-xl border border-border bg-card/50 backdrop-blur-xl space-y-4">
+            <div className="grid gap-4 md:grid-cols-5">
+                <div className="col-span-3 p-6 rounded border border-border bg-card space-y-4">
                     <Skeleton className="h-6 w-32" />
                     <div className="space-y-3">
                         <SkeletonServiceRow />
@@ -81,7 +81,7 @@ export function SkeletonDashboard() {
                         <SkeletonServiceRow />
                     </div>
                 </div>
-                <div className="col-span-3 p-6 rounded-xl border border-border bg-card/50 backdrop-blur-xl space-y-4">
+                <div className="col-span-2 p-6 rounded border border-border bg-card space-y-4">
                     <Skeleton className="h-6 w-24" />
                     <div className="space-y-2">
                         <Skeleton className="h-4 w-full" />

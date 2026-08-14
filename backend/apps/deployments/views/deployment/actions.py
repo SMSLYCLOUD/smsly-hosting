@@ -400,6 +400,16 @@ class LifecycleActionsMixin:
                           'Only STAGED deployments can be promoted.'},
                 status=status.HTTP_409_CONFLICT)
 
+        if deployment.service.deploy_mode == 'COMPOSE':
+            return Response(
+                {
+                    'error': 'Compose staging is isolated, but project-level promotion '
+                             'is not yet supported. Cancel this staged deployment or '
+                             'deploy it through the normal live flow.'
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         if not deployment.green_container_id:
             return Response(
                 {'error': 'No green container found on this deployment.'},

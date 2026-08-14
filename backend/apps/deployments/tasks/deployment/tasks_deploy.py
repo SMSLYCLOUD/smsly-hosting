@@ -153,7 +153,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
             if service.deploy_type == 'GIT' and not str(service.docker_image or "").strip():
                 with fleet_build_lock(deployment):
-                    pipeline = PipelineManager(deployment)
+                    pipeline = PipelineManager(
+                        deployment,
+                        staged_only=skip_review and not deployment.is_rollback,
+                    )
                     if skip_review:
                         built_image = pipeline.run()
                     else:
@@ -175,7 +178,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 image_name = prebuilt
             elif deployment.is_rollback or skip_review:
                 with fleet_build_lock(deployment):
-                    manager = PipelineManager(deployment)
+                    manager = PipelineManager(
+                        deployment,
+                        staged_only=skip_review and not deployment.is_rollback,
+                    )
                     image_name = manager.run()
             else:
                 manager = PipelineManager(deployment)
