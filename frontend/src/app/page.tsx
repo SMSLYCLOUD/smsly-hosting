@@ -890,12 +890,7 @@ export default function Home() {
             {/* ============================================
                 RARE FEATURES — No Other PaaS Does This
                ============================================ */}
-            <section className="py-24 bg-slate-950 relative overflow-hidden">
-                <div className="absolute inset-0 opacity-[0.03]" style={{
-                    backgroundImage: 'linear-gradient(to right, #fff 1px, transparent 1px), linear-gradient(to bottom, #fff 1px, transparent 1px)',
-                    backgroundSize: '60px 60px',
-                }} />
-
+            <section className="py-24 relative overflow-hidden">
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16">
                         <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold rounded-full mb-6">
@@ -942,11 +937,7 @@ export default function Home() {
             {/* ============================================
                 ECOSYSTEM DEPLOY — Full Visual
                ============================================ */}
-            <section className="py-24 bg-[#0a0f1a] relative overflow-hidden">
-                <div className="absolute inset-0 opacity-[0.03]" style={{
-                    backgroundImage: 'linear-gradient(to right, #fff 1px, transparent 1px), linear-gradient(to bottom, #fff 1px, transparent 1px)',
-                    backgroundSize: '60px 60px',
-                }} />
+            <section className="py-24 relative overflow-hidden">
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <ScrollReveal variant="fadeUp">
                         <div className="text-center mb-12">
@@ -1205,12 +1196,7 @@ export default function Home() {
             {/* ============================================
                 ECOSYSTEM — Secured by Trulay
                ============================================ */}
-            <section className="py-24 bg-slate-950 relative overflow-hidden">
-                <div className="absolute inset-0 opacity-[0.03]" style={{
-                    backgroundImage: 'linear-gradient(to right, #fff 1px, transparent 1px), linear-gradient(to bottom, #fff 1px, transparent 1px)',
-                    backgroundSize: '60px 60px',
-                }} />
-
+            <section className="py-24 relative overflow-hidden">
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16">
                         <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold rounded-full mb-6">

@@ -301,13 +301,26 @@
 
 /* Keep the shared operational grid visible beneath route-level page bands. */
 .premium-bg main.min-h-screen,
-.premium-bg main.min-h-screen > section {
-  background-color: transparent;
-  background-image: none;
+.premium-bg main.min-h-screen > section,
+.premium-bg footer,
+.premium-bg main.min-h-screen > section > div[class*="bg-"] {
+  background-color: transparent !important;
+  background-image: none !important;
 }
 
-.premium-bg main.min-h-screen > section.text-white {
-  background-color: hsl(222 40% 8% / 0.88);
+/* Give dark sections a semi-transparent navy surface so the grid shows through. */
+.premium-bg main.min-h-screen > section[class*="bg-slate-950"],
+.premium-bg main.min-h-screen > section[class*="bg-\[#0a0f1a\]"],
+.premium-bg main.min-h-screen > section[class*="bg-\[#0f172a\]"],
+.premium-bg main.min-h-screen > section.text-white,
+.premium-bg footer {
+  background-color: hsl(222 40% 8% / 0.72) !important;
+}
+
+/* Light-mode sections get a semi-transparent light surface. */
+.premium-bg:not(.dark) main.min-h-screen > section[class*="bg-white"],
+.premium-bg:not(.dark) main.min-h-screen > section[class*="bg-slate-50"] {
+  background-color: hsl(220 14% 98% / 0.82) !important;
 }
 
 /* Legacy public CTAs keep a solid action color without decorative glow. */
