@@ -33,6 +33,47 @@ from .state import _mark_deployment_active, _post_deploy_success
 logger = logging.getLogger(__name__)
 
 
+def _cancel_previous_staged(deployment: Deployment) -> None:
+    """Cancel any prior STAGED deployments for the same service.
+
+    Ensures only one staged version is live at a time — the staging URL is
+    per-service, so multiple staged containers would collide on the same
+    Traefik router and load-balance randomly.
+    """
+    previous = Deployment.objects.filter(
+        service=deployment.service,
+        status__in=(Deployment.Status.STAGED, Deployment.Status.HEALTH_CHECK),
+    ).exclude(id=deployment.id)
+
+    if not previous.exists():
+        return
+
+    client = None
+    try:
+        client = docker.from_env()
+    except Exception:
+        pass
+
+    for old in previous:
+        append_log(deployment, f"[STAGED] Replacing prior staged deployment {old.id} (commit {old.commit_hash[:8] if old.commit_hash else 'unknown'})\n")
+        old.status = Deployment.Status.CANCELLED
+        old.finished_at = timezone.now()
+        old.build_logs += "\n\n[Cancelled] Superseded by a newer staged deployment."
+        old.save(update_fields=['status', 'finished_at', 'build_logs'])
+        # Stop old green container
+        for c_id in [old.green_container_id, old.container_id]:
+            if not c_id or not client:
+                continue
+            try:
+                c = client.containers.get(c_id)
+                c.remove(force=True)
+                logger.info("Removed old staged container %s for deployment %s", c_id, old.id)
+            except docker.errors.NotFound:
+                pass
+            except Exception as exc:
+                logger.warning("Failed to remove old staged container %s: %s", c_id, exc)
+
+
 def _deploy_container(deployment: Deployment, provider: CloudProvider, image_name: str,
                       staged_only: bool = False) -> None:
     from ..deployment.tasks_deploy import _post_deploy_monitor
@@ -80,6 +121,7 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     )
 
             if staged_only:
+                _cancel_previous_staged(deployment)
                 staging_url = service.generate_staging_url(deployment.commit_hash or '')
                 deployment.status = Deployment.Status.STAGED
                 deployment.staging_url = staging_url
@@ -344,6 +386,7 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             )
 
         if staged_only:
+            _cancel_previous_staged(deployment)
             deployment.status = Deployment.Status.STAGED
             deployment.staged_at = timezone.now()
             deployment.container_id = resource.resource_id
