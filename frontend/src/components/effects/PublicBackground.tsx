@@ -24,34 +24,6 @@ const PUBLIC_ROUTES = [
   "/get-started",
   "/logout",
   "/forgot-password",
-  "/reseller",
-  "/store",
-  "/marketplace",
-  "/blueprints",
-  "/templates",
-  "/replication",
-  "/tunnels",
-  "/network",
-  "/monitoring",
-  "/activity",
-  "/functions",
-  "/backups",
-  "/restore",
-  "/transfers",
-  "/servers",
-  "/domains",
-  "/projects",
-  "/new",
-  "/billing",
-  "/client",
-  "/ecosystem",
-  "/intelligence",
-  "/cloud",
-  "/autoscaler",
-  "/topology",
-  "/mcp",
-  "/console",
-  "/admin-dashboard",
 ];
 
 export function isPublicRoute(pathname: string): boolean {
@@ -66,7 +38,7 @@ export function PublicBackground() {
   return (
     <div
       className="fixed inset-0 pointer-events-none"
-      style={{ zIndex: 0 }}
+      style={{ zIndex: -1 }}
       aria-hidden="true"
     >
       <style jsx>{`
