@@ -196,6 +196,7 @@ class Service(TimeStampedModel):
         max_length=255, blank=True, null=True,
         help_text="Custom staging domain for webhook deployments (e.g. staging.example.com). "
                   "If blank, auto-generated from service name + base domain.")
+    staging_domain_verified = models.BooleanField(default=False)  # type: ignore[var-annotated]
 
     # Resource Limits (Simulated for now)
     cpu_cores = models.DecimalField(  # type: ignore[var-annotated]

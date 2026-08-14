@@ -326,6 +326,7 @@ export interface Service {
   domain_verified?: boolean;
   verification_token?: string;
   staging_domain?: string;
+  staging_domain_verified?: boolean;
   created_at?: string;
   cpu_cores?: number;
   memory_mb?: number;

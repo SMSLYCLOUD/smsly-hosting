@@ -247,7 +247,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'build_command', 'start_command', 'root_directory',
             'internal_port',
             'public_domain', 'public_domain_hidden', 'domain_verified',
-            'staging_domain',
+            'staging_domain', 'staging_domain_verified',
             'custom_domains',
             'cpu_cores', 'memory_mb',
             'autoscale_enabled', 'min_replicas', 'max_replicas',
@@ -289,6 +289,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'active_host_ip',
             'active_runtime_id',
             'last_scale_at',
+            'staging_domain_verified',
         ]
 
     def get_service_url(self, obj: Service) -> str:

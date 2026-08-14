@@ -28,7 +28,11 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const [serverIp, setServerIp] = useState<string>('');
     const [stagingDomain, setStagingDomain] = useState(service.staging_domain || '');
     const [savingStaging, setSavingStaging] = useState(false);
-    const [stagingVerified, setStagingVerified] = useState<boolean | null>(null);
+    const [stagingVerified, setStagingVerified] = useState<boolean | null>(() => {
+        if (service.staging_domain_verified === true) return true;
+        if (service.staging_domain_verified === false) return false;
+        return null;
+    });
     const [stagingChecking, setStagingChecking] = useState(false);
     const [stagedDeployment, setStagedDeployment] = useState<Deployment | null>(null);
 
@@ -165,10 +169,14 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const handleSaveStagingDomain = async () => {
         setSavingStaging(true);
         try {
-            const updated = await servicesApi.update(service.id, { staging_domain: stagingDomain.trim() || undefined });
+            const oldDomain = service.staging_domain || '';
+            const newDomain = stagingDomain.trim() || '';
+            const updated = await servicesApi.update(service.id, { staging_domain: newDomain || undefined });
             setService(updated);
-            setStagingVerified(null);
-            toast({ title: 'Staging domain saved', description: stagingDomain.trim() ? `Staging URL: https://${stagingDomain.trim()}` : 'Staging URL will be auto-generated.' });
+            if (oldDomain !== newDomain) {
+                setStagingVerified(null);
+            }
+            toast({ title: 'Staging domain saved', description: newDomain ? `Staging URL: https://${newDomain}` : 'Staging URL will be auto-generated.' });
         } catch (err: any) {
             toast({ title: 'Failed to save', description: err?.response?.data?.error || 'Could not save staging domain.', variant: 'destructive' });
         } finally {
@@ -182,6 +190,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
         try {
             const result = await servicesApi.verifyDomain(service.id, stagingDomain.trim());
             setStagingVerified(result.verified);
+            setService({ ...service, staging_domain_verified: result.verified });
             if (result.verified) {
                 toast({ title: "DNS Verified", description: `${stagingDomain.trim()} is correctly pointing to Grid.` });
             } else {

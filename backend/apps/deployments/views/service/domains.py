@@ -153,15 +153,23 @@ class DomainActionsMixin:
                 self._sync_caddy()
 
         # ── Persist the verification result on the Service model ──
-        # This is the critical step that was missing. Without this, the
-        # domain_verified field stays False forever and the frontend badge
-        # never updates.
-        if is_valid and not service.domain_verified:
-            service.domain_verified = True
-            service.save(update_fields=['domain_verified'])
-        elif not is_valid and service.domain_verified:
-            service.domain_verified = False
-            service.save(update_fields=['domain_verified'])
+        # Write to staging_domain_verified when verifying the staging domain,
+        # to domain_verified otherwise (production/public domain).
+        is_staging = service.staging_domain and domain == service.staging_domain
+        if is_staging:
+            if is_valid and not service.staging_domain_verified:
+                service.staging_domain_verified = True
+                service.save(update_fields=['staging_domain_verified'])
+            elif not is_valid and service.staging_domain_verified:
+                service.staging_domain_verified = False
+                service.save(update_fields=['staging_domain_verified'])
+        else:
+            if is_valid and not service.domain_verified:
+                service.domain_verified = True
+                service.save(update_fields=['domain_verified'])
+            elif not is_valid and service.domain_verified:
+                service.domain_verified = False
+                service.save(update_fields=['domain_verified'])
 
         from ...utils import log_event
         log_event(

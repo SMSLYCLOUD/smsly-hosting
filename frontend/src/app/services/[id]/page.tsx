@@ -355,6 +355,22 @@ export default function ServiceDetailPage() {
         }
     }, [service]);
 
+    // Auto-verify staging domain on first load if domain exists but is not verified.
+    const stagingVerifyTriggered = useRef(false);
+    useEffect(() => {
+        if (
+            service &&
+            service.staging_domain &&
+            !service.staging_domain_verified &&
+            !stagingVerifyTriggered.current
+        ) {
+            stagingVerifyTriggered.current = true;
+            servicesApi.verifyDomain(service.id, service.staging_domain).catch(() => {
+                // Silent — verification is best-effort on load
+            });
+        }
+    }, [service]);
+
     if (!service) return <div className="h-screen flex items-center justify-center bg-background text-muted-foreground">Loading...</div>;
 
     // Simple cost estimation logic (use defaults if not set)
