@@ -1626,6 +1626,178 @@ services:
         limits:
           memory: ${GRAFANA_MEMORY_LIMIT:-1G}
 
+  # ── Falco Runtime Security ──────────────────────────────────────────
+  falco:
+    image: falcosecurity/falco:0.39.2
+    container_name: smsly-falco
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+      - SYS_RESOURCE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro,z
+      - /var/run/docker.sock:/host/var/run/docker.sock:ro,z
+      - /proc:/host/proc:ro,z
+      - /etc:/host/etc:ro,z
+    environment:
+      - HOST_ROOT=/host
+    command: ["/usr/bin/falco", "-o", "json_output=true", "-o", "engine.kind=modern_ebpf"]
+    networks:
+      - smsly-net
+    pid: host
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    labels:
+      - managed_by=smsly-hosting
+
+  # ── SPIRE mTLS Infrastructure ───────────────────────────────────────
+  # Platform trust domain: platform.local
+  # Ecosystem trust domain: ecosystem.local
+  # Agents are started by spire-init after servers generate join tokens.
+
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:1.9.6
+    container_name: smsly-spire-server
+    hostname: spire-server
+    restart: unless-stopped
+    volumes:
+      - spire-server-data:/opt/spire/data
+      - ./infrastructure/spire/server.conf:/etc/spire/server.conf:ro,z
+      - ./infrastructure/spire/registration_entries.json:/etc/spire/entries.json:ro,z
+    environment:
+      SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
+    command: ["-config", "/etc/spire/server.conf"]
+    networks:
+      - smsly-net
+    ports:
+      - "127.0.0.1:8083:8081"
+      - "127.0.0.1:8084:8080"
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck", "-socketPath", "/tmp/spire-server/private/api.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: ${SPIRE_SERVER_MEMORY_LIMIT:-256M}
+    labels:
+      - managed_by=smsly-hosting
+
+  spire-server-ecosystem:
+    image: ghcr.io/spiffe/spire-server:1.9.6
+    container_name: smsly-spire-server-ecosystem
+    hostname: spire-server-ecosystem
+    restart: unless-stopped
+    volumes:
+      - spire-ecosystem-server-data:/opt/spire/data
+      - ./infrastructure/spire/server-ecosystem.conf:/etc/spire/server.conf:ro,z
+      - ./infrastructure/spire/registration_entries_ecosystem.json:/etc/spire/entries.json:ro,z
+    environment:
+      SPIFFE_TRUST_DOMAIN: ${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}
+    command: ["-config", "/etc/spire/server.conf"]
+    networks:
+      - smsly-net
+    ports:
+      - "127.0.0.1:8091:8081"
+      - "127.0.0.1:8090:8080"
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck", "-socketPath", "/tmp/spire-server/private/api.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: ${SPIRE_SERVER_MEMORY_LIMIT:-256M}
+    labels:
+      - managed_by=smsly-hosting
+
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.9.6
+    container_name: smsly-spire-agent
+    hostname: spire-agent
+    restart: unless-stopped
+    volumes:
+      - spire-agent-data:/opt/spire/data
+      - spire-agent-socket:/opt/spire/run
+      - spire-agent-svids:/opt/spire/svids
+      - ./infrastructure/spire/agent.conf:/etc/spire/agent.conf:ro,z
+    environment:
+      SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
+      DOCKER_HOST: tcp://traefik-socket-proxy:2375
+    command: ["-config", "/etc/spire/agent.conf"]
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/opt/spire/run/agent.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: ${SPIRE_AGENT_MEMORY_LIMIT:-128M}
+    labels:
+      - managed_by=smsly-hosting
+
+  spire-agent-ecosystem:
+    image: ghcr.io/spiffe/spire-agent:1.9.6
+    container_name: smsly-spire-agent-ecosystem
+    hostname: spire-agent-ecosystem
+    restart: unless-stopped
+    volumes:
+      - spire-ecosystem-agent-data:/opt/spire/data
+      - spire-ecosystem-agent-socket:/opt/spire/run
+      - spire-ecosystem-agent-svids:/opt/spire/svids
+      - ./infrastructure/spire/agent-ecosystem.conf:/etc/spire/agent.conf:ro,z
+    environment:
+      SPIFFE_TRUST_DOMAIN: ${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}
+      DOCKER_HOST: tcp://traefik-socket-proxy:2375
+    command: ["-config", "/etc/spire/agent.conf"]
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/opt/spire/run/agent.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: ${SPIRE_AGENT_MEMORY_LIMIT:-128M}
+    labels:
+      - managed_by=smsly-hosting
+
 networks:
   smsly-net:
     external: true
@@ -1679,3 +1851,11 @@ volumes:
   grafana-data: null
   promtail-positions: null
   alertmanager-data: null
+
+  # SPIRE mTLS volumes
+  spire-server-data: null
+  spire-ecosystem-server-data: null
+  spire-agent-data: null
+  spire-ecosystem-agent-data: null
+  spire-ecosystem-agent-socket: null
+  spire-ecosystem-agent-svids: null
