@@ -7,17 +7,18 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg-1: #030713;
-      --bg-2: #0a1a38;
-      --panel: rgba(8, 18, 40, 0.9);
-      --line: rgba(76, 148, 255, 0.3);
-      --text: #ebf4ff;
-      --muted: #9db2cc;
-      --ok: #20d59c;
-      --warn: #ffd27d;
-      --err: #ff8f8f;
-      --btn: #19c78f;
-      --btn-text: #032218;
+      --bg: #080c18;
+      --panel: #0d1322;
+      --border: #1a2438;
+      --border-hover: #2a3a58;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --dim: #6b7280;
+      --primary: #10b981;
+      --primary-hover: #059669;
+      --primary-text: #05060d;
+      --warn: #f59e0b;
+      --err: #ef4444;
     }
     * { box-sizing: border-box; }
     body {
@@ -25,32 +26,33 @@
       min-height: 100vh;
       font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
       color: var(--text);
-      background:
-        radial-gradient(1200px 500px at 5% -10%, #184c9955, transparent 60%),
-        radial-gradient(900px 420px at 95% 0%, #0d968155, transparent 60%),
-        linear-gradient(150deg, var(--bg-1), var(--bg-2));
+      background-color: var(--bg);
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+      background-size: 24px 24px, 24px 24px, 96px 96px, 96px 96px;
       display: grid;
       place-items: center;
       padding: 22px;
     }
     .panel {
       width: min(760px, 100%);
-      border: 1px solid var(--line);
-      border-radius: 18px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
       background: var(--panel);
-      box-shadow: 0 24px 60px rgba(2, 10, 24, 0.56);
-      backdrop-filter: blur(8px);
       overflow: hidden;
     }
     .bar {
       height: 3px;
       width: 100%;
-      background: linear-gradient(90deg, #21d6a0, #48a7ff, #21d6a0);
+      background: linear-gradient(90deg, transparent, var(--primary), transparent);
       background-size: 200% 100%;
       animation: flow 2.8s linear infinite;
     }
     @keyframes flow {
-      0% { background-position: 0 0; }
+      0% { background-position: -100% 0; }
       100% { background-position: 200% 0; }
     }
     .content {
@@ -60,20 +62,24 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      font-size: 12px;
+      font-size: 10px;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--muted);
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 6px 10px;
+      letter-spacing: 0.18em;
+      color: var(--primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #111827;
+      padding: 6px 12px;
       margin-bottom: 10px;
+      font-weight: 700;
     }
     h1 {
       margin: 0 0 10px;
       font-size: clamp(24px, 4vw, 35px);
       line-height: 1.2;
       letter-spacing: -0.02em;
+      color: #fff;
+      font-weight: 800;
     }
     p {
       margin: 0 0 12px;
@@ -83,13 +89,14 @@
     }
     .host {
       margin-top: 14px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
       padding: 10px 12px;
-      color: #5eb3ff;
-      background: rgba(5, 14, 31, 0.65);
+      color: #3b82f6;
+      background: #111827;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       word-break: break-all;
+      font-size: 14px;
     }
     .actions {
       display: flex;
@@ -99,23 +106,30 @@
     }
     button, a.btn {
       appearance: none;
-      border: 0;
-      border-radius: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
       padding: 11px 14px;
       font-size: 14px;
-      font-weight: 600;
+      font-weight: 700;
       cursor: pointer;
       text-decoration: none;
-      transition: transform .12s ease, filter .2s ease, background .2s ease;
+      transition: border-color 0.2s ease, background 0.2s ease;
     }
-    button:hover, a.btn:hover { transform: translateY(-1px); filter: brightness(1.05); }
+    button:hover, a.btn:hover {
+      border-color: var(--border-hover);
+      background: #162032;
+    }
     .primary {
-      background: linear-gradient(135deg, var(--btn), #11b8d8);
-      color: var(--btn-text);
+      background: var(--primary);
+      border: 1px solid var(--primary);
+      color: var(--primary-text);
+    }
+    .primary:hover {
+      background: var(--primary-hover);
+      border-color: var(--primary-hover);
     }
     .ghost {
-      background: rgba(13, 30, 63, 0.58);
-      border: 1px solid var(--line);
+      background: #111827;
       color: var(--text);
     }
     .status {
@@ -124,13 +138,13 @@
       font-size: 13px;
       color: var(--muted);
     }
-    .status[data-tone="ok"] { color: var(--ok); }
+    .status[data-tone="ok"] { color: var(--primary); }
     .status[data-tone="warn"] { color: var(--warn); }
     .status[data-tone="err"] { color: var(--err); }
     .hint {
       margin-top: 14px;
       font-size: 12px;
-      color: #9ab0c9;
+      color: var(--dim);
     }
   </style>
 </head>
@@ -222,4 +236,3 @@
   </script>
 </body>
 </html>
-
