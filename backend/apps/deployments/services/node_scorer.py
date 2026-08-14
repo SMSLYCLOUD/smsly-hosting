@@ -98,23 +98,45 @@ class NodeScorer:
         return None
 
     def _query_node_mem(self, node):
-        return self._promql_avg(
-            f'100 - (node_memory_MemAvailable_bytes{{instance=~".*{self._node_ip(node)}.*"}} '
-            f'/ node_memory_MemTotal_bytes{{instance=~".*{self._node_ip(node)}.*"}} * 100)'
+        ip = self._node_ip(node)
+        result = self._promql_avg(
+            f'100 - (node_memory_MemAvailable_bytes{{instance=~".*{ip}.*"}} '
+            f'/ node_memory_MemTotal_bytes{{instance=~".*{ip}.*"}} * 100)'
         )
+        if result is None:
+            result = self._promql_avg(
+                f'100 - (node_memory_MemAvailable_bytes{{job="node"}} '
+                f'/ node_memory_MemTotal_bytes{{job="node"}} * 100)'
+            )
+        return result
 
     def _query_node_cpu(self, node):
-        return self._promql_avg(
+        ip = self._node_ip(node)
+        result = self._promql_avg(
             f'100 - (avg by(instance)(rate(node_cpu_seconds_total{{mode!="idle",'
-            f'instance=~".*{self._node_ip(node)}.*"}}[2m])) * 100)'
+            f'instance=~".*{ip}.*"}}[2m])) * 100)'
         )
+        if result is None:
+            result = self._promql_avg(
+                f'100 - (avg by(instance)(rate(node_cpu_seconds_total{{mode!="idle",'
+                f'job="node"}}[2m])) * 100)'
+            )
+        return result
 
     def _query_node_disk(self, node):
-        return self._promql_avg(
-            f'100 - (node_filesystem_avail_bytes{{instance=~".*{self._node_ip(node)}.*",'
-            f'mountpoint="/"}} / node_filesystem_size_bytes{{instance=~".*{self._node_ip(node)}.*",'
+        ip = self._node_ip(node)
+        result = self._promql_avg(
+            f'100 - (node_filesystem_avail_bytes{{instance=~".*{ip}.*",'
+            f'mountpoint="/"}} / node_filesystem_size_bytes{{instance=~".*{ip}.*",'
             f'mountpoint="/"}} * 100)'
         )
+        if result is None:
+            result = self._promql_avg(
+                f'100 - (node_filesystem_avail_bytes{{job="node",'
+                f'mountpoint="/"}} / node_filesystem_size_bytes{{job="node",'
+                f'mountpoint="/"}} * 100)'
+            )
+        return result
 
     def _promql_avg(self, query):
         try:
