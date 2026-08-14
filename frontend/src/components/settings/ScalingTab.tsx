@@ -187,7 +187,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         <CardHeader>
           <CardTitle>Horizontal Auto-Scaling (HPA)</CardTitle>
           <CardDescription>
-            Spawns replicas across remote nodes for fault isolation and load distribution. Falls back to the local server when no remote nodes are available.
+            Replicates containers on the same server for low-latency inter-replica communication. Falls back to remote nodes when local capacity is exceeded.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-8">
@@ -238,7 +238,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         <CardHeader>
           <CardTitle>Vertical Auto-Scaling (VPA)</CardTitle>
           <CardDescription>
-            Increases CPU/Memory on the same server. Does not create replicas on other nodes.
+            Spawns replicas across different servers/nodes for fault isolation and geographic distribution.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex items-center justify-between">
