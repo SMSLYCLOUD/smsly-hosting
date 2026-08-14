@@ -28,7 +28,7 @@ export const viewport: Viewport = {
 import { LazyMount } from "@/components/LazyMount";
 import { ThreeCompat } from "@/components/three-compat";
 import { ReactQueryProvider } from "@/components/react-query-provider";
-import { OperationalMesh } from "@/components/effects/OperationalMesh";
+import { AppBackground } from "@/components/effects/AppBackground";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import FloatingAILoader from "@/components/ai/FloatingAILoader";
@@ -60,7 +60,7 @@ export default function RootLayout({
               <TierProvider>
                 <ConfirmProvider>
                   <SpaceOpsProvider>
-                  <OperationalMesh />
+                  <AppBackground />
                   <CommandPalette />
                   <Navbar />
                   <main className="min-h-[calc(100vh-3.5rem)] flex flex-col">
