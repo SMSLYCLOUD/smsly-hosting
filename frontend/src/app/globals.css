@@ -307,22 +307,6 @@
   background-image: none !important;
 }
 
-/* Give dark sections a semi-transparent navy surface so the grid shows through. */
-.premium-bg main.min-h-screen > section[class*="bg-slate-950"],
-.premium-bg main.min-h-screen > section[class*="bg-slate-900"],
-.premium-bg main.min-h-screen > section[class*="bg-\[#0a0f1a\]"],
-.premium-bg main.min-h-screen > section[class*="bg-\[#0f172a\]"],
-.premium-bg main.min-h-screen > section.text-white,
-.premium-bg footer {
-  background-color: hsl(222 40% 8% / 0.72) !important;
-}
-
-/* Light-mode sections get a semi-transparent light surface. */
-.premium-bg:not(.dark) main.min-h-screen > section[class*="bg-white"],
-.premium-bg:not(.dark) main.min-h-screen > section[class*="bg-slate-50"] {
-  background-color: hsl(220 14% 98% / 0.82) !important;
-}
-
 /* Legacy public CTAs keep a solid action color without decorative glow. */
 .premium-bg main a[class*="shadow-"][class*="emerald"],
 .premium-bg main button[class*="shadow-"][class*="emerald"],

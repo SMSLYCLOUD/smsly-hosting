@@ -795,7 +795,7 @@ export default function Home() {
             {/* ============================================
                 PLATFORM STATS — Key numbers
                ============================================ */}
-            <section className="py-16 bg-white dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800">
+            <section className="py-16 border-t border-slate-100 dark:border-slate-800">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <ScrollReveal variant="staggerContainer">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
@@ -820,7 +820,7 @@ export default function Home() {
             {/* ============================================
                 THE PROBLEM
                ============================================ */}
-            <section className="py-20 bg-slate-50 dark:bg-slate-900">
+            <section className="py-20">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16">
                         <h2 className="text-3xl md:text-4xl font-bold text-slate-900 dark:text-white mb-4">
@@ -854,7 +854,7 @@ export default function Home() {
             {/* ============================================
                 HOW GRID SOLVES IT
                ============================================ */}
-            <section className="py-20 bg-white dark:bg-slate-950">
+            <section className="py-20">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16">
                         <h2 className="text-3xl md:text-4xl font-bold text-slate-900 dark:text-white mb-4">
@@ -964,7 +964,7 @@ export default function Home() {
             {/* ============================================
                 HIGH AVAILABILITY INFRASTRUCTURE
                ============================================ */}
-            <section className="py-24 bg-white dark:bg-slate-950">
+            <section className="py-24">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16">
                         <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded-full mb-6">
@@ -1027,7 +1027,7 @@ export default function Home() {
             {/* ============================================
                 DEVELOPER EXPERIENCE — Dashboard + Terminal
                ============================================ */}
-            <section className="py-24 bg-slate-50 dark:bg-slate-900">
+            <section className="py-24">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex flex-col lg:flex-row items-center gap-16">
                         <ScrollReveal variant="slideLeft" className="lg:w-1/2">
@@ -1121,7 +1121,7 @@ export default function Home() {
             {/* ============================================
                 COMPARISON
                ============================================ */}
-            <section className="py-24 bg-white dark:bg-slate-950">
+            <section className="py-24">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16">
                         <h2 className="text-3xl md:text-4xl font-bold text-slate-900 dark:text-white mb-4">
@@ -1252,7 +1252,7 @@ export default function Home() {
             {/* ============================================
                 SECURITY & COMPLIANCE
                ============================================ */}
-            <section className="py-24 bg-white dark:bg-slate-950">
+            <section className="py-24">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex flex-col lg:flex-row items-center gap-16">
                         <ScrollReveal variant="slideLeft" className="lg:w-1/2">
