@@ -108,12 +108,80 @@ class Reconciler:
             spawner = SpawningService()
             remaining = rec.scale_up_by
 
-            # Priority 1: try local spawn directly (spawn_local checks
-            # capacity internally). No separate _check_local_capacity
-            # call — that would create a TOCTOU race where capacity
-            # passes but spawn_local fails, skipping local entirely.
-            local_ok = True
+            # Priority 1: remote nodes — horizontal scaling spreads replicas
+            # across different servers for fault isolation and load distribution.
+            candidates = ManagedServer.objects.filter(
+                status=ManagedServer.Status.ONLINE,
+                allow_user_workloads=True,
+            ).exclude(is_primary=True)
 
+            if candidates.exists():
+                scorer = NodeScorer()
+                scores = scorer.score(candidates)
+
+                from apps.deployments.services.node_scorer import _get_min_score
+                min_score = _get_min_score()
+                qualified = [(n, s, r) for n, s, r in scores if s >= min_score]
+                fallback = [(n, s, r) for n, s, r in scores if 0 <= s < min_score]
+
+                if not qualified and not fallback:
+                    logger.info(
+                        "All %d remote nodes unreachable (score=-1) for %s — "
+                        "falling back to local",
+                        len(scores), self.service.name,
+                    )
+                else:
+                    nodes_to_try = qualified + fallback
+                    if not qualified:
+                        best_node, best_score, best_res = fallback[0]
+                        logger.warning(
+                            "All nodes below min_score=%d for %s — trying best "
+                            "node %s (score=%.1f) as fallback",
+                            min_score, self.service.name,
+                            best_node.name, best_score,
+                        )
+
+                    for node, score, resources in nodes_to_try:
+                        if spawned >= remaining:
+                            break
+                        replica = ServiceReplica.objects.create(
+                            service=self.service, node=node,
+                            spawn_reason=rec.reason, status='SPAWNING',
+                        )
+                        try:
+                            spawner.spawn(self.service, node, replica)
+                            spawned += 1
+                            logger.info(
+                                "Auto-scaled %s: spawned on %s (score=%.1f, "
+                                "mem=%.0f%% cpu=%.0f%% disk=%.0f%%)",
+                                self.service.name, node.name, score,
+                                resources['mem'], resources['cpu'], resources['disk'],
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Remote spawn failed for %s on %s (score=%.1f, "
+                                "mem=%.0f%% cpu=%.0f%% disk=%.0f%%): %s",
+                                self.service.name, node.name, score,
+                                resources['mem'], resources['cpu'], resources['disk'],
+                                exc,
+                            )
+                            try:
+                                spawner.destroy(replica)
+                            except Exception as exc:
+                                logger.debug("Destroy replica after remote spawn failure: %s", exc)
+                            replica.status = 'DESTROYED'
+                            replica.save(update_fields=['status'])
+            else:
+                logger.info("No remote nodes available for %s — using local spawn", self.service.name)
+
+            if spawned >= remaining:
+                self._record_scale()
+                return ScaleResult(rec, applied=True, spawned=spawned)
+
+            # Priority 2: local spawn (fallback when no remote nodes or
+            # remote spawns failed). This is vertical scaling — adding more
+            # capacity on the same server.
+            local_ok = True
             while spawned < remaining and local_ok:
                 replica = ServiceReplica.objects.create(
                     service=self.service, node=None,
@@ -132,84 +200,6 @@ class Reconciler:
                     replica.save(update_fields=['status'])
                     local_ok = False
 
-            if spawned >= remaining:
-                self._record_scale()
-                return ScaleResult(rec, applied=True, spawned=spawned)
-
-            # Priority 2: remote nodes
-            candidates = ManagedServer.objects.filter(
-                status=ManagedServer.Status.ONLINE,
-                allow_user_workloads=True,
-            ).exclude(is_primary=True)
-            if not candidates.exists():
-                logger.warning("No remote nodes for scaling %s", self.service.name)
-                if spawned > 0:
-                    self._record_scale()
-                    return ScaleResult(rec, applied=True, spawned=spawned)
-                return ScaleResult(rec, applied=False,
-                                   error='No remote nodes available')
-
-            scorer = NodeScorer()
-            scores = scorer.score(candidates)
-
-            # Separate nodes into qualified (score >= min_score) and
-            # fallback (score < min_score but not -1/unreachable).
-            # The Prometheus score is predictive; the SSH capacity check
-            # in SpawningService.spawn() is the ground truth.  When all
-            # nodes score low we still try the best one as a fallback.
-            from apps.deployments.services.node_scorer import _get_min_score
-            min_score = _get_min_score()
-            qualified = [(n, s, r) for n, s, r in scores if s >= min_score]
-            fallback = [(n, s, r) for n, s, r in scores if 0 <= s < min_score]
-
-            if not qualified and not fallback:
-                logger.warning(
-                    "All %d remote nodes unreachable (score=-1) for %s",
-                    len(scores), self.service.name,
-                )
-                return ScaleResult(rec, applied=False,
-                                   error='All remote nodes unreachable')
-
-            nodes_to_try = qualified + fallback
-            if not qualified:
-                best_node, best_score, best_res = fallback[0]
-                logger.warning(
-                    "All nodes below min_score=%d for %s — trying best "
-                    "node %s (score=%.1f) as fallback",
-                    min_score, self.service.name,
-                    best_node.name, best_score,
-                )
-
-            for node, score, resources in nodes_to_try:
-                if spawned >= remaining:
-                    break
-                replica = ServiceReplica.objects.create(
-                    service=self.service, node=node,
-                    spawn_reason=rec.reason, status='SPAWNING',
-                )
-                try:
-                    spawner.spawn(self.service, node, replica)
-                    spawned += 1
-                    logger.info(
-                        "Auto-scaled %s: spawned on %s (score=%.1f, "
-                        "mem=%.0f%% cpu=%.0f%% disk=%.0f%%)",
-                        self.service.name, node.name, score,
-                        resources['mem'], resources['cpu'], resources['disk'],
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Remote spawn failed for %s on %s (score=%.1f, "
-                        "mem=%.0f%% cpu=%.0f%% disk=%.0f%%): %s",
-                        self.service.name, node.name, score,
-                        resources['mem'], resources['cpu'], resources['disk'],
-                        exc,
-                    )
-                    try:
-                        spawner.destroy(replica)
-                    except Exception as exc:
-                        logger.debug("Destroy replica after remote spawn failure: %s", exc)
-                    replica.status = 'DESTROYED'
-                    replica.save(update_fields=['status'])
             if spawned > 0:
                 self._record_scale()
                 return ScaleResult(rec, applied=True, spawned=spawned)
