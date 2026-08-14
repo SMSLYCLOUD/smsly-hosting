@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}SMSLY Hosting{% endblock %}</title>
+    <title>{% block title %}Trulay Grid{% endblock %}</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
@@ -11,209 +11,208 @@
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+            background-color: #080c18;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+            background-size: 24px 24px, 24px 24px, 96px 96px, 96px 96px;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #fff;
+            color: #e5e7eb;
         }
-        
+
         .auth-container {
             width: 100%;
             max-width: 420px;
             padding: 20px;
         }
-        
+
         .auth-card {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 24px;
+            background: #0d1322;
+            border: 1px solid #1a2438;
+            border-radius: 12px;
             padding: 40px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
         }
-        
+
         .logo {
             text-align: center;
             margin-bottom: 32px;
         }
-        
+
         .logo h1 {
             font-size: 28px;
             font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #10b981;
         }
-        
+
         .logo p {
-            color: rgba(255, 255, 255, 0.6);
+            color: #6b7280;
             font-size: 14px;
             margin-top: 8px;
         }
-        
+
         h2 {
             font-size: 24px;
             font-weight: 600;
             text-align: center;
             margin-bottom: 24px;
+            color: #fff;
         }
-        
+
         .form-group {
             margin-bottom: 20px;
         }
-        
+
         label {
             display: block;
             font-size: 14px;
             font-weight: 500;
-            color: rgba(255, 255, 255, 0.8);
+            color: #9ca3af;
             margin-bottom: 8px;
         }
-        
+
         input[type="text"],
         input[type="email"],
         input[type="password"] {
             width: 100%;
             padding: 14px 16px;
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            border-radius: 12px;
+            background: #111827;
+            border: 1px solid #1a2438;
+            border-radius: 8px;
             color: #fff;
             font-size: 15px;
-            transition: all 0.3s ease;
+            transition: border-color 0.2s ease;
         }
-        
+
         input:focus {
             outline: none;
-            border-color: #667eea;
-            background: rgba(255, 255, 255, 0.12);
-            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.15);
+            border-color: #10b981;
         }
-        
+
         input::placeholder {
-            color: rgba(255, 255, 255, 0.4);
+            color: #4b5563;
         }
-        
+
         .btn {
             width: 100%;
             padding: 14px 24px;
             border: none;
-            border-radius: 12px;
+            border-radius: 8px;
             font-size: 15px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: background 0.2s ease, border-color 0.2s ease;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 10px;
         }
-        
+
         .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #fff;
+            background: #10b981;
+            color: #05060d;
         }
-        
+
         .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+            background: #059669;
         }
-        
+
         .btn-social {
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            color: #fff;
+            background: #111827;
+            border: 1px solid #1a2438;
+            color: #e5e7eb;
             margin-bottom: 12px;
         }
-        
+
         .btn-social:hover {
-            background: rgba(255, 255, 255, 0.15);
-            transform: translateY(-2px);
+            background: #162032;
+            border-color: #2a3a58;
         }
-        
+
         .btn-github {
-            background: #24292e;
+            background: #111827;
         }
-        
+
         .btn-github:hover {
-            background: #2f363d;
+            background: #162032;
         }
-        
+
         .btn-google {
             background: #fff;
             color: #333;
         }
-        
+
         .btn-google:hover {
             background: #f5f5f5;
         }
-        
+
         .divider {
             display: flex;
             align-items: center;
             margin: 28px 0;
         }
-        
+
         .divider::before,
         .divider::after {
             content: '';
             flex: 1;
             height: 1px;
-            background: rgba(255, 255, 255, 0.15);
+            background: #1a2438;
         }
-        
+
         .divider span {
             padding: 0 16px;
-            color: rgba(255, 255, 255, 0.5);
+            color: #6b7280;
             font-size: 13px;
         }
-        
+
         .auth-links {
             text-align: center;
             margin-top: 24px;
         }
-        
+
         .auth-links a {
-            color: #667eea;
+            color: #10b981;
             text-decoration: none;
             font-size: 14px;
-            transition: color 0.3s ease;
+            transition: color 0.2s ease;
         }
-        
+
         .auth-links a:hover {
-            color: #764ba2;
+            color: #059669;
         }
-        
+
         .error-list {
-            background: rgba(239, 68, 68, 0.15);
+            background: rgba(239, 68, 68, 0.1);
             border: 1px solid rgba(239, 68, 68, 0.3);
-            border-radius: 12px;
+            border-radius: 8px;
             padding: 16px;
             margin-bottom: 20px;
         }
-        
+
         .error-list ul {
             list-style: none;
             color: #fca5a5;
             font-size: 14px;
         }
-        
+
         .error-list li {
             margin-bottom: 4px;
         }
-        
+
         .help-text {
             font-size: 12px;
-            color: rgba(255, 255, 255, 0.5);
+            color: #6b7280;
             margin-top: 6px;
         }
-        
+
         svg {
             width: 20px;
             height: 20px;
@@ -224,8 +223,8 @@
     <div class="auth-container">
         <div class="auth-card">
             <div class="logo">
-                <h1>SMSLY Hosting</h1>
-                <p>Deploy your apps in seconds</p>
+                <h1>Trulay Grid</h1>
+                <p>The trust layer for internet communications</p>
             </div>
             {% block content %}{% endblock %}
         </div>

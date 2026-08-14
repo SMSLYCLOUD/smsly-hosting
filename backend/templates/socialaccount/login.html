@@ -1,11 +1,11 @@
 {% extends "account/base.html" %} {% block title %}Authorize {{ provider.name }}
-— SMSLY Hosting{% endblock %} {% block content %}
+— Trulay Grid{% endblock %} {% block content %}
 <h2>Connect {{ provider.name }}</h2>
 
 <div style="text-align: center; margin-bottom: 28px">
   <p
     style="
-      color: rgba(255, 255, 255, 0.7);
+      color: #9ca3af;
       font-size: 14px;
       margin-bottom: 20px;
     "
@@ -17,25 +17,25 @@
   <!-- Permissions summary -->
   <div
     style="
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 16px;
+      background: #111827;
+      border: 1px solid #1a2438;
+      border-radius: 8px;
       padding: 20px;
       text-align: left;
       max-width: 340px;
       margin: 0 auto;
     "
   >
-    <p
-      style="
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: rgba(255, 255, 255, 0.4);
-        margin-bottom: 12px;
-        font-weight: 600;
-      "
-    >
+      <p
+        style="
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #6b7280;
+          margin-bottom: 12px;
+          font-weight: 600;
+        "
+      >
       Permissions requested
     </p>
     <div style="display: flex; flex-direction: column; gap: 8px">
@@ -46,21 +46,21 @@
           align-items: center;
           gap: 10px;
           font-size: 13px;
-          color: rgba(255, 255, 255, 0.8);
-        "
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
-          <circle cx="9" cy="7" r="4" />
-        </svg>
-        <span>Read your profile info</span>
+          color: #9ca3af;
+         "
+       >
+         <svg
+           width="16"
+           height="16"
+           viewBox="0 0 24 24"
+           fill="none"
+           stroke="currentColor"
+           stroke-width="2"
+         >
+           <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
+           <circle cx="9" cy="7" r="4" />
+         </svg>
+         <span>Read your profile info</span>
       </div>
       <div
         style="
@@ -68,22 +68,22 @@
           align-items: center;
           gap: 10px;
           font-size: 13px;
-          color: rgba(255, 255, 255, 0.8);
-        "
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path
-            d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2v11z"
-          />
-        </svg>
-        <span>Access public & private repos</span>
+          color: #9ca3af;
+         "
+       >
+         <svg
+           width="16"
+           height="16"
+           viewBox="0 0 24 24"
+           fill="none"
+           stroke="currentColor"
+           stroke-width="2"
+         >
+           <path
+             d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2v11z"
+           />
+         </svg>
+         <span>Access public & private repos</span>
       </div>
       <div
         style="
@@ -91,22 +91,22 @@
           align-items: center;
           gap: 10px;
           font-size: 13px;
-          color: rgba(255, 255, 255, 0.8);
-        "
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
-          <circle cx="9" cy="7" r="4" />
-          <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
-        </svg>
-        <span>Read organization membership</span>
+          color: #9ca3af;
+         "
+       >
+         <svg
+           width="16"
+           height="16"
+           viewBox="0 0 24 24"
+           fill="none"
+           stroke="currentColor"
+           stroke-width="2"
+         >
+           <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+           <circle cx="9" cy="7" r="4" />
+           <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+         </svg>
+         <span>Read organization membership</span>
       </div>
       {% elif provider.id == 'google' %}
       <div
@@ -115,21 +115,21 @@
           align-items: center;
           gap: 10px;
           font-size: 13px;
-          color: rgba(255, 255, 255, 0.8);
-        "
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
-          <circle cx="9" cy="7" r="4" />
-        </svg>
-        <span>Read your profile info & email</span>
+          color: #9ca3af;
+         "
+       >
+         <svg
+           width="16"
+           height="16"
+           viewBox="0 0 24 24"
+           fill="none"
+           stroke="currentColor"
+           stroke-width="2"
+         >
+           <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
+           <circle cx="9" cy="7" r="4" />
+         </svg>
+         <span>Read your profile info & email</span>
       </div>
       {% endif %}
     </div>
@@ -187,11 +187,11 @@
   style="
     text-align: center;
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.35);
+    color: #4b5563;
     margin-top: 16px;
   "
 >
-  By connecting, you agree to share the above permissions with SMSLY Hosting.<br />
+  By connecting, you agree to share the above permissions with Trulay Grid.<br />
   You can revoke access at any time from your {{ provider.name }} settings.
 </p>
 
