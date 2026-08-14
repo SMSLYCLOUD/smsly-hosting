@@ -151,6 +151,13 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
     )
     rec: Recommendation = engine.decide()
 
+    # 4a. VPA: if enabled and action is scale_up, adjust resources instead of spawning
+    if rec.action == 'scale_up' and getattr(service, 'vpa_enabled', False):
+        from apps.autoscaler.engine.vpa import apply_vpa
+        vpa_result = apply_vpa(service, metrics, rec, now=now)
+        if vpa_result:
+            return ScaleResult(rec, applied=True, spawned=0, error=None)
+
     # 4. Apply
     result = Reconciler(service, now=now).apply(rec)
     return result

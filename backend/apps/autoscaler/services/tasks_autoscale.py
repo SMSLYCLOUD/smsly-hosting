@@ -34,17 +34,12 @@ def analyze_all_services_task(self) -> dict[str, int]:
     analyzed = 0
     last_id = None
     while True:
-        base = ServiceReplica.objects.filter(status='RUNNING').values_list(
-            'service_id', flat=True
-        )
         qs = Service.objects.filter(
             status='ACTIVE',
         ).filter(
             db_models.Q(autoscale_enabled=True) | db_models.Q(autoscale_enabled__isnull=True),
+            max_replicas__gt=1,
         ).distinct()
-        qs = qs.filter(
-            db_models.Q(id__in=base) | db_models.Q(compose_file='', deploy_mode='SINGLE')
-        )
         if last_id is not None:
             qs = qs.filter(id__gt=last_id)
         batch = list(qs.order_by('id')[:AUTOSCALE_BATCH_SIZE])
@@ -111,4 +106,16 @@ def cleanup_stuck_spawning(self) -> dict[str, int]:
     if count > 0:
         logger.warning("Cleaning up %d stuck SPAWNING replicas (older than %ds)", count, _STUCK_SPAWN_THRESHOLD_SECONDS)
         stuck.update(status='DESTROYED', destroyed_at=timezone.now())
-    return {'cleaned': count}
+
+    # Also delete old DESTROYED replicas (> 24h) to prevent table bloat
+    old_threshold = timezone.now() - timedelta(hours=24)
+    old_destroyed = ServiceReplica.objects.filter(
+        status='DESTROYED',
+        destroyed_at__lt=old_threshold,
+    )
+    old_count = old_destroyed.count()
+    if old_count > 0:
+        logger.info("Deleting %d old DESTROYED replicas (>24h)", old_count)
+        old_destroyed.delete()
+
+    return {'cleaned': count, 'old_deleted': old_count}
