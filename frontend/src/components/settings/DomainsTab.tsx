@@ -210,6 +210,80 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     <Globe className="w-10 h-10 text-muted-foreground/20" />
                 </div>
 
+                {/* DNS Setup Instructions — at the top */}
+                <div className="mb-8 p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg">
+                    <p className="text-sm font-medium text-blue-400 mb-3">DNS Setup</p>
+
+                    {/* Default Domain */}
+                    <p className="text-xs font-semibold text-muted-foreground mb-1">
+                        Default Domain — auto-configured, no DNS needed
+                    </p>
+                    <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-3">
+                        <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copyToClipboard(defaultDomain)}>
+                            <Copy size={14} />
+                        </Button>
+                    </div>
+
+                    {/* Custom Domains */}
+                    <p className="text-xs font-semibold text-muted-foreground mb-1 mt-4">
+                        Custom Domains — CNAME for subdomains
+                    </p>
+                    <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-2">
+                        <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copyToClipboard(defaultDomain)}>
+                            <Copy size={14} />
+                        </Button>
+                    </div>
+                    <div className="flex items-center gap-2 mb-3 text-xs text-muted-foreground">
+                        <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">app.example.com</span>
+                        <ArrowRight size={12} />
+                        <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
+                        <ArrowRight size={12} />
+                        <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
+                    </div>
+                    <p className="text-xs font-semibold text-muted-foreground mb-1">
+                        Custom Domains — A Record for apex domains
+                    </p>
+                    <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-2">
+                        <code className="text-sm font-mono text-primary flex-1">{serverIp || '(see Settings → Infra)'}</code>
+                        {serverIp && (
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copyToClipboard(serverIp)}>
+                                <Copy size={14} />
+                            </Button>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">example.com</span>
+                        <ArrowRight size={12} />
+                        <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">A</span>
+                        <ArrowRight size={12} />
+                        <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{serverIp || 'your.server.ip'}</span>
+                    </div>
+
+                    {/* Staging Domain */}
+                    {stagingDomain.trim() && (
+                        <>
+                            <p className="text-xs font-semibold text-muted-foreground mb-1 mt-4">
+                                Staging Domain — CNAME to default domain
+                            </p>
+                            <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-2">
+                                <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
+                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copyToClipboard(defaultDomain)}>
+                                    <Copy size={14} />
+                                </Button>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{stagingDomain.trim()}</span>
+                                <ArrowRight size={12} />
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
+                                <ArrowRight size={12} />
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
+                            </div>
+                        </>
+                    )}
+                </div>
+
                 {/* Default Domain */}
                 <div className="mb-8">
                     <div className="flex items-center justify-between mb-3">
@@ -221,7 +295,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                     checked={!service.public_domain_hidden}
                                     onCheckedChange={async (checked) => {
                                         try {
-                                            const newVal = !checked; // hidden is inverse of checked (visible)
+                                            const newVal = !checked;
                                             const updated = await servicesApi.update(service.id, { public_domain_hidden: newVal });
                                             setService(updated);
                                             toast({ title: 'Success', description: `Default domain is now ${newVal ? 'hidden' : 'visible'}. Redeploy to apply.` });
@@ -237,12 +311,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         <div className={`h-2 w-2 rounded-full ${service.public_domain_hidden ? 'bg-zinc-500' : 'bg-emerald-500 animate-pulse'}`} />
                         <span className={`font-mono text-sm flex-1 ${service.public_domain_hidden ? 'line-through text-muted-foreground' : ''}`}>{defaultDomain}</span>
                         {!service.public_domain_hidden && (
-                            <a
-                                href={`https://${defaultDomain}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary hover:text-primary/80"
-                            >
+                            <a href={`https://${defaultDomain}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80">
                                 <ExternalLink size={16} />
                             </a>
                         )}
@@ -323,34 +392,6 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                             </div>
                         </div>
                     )}
-
-                    {/* DNS Setup for Staging */}
-                    {stagingDomain.trim() && (
-                        <div className="mt-2 p-3 bg-blue-500/5 border border-blue-500/20 rounded-lg">
-                            <p className="text-xs font-medium text-blue-400 mb-1">DNS Setup for Staging</p>
-                            <p className="text-xs text-muted-foreground mb-2">
-                                Point a CNAME record for the staging hostname to:
-                            </p>
-                            <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border">
-                                <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    onClick={() => copyToClipboard(defaultDomain)}
-                                >
-                                    <Copy size={14} />
-                                </Button>
-                            </div>
-                            <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{stagingDomain.trim()}</span>
-                                <ArrowRight size={12} />
-                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
-                                <ArrowRight size={12} />
-                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
-                            </div>
-                        </div>
-                    )}
                 </div>
 
                 {/* Active Staging Deployment */}
@@ -391,59 +432,6 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 {/* Custom Domains */}
                 <div>
                     <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">Custom Domains</h4>
-
-                    {/* DNS Setup Instructions */}
-                    <div className="mb-4 p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg">
-                        <p className="text-sm font-medium text-blue-400 mb-2">📋 DNS Setup</p>
-                        
-                        {/* Option 1: CNAME (subdomains) */}
-                        <p className="text-xs font-semibold text-muted-foreground mb-1">
-                            Option 1: <strong>CNAME</strong> — for subdomains (e.g., app.yourdomain.com)
-                        </p>
-                        <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-3">
-                            <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                onClick={() => copyToClipboard(defaultDomain)}
-                            >
-                                <Copy size={14} />
-                            </Button>
-                        </div>
-                        <div className="flex items-center gap-2 mb-4 text-xs text-muted-foreground">
-                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">app.example.com</span>
-                            <ArrowRight size={12} />
-                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
-                            <ArrowRight size={12} />
-                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
-                        </div>
-
-                        {/* Option 2: A Record (apex domains) */}
-                        <p className="text-xs font-semibold text-muted-foreground mb-1">
-                            Option 2: <strong>A Record</strong> — for root/apex domains (e.g., yourdomain.com)
-                        </p>
-                        <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-2">
-                            <code className="text-sm font-mono text-primary flex-1">{serverIp || '(see Settings → Infra)'}</code>
-                            {serverIp && (
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    onClick={() => copyToClipboard(serverIp)}
-                                >
-                                    <Copy size={14} />
-                                </Button>
-                            )}
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">example.com</span>
-                            <ArrowRight size={12} />
-                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">A</span>
-                            <ArrowRight size={12} />
-                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{serverIp || 'your.server.ip'}</span>
-                        </div>
-                    </div>
 
                     {/* Add Domain */}
                     <div className="flex gap-2 mb-4">
