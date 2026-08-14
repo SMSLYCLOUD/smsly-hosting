@@ -28,6 +28,8 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const [serverIp, setServerIp] = useState<string>('');
     const [stagingDomain, setStagingDomain] = useState(service.staging_domain || '');
     const [savingStaging, setSavingStaging] = useState(false);
+    const [stagingVerified, setStagingVerified] = useState<boolean | null>(null);
+    const [stagingChecking, setStagingChecking] = useState(false);
     const [stagedDeployment, setStagedDeployment] = useState<Deployment | null>(null);
 
     const defaultDomain = service.public_domain || `${service.name}.cloud.Trulay.co`;
@@ -165,11 +167,31 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
         try {
             const updated = await servicesApi.update(service.id, { staging_domain: stagingDomain.trim() || undefined });
             setService(updated);
+            setStagingVerified(null);
             toast({ title: 'Staging domain saved', description: stagingDomain.trim() ? `Staging URL: https://${stagingDomain.trim()}` : 'Staging URL will be auto-generated.' });
         } catch (err: any) {
             toast({ title: 'Failed to save', description: err?.response?.data?.error || 'Could not save staging domain.', variant: 'destructive' });
         } finally {
             setSavingStaging(false);
+        }
+    };
+
+    const handleVerifyStaging = async () => {
+        if (!stagingDomain.trim()) return;
+        setStagingChecking(true);
+        try {
+            const result = await servicesApi.verifyDomain(service.id, stagingDomain.trim());
+            setStagingVerified(result.verified);
+            if (result.verified) {
+                toast({ title: "DNS Verified", description: `${stagingDomain.trim()} is correctly pointing to Grid.` });
+            } else {
+                toast({ title: "DNS Not Found", description: result.message, variant: "destructive" });
+            }
+        } catch {
+            setStagingVerified(false);
+            toast({ title: "Verification failed", variant: "destructive" });
+        } finally {
+            setStagingChecking(false);
         }
     };
 
@@ -241,7 +263,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         Custom domain for webhook deployments. Pushes will deploy to this URL for review before going live.
                         If blank, auto-generated as <code>staging-{service.name}.{service.public_domain?.split('.').slice(1).join('.') || 'cloud.Trulay.co'}</code>.
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 mb-3">
                         <Input
                             placeholder={`staging-${service.name}.example.com`}
                             value={stagingDomain}
@@ -254,6 +276,81 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                             Save
                         </Button>
                     </div>
+
+                    {/* Staging domain DNS status + verify */}
+                    {stagingDomain.trim() && (
+                        <div className="flex items-center justify-between p-3 bg-card border border-border rounded-lg">
+                            <div className="flex items-center gap-3">
+                                <Globe className="w-4 h-4 text-amber-500" />
+                                <span className="font-mono text-sm">{stagingDomain.trim()}</span>
+                                {stagingVerified === true && (
+                                    <span className="text-[10px] bg-emerald-500/10 text-emerald-500 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                        <CheckCircle size={10} /> Verified
+                                    </span>
+                                )}
+                                {stagingVerified === false && (
+                                    <span className="text-[10px] bg-red-500/10 text-red-400 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                        <XCircle size={10} /> DNS Not Found
+                                    </span>
+                                )}
+                                {stagingVerified === null && !stagingChecking && (
+                                    <span className="text-[10px] bg-yellow-500/10 text-yellow-500 px-1.5 py-0.5 rounded">
+                                        Pending
+                                    </span>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-1">
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-primary hover:text-primary/80"
+                                    onClick={handleVerifyStaging}
+                                    disabled={stagingChecking}
+                                    title="Verify DNS"
+                                >
+                                    {stagingChecking ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                </Button>
+                                {stagingVerified === true && (
+                                    <a
+                                        href={`https://${stagingDomain.trim()}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center justify-center h-8 w-8 text-primary hover:text-primary/80"
+                                    >
+                                        <ExternalLink size={16} />
+                                    </a>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* DNS Setup for Staging */}
+                    {stagingDomain.trim() && (
+                        <div className="mt-2 p-3 bg-blue-500/5 border border-blue-500/20 rounded-lg">
+                            <p className="text-xs font-medium text-blue-400 mb-1">DNS Setup for Staging</p>
+                            <p className="text-xs text-muted-foreground mb-2">
+                                Point a CNAME record for the staging hostname to:
+                            </p>
+                            <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border">
+                                <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={() => copyToClipboard(defaultDomain)}
+                                >
+                                    <Copy size={14} />
+                                </Button>
+                            </div>
+                            <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{stagingDomain.trim()}</span>
+                                <ArrowRight size={12} />
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
+                                <ArrowRight size={12} />
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Active Staging Deployment */}
@@ -268,7 +365,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         <p className="text-xs text-muted-foreground mb-3">
                             This staging URL is live and ready for review. Promote it to make it the production deployment.
                         </p>
-                        <div className="flex items-center gap-3 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg mb-3">
+                        <div className="flex items-center gap-3 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
                             <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
                             <span className="font-mono text-sm flex-1 text-amber-400">{stagedDeployment.staging_url.replace('https://', '')}</span>
                             <Button
@@ -287,30 +384,6 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                             >
                                 <ExternalLink size={16} />
                             </a>
-                        </div>
-                        <div className="p-3 bg-blue-500/5 border border-blue-500/20 rounded-lg">
-                            <p className="text-xs font-medium text-blue-400 mb-1">DNS Setup for Staging</p>
-                            <p className="text-xs text-muted-foreground mb-2">
-                                Point a CNAME record for the staging hostname to:
-                            </p>
-                            <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border">
-                                <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    onClick={() => copyToClipboard(defaultDomain)}
-                                >
-                                    <Copy size={14} />
-                                </Button>
-                            </div>
-                            <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{stagedDeployment.staging_url.replace('https://', '')}</span>
-                                <ArrowRight size={12} />
-                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
-                                <ArrowRight size={12} />
-                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
-                            </div>
                         </div>
                     </div>
                 )}
