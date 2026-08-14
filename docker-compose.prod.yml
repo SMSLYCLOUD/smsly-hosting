@@ -1371,6 +1371,261 @@ services:
         limits:
           memory: ${CADDY_MEMORY_LIMIT:-512M}
           cpus: "1.0"
+
+  # ── Observability Stack ─────────────────────────────────────────────
+  # Loki + Promtail + Grafana + Prometheus + cAdvisor + Node Exporter
+  # Previously in infrastructure/docker/docker-compose.observability.yml
+  # Inlined here so a single `docker compose up -d` starts everything.
+
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: smsly-loki
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - loki-data:/loki
+      - ./infrastructure/monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '${LOKI_CPU_LIMIT:-0.5}'
+          memory: ${LOKI_MEMORY_LIMIT:-512M}
+    labels:
+      - managed_by=smsly-hosting
+
+  promtail:
+    image: grafana/promtail:2.9.3
+    container_name: smsly-promtail
+    restart: unless-stopped
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infrastructure/monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - promtail-positions:/tmp
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "cat /proc/1/status > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${PROMTAIL_MEMORY_LIMIT:-512M}
+    labels:
+      - managed_by=smsly-hosting
+    depends_on:
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: smsly-prometheus
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/monitoring/rules/:/etc/prometheus/rules/:ro
+      - prometheus-data:/prometheus
+      - /opt/smsly-hosting/prometheus-targets:/etc/prometheus/docker-labels-targets:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '${PROMETHEUS_CPU_LIMIT:-0.5}'
+          memory: ${PROMETHEUS_MEMORY_LIMIT:-512M}
+    labels:
+      - managed_by=smsly-hosting
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: smsly-alertmanager
+    restart: unless-stopped
+    entrypoint: /entrypoint.sh
+    command:
+      - --storage.path=/alertmanager
+    environment:
+      - ALERT_SLACK_WEBHOOK_URL=${ALERT_SLACK_WEBHOOK_URL:-}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-http://127.0.0.1:5001/alerts}
+      - ALERT_SMTP_HOST=${ALERT_SMTP_HOST:-}
+      - ALERT_SMTP_PORT=${ALERT_SMTP_PORT:-}
+      - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:-}
+      - ALERT_SMTP_USER=${ALERT_SMTP_USER:-}
+      - ALERT_SMTP_PASS=${ALERT_SMTP_PASS:-}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-}
+      - ALERT_ENV=${ALERT_ENV:-smsly}
+    volumes:
+      - ./scripts/alertmanager-entrypoint.sh:/entrypoint.sh:ro
+      - alertmanager-data:/alertmanager
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${ALERTMANAGER_MEMORY_LIMIT:-256M}
+    labels:
+      - managed_by=smsly-hosting
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: smsly-cadvisor
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true, apparmor:docker-default]
+    command:
+      - --containerd=unix:///var/run/containerd/containerd.sock
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/containerd/containerd.sock:/var/run/containerd/containerd.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${CADVISOR_MEMORY_LIMIT:-256M}
+    labels:
+      - managed_by=smsly-hosting
+
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: smsly-node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9100/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${NODE_EXPORTER_MEMORY_LIMIT:-128M}
+    labels:
+      - managed_by=smsly-hosting
+
+  docker-labels:
+    image: python:3.12-alpine
+    container_name: smsly-docker-labels
+    restart: unless-stopped
+    command: python3 -u /app/exporter.py
+    environment:
+      - NODE_NAME=local
+      - REFRESH_INTERVAL=60
+      - STATS_TIMEOUT=50
+      - MAX_WORKERS=8
+      - DOCKER_SOCK=/var/run/docker.sock
+    volumes:
+      - ./infrastructure/monitoring/docker-labels-exporter.py:/app/exporter.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9234/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          memory: ${DOCKER_LABELS_MEMORY_LIMIT:-256M}
+    labels:
+      - managed_by=smsly-hosting
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: smsly-grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_SERVER_ROOT_URL:-https://${DOMAIN:-localhost}/grafana/}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON_ENABLED:-false}
+      - GF_AUTH_ANONYMOUS_ORG_NAME=${GRAFANA_ANON_ORG:-Main Org.}
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=${GRAFANA_ANON_ROLE:-Viewer}
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_SECURITY_COOKIE_SAMESITE=lax
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infrastructure/docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - smsly-net
+      - smsly-proxy
+    depends_on:
+      - loki
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/grafana`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+      - "traefik.docker.network=smsly-proxy"
+      - "managed_by=smsly-hosting"
+    deploy:
+      resources:
+        limits:
+          memory: ${GRAFANA_MEMORY_LIMIT:-1G}
+
 networks:
   smsly-net:
     external: true
@@ -1413,7 +1668,14 @@ volumes:
   crowdsec_data: null
   crowdsec_config: null
   
-  # SPIRE mTLS volumes  
-  spire-server-data: null  
-  spire-agent-socket: null  
-  spire-agent-svids: null 
+  # SPIRE mTLS volumes
+  spire-server-data: null
+  spire-agent-socket: null
+  spire-agent-svids: null
+
+  # Observability volumes
+  loki-data: null
+  prometheus-data: null
+  grafana-data: null
+  promtail-positions: null
+  alertmanager-data: null
