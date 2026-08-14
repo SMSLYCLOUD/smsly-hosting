@@ -82,7 +82,11 @@ class ScalingViewSet(viewsets.GenericViewSet):
 
     @action(detail=True, methods=['post'])
     def spawn(self, request, pk=None):
-        """Manually spawn a replica on the best available node."""
+        """Manually spawn a replica.
+
+        Horizontal scaling: tries local (same server) first.
+        Vertical scaling: falls back to remote nodes.
+        """
         if request.user.is_superuser:
             service = get_object_or_404(Service, id=pk)
         else:
@@ -90,6 +94,35 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 Service, get_team_q_filter(request.user, request=request), id=pk
             )
 
+        # Check max_replicas cap
+        running = ServiceReplica.objects.filter(
+            service=service, status='RUNNING'
+        ).count()
+        if running >= (service.max_replicas or 1):
+            return Response({
+                'error': f'At max_replicas ({service.max_replicas}) — cannot spawn more.',
+            }, status=400)
+
+        spawner = SpawningService()
+
+        # Priority 1: local spawn (horizontal = same server)
+        replica = ServiceReplica.objects.create(
+            service=service, node=None, status='SPAWNING',
+            spawn_reason='Manual spawn via API',
+        )
+        try:
+            spawner.spawn_local(service, replica)
+            return Response(ServiceReplicaSerializer(replica).data)
+        except Exception as exc:
+            logger.info("Local spawn failed for %s: %s — trying remote nodes", service.name, exc)
+            try:
+                spawner.destroy(replica)
+            except Exception:
+                pass
+            replica.status = 'DESTROYED'
+            replica.save(update_fields=['status'])
+
+        # Priority 2: remote nodes (vertical = different servers)
         allow_control_plane = getattr(
             settings, 'GRID_ALLOW_CONTROL_PLANE_WORKLOADS',
             getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False),
@@ -102,19 +135,12 @@ class ScalingViewSet(viewsets.GenericViewSet):
             candidates = candidates.exclude(is_primary=True)
 
         if not candidates.exists():
-            if not allow_control_plane:
-                candidates = ManagedServer.objects.filter(
-                    status=ManagedServer.Status.ONLINE,
-                    allow_user_workloads=True,
-                )
-            if not candidates.exists():
-                return Response({'error': 'No available nodes'}, status=400)
+            return Response({'error': 'No available nodes — local spawn failed and no remote nodes configured.'}, status=400)
 
         scorer = NodeScorer()
         best = scorer.best(candidates)
         if not best:
             min_score = _get_min_score()
-            # Log scores for every candidate so operators can see why
             ranked = scorer.score(candidates)
             for node, score, resources in ranked:
                 logger.warning(
@@ -136,8 +162,6 @@ class ScalingViewSet(viewsets.GenericViewSet):
             service=service, node=best, status='SPAWNING',
             spawn_reason='Manual spawn via API',
         )
-
-        spawner = SpawningService()
         try:
             spawner.spawn(service, best, replica)
             return Response(ServiceReplicaSerializer(replica).data)

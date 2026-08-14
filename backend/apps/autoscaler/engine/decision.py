@@ -92,10 +92,12 @@ class DecisionEngine:
         mem_growth_mb_min: float = DEFAULT_MEM_GROWTH_MB_MIN,
         cooldown_up_min: int = DEFAULT_COOLDOWN_UP_MIN,
         cooldown_down_min: int = DEFAULT_COOLDOWN_DOWN_MIN,
+        min_replicas: int = 0,
     ):
         self.metrics = metrics
         self.running_replicas = running_replicas
         self.max_replicas = max(max_replicas, 1)
+        self.min_replicas = max(min_replicas, 0)
         self.cpu_target = cpu_target
         self.last_scale_at = last_scale_at
         self.spawning_in_progress = spawning_in_progress
@@ -205,7 +207,7 @@ class DecisionEngine:
 
         # ── Scale down ──────────────────────────────────────────────────────
         if (
-            self.running_replicas > 0
+            self.running_replicas > self.min_replicas
             and cpu <= self.cpu_low
             and not scale_down_cooldown
         ):

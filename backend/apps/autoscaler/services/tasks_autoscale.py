@@ -80,3 +80,35 @@ def analyze_and_scale_service(service_id) -> dict[str, object] | None:
     # Pass dedup window so the 3-min sweep and the 30s quick-check
     # share the same cache key and never race on the same service.
     return analyze_and_apply(service, min_interval_seconds=120)
+
+
+_STUCK_SPAWN_THRESHOLD_SECONDS = 300
+
+
+@shared_task(
+    name='apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning',
+    bind=True,
+    ignore_result=True,
+    soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
+    time_limit=TASK_TIME_LIMIT_MEDIUM[1],
+)
+def cleanup_stuck_spawning(self) -> dict[str, int]:
+    """Mark replicas stuck in SPAWNING for > 5 minutes as DESTROYED.
+
+    Without this, a failed spawn leaves the replica in SPAWNING forever,
+    which blocks all future scaling for that service (spawning_in_progress
+    check in the pipeline always returns True).
+    """
+    from datetime import timedelta
+    from django.utils import timezone
+
+    threshold = timezone.now() - timedelta(seconds=_STUCK_SPAWN_THRESHOLD_SECONDS)
+    stuck = ServiceReplica.objects.filter(
+        status='SPAWNING',
+        created_at__lt=threshold,
+    )
+    count = stuck.count()
+    if count > 0:
+        logger.warning("Cleaning up %d stuck SPAWNING replicas (older than %ds)", count, _STUCK_SPAWN_THRESHOLD_SECONDS)
+        stuck.update(status='DESTROYED', destroyed_at=timezone.now())
+    return {'cleaned': count}

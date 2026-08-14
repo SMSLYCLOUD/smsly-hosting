@@ -147,6 +147,7 @@ app.conf.task_routes = {
     'apps.core.services.health_monitor.monitor_health_task': {'queue': 'deploy'},
     'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'deploy'},
     'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task': {'queue': 'deploy'},
+    'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task': {'queue': 'deploy'},
     'apps.deployments.tasks_replication.deploy_replication_task': {'queue': 'deploy'},
@@ -225,6 +226,12 @@ app.conf.beat_schedule = {
     # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
     'recover-stalled-deletions-every-5m': {
         'task': 'apps.deployments.tasks.recover_stalled_deletions',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Clean up replicas stuck in SPAWNING for > 5 minutes (failed spawn)
+    'cleanup-stuck-spawning-every-5m': {
+        'task': 'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
