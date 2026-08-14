@@ -1853,7 +1853,6 @@ volumes:
   alertmanager-data: null
 
   # SPIRE mTLS volumes
-  spire-server-data: null
   spire-ecosystem-server-data: null
   spire-agent-data: null
   spire-ecosystem-agent-data: null
