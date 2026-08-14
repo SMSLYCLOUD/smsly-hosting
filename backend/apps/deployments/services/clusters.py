@@ -1,4 +1,3 @@
-# NOT USED — kept for reference.
 # pylint: disable=line-too-long,too-many-instance-attributes,bare-except,logging-fstring-interpolation,import-outside-toplevel,too-few-public-methods
 """Clusters module."""
 # pylint: disable=no-member
@@ -345,7 +344,7 @@ class ClusterManager:
                     "name": name
                 },
                 "updatePolicy": {
-                    "updateMode": "Auto"
+                    "updateMode": "Initial"
                 }
             }
         }
@@ -363,17 +362,21 @@ class ClusterManager:
                     group, version, namespace, plural, vpa_name, vpa_manifest)
                 self._log(f"Updated VPA {vpa_name}.")
             except client.exceptions.ApiException as e:
-                if e.status == 404:
+                if e.status != 404:
+                    logger.warning(f"VPA error: {e}")
+                    self._log(f"Warning: Failed to configure VPA: {e}")
+                    return
+                # 404: either the VPA object is missing, or the CRD is not installed.
+                try:
                     self.custom_obj.create_namespaced_custom_object(
                         group, version, namespace, plural, vpa_manifest)
                     self._log(f"Created VPA {vpa_name}.")
-                # If CRD not found, log warning but don't crash
-                elif e.status == 404:
-                    self._log("VPA CRD not found in cluster. Skipping VPA.")
-                else:
-                    # Log but don't fail deployment for VPA
-                    logger.warning(f"VPA error: {e}")
-                    self._log(f"Warning: Failed to configure VPA: {e}")
+                except client.exceptions.ApiException as create_err:
+                    if create_err.status == 404:
+                        self._log("VPA CRD not found in cluster. Skipping VPA.")
+                    else:
+                        logger.warning(f"VPA create failed: {create_err}")
+                        self._log(f"Warning: Failed to create VPA: {create_err}")
         except Exception as e:
             logger.error(f"VPA configuration failed: {e}")
             self._log(f"Warning: VPA configuration failed: {e}")

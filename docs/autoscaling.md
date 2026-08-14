@@ -8,9 +8,9 @@ There are three distinct autoscaler code paths:
 
 | Path | Module | Trigger | Scope |
 | --- | --- | --- | --- |
-| Classic CPU | `services/autoscaler.py` | Celery beat, every 30 seconds | Every service, CPU threshold |
-| AI-enhanced | `apps/intelligence/tasks_autoscale.py` + `scaling_ai.py` | Celery beat, every 60s | Every service, Prometheus + Loki + AI |
-| K8s / Docker admin | `apps/autoscaler/views.py` | Manual (HTTP) | One service, per-call |
+| Classic CPU | `apps/autoscaler/services/legacy_autoscaler.py` | Celery beat, every 30 seconds | Every service, CPU threshold |
+| AI-enhanced | `apps/autoscaler/services/tasks_autoscale.py` + `scaling_ai.py` | Celery beat, every 180s | Every service, Prometheus + Loki + AI |
+| K8s / Docker admin | `apps/autoscaler/views/dashboard.py` | Manual (HTTP) | One service, per-call |
 
 The classic engine is the **default** and is what the platform runs out of the box. The AI-enhanced engine is opt-in via `AUTOSCALER_AI_ENABLED=True` and requires the `prometheus_loki` integration. The admin surface is always available but requires `IsAdminUser`.
 
@@ -26,9 +26,9 @@ The two per-`Service` engines (Classic + AI-Enhanced) have been refactored onto 
 | `apps/autoscaler/engine/decision.py` | Pure `DecisionEngine` — converts a `MetricsSnapshot` + cooldown + replica state into a `Recommendation` (`scale_up` / `scale_down` / `none`). No I/O. |
 | `apps/autoscaler/engine/reconciler.py` | `Reconciler` applies a `Recommendation` via `SpawningService` (local first, then `NodeScorer` for remote). Holds a **per-service `threading.Lock`** to serialize concurrent invocations. |
 | `apps/autoscaler/engine/pipeline.py` | `analyze_and_apply(service)` and `analyze_only(service)` are the public entry points. All three Celery tasks and the legacy REST endpoint go through these. |
-| `apps/autoscaler/engine/container_metrics.py` | Container-level primitives (K8s metrics API, `docker stats`, unit parsing) shared with the platform-level autoscaler in `apps/autoscaler/views.py`. |
+| `apps/autoscaler/engine/container_metrics.py` | Container-level primitives (K8s metrics API, `docker stats`, unit parsing) shared with the platform-level autoscaler in `apps/autoscaler/views/dashboard.py`. |
 
-The K8s / Docker admin surface in `apps/autoscaler/views.py` is **not** on this pipeline: it scales *platform* containers (celery, gunicorn, customer apps via Swarm/K8s deployments) using a `demand_score` on raw container metrics, not `Service.autoscale_cpu_target`. The two engines are intentionally separate.
+The K8s / Docker admin surface in `apps/autoscaler/views/dashboard.py` is **not** on this pipeline: it scales *platform* containers (celery, gunicorn, customer apps via Swarm/K8s deployments) using a `demand_score` on raw container metrics, not `Service.autoscale_cpu_target`. The two engines are intentionally separate.
 
 ### Race Condition Prevention
 
@@ -60,7 +60,7 @@ The classic engine has no user-facing API. It writes to `Service` directly. Oper
 
 ## AI-Enhanced Engine (`tasks_autoscale.py` + `scaling_ai.py`)
 
-The AI-enhanced engine is a superset of the classic one. It uses Prometheus for CPU / memory metrics, Loki for runtime log volume, and (when configured) the Senate Committee for capacity recommendations. It runs on a 60-second beat.
+The AI-enhanced engine is a superset of the classic one. It uses Prometheus for CPU / memory metrics, Loki for runtime log volume, and (when configured) the Senate Committee for capacity recommendations. It runs on a 180-second beat.
 
 ### Prometheus + Loki Integration
 

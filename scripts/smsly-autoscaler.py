@@ -402,10 +402,15 @@ def _scale_gunicorn(container: str, target_workers: int):
     We use TTIN/TTOU signals for precise control.
     """
     try:
-        # Get current worker count
+        # Count Gunicorn worker processes. In a typical container the
+        # Gunicorn master is PID 1 and its workers are its children, so
+        # counting children of PID 1 gives the worker count. The previous
+        # 'pgrep -c -P 1 gunicorn' name filter returned 0 when the process
+        # comm was 'python' (not 'gunicorn'), causing every scale-up to add
+        # the full target count.
         result = subprocess.run(
             ['docker', 'exec', container, 'sh', '-c',
-             'pgrep -c -P 1 gunicorn || echo 0'],
+             'pgrep -c -P 1 || echo 0'],
             capture_output=True, text=True, timeout=10
         )
         current = int(result.stdout.strip()) if result.returncode == 0 else 0

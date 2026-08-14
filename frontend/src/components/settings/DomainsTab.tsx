@@ -268,8 +268,8 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                 Staging Domain — CNAME to default domain
                             </p>
                             <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-2">
-                                <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copyToClipboard(defaultDomain)}>
+                                <code className="text-sm font-mono text-primary flex-1">{stagingDomain.trim()}</code>
+                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copyToClipboard(stagingDomain.trim())}>
                                     <Copy size={14} />
                                 </Button>
                             </div>

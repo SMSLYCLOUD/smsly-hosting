@@ -89,12 +89,80 @@ class Reconciler:
         if recommendation.action == 'none':
             return ScaleResult(recommendation, applied=False)
 
+        # K8s services are scaled by HPA — skip the custom Docker autoscaler.
+        # HPA manages Deployment.spec.replicas directly; our ServiceReplica
+        # rows are a Docker-only concept.
+        if getattr(self.service, 'active_target_type', None) == 'kubernetes':
+            return ScaleResult(recommendation, applied=False, error='k8s-hpa')
+
+        # The threading.Lock serializes concurrent invocations within a
+        # single worker process. The SELECT … FOR UPDATE row lock in
+        # ``_apply_locked`` serializes them across worker processes —
+        # Celery prefork children each have their own ``_SPAWN_LOCKS``
+        # dict, so the in-process lock alone cannot prevent a double
+        # spawn across processes. The row lock is the cross-process
+        # guarantee; the in-process lock reduces DB lock contention.
         with self._lock:
-            if recommendation.action == 'scale_up':
-                return self._scale_up(recommendation)
-            if recommendation.action == 'scale_down':
-                return self._scale_down(recommendation)
-            return ScaleResult(recommendation, applied=False)
+            return self._apply_locked(recommendation)
+
+    @transaction.atomic
+    def _apply_locked(self, rec: Recommendation) -> ScaleResult:
+        from apps.autoscaler.models.replica import ServiceReplica
+        from apps.deployments.models.core import Service
+
+        # Acquire the row lock for the read-decide-write cycle. Other
+        # scale events for this service block here until we commit.
+        try:
+            locked = Service.objects.select_for_update().get(id=self.service.id)
+        except Service.DoesNotExist:
+            return ScaleResult(rec, applied=False, error='service not found after lock')
+        # Use the fresh, locked instance downstream so ``last_scale_at``
+        # and replica counts reflect any committed concurrent change.
+        self.service = locked
+
+        running = ServiceReplica.objects.filter(
+            service=locked, status='RUNNING'
+        ).count()
+        spawning = ServiceReplica.objects.filter(
+            service=locked, status__in=('SPAWNING', 'DRAINING')
+        ).exists()
+
+        # A spawn from another process may have committed between the
+        # pipeline's decision and our acquiring the lock. Defer.
+        if spawning:
+            return ScaleResult(rec, applied=False, error='spawn in progress after lock')
+
+        if rec.action == 'scale_up':
+            max_r = locked.max_replicas or 1
+            if running >= max_r:
+                return ScaleResult(rec, applied=False, error='at max_replicas after lock')
+            headroom = max_r - running
+            up_by = min(rec.scale_up_by, headroom)
+            if up_by <= 0:
+                return ScaleResult(rec, applied=False, error='no headroom after lock')
+            clamped = Recommendation(
+                action='scale_up', reason=rec.reason, scale_up_by=up_by,
+                urgency=rec.urgency, cooldown_active=rec.cooldown_active,
+                at_capacity=rec.at_capacity, spawning_in_progress=rec.spawning_in_progress,
+            )
+            return self._scale_up(clamped)
+
+        if rec.action == 'scale_down':
+            min_r = locked.min_replicas or 0
+            if running <= min_r:
+                return ScaleResult(rec, applied=False, error='at min_replicas after lock')
+            removable = running - min_r
+            down_by = min(max(rec.scale_down_by, 1), removable)
+            if down_by <= 0:
+                return ScaleResult(rec, applied=False, error='no removable replicas after lock')
+            clamped = Recommendation(
+                action='scale_down', reason=rec.reason, scale_down_by=down_by,
+                urgency=rec.urgency, cooldown_active=rec.cooldown_active,
+                at_capacity=rec.at_capacity, spawning_in_progress=rec.spawning_in_progress,
+            )
+            return self._scale_down(clamped)
+
+        return ScaleResult(rec, applied=False)
 
     # ── Scale up ─────────────────────────────────────────────────────────────
     def _scale_up(self, rec: Recommendation) -> ScaleResult:

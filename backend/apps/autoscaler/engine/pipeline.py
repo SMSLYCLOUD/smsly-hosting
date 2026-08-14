@@ -56,6 +56,64 @@ def _clear_starvation(service_id: str):
     django_cache.delete(_starvation_key(service_id))
 
 
+def _ai_advisory(service, rec, metrics, running, max_replicas) -> None:
+    """Best-effort AI consultation on scale-up near the replica ceiling.
+
+    Gated behind ``AUTOSCALER_AI_ENABLED``. When the engine is about to
+    scale up to within 80% of ``max_replicas``, ask the Senate Committee
+    whether to raise the ceiling or hold. The response is logged to
+    ``AuditLog`` with ``actor='AI_SCALER'`` and is **advisory only** —
+    the engine never auto-raises ``max_replicas``; an operator must
+    approve the change. This call never blocks or fails the scale-up.
+    """
+    if os.environ.get('AUTOSCALER_AI_ENABLED', '').lower() not in ('1', 'true', 'yes'):
+        return
+    if rec.action != 'scale_up' or max_replicas <= 0:
+        return
+    if (running + rec.scale_up_by) < max_replicas * 0.8:
+        return
+    try:
+        from apps.intelligence.providers import (
+            COMMITTEE_SYSTEM_PROMPT, ask_with_fallback,
+        )
+        prompt = (
+            f"Service: {service.name}\n"
+            f"Current replicas: {running}\n"
+            f"Max replicas: {max_replicas}\n"
+            f"Recommended scale up by: {rec.scale_up_by}\n"
+            f"CPU: {metrics.cpu_percent}\n"
+            f"Memory (MB): {metrics.memory_mb}\n"
+            f"Memory trend (MB/min): {metrics.memory_trend_mb_per_min}\n"
+            f"OOM detected: {metrics.oom_detected}\n"
+            f"Crash loop: {metrics.crash_loop}\n\n"
+            f"Given the above, should we raise max_replicas or hold it? "
+            f"Return a JSON object with 'recommendation' (raise|hold), "
+            f"'suggested_max' (int or null), and 'reason' (str)."
+        )
+        model_output, _provider = ask_with_fallback(
+            prompt, system_prompt=COMMITTEE_SYSTEM_PROMPT
+        )
+    except Exception as exc:
+        logger.debug("AI scaler advisory LLM call failed: %s", exc)
+        return
+    try:
+        from apps.core.models.audit import AuditLog
+        AuditLog.objects.create(
+            actor='AI_SCALER',
+            action='AI_SCALE_ADVISORY',
+            target=f"Service: {service.name}",
+            metadata={
+                'service_id': str(service.id),
+                'running_replicas': running,
+                'max_replicas': max_replicas,
+                'recommendation': rec.to_dict(),
+                'model_output': str(model_output)[:4000],
+            },
+        )
+    except Exception as exc:
+        logger.debug("AI scaler advisory audit log failed: %s", exc)
+
+
 def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> ScaleResult:
     """One-shot: collect metrics → decide → reconcile. Returns ScaleResult.
 
@@ -151,6 +209,10 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
     )
     rec: Recommendation = engine.decide()
 
+    # Advisory-only AI consultation on scale-up near the ceiling.
+    # Never blocks or alters the scaling decision.
+    _ai_advisory(service, rec, metrics, running, service.max_replicas or 1)
+
     # 4. Apply
     result = Reconciler(service, now=now).apply(rec)
     return result
@@ -162,14 +224,35 @@ def analyze_only(service, *, now=None) -> dict:
     from apps.autoscaler.models.replica import ServiceReplica
     now = now or timezone.now()
 
-    metrics = MetricsCollector(service).collect()
+    # The on-demand REST endpoint prefers Prometheus (fresher) per the
+    # autoscaling docs, then falls back to DB and Docker.
+    metrics = MetricsCollector(service, prefer='prometheus').collect()
+
+    # Mirror analyze_and_apply's starvation circuit breaker so the REST
+    # endpoint cannot recommend a scale-down on stale metrics while the
+    # periodic task refuses.
+    if metrics.cpu_percent is None:
+        _record_metrics_outage(str(service.id))
+    else:
+        _clear_starvation(str(service.id))
+
     running = ServiceReplica.objects.filter(service=service, status='RUNNING').count()
     spawning = ServiceReplica.objects.filter(
         service=service, status__in=('SPAWNING', 'DRAINING')
     ).exists()
+    last_destroyed = ServiceReplica.objects.filter(
+        service=service, status='DESTROYED',
+    ).order_by('-destroyed_at').first()
     last_spawned = ServiceReplica.objects.filter(
         service=service, status='RUNNING',
     ).order_by('-created_at').first()
+
+    # Use the same last-event computation as analyze_and_apply so the
+    # REST endpoint and the periodic task agree on cooldown state.
+    candidates = [service.last_scale_at,
+                  last_spawned.created_at if last_spawned else None,
+                  last_destroyed.destroyed_at if last_destroyed and last_destroyed.destroyed_at else None]
+    last_event = max((c for c in candidates if c is not None), default=None)
 
     alert_cfg = dict(service.alert_config or {})  # copy to avoid mutating the DB field
     cooldown_up = alert_cfg.get('cooldown_up_min')
@@ -181,7 +264,7 @@ def analyze_only(service, *, now=None) -> dict:
         max_replicas=service.max_replicas,
         min_replicas=service.min_replicas or 0,
         cpu_target=service.autoscale_cpu_target,
-        last_scale_at=last_spawned.created_at if last_spawned else service.last_scale_at,
+        last_scale_at=last_event,
         spawning_in_progress=spawning,
         now=now,
         **({'cooldown_up_min': int(cooldown_up)} if cooldown_up is not None else {}),

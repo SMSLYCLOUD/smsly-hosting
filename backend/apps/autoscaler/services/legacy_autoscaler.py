@@ -62,9 +62,9 @@ def _evaluate_scaling(service, ServiceMetric):
     to track the computed replica count, which is semantically wrong.
     ``min_replicas`` is a user-facing configuration hint, not a runtime
     replica counter. The unified engine uses actual ``ServiceReplica``
-    rows for replica tracking instead. This legacy function now ONLY
-    computes the recommendation — it no longer modifies the service
-    record.
+    rows for replica tracking instead. This legacy function computes the
+    recommendation and writes only ``last_scale_at`` (the dedicated
+    cooldown field) — it no longer mutates ``min_replicas``.
     """
     import warnings
     warnings.warn(

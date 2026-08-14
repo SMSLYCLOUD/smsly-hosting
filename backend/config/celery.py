@@ -148,6 +148,9 @@ app.conf.task_routes = {
     'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'deploy'},
     'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task': {'queue': 'deploy'},
     'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning': {'queue': 'deploy'},
+    # Stats collection does Docker/K8s I/O and mutates platform containers —
+    # keep it off the default 'celery' queue with the other I/O-heavy tasks.
+    'apps.autoscaler.tasks.autoscaler_collect_stats': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task': {'queue': 'deploy'},
     'apps.deployments.tasks_replication.deploy_replication_task': {'queue': 'deploy'},
@@ -232,6 +235,12 @@ app.conf.beat_schedule = {
     # Clean up replicas stuck in SPAWNING for > 5 minutes (failed spawn)
     'cleanup-stuck-spawning-every-5m': {
         'task': 'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Apply VPA soft limits + hard ceiling to running containers every 5 minutes
+    'apply-vpa-limits-every-5m': {
+        'task': 'apps.autoscaler.services.tasks_autoscale.apply_vpa_limits_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },

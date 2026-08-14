@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 from celery import shared_task
@@ -119,3 +120,62 @@ def cleanup_stuck_spawning(self) -> dict[str, int]:
         old_destroyed.delete()
 
     return {'cleaned': count, 'old_deleted': old_count}
+
+
+@shared_task(
+    name='apps.autoscaler.services.tasks_autoscale.apply_vpa_limits_task',
+    bind=True,
+    ignore_result=True,
+    soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
+    time_limit=TASK_TIME_LIMIT_MEDIUM[1],
+)
+def apply_vpa_limits_task(self) -> dict[str, int]:
+    """Periodic task: apply VPA soft limits + hard ceiling to running containers.
+
+    For each ``vpa_enabled=True`` service, updates the running Docker container
+    to use soft reservations (``mem_reservation`` / ``cpu_shares``) plus a hard
+    ceiling (``mem_limit`` / ``cpu_quota``) so the service can burst within a
+    safe bound without starving neighbors.
+
+    The ceiling multiplier is controlled by the ``VPA_CEILING_MULTIPLIER``
+    env var (default 1.5).
+    """
+    import docker as docker_lib
+    try:
+        client = docker_lib.from_env()
+    except Exception as exc:
+        logger.error("apply_vpa_limits: cannot connect to Docker: %s", exc)
+        return {'updated': 0}
+
+    try:
+        ceiling = float(os.environ.get("VPA_CEILING_MULTIPLIER", "1.5"))
+    except (TypeError, ValueError):
+        ceiling = 1.5
+    ceiling = max(1.0, ceiling)
+
+    services = Service.objects.filter(vpa_enabled=True)
+    updated = 0
+    for service in services:
+        try:
+            container = client.containers.get(service.name)
+
+            memory = service.memory_mb
+            cpu = int(service.cpu_cores * 1024)
+
+            update_kwargs = {}
+            if memory and memory > 0:
+                update_kwargs['mem_reservation'] = f"{memory}m"
+                update_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
+            if cpu and cpu > 0:
+                update_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
+                update_kwargs['cpu_period'] = 100000
+                update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
+
+            container.update(**update_kwargs)
+            updated += 1
+        except docker_lib.errors.NotFound:
+            pass
+        except Exception as exc:
+            logger.warning("apply_vpa_limits: failed for %s: %s", service.name, exc)
+
+    return {'updated': updated}

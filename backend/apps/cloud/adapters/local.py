@@ -44,6 +44,15 @@ def _coerce_int(value, default: int) -> int:
         return default
 
 
+def _vpa_ceiling() -> float:
+    """Hard ceiling multiplier for VPA-enabled containers (default 1.5x reservation)."""
+    try:
+        value = float(os.environ.get("VPA_CEILING_MULTIPLIER", "1.5"))
+    except (TypeError, ValueError):
+        value = 1.5
+    return max(1.0, value)
+
+
 def _normalize_health_path(path: str) -> str:
     value = str(path or "/").strip()
     if not value.startswith("/"):
@@ -560,15 +569,19 @@ class LocalAdapter(BaseCloudAdapter):
         )
 
         run_kwargs: dict[str, Any] = {}
+        ceiling = _vpa_ceiling()
         if memory and memory > 0:
             if vpa_enabled:
                 run_kwargs['mem_reservation'] = f"{memory}m"
+                run_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
             else:
                 run_kwargs['mem_limit'] = f"{memory}m"
 
         if cpu and cpu > 0:
             if vpa_enabled:
                 run_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
+                run_kwargs['cpu_period'] = 100000
+                run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
             else:
                 run_kwargs['cpu_period'] = 100000
                 run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000)

@@ -201,10 +201,10 @@ def _apply_scaling(decision: dict):
     if k8s_available():
         try:
             apps_v1 = k8s_client.AppsV1Api()
-            autoscaling_v1 = k8s_client.AutoscalingV1Api()
+            autoscaling_v2 = k8s_client.AutoscalingV2Api()
             namespace = "default"
             try:
-                autoscaling_v1.read_namespaced_horizontal_pod_autoscaler(name, namespace)
+                autoscaling_v2.read_namespaced_horizontal_pod_autoscaler(name, namespace)
                 logger.info(
                     "Autoscaler: HPA exists for %s/%s — delegating to HPA",
                     namespace, name,

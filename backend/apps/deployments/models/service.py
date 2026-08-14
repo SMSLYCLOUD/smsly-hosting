@@ -211,11 +211,11 @@ class Service(TimeStampedModel):
                   "NULL/None is treated as enabled by autoscaling query filters.",
     )
     min_replicas = models.IntegerField(  # type: ignore[var-annotated]
-        default=1, validators=[MinValueValidator(1)])
+        default=1, validators=[MinValueValidator(0)])
     max_replicas = models.IntegerField(  # type: ignore[var-annotated]
         default=3, validators=[MinValueValidator(1)])
     autoscale_cpu_target = models.IntegerField(  # type: ignore[var-annotated]
-        default=80, help_text="Target CPU utilization percentage (HPA)")
+        default=80, help_text="Target CPU utilization percentage for the autoscaler")
     vpa_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=False, help_text="Enable Vertical Pod Autoscaling (VPA)")
     alert_config = models.JSONField(  # type: ignore[var-annotated]

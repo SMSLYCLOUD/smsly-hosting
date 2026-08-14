@@ -40,6 +40,10 @@ class AlertConfigSerializer(serializers.Serializer):
     notify_email = serializers.BooleanField(required=False)
     notify_webhook = serializers.BooleanField(required=False)
     webhook_url = serializers.URLField(required=False, allow_blank=True)
+    # Per-service cooldown overrides (minutes). When set, they take
+    # precedence over the global SCALE_COOLDOWN_* env vars for this service.
+    cooldown_up_min = serializers.IntegerField(min_value=0, required=False)
+    cooldown_down_min = serializers.IntegerField(min_value=0, required=False)
 
 
 class ScalingViewSet(viewsets.GenericViewSet):
@@ -206,6 +210,17 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 id=replica_id, status='RUNNING',
             )
         spawner = SpawningService()
+        # Refuse to destroy the last replica when min_replicas >= 1, so a
+        # service cannot be taken to zero by manual destroy. To take a
+        # service to zero, set min_replicas=0 first.
+        running = ServiceReplica.objects.filter(
+            service=replica.service, status='RUNNING'
+        ).count()
+        if running <= (replica.service.min_replicas or 0):
+            return Response({
+                'error': f'Cannot destroy replica — service is at min_replicas '
+                f'({replica.service.min_replicas or 0}). Set min_replicas=0 first.',
+            }, status=400)
         try:
             spawner.destroy(replica)
             return Response({'status': 'destroyed'})

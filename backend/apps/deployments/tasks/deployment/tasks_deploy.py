@@ -131,6 +131,15 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         from apps.deployments.models import PlatformConfig
         config = PlatformConfig.load()
 
+        # Kubernetes deploy path — route through Orchestrator
+        # when a service targets a K8s cluster, the full flow is:
+        # BuildManager (build + push to registry) → ClusterManager (K8s
+        # Deployment + Service + Ingress + HPA + VPA manifests).
+        if getattr(service, 'active_target_type', None) == 'kubernetes':
+            from apps.deployments.services.orchestrator import Orchestrator
+            Orchestrator(str(deployment.id)).run_deployment()
+            return
+
         if is_delegated:
             from apps.deployments.models.core import ManagedServer
 

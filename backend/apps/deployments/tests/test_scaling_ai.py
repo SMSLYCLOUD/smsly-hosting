@@ -67,6 +67,11 @@ class ScalingAIDecisionTests(TestCase):
             container_name="rep-1",
             status="RUNNING",
         )
+        ServiceReplica.objects.create(
+            service=self.service,
+            container_name="rep-2",
+            status="RUNNING",
+        )
 
         # Mock prometheus + loki calls to return empty results
         class _Resp:
@@ -83,8 +88,10 @@ class ScalingAIDecisionTests(TestCase):
         analyzer = self.ScalingAnalyzer(self.service)
         metrics = {"cpu_percent": float(CPU_LOW) - 1.0, "memory_mb": 100.0, "memory_trend": 0.0}
         errors = {"error_count_1h": 0, "oom_detected": False, "crash_loop": False, "has_errors": False}
+        # The unified DecisionEngine only scales down when running_replicas
+        # exceeds min_replicas (default 1), so use 2 running replicas.
         guardrails = {
-            "running_replicas": 1,
+            "running_replicas": 2,
             "max_replicas": 5,
             "at_capacity": False,
             "spawning_in_progress": False,

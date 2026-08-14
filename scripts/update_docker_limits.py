@@ -15,10 +15,20 @@ from apps.deployments.models import Service  # noqa: E402
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _vpa_ceiling() -> float:
+    """Hard ceiling multiplier for VPA-enabled containers (default 1.5x reservation)."""
+    try:
+        value = float(os.environ.get("VPA_CEILING_MULTIPLIER", "1.5"))
+    except (TypeError, ValueError):
+        value = 1.5
+    return max(1.0, value)
+
+
 def update_docker_limits():
     """
     Update docker limits of all running services that have vpa_enabled=True.
-    This replaces hard limits with soft limits in place.
+    Applies soft reservation + a hard ceiling so VPA services cannot starve neighbors.
     """
     try:
         client = docker.from_env()
@@ -26,26 +36,25 @@ def update_docker_limits():
         logger.error(f"Could not connect to Docker: {e}")
         return
 
+    ceiling = _vpa_ceiling()
     services = Service.objects.filter(vpa_enabled=True)
     count = 0
     for service in services:
         try:
             container = client.containers.get(service.name)
 
-            # Prepare update kwargs for soft limits
             memory = service.memory_mb
             cpu = int(service.cpu_cores * 1024)
 
             update_kwargs = {}
             if memory and memory > 0:
                 update_kwargs['mem_reservation'] = f"{memory}m"
-                # Need to clear mem_limit if it exists. Docker API allows mem_limit=0 to remove the limit
-                update_kwargs['mem_limit'] = 0
+                update_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
 
             if cpu and cpu > 0:
                 update_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
-                # Clear quota
-                update_kwargs['cpu_quota'] = 0
+                update_kwargs['cpu_period'] = 100000
+                update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
 
             logger.info(f"Updating container {service.name} with {update_kwargs}")
             container.update(**update_kwargs)
@@ -57,6 +66,7 @@ def update_docker_limits():
             logger.error(f"Error updating container {service.name}: {e}")
 
     logger.info(f"Updated {count} containers successfully.")
+
 
 if __name__ == "__main__":
     update_docker_limits()

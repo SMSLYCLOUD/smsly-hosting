@@ -37,11 +37,14 @@ _log() {
 
 # ── Query RabbitMQ for queue depth ───────────────────────────────────────────
 # Uses rabbitmqctl inside the container — no management API port exposure needed.
+# Sums depth across ALL platform queues. Grepping only '^celery' missed the
+# 'deploy' and 'fast' queues where most heavy work lands (see config/celery.py
+# task_routes), so the scaler never triggered on deploy-queue backpressure.
 _get_queue_depth() {
     local total=0
     local raw
     raw=$(timeout 10 docker exec rabbitmq rabbitmqctl list_queues name messages 2>/dev/null \
-        | grep -E '^celery\b' \
+        | grep -E '^(celery|deploy|fast|media-telemetry|media-audit)\b' \
         | awk '{print $2}' \
         || echo "0")
     for n in $raw; do
