@@ -81,6 +81,14 @@ def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
         f"[OK] Deployment promoted to ACTIVE. Container: {promoted_id}\n"
     )
 
+    # After promote, the staged container is destroyed. Reset staging
+    # verification status so the UI reflects there is no active staged
+    # deployment.  Custom staging domains keep their DNS verification
+    # (the CNAME is still valid), but auto-generated ones lose meaning.
+    if service.staging_domain_verified:
+        service.staging_domain_verified = False
+        service.save(update_fields=['staging_domain_verified'])
+
 
     if provider.provider_type == CloudProvider.ProviderType.LOCAL:
         from .health import _local_route_timeout_seconds, _wait_for_local_route_ready

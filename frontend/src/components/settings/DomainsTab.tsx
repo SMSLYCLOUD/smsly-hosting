@@ -403,8 +403,8 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     )}
                 </div>
 
-                {/* Active Staging Deployment */}
-                {stagedDeployment && stagedDeployment.staging_url && (
+                {/* Active Staging Deployment or No Staged Container */}
+                {stagedDeployment && stagedDeployment.staging_url ? (
                     <div className="mb-8">
                         <div className="flex items-center justify-between mb-3">
                             <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Active Staged Deployment</h4>
@@ -436,7 +436,24 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                             </a>
                         </div>
                     </div>
-                )}
+                ) : stagingDomain.trim() ? (
+                    <div className="mb-8">
+                        <div className="flex items-center justify-between mb-3">
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Staging Deployment</h4>
+                            <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded flex items-center gap-1">
+                                NO STAGED CONTAINER
+                            </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mb-3">
+                            No active staged deployment. Push to this service to deploy a staged container for review before going live.
+                        </p>
+                        <div className="flex items-center gap-3 p-3 bg-muted/30 border border-border rounded-lg">
+                            <div className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+                            <span className="font-mono text-sm flex-1 text-muted-foreground">{stagingDomain.trim()}</span>
+                            <span className="text-[10px] text-muted-foreground">Waiting for staged deploy</span>
+                        </div>
+                    </div>
+                ) : null}
 
                 {/* Custom Domains */}
                 <div>
