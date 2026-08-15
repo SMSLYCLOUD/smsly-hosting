@@ -126,6 +126,24 @@ export async function middleware(request: NextRequest) {
     return injectRustTwinAuthHeader(request);
   }
 
+  // Hostname validation: reject requests for unknown service subdomains.
+  // Only the platform domain (APP_URL) and localhost serve the dashboard.
+  // Everything else is a service domain that should have been routed to
+  // a container by Caddy — if we're here, the service doesn't exist.
+  const hostname = request.nextUrl.hostname || '';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+  const platformHost = appUrl ? new URL(appUrl).hostname : '';
+  const isPlatformHost =
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === platformHost ||
+    hostname.endsWith('.' + platformHost);
+  if (!isPlatformHost) {
+    const notFoundUrl = request.nextUrl.clone();
+    notFoundUrl.pathname = '/not-found';
+    return NextResponse.rewrite(notFoundUrl);
+  }
+
   // Allow the callback page through so it can complete auth.
   if (isCallbackPage(pathname)) {
     return NextResponse.next();

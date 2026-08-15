@@ -6,7 +6,7 @@ import {
     Server, Activity, Globe, Database, Cpu, Network, Shield, HardDrive, Lock,
     CheckCircle2, ArrowRight, Zap, Code, Sparkles, Terminal, Cloud, Rocket, GitBranch,
     ArrowUpRight, Blocks, RefreshCw, Brain, FileCode, ShieldCheck, Eye, Wifi,
-    Container, Fingerprint, ScanLine, Bug, ShieldAlert,
+    Container, Fingerprint, ScanLine, Bug, ShieldAlert, SearchX, ArrowLeft,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ScrollReveal, StaggerChild, ParallaxReveal } from "@/components/ui/ScrollReveal";
@@ -664,6 +664,19 @@ const platformStats = [
 export default function Home() {
     const [current, setCurrent] = useState(0);
     const [isHovered, setIsHovered] = useState(false);
+    const [unknownHost, setUnknownHost] = useState(false);
+
+    useEffect(() => {
+        const host = window.location.hostname;
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+        const platformHost = appUrl ? new URL(appUrl).hostname : '';
+        const isKnown =
+            host === 'localhost' ||
+            host === '127.0.0.1' ||
+            host === platformHost ||
+            host.endsWith('.' + platformHost);
+        if (!isKnown) setUnknownHost(true);
+    }, []);
 
     useEffect(() => {
         if (isHovered) return;
@@ -672,6 +685,31 @@ export default function Home() {
         }, 7000);
         return () => clearInterval(timer);
     }, [isHovered]);
+
+    if (unknownHost) {
+        return (
+            <div className="h-screen flex items-center justify-center bg-background">
+                <div className="max-w-md w-full px-6 text-center">
+                    <div className="flex justify-center mb-6">
+                        <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center">
+                            <SearchX className="h-8 w-8 text-muted-foreground" />
+                        </div>
+                    </div>
+                    <h1 className="text-xl font-semibold mb-2">Service Not Found</h1>
+                    <p className="text-sm text-muted-foreground mb-8">
+                        No service exists for this domain. It may have been deleted or the link is incorrect.
+                    </p>
+                    <Link
+                        href="/services"
+                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+                    >
+                        <ArrowLeft className="h-4 w-4" />
+                        Back to Services
+                    </Link>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <main className="min-h-screen relative overflow-x-hidden">
