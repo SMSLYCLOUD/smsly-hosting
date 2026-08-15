@@ -39,6 +39,11 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
 
     const defaultDomain = service.public_domain || `${service.name}.cloud.Trulay.co`;
 
+    // Compute auto-generated staging domain: staging-{slug}.{platformDomain}
+    const autoStagingDomain = platformDomain
+        ? `staging-${(service.slug || service.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30)}.${platformDomain}`
+        : '';
+
     // Fetch server IP and platform domain from system config
     useEffect(() => {
         systemApi.getDomainConfig()
@@ -278,7 +283,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     {stagingDomain.trim() && (
                         <>
                             <p className="text-xs font-semibold text-muted-foreground mb-1 mt-4">
-                                Staging Domain — CNAME to platform domain
+                                Staging Domain — CNAME to staging domain
                             </p>
                             <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-2">
                                 <code className="text-sm font-mono text-primary flex-1">{stagingDomain.trim()}</code>
@@ -291,7 +296,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                 <ArrowRight size={12} />
                                 <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
                                 <ArrowRight size={12} />
-                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{platformDomain || 'your-platform.domain'}</span>
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{autoStagingDomain || 'staging-{service}.platform.domain'}</span>
                             </div>
                         </>
                     )}

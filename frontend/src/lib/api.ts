@@ -316,6 +316,7 @@ api.interceptors.response.use(
 export interface Service {
   id: string;
   name: string;
+  slug: string;
   status: 'ACTIVE' | 'DELETION_PENDING' | 'DELETION_FAILED' | 'UPDATING' | 'STOPPED';
   repository_url?: string;
   branch?: string;
