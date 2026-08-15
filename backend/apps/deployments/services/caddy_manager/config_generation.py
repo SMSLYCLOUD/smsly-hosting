@@ -678,7 +678,7 @@ def generate_caddyfile(config) -> str:
             wildcard_lines.extend(
                 [
                     "    handle {",
-                    "        respond \"Service Not Found\" 404",
+                    "        reverse_proxy frontend:3000",
                     "    }",
                     "}",
                 ]
