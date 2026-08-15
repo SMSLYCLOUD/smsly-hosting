@@ -2,6 +2,7 @@
 Helper functions for multi-server management views.
 """
 
+import contextlib
 import hashlib
 import hmac as hmac_mod
 import ipaddress
@@ -155,34 +156,22 @@ def _candidate_api_urls(server) -> list[str]:
     return urls
 
 
-def _extract_health_version(response) -> str:
-    try:
-        payload = response.json()
-    except ValueError:
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    version = payload.get("version")
-    return str(version).strip() if version else ""
 
+def _detect_reachable_api_url(server) -> tuple[str | None, dict | None]:
+    """Probe candidate base URLs and return the first one that responds.
 
-def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
-    """Probe candidate base URLs and return the first one that responds."""
-    # Try multiple health paths: /health is the standard endpoint,
-    # /health/live is the liveness-only probe used by some lite agent configs.
+    Returns (base_url, health_payload) where health_payload is the parsed
+    JSON dict from the /health endpoint, or (None, None) if unreachable.
+    The HTTP response is always closed inside this function to prevent
+    connection leaks.
+    """
     health_paths = ("/health", "/health/live")
     from .services.tls_verify import _check_pin_after_handshake, resolve_tls_verify
     verify, fingerprint = resolve_tls_verify(server)
     for base_url in _candidate_api_urls(server):
         for health_path in health_paths:
+            response = None
             try:
-                # SECURITY: TLS verification is now per-server
-                # (ManagedServer.verify_tls, default True) and can
-                # be tightened with a SHA-256 cert pin
-                # (ManagedServer.tls_cert_sha256). The legacy
-                # hard-coded ``verify=False`` was removed in
-                # Batch G to prevent a MITM on the inter-node
-                # connection from capturing the gateway_secret.
                 response = requests.get(
                     f"{base_url}{health_path}",
                     timeout=MANAGED_SERVER_HEALTH_TIMEOUT,
@@ -192,18 +181,22 @@ def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
                 if fingerprint:
                     _check_pin_after_handshake(response, fingerprint)
 
-                # Consume and close so connection returns to pool
-                _ = response.content
-                response.close()
+                if response.status_code >= 500:
+                    continue
+
+                # Parse the payload while the connection is still open
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = {}
+                return base_url, payload
 
             except (requests.RequestException, ssl.SSLError):
                 continue
-
-            # If it's 5xx, it's a server error but the server IS reachable.
-            # However, we only mark as 'ONLINE' if it returns a non-5xx code
-            # to ensure the management layer is actually healthy.
-            if response.status_code < 500:
-                return base_url, response
+            finally:
+                if response is not None:
+                    with contextlib.suppress(Exception):
+                        response.close()
 
     return None, None
 
@@ -212,7 +205,7 @@ def _refresh_managed_server_health(server):
     """
     Detect a reachable API URL, update server health fields, and sync service count.
     """
-    base, health_response = _detect_reachable_api_url(server)
+    base, health_payload = _detect_reachable_api_url(server)
     update_fields = {"status", "last_health_check", "services_count"}
 
     if base:
@@ -222,10 +215,11 @@ def _refresh_managed_server_health(server):
 
         server.status = ManagedServer.Status.ONLINE
 
-        version = _extract_health_version(health_response)
-        if version and server.server_version != version:
-            server.server_version = version
-            update_fields.add("server_version")
+        if isinstance(health_payload, dict):
+            version = str(health_payload.get("version") or "").strip()
+            if version and server.server_version != version:
+                server.server_version = version
+                update_fields.add("server_version")
 
         # Lite agents share the master DB — count services locally
         if getattr(server, 'is_lite_agent', False):

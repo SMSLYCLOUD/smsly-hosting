@@ -1,11 +1,9 @@
 import logging
-
-logger = logging.getLogger(__name__)
-import logging
 import os
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass, field
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
@@ -19,6 +17,22 @@ from apps.deployments.constants import (
 )
 
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _WatchdogService:
+    """Minimal service stub for watchdog-initiated recovery actions."""
+    name: str = ""
+
+
+@dataclass
+class _WatchdogDeployment:
+    """Minimal deployment stub for watchdog-initiated recovery actions."""
+    id: str = "watchdog"
+    container_id: str = ""
+    service: _WatchdogService = field(default_factory=_WatchdogService)
 
 
 @shared_task(
@@ -92,9 +106,8 @@ def check_agent_heartbeats_task():
         old_status = server.status
         server.status = ManagedServer.Status.OFFLINE
         # Don't reset agent_ready on a missed heartbeat — the
-        # registrar may just be restarting. Only mark as
-        # degraded so operators can see the node hasn't
-        # fully fallen out of the cluster yet.
+        # registrar may just be restarting. Only mark as OFFLINE
+        # so operators can see the node has stopped reporting in.
         server.save(update_fields=["status", "updated_at"])
         if old_status != ManagedServer.Status.OFFLINE:
             logger.warning(
@@ -171,6 +184,7 @@ def node_watchdog_task(self):
         from apps.deployments.models.core import ManagedServer
         from apps.deployments.services.self_healing_orchestrator import (
             FailureType,
+            RecoveryAction,
             SelfHealingOrchestrator,
         )
     except ImportError:
@@ -223,13 +237,13 @@ def node_watchdog_task(self):
             if diagnostics.docker_running and old_status != ManagedServer.Status.ONLINE:
                 logger.info("Server %s recovered — status: ONLINE", server.name)
 
+            watchdog_stub = _WatchdogDeployment()
+
             if not diagnostics.docker_running:
                 logger.warning("Server %s — Docker daemon down, attempting recovery", server.name)
                 results["offline"] += 1
 
-                heal_result = orchestrator.heal_deployment_failure(
-                    type("obj", (object,), {"id": "watchdog", "container_id": "", "service": type("o", (object,), {"name": ""})()})()
-                )
+                heal_result = orchestrator.heal_deployment_failure(watchdog_stub)
                 if heal_result.success:
                     results["healed"] += 1
                     server.status = ManagedServer.Status.ONLINE
@@ -239,8 +253,8 @@ def node_watchdog_task(self):
             elif diagnostics.failure_type == FailureType.DISK_FULL:
                 logger.warning("Server %s — disk full, pruning images", server.name)
                 heal_result = orchestrator._execute_recovery(
-                    type("obj", (object,), {"value": "prune_images"})(),
-                    type("obj", (object,), {"id": "watchdog", "container_id": "", "service": type("o", (object,), {"name": ""})()})(),
+                    RecoveryAction.PRUNE_IMAGES,
+                    watchdog_stub,
                     diagnostics,
                 )
                 if heal_result.success:
@@ -252,12 +266,6 @@ def node_watchdog_task(self):
         except Exception as exc:
             results["failed"] += 1
             logger.warning("Watchdog check failed for %s: %s", server.name, exc)
-            try:
-                server.status = ManagedServer.Status.OFFLINE
-                server.last_health_check = timezone.now()
-                server.save(update_fields=["status", "last_health_check", "updated_at"])
-            except Exception as exc:
-                logger.debug("Failed to mark server %s as offline: %s", server.name, exc)
 
     logger.info(
         "Node watchdog complete: checked=%d healed=%d failed=%d offline=%d",

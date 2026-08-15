@@ -132,15 +132,18 @@ class ProvisioningMixin:
     def update_server(self, request, pk=None):
         server = self.get_object()
 
+        if not (server.ssh_key or server.ssh_password):
+             return Response(
+                 {"error": "Server has no SSH credentials configured for updates."},
+                 status=status.HTTP_400_BAD_REQUEST,
+             )
+
         blocked_statuses = {
             ManagedServer.ProvisionStatus.PENDING,
             ManagedServer.ProvisionStatus.PROVISIONING,
             ManagedServer.ProvisionStatus.UPDATING,
         }
         if server.provision_status in blocked_statuses:
-            # Only the user who started provisioning (or a superuser) may
-            # force-clear a stuck status.  Otherwise the clear is silently
-            # skipped — the caller will see the current in-flight status.
             provision_started_by = getattr(server, "_provision_started_by", None)
             if (
                 not request.user.is_superuser
@@ -169,14 +172,6 @@ class ProvisioningMixin:
                 "update_server: auto-clearing in-flight provision_status=%s for server %s (user=%s)",
                 server.provision_status, server.id, request.user.id,
             )
-            server.provision_status = ManagedServer.ProvisionStatus.DONE
-            server.save(update_fields=["provision_status", "updated_at"])
-
-        if not (server.ssh_key or server.ssh_password):
-             return Response(
-                 {"error": "Server has no SSH credentials configured for updates."},
-                 status=status.HTTP_400_BAD_REQUEST,
-             )
 
         server.provision_status = ManagedServer.ProvisionStatus.PENDING
         server.provision_logs = f"--- Update started by {request.user.username} at {timezone.now()} ---\n"

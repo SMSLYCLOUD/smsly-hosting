@@ -113,8 +113,6 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         except (ValueError, TypeError):
             _validated_ip = server.host
         resources.track_iptables_port5000(_validated_ip)
-        if getattr(server, "wg_address", None):
-            resources.track_iptables_port5000(str(server.wg_address))
         if getattr(server, "is_lite_agent", False):
             for port in ("5432",):
                 resources.track_firewall_rule(server.host, port)
@@ -663,6 +661,31 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 f"Warning: VPN mesh auto-connect could not complete yet: {mesh_exc}",
             )
 
+        wg_ip = getattr(server, "wg_address", None) or ""
+        if wg_ip:
+            import contextlib as _ctx
+            import subprocess as _sp
+            try:
+                import ipaddress as _ipa
+                validated_wg = str(_ipa.ip_address(wg_ip))
+                check = _sp.run(
+                    ["iptables", "-C", "DOCKER-USER",
+                     "-s", validated_wg, "-p", "tcp", "--dport", "5000",
+                     "-j", "ACCEPT"],
+                    capture_output=True, timeout=5,
+                )
+                if check.returncode != 0:
+                    _sp.run(
+                        ["iptables", "-I", "DOCKER-USER",
+                         "-s", validated_wg, "-p", "tcp", "--dport", "5000",
+                         "-j", "ACCEPT"],
+                        capture_output=True, timeout=5,
+                    )
+                    resources.track_iptables_port5000(validated_wg)
+                    _append_log(server, f"✅ iptables: Allowed mesh IP {validated_wg} -> registry port 5000")
+            except Exception as exc:
+                logger.debug("Failed to add WG IP iptables rule: %s", exc)
+
         if not wg_assigned and not getattr(server, "wg_address", None):
             try:
                 from apps.deployments.models.mesh import WireGuardPeer
@@ -688,36 +711,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         server.status = ManagedServer.Status.ONLINE
         server.save(update_fields=update_fields)
 
-        # Clear SSH password now that provisioning succeeded (key-only auth)
-        _clear_ssh_password_after_success(server)
-
         _append_log(server, "✅ Grid provisioning complete!")
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
-
-        try:
-            from apps.autoscaler.services.prometheus_targets import (
-                deploy_cadvisor_on_node,
-                deploy_docker_labels_exporter_on_node,
-                deploy_node_exporter_on_node,
-                deploy_promtail_on_node,
-                write_docker_labels_targets,
-            )
-            _append_log(server, "Deploying observability agents...")
-            if deploy_docker_labels_exporter_on_node(server):
-                _append_log(server, "✓ docker-labels exporter deployed")
-            if deploy_promtail_on_node(server):
-                _append_log(server, "✓ Promtail deployed")
-            if deploy_cadvisor_on_node(server):
-                _append_log(server, "✓ cAdvisor deployed")
-            else:
-                _append_log(server, "⚠ cAdvisor deployment failed (non-critical)")
-            if deploy_node_exporter_on_node(server):
-                _append_log(server, "✓ Node Exporter deployed")
-            else:
-                _append_log(server, "⚠ Node Exporter deployment failed (non-critical)")
-            write_docker_labels_targets()
-        except Exception as exc:
-            _append_log(server, f"⚠ observability deployment skipped: {exc}")
 
         if api_token and not api_token.startswith("smsly_"):
             _append_log(server, "🔄 Attempting auto token exchange for long-lived API token...")
@@ -744,6 +739,34 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                                 break
             except Exception as exc:
                 _append_log(server, f"⚠️ Auto token exchange failed (non-critical): {exc}")
+
+        try:
+            from apps.autoscaler.services.prometheus_targets import (
+                deploy_cadvisor_on_node,
+                deploy_docker_labels_exporter_on_node,
+                deploy_node_exporter_on_node,
+                deploy_promtail_on_node,
+                write_docker_labels_targets,
+            )
+            _append_log(server, "Deploying observability agents...")
+            if deploy_docker_labels_exporter_on_node(server):
+                _append_log(server, "✓ docker-labels exporter deployed")
+            if deploy_promtail_on_node(server):
+                _append_log(server, "✓ Promtail deployed")
+            if deploy_cadvisor_on_node(server):
+                _append_log(server, "✓ cAdvisor deployed")
+            else:
+                _append_log(server, "⚠ cAdvisor deployment failed (non-critical)")
+            if deploy_node_exporter_on_node(server):
+                _append_log(server, "✓ Node Exporter deployed")
+            else:
+                _append_log(server, "⚠ Node Exporter deployment failed (non-critical)")
+            write_docker_labels_targets()
+        except Exception as exc:
+            _append_log(server, f"⚠ observability deployment skipped: {exc}")
+
+        # Clear SSH password now that provisioning succeeded (key-only auth)
+        _clear_ssh_password_after_success(server)
 
         if not skip_reboot and _env_bool("SMSLY_PROVISION_REBOOT_ON_SUCCESS", default=True):
             _append_log(server, "Scheduling remote reboot after successful provisioning.")
