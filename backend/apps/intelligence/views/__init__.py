@@ -280,6 +280,10 @@ def ai_providers_update(request):
         "mistral_api_key", "mistral_model", "mistral_base_url",
         "nvidia_api_key", "nvidia_model", "nvidia_base_url",
         "cloudflare_api_key", "cloudflare_model", "cloudflare_base_url",
+        "kimi_api_key", "kimi_model", "kimi_base_url",
+        "orcarouter_api_key", "orcarouter_model", "orcarouter_base_url",
+        "zenmax_api_key", "zenmax_model", "zenmax_base_url",
+        "agentrouter_api_key", "agentrouter_model", "agentrouter_base_url",
         "senate_enabled", "senate_max_members",
     ]
 

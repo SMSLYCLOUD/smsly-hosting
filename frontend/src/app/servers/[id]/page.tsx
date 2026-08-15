@@ -431,6 +431,11 @@ export default function ServerDetailPage() {
                                         </button>
                                     </>
                                 )}
+                                {server.node_type === 'media' && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-500 font-bold uppercase">
+                                        Media Node
+                                    </span>
+                                )}
                                 {server.is_primary && (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-bold uppercase">
                                         Control Plane
@@ -441,7 +446,7 @@ export default function ServerDetailPage() {
                                         Lite Agent
                                     </span>
                                 )}
-                                {!server.is_primary && !server.is_lite_agent && (
+                                {!server.is_primary && !server.is_lite_agent && server.node_type !== 'media' && (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-bold uppercase">
                                         Full Stack
                                     </span>

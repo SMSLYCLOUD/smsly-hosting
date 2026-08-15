@@ -53,7 +53,7 @@ def _truncate_dict(payload, max_items=20, max_str_len=120):
 def _append_log_safe(server, message):
     """Best-effort log append. Never raises — agents rely on this."""
     try:
-        from .services.provisioner import _append_log
+        from apps.deployments.services.provisioner import _append_log
         _append_log(server, message)
     except Exception:
         # If provisioner imports cycle, fall back to writing directly
@@ -166,7 +166,7 @@ def _detect_reachable_api_url(server) -> tuple[str | None, dict | None]:
     connection leaks.
     """
     health_paths = ("/health", "/health/live")
-    from .services.tls_verify import _check_pin_after_handshake, resolve_tls_verify
+    from apps.deployments.services.tls_verify import _check_pin_after_handshake, resolve_tls_verify
     verify, fingerprint = resolve_tls_verify(server)
     for base_url in _candidate_api_urls(server):
         for health_path in health_paths:
@@ -322,7 +322,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                 payload = f"POST|{path}|{ts}|{body_hash}"
                 sig = hmac_mod.new(gateway_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
-                from .services.tls_verify import (
+                from apps.deployments.services.tls_verify import (
                     _check_pin_after_handshake,
                     resolve_tls_verify,
                 )

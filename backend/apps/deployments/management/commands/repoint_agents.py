@@ -98,6 +98,7 @@ class Command(BaseCommand):
         ssh = SSHClient(
             ip=agent.host,
             key_content=agent.ssh_key,
+            key_passphrase=agent.ssh_key_passphrase,
             password=agent.ssh_password,
             port=agent.ssh_port or 22,
             user=agent.ssh_user or 'root',

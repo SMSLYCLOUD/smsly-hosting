@@ -28,7 +28,7 @@ class ProvisionNewAdminGateTests(TestCase):
     def _payload(self, **overrides):
         body = {
             "name": "primary-host",
-            "host": "10.0.0.50",
+            "host": "8.8.8.8",
             "ssh_user": "root",
             "ssh_password": "secret",
             "ssh_auth_method": "password",
@@ -46,7 +46,7 @@ class ProvisionNewAdminGateTests(TestCase):
             format="json",
         )
         self.assertEqual(resp.status_code, 403)
-        self.assertIn("admin", str(resp.data).lower())
+        self.assertIn("superuser", str(resp.data).lower())
         self.assertFalse(
             ManagedServer.objects.filter(name="primary-host").exists()
         )
@@ -65,16 +65,20 @@ class ProvisionNewAdminGateTests(TestCase):
         self.assertEqual(created.owner, self.regular)
 
     @patch("apps.deployments.services.provisioner.provision_server.delay")
-    def test_staff_admin_can_set_is_primary(self, _delay):
+    def test_staff_non_superuser_cannot_set_is_primary(self, _delay):
+        """Staff without superuser status is rejected — primary
+        provisioning is gated to superusers only (security batch).
+        """
         self.client.force_authenticate(user=self.staff)
         resp = self.client.post(
             self.url,
             self._payload(is_primary=True, name="staff-primary"),
             format="json",
         )
-        self.assertEqual(resp.status_code, 202)
-        created = ManagedServer.objects.get(name="staff-primary")
-        self.assertTrue(created.is_primary)
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(
+            ManagedServer.objects.filter(name="staff-primary").exists()
+        )
 
     @patch("apps.deployments.services.provisioner.provision_server.delay")
     def test_superuser_can_set_is_primary(self, _delay):

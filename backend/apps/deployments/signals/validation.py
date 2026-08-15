@@ -68,21 +68,22 @@ def validate_volume_mount_path_pre_save(sender, instance, **kwargs):
 
 _MANAGED_SERVER_HOST_RE = re.compile(r"^[a-zA-Z0-9.\-]+$")
 
-_RFC1918_RANGES = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-]
-
 
 def _is_private_or_internal_ip(host: str) -> bool:
+    """Return True for loopback / link-local / multicast / unspecified IPs.
+
+    RFC1918 (private) ranges are intentionally NOT rejected here: the
+    provisioning serializer allows private hosts for non-primary servers
+    (VPC / VPN / WireGuard fleets), and _ensure_local_server_record
+    auto-registers the master with its own (often private) address.
+    User-facing SSRF protection is enforced separately in
+    ManagedServerCreateSerializer.validate_api_url.
+    """
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
-    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-        return True
-    return bool(any(ip in net for net in _RFC1918_RANGES))
+    return ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified
 
 
 @receiver(pre_save, sender=ManagedServer)
@@ -103,7 +104,7 @@ def validate_managed_server_host_pre_save(sender, instance, **kwargs):
     if _is_private_or_internal_ip(host):
         raise ValidationError({
             "host": (
-                f"host {host!r} is a loopback, link-local, RFC1918, "
+                f"host {host!r} is a loopback, link-local, "
                 "multicast, or unspecified address."
             )
         })

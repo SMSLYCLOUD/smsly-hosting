@@ -195,7 +195,7 @@ class MediaNodeRegistrationView(viewsets.ViewSet):
     via HMAC V2 using the shared ``gateway_secret`` — no user session
     required.
 
-    POST /api/v1/media-nodes/register/
+    POST /api/v1/media/media-nodes/register/
     {
         "node_id": "<uuid>",
         "host": "198.51.100.10",
@@ -263,6 +263,10 @@ class MediaNodeRegistrationView(viewsets.ViewSet):
             return Response({"error": "timestamp expired"}, status=status.HTTP_401_UNAUTHORIZED)
 
         body_hash = hashlib.sha256(request.body or b"").hexdigest()
+        # NOTE: this path string intentionally differs from the mounted URL
+        # (/api/v1/media/media-nodes/register/). Installers sign this legacy
+        # path in their HMAC payload — do NOT "fix" it without shipping a
+        # matching installer update.
         payload_str = f"POST|/api/v1/media-nodes/register/|{timestamp}|{nonce}|{body_hash}"
         expected = hmac_mod.new(
             gateway_secret.encode(), payload_str.encode(), hashlib.sha256
@@ -412,3 +416,48 @@ class MediaWebhookView(viewsets.ViewSet):
                 profile.save(update_fields=["tamper_detections_total"])
 
         return Response({"status": "ok"})
+
+
+class MediaNodeInterestView(viewsets.ViewSet):
+    """Public-facing lead capture for the enterprise media node workflow.
+
+    The media node installation stack is proprietary; this endpoint only
+    records contact details so the sales workflow can follow up. Returns
+    the mailto fallback subject/body for the frontend.
+    """
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="interest",
+    )
+    def interest(self, request):
+        from ..models import MediaNodeInterest
+        from ..serializers import MediaNodeInterestSerializer
+
+        serializer = MediaNodeInterestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        lead = serializer.save()
+        logger.info("Media node interest captured: %s (%s)", lead.email, lead.company or lead.name)
+
+        subject = "Media Node (Voice & Video) Access Request"
+        body = (
+            f"Hi SMSLY team,\n\n"
+            f"I'd like to get access to the Media Node workflow.\n\n"
+            f"Name: {lead.name}\n"
+            f"Company: {lead.company or '-'}\n"
+            f"Email: {lead.email}\n"
+            f"Target host: {lead.host or '-'}\n"
+            f"Notes: {lead.notes or '-'}"
+        )
+        return Response(
+            {
+                "status": "recorded",
+                "id": str(lead.id),
+                "mailto_subject": subject,
+                "mailto_body": body,
+            },
+            status=status.HTTP_201_CREATED,
+        )

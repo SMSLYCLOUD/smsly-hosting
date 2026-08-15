@@ -1229,6 +1229,7 @@ export interface ManagedServer {
   has_ssh_credentials?: boolean;
   is_primary: boolean;
   is_lite_agent?: boolean;
+  node_type?: 'master' | 'node' | 'agent-lite' | 'media';
   allow_user_workloads: boolean;
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN' | 'DEGRADED';
   last_health_check: string | null;

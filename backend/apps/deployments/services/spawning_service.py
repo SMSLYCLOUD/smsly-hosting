@@ -98,6 +98,7 @@ class SpawningService:
             client = SSHClient(
                 ip=node.host,
                 key_content=node.ssh_key,
+                key_passphrase=node.ssh_key_passphrase,
                 user=node.ssh_user,
                 port=node.ssh_port,
                 password=node.ssh_password,

@@ -116,12 +116,14 @@ class SSHClient:
         host=None,
         username=None,
         private_key=None,
+        key_passphrase='',
         wg_address=None,
     ):
         self.ip = ip or host
         self.port = port
         self.user = username or user
         self.key_content = key_content or private_key or ''
+        self.key_passphrase = key_passphrase or ''
         self.password = password
         self.wg_address = wg_address
         self.client = None
@@ -148,13 +150,16 @@ class SSHClient:
 
         # Try various key formats
         errors = []
+        passphrase = self.key_passphrase or None
         for key_cls in (
             paramiko.RSAKey,
             paramiko.Ed25519Key,
             paramiko.ECDSAKey,
         ):
             try:
-                self._key = key_cls.from_private_key(io.StringIO(trimmed))
+                self._key = key_cls.from_private_key(
+                    io.StringIO(trimmed), password=passphrase
+                )
                 return self._key
             except Exception as e:
                 errors.append(f"{key_cls.__name__}: {e}")

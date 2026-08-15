@@ -23,6 +23,7 @@ class HelpersMixin:
                 username=server.ssh_user,
                 password=server.ssh_password,
                 private_key=server.ssh_key,
+                key_passphrase=getattr(server, "ssh_key_passphrase", ""),
             )
             ssh.connect()
             out, _err, code = ssh.exec_command(
@@ -57,6 +58,7 @@ class HelpersMixin:
                 username=server.ssh_user,
                 password=server.ssh_password,
                 private_key=server.ssh_key,
+                key_passphrase=getattr(server, "ssh_key_passphrase", ""),
             )
             ssh.connect()
 
@@ -105,6 +107,7 @@ class HelpersMixin:
             username=server.ssh_user,
             password=server.ssh_password,
             private_key=server.ssh_key,
+            key_passphrase=getattr(server, "ssh_key_passphrase", ""),
             wg_address=getattr(server, "wg_address", None),
         )
         try:

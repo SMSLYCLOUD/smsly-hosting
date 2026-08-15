@@ -162,11 +162,12 @@ class _ProvisioningResources:
             return
         try:
             key_file = io.StringIO(self.server.ssh_key)
+            passphrase = getattr(self.server, "ssh_key_passphrase", "") or None
             try:
-                pkey = paramiko.Ed25519Key.from_private_key(key_file)
+                pkey = paramiko.Ed25519Key.from_private_key(key_file, password=passphrase)
             except Exception:
                 key_file.seek(0)
-                pkey = paramiko.RSAKey.from_private_key(key_file)
+                pkey = paramiko.RSAKey.from_private_key(key_file, password=passphrase)
             client = paramiko.SSHClient()
             from apps.deployments.services.ssh_client import _get_tofu_policy
             client.set_missing_host_key_policy(_get_tofu_policy(self.server.host, self.server.ssh_port))

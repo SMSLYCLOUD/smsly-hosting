@@ -230,6 +230,10 @@ export default function MultiServerDocsPage() {
                     <p>A Lite Agent is a <code>ManagedServer</code> with <code>is_lite_agent=True</code>. It runs <code>docker-compose.agent-lite.yml</code>: a subset of the platform that includes the backend, worker, and a local Redis/RabbitMQ, but <strong>not</strong> PostgreSQL. The agent&apos;s database connection points at the master over the WireGuard mesh (<code>MASTER_MESH_IP</code>), and its reads (services, deployments) hit the shared master database directly rather than through a proxy.</p>
                     <p>Use Lite Agents when the remote VPS is small (1-2 vCPU, 1-2 GB RAM) and you do not want to run PostgreSQL on it, when the agent is in a private subnet and can reach the master over WireGuard but not the public internet, or when you want to add a node quickly without provisioning a database.</p>
 
+                    <h3>Media Node (Enterprise)</h3>
+                    <p>Media Nodes add live audio/video capabilities (LiveKit-based calling, rooms, participants, WebRTC relaying) to the fleet. They are a proprietary, enterprise-only offering: the installer stack is not part of the open-source distribution, and node-type registration is enforced server-side.</p>
+                    <p>To request access, open <strong>Servers</strong>, choose <strong>Provision New</strong>, and select the <strong>Media Node</strong> card in Node Mode. The lead form records your contact details, and the sales team will follow up with installer credentials and sizing guidance. No install details are exposed in the UI until the enterprise stack is delivered.</p>
+
                     {/* Connecting a Server */}
                     <h2 id="connecting" className="text-2xl font-bold flex items-center gap-2">
                         <Server className="w-5 h-5 text-violet-600" /> Connecting a Server
@@ -247,7 +251,7 @@ export default function MultiServerDocsPage() {
                     <h3>Provision a new VPS (UI)</h3>
                     <ol>
                         <li>Open <strong>Servers</strong> and click <strong>Provision New</strong>.</li>
-                        <li>Enter name, public IP, SSH port, SSH user, and either a password or a PEM-encoded private key.</li>
+                        <li>Enter name, public IP, SSH port, and SSH user. Choose an auth method: <strong>Password</strong>, an existing <strong>SSH key</strong> (optionally with a passphrase), or <strong>Generated Key</strong> — where the platform creates an Ed25519 keypair and shows you the public key to install on the host.</li>
                         <li>Optionally toggle <code>is_lite_agent=True</code> to install the agent-lite compose profile instead of the full stack.</li>
                         <li>Submit. The installer runs over SSH, lays down the platform, and auto-fills <code>api_url</code> and <code>api_token</code> on the server record.</li>
                     </ol>

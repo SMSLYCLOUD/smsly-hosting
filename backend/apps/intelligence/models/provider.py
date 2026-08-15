@@ -86,6 +86,39 @@ def _validate_localllm_base_url(url: str) -> None:
         )
 
 
+def _validate_custom_router_base_url(url: str, field_label: str, allowed_hosts: tuple) -> None:
+    """Validate an OpenAI-compatible router base URL (operator-configured).
+
+    Rejects non-https URLs, missing hostnames, IP literals, and cloud
+    metadata endpoints. Hostnames must be explicitly allowlisted via the
+    corresponding ``*_ALLOWED_HOSTS`` setting (empty allowlist = opt-out).
+    """
+    if not url:
+        return
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != 'https':
+        raise ValidationError(
+            {field_label: f'{field_label} must use https:// scheme; got {parsed.scheme!r}.'}
+        )
+    host = (parsed.hostname or '').lower()
+    if not host:
+        raise ValidationError({field_label: f'{field_label} must include a hostname.'})
+    if host in _DISALLOWED_LOCALLM_HOSTS:
+        raise ValidationError({field_label: f'{field_label} host {host!r} is not allowed.'})
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        raise ValidationError({field_label: f'{field_label} must be a hostname, not an IP literal.'})
+    allowed = {h.lower() for h in allowed_hosts}
+    if not allowed or host not in allowed:
+        raise ValidationError(
+            {field_label: f'{field_label} host {host!r} is not allowlisted. '
+             f'Add it to the corresponding *_ALLOWED_HOSTS setting before using this provider.'}
+        )
+
+
 class AIProviderSettings(models.Model):
     """Singleton table for AI provider configuration (admin-managed)."""
 
@@ -195,6 +228,46 @@ class AIProviderSettings(models.Model):
         help_text="Cloudflare AI Gateway URL. Replace YOUR_ACCOUNT_ID with your Cloudflare account ID.",
     )
 
+    # Kimi (Moonshot AI)
+    kimi_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    kimi_model = models.CharField(max_length=100, default="kimi-latest", blank=True)  # type: ignore[var-annotated]
+    kimi_base_url = models.CharField(  # type: ignore[var-annotated]
+        max_length=255,
+        default="https://api.moonshot.ai/v1",
+        blank=True,
+        help_text="OpenAI-compatible base URL for Kimi (Moonshot) provider",
+    )
+
+    # Orca Router (OpenAI-compatible router)
+    orcarouter_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    orcarouter_model = models.CharField(max_length=100, default="orcarouter/auto", blank=True)  # type: ignore[var-annotated]
+    orcarouter_base_url = models.CharField(  # type: ignore[var-annotated]
+        max_length=255,
+        default="",
+        blank=True,
+        help_text="OpenAI-compatible base URL for Orca Router provider",
+    )
+
+    # ZenMax (OpenAI-compatible router)
+    zenmax_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    zenmax_model = models.CharField(max_length=100, default="zenmax/auto", blank=True)  # type: ignore[var-annotated]
+    zenmax_base_url = models.CharField(  # type: ignore[var-annotated]
+        max_length=255,
+        default="",
+        blank=True,
+        help_text="OpenAI-compatible base URL for ZenMax provider",
+    )
+
+    # Agent Router (OpenAI-compatible router)
+    agentrouter_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    agentrouter_model = models.CharField(max_length=100, default="agentrouter/auto", blank=True)  # type: ignore[var-annotated]
+    agentrouter_base_url = models.CharField(  # type: ignore[var-annotated]
+        max_length=255,
+        default="",
+        blank=True,
+        help_text="OpenAI-compatible base URL for Agent Router provider",
+    )
+
     ecosystem_wave_size = models.PositiveSmallIntegerField(  # type: ignore[var-annotated]
         default=10,
         help_text="Maximum services deployed concurrently per dependency wave",
@@ -264,4 +337,20 @@ class AIProviderSettings(models.Model):
         _validate_https_allowlist(
             self.cloudflare_base_url, 'cloudflare_base_url',
             ['gateway.ai.cloudflare.com'],
+        )
+        _validate_https_allowlist(
+            self.kimi_base_url, 'kimi_base_url',
+            list(getattr(settings, 'KIMI_ALLOWED_HOSTS', ['api.moonshot.ai'])),
+        )
+        _validate_custom_router_base_url(
+            self.orcarouter_base_url, 'orcarouter_base_url',
+            tuple(getattr(settings, 'ORCAROUTER_ALLOWED_HOSTS', ()) or ()),
+        )
+        _validate_custom_router_base_url(
+            self.zenmax_base_url, 'zenmax_base_url',
+            tuple(getattr(settings, 'ZENMAX_ALLOWED_HOSTS', ()) or ()),
+        )
+        _validate_custom_router_base_url(
+            self.agentrouter_base_url, 'agentrouter_base_url',
+            tuple(getattr(settings, 'AGENTROUTER_ALLOWED_HOSTS', ()) or ()),
         )

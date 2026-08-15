@@ -70,6 +70,7 @@ def update_remote_server_task(server_id: str):
         ssh = SSHClient(
             ip=server.host,
             key_content=server.ssh_key,
+            key_passphrase=server.ssh_key_passphrase,
             password=server.ssh_password,
             user=server.ssh_user,
             port=server.ssh_port,

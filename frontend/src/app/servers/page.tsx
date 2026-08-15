@@ -13,7 +13,8 @@ import {
     Server, Plus, Trash2, RefreshCw, RefreshCcw, CheckCircle2, XCircle, Loader2,
     Globe, Shield, Wifi, WifiOff, ChevronRight, Monitor, ArrowUpRight,
     Terminal, Key, Lock, Zap, Link2, Cloud, Activity, HardDrive, Cpu,
-    AlertTriangle, Info, Sparkles, Database, Copy, ExternalLink
+    AlertTriangle, Info, Sparkles, Database, Copy, ExternalLink,
+    Fingerprint, Mic, Mail, Building2, User
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { toast } from '@/components/ui/use-toast';
@@ -21,7 +22,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
 
 // Local types — kept in sync with the backend's ManagedServer model
-// in backend/apps/deployments/models_core.py.
+// in backend/apps/deployments/models/platform.py.
 type ServerStatus = 'ONLINE' | 'OFFLINE' | 'UNKNOWN' | 'DEGRADED';
 type ProvisionStatus = 'NONE' | 'PENDING' | 'PROVISIONING' | 'DONE' | 'FAILED';
 type ServerRole = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
@@ -66,6 +67,7 @@ interface ManagedServer {
     provision_status: ProvisionStatus;
     role?: ServerRole;
     is_lite_agent?: boolean;
+    node_type?: 'master' | 'node' | 'agent-lite' | 'media';
     wg_address?: string | null;
     // Agent self-registration signals
     agent_ready?: boolean;
@@ -261,6 +263,7 @@ export default function ServersPage() {
     const [provisionLogs, setProvisionLogs] = useState('');
     const [provisionStatus, setProvisionStatus] = useState<ProvisionStatus | ''>('');
     const [liveServer, setLiveServer] = useState<ManagedServer | null>(null);
+    const [generatedPublicKey, setGeneratedPublicKey] = useState<string | null>(null);
     const logRef = useRef<HTMLPreElement>(null);
 
     // Live re-render for "Xs ago" labels.
@@ -270,6 +273,7 @@ export default function ServersPage() {
     const [connectForm, setConnectForm] = useState({
         name: '', host: '', private_ip: '', api_url: '', api_token: '',
         gateway_secret: '', ssh_user: 'root', ssh_password: '', ssh_key: '',
+        ssh_key_passphrase: '',
         ssh_port: 22, is_primary: false, allow_user_workloads: true,
         is_lite_agent: false, node_certificate: '',
     });
@@ -277,9 +281,11 @@ export default function ServersPage() {
     // Provision form
     const [provisionForm, setProvisionForm] = useState({
         name: '', host: '', ssh_port: 22, ssh_user: 'root',
-        ssh_auth_method: 'password' as 'password' | 'key',
-        ssh_password: '', ssh_key: '', is_primary: false,
+        ssh_auth_method: 'password' as 'password' | 'key' | 'generated',
+        ssh_password: '', ssh_key: '', ssh_key_passphrase: '',
+        is_primary: false,
         allow_user_workloads: true, is_lite_agent: false,
+        is_media_node: false,
         node_certificate: '',
     });
 
@@ -399,6 +405,7 @@ export default function ServersPage() {
             setConnectForm({
                 name: '', host: '', private_ip: '', api_url: '', api_token: '',
                 gateway_secret: '', ssh_user: 'root', ssh_password: '', ssh_key: '',
+                ssh_key_passphrase: '',
                 ssh_port: 22, is_primary: false, allow_user_workloads: true,
                 is_lite_agent: false, node_certificate: '',
             });
@@ -417,7 +424,9 @@ export default function ServersPage() {
         try {
             // Build payload — strip the non-model ssh_auth_method
             // field and only include creds that match the chosen
-            // method.
+            // method. The 'generated' method needs no credentials:
+            // the platform creates the keypair and we surface the
+            // public key in the response.
             const payload: any = {
                 name: provisionForm.name,
                 host: provisionForm.host,
@@ -433,27 +442,35 @@ export default function ServersPage() {
             }
             if (provisionForm.ssh_auth_method === 'password') {
                 payload.ssh_password = provisionForm.ssh_password;
-            } else {
+            } else if (provisionForm.ssh_auth_method === 'key') {
                 payload.ssh_key = provisionForm.ssh_key;
+                if (provisionForm.ssh_key_passphrase.trim()) {
+                    payload.ssh_key_passphrase = provisionForm.ssh_key_passphrase;
+                }
             }
             const result = await apiFetch('/api/v1/servers/provision/', 'POST', payload);
             setShowAdd(false);
             setProvisionForm({
                 name: '', host: '', ssh_port: 22, ssh_user: 'root',
                 ssh_auth_method: 'password', ssh_password: '', ssh_key: '',
+                ssh_key_passphrase: '',
                 is_primary: false, allow_user_workloads: true, is_lite_agent: false,
+                is_media_node: false,
                 node_certificate: '',
             });
             setTestResult(null);
             fetchServers();
             // Auto-open provision logs
             if (result.id) {
+                setGeneratedPublicKey(result.generated_ssh_public_key || null);
                 setViewingLogs(result.id);
                 setProvisionLogs('');
                 setProvisionStatus('PENDING');
                 toast({
                     title: 'Provisioning started',
-                    description: 'Connecting to the VPS via SSH. The log panel will stream output.',
+                    description: result.generated_ssh_public_key
+                        ? 'Install the public key on your VPS — it was generated by Grid.'
+                        : 'Connecting to the VPS via SSH. The log panel will stream output.',
                 });
             }
         } catch (err: any) {
@@ -671,7 +688,8 @@ export default function ServersPage() {
                                 server={liveServer || servers.find(s => s.id === viewingLogs) || null}
                                 logs={provisionLogs}
                                 status={provisionStatus as ProvisionStatus}
-                                onClose={() => { setViewingLogs(null); setProvisionLogs(''); setLiveServer(null); }}
+                                publicKey={generatedPublicKey}
+                                onClose={() => { setViewingLogs(null); setProvisionLogs(''); setLiveServer(null); setGeneratedPublicKey(null); }}
                                 onRetry={() => handleRetryProvision(viewingLogs)}
                                 onUpdate={() => handleUpdateServer(viewingLogs)}
                                 logRef={logRef}
@@ -776,7 +794,13 @@ function TestConnectionButton({ testing, onClick, result }: { testing: boolean; 
     );
 }
 
-function NodeModePicker({ value, onChange, idPrefix }: { value: boolean; onChange: (v: boolean) => void; idPrefix: string }) {
+function NodeModePicker({ value, onChange, idPrefix, media, onMediaChange }: {
+    value: boolean;
+    onChange: (v: boolean) => void;
+    idPrefix: string;
+    media?: boolean;
+    onMediaChange?: (v: boolean) => void;
+}) {
     return (
         <div>
             <label className="text-xs font-medium text-muted-foreground block mb-2">Node Mode</label>
@@ -784,7 +808,7 @@ function NodeModePicker({ value, onChange, idPrefix }: { value: boolean; onChang
                 <label
                     htmlFor={`${idPrefix}-full`}
                     className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-all ${
-                        !value
+                        !value && !media
                             ? 'border-blue-500/50 bg-blue-500/5'
                             : 'border-border hover:border-muted-foreground/30'
                     }`}
@@ -793,8 +817,8 @@ function NodeModePicker({ value, onChange, idPrefix }: { value: boolean; onChang
                         id={`${idPrefix}-full`}
                         type="radio"
                         name={`${idPrefix}-mode`}
-                        checked={!value}
-                        onChange={() => onChange(false)}
+                        checked={!value && !media}
+                        onChange={() => { onChange(false); onMediaChange?.(false); }}
                         className="accent-blue-500 mt-0.5"
                     />
                     <div className="flex-1 min-w-0">
@@ -810,7 +834,7 @@ function NodeModePicker({ value, onChange, idPrefix }: { value: boolean; onChang
                 <label
                     htmlFor={`${idPrefix}-lite`}
                     className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-all ${
-                        value
+                        value && !media
                             ? 'border-purple-500/50 bg-purple-500/5'
                             : 'border-border hover:border-muted-foreground/30'
                     }`}
@@ -819,8 +843,8 @@ function NodeModePicker({ value, onChange, idPrefix }: { value: boolean; onChang
                         id={`${idPrefix}-lite`}
                         type="radio"
                         name={`${idPrefix}-mode`}
-                        checked={value}
-                        onChange={() => onChange(true)}
+                        checked={value && !media}
+                        onChange={() => { onChange(true); onMediaChange?.(false); }}
                         className="accent-purple-500 mt-0.5"
                     />
                     <div className="flex-1 min-w-0">
@@ -833,6 +857,183 @@ function NodeModePicker({ value, onChange, idPrefix }: { value: boolean; onChang
                         </p>
                     </div>
                 </label>
+                {onMediaChange && (
+                    <label
+                        htmlFor={`${idPrefix}-media`}
+                        className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-all ${
+                            media
+                                ? 'border-cyan-500/50 bg-cyan-500/5'
+                                : 'border-border hover:border-muted-foreground/30'
+                        }`}
+                    >
+                        <input
+                            id={`${idPrefix}-media`}
+                            type="radio"
+                            name={`${idPrefix}-mode`}
+                            checked={!!media}
+                            onChange={() => { onChange(false); onMediaChange(true); }}
+                            className="accent-cyan-500 mt-0.5"
+                        />
+                        <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                                <Mic size={12} className="text-cyan-500" />
+                                <span className="text-sm font-medium">Media Node</span>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
+                                Enterprise voice &amp; video baremetal (Kamailio, FreeSWITCH, LiveKit).
+                                Provisioned by Trulay — request access.
+                            </p>
+                        </div>
+                    </label>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function MediaNodeGatePanel({ host }: { host: string }) {
+    const [form, setForm] = useState({
+        name: '', company: '', email: '', notes: '',
+    });
+    const [submitting, setSubmitting] = useState(false);
+    const [submitted, setSubmitted] = useState(false);
+
+    const submitInterest = async () => {
+        if (!form.name.trim() || !form.email.trim()) return;
+        setSubmitting(true);
+        try {
+            await apiFetch('/api/v1/media/interest/', 'POST', {
+                name: form.name.trim(),
+                company: form.company.trim(),
+                email: form.email.trim(),
+                host: host.trim(),
+                notes: form.notes.trim(),
+            });
+            setSubmitted(true);
+            toast({
+                title: 'Request recorded',
+                description: 'The Trulay team will reach out to onboard your media node.',
+            });
+        } catch (err: any) {
+            toast({ title: 'Failed to send request', description: err.message, variant: 'destructive' });
+        }
+        setSubmitting(false);
+    };
+
+    const mailtoHref = `mailto:sales@Trulay.co?subject=${encodeURIComponent(
+        'Media Node (Voice & Video) Access Request'
+    )}&body=${encodeURIComponent(
+        `Hi Trulay team,\n\nI'd like to get access to the Media Node workflow.\n\nName: ${form.name || '...'}\nCompany: ${form.company || '-'}\nEmail: ${form.email || '...'}\nTarget host: ${host || '-'}\nNotes: ${form.notes || '-'}`
+    )}`;
+
+    if (submitted) {
+        return (
+            <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-cyan-500">
+                    <CheckCircle2 size={16} /> Request received
+                </div>
+                <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
+                    We&apos;ve recorded your interest and the Trulay team will reach out to
+                    onboard your voice &amp; video infrastructure. Want to follow up directly?
+                </p>
+                <a
+                    href={mailtoHref}
+                    className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-md border border-border text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                    <Mail size={12} /> Email sales@Trulay.co
+                </a>
+            </div>
+        );
+    }
+
+    return (
+        <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4 space-y-4">
+            <div>
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                    <Mic size={14} className="text-cyan-500" />
+                    Media Node — enterprise access
+                </div>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    Media Nodes run Trulay&apos;s proprietary voice &amp; video stack (Kamailio,
+                    FreeSWITCH, rtpengine, LiveKit, coturn) on baremetal. The installation workflow
+                    is provided under an enterprise agreement — tell us about your infrastructure
+                    and we&apos;ll onboard you.
+                </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+                <div>
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <User size={10} /> Your name <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                        value={form.name}
+                        onChange={e => setForm({ ...form, name: e.target.value })}
+                        placeholder="Ada Lovelace"
+                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                    />
+                </div>
+                <div>
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <Building2 size={10} /> Company
+                    </label>
+                    <input
+                        value={form.company}
+                        onChange={e => setForm({ ...form, company: e.target.value })}
+                        placeholder="Acme Communications"
+                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                    />
+                </div>
+                <div>
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <Mail size={10} /> Work email <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                        type="email"
+                        value={form.email}
+                        onChange={e => setForm({ ...form, email: e.target.value })}
+                        placeholder="ada@acme.com"
+                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                    />
+                </div>
+                <div>
+                    <label className="text-xs font-medium text-muted-foreground">Target host</label>
+                    <input
+                        value={host}
+                        disabled
+                        placeholder="198.51.100.5"
+                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm opacity-60"
+                    />
+                </div>
+            </div>
+
+            <div>
+                <label className="text-xs font-medium text-muted-foreground">Notes</label>
+                <textarea
+                    value={form.notes}
+                    onChange={e => setForm({ ...form, notes: e.target.value })}
+                    placeholder="Expected call volume, video rooms, regions..."
+                    rows={2}
+                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-xs"
+                />
+            </div>
+
+            <div className="flex items-center justify-between flex-wrap gap-2">
+                <button
+                    type="button"
+                    onClick={submitInterest}
+                    disabled={submitting || !form.name.trim() || !form.email.trim()}
+                    className="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-semibold flex items-center gap-2 disabled:opacity-50"
+                >
+                    {submitting ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                    Request access
+                </button>
+                <a
+                    href={mailtoHref}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-cyan-500 hover:underline"
+                >
+                    <Mail size={12} /> Or email us directly
+                </a>
             </div>
         </div>
     );
@@ -922,14 +1123,20 @@ function ProvisionForm({
                 idPrefix="prov"
                 value={form.is_lite_agent}
                 onChange={v => setForm({ ...form, is_lite_agent: v })}
+                media={form.is_media_node}
+                onMediaChange={v => setForm({ ...form, is_media_node: v, is_lite_agent: v ? false : form.is_lite_agent })}
             />
 
+            {form.is_media_node ? (
+                <MediaNodeGatePanel host={form.host} />
+            ) : (
+            <>
             {/* Node Certificate is automatically fetched by the provisioner over SSH for new Lite Agents */}
 
             {/* Auth Method Toggle */}
             <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-2">Authentication</label>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-3 flex-wrap">
                     <button
                         onClick={() => setForm({ ...form, ssh_auth_method: 'password' })}
                         className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
@@ -950,9 +1157,32 @@ function ProvisionForm({
                     >
                         <Key size={12} /> SSH Key
                     </button>
+                    <button
+                        onClick={() => setForm({ ...form, ssh_auth_method: 'generated' })}
+                        className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
+                            form.ssh_auth_method === 'generated'
+                                ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/30'
+                                : 'border border-border text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                        <Fingerprint size={12} /> Generated Key
+                    </button>
                 </div>
 
-                {form.ssh_auth_method === 'password' ? (
+                {form.ssh_auth_method === 'generated' ? (
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                        <p className="text-xs text-emerald-500 font-semibold flex items-center gap-1.5">
+                            <Fingerprint size={12} /> Grid generates the keypair
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                            When provisioning starts, Grid creates an Ed25519 keypair and shows you
+                            the <strong>public key</strong> in the log panel. Install it on the VPS
+                            (provider console → SSH keys, or <code className="text-[10px]">~/.ssh/authorized_keys</code>)
+                            and provisioning continues automatically. The private key never leaves
+                            your instance.
+                        </p>
+                    </div>
+                ) : form.ssh_auth_method === 'password' ? (
                     <input
                         type="password"
                         value={form.ssh_password}
@@ -961,13 +1191,22 @@ function ProvisionForm({
                         className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm"
                     />
                 ) : (
-                    <textarea
-                        value={form.ssh_key}
-                        onChange={e => setForm({ ...form, ssh_key: e.target.value })}
-                        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
-                        rows={4}
-                        className="w-full px-3 py-2 rounded-lg bg-background border border-border font-mono text-xs"
-                    />
+                    <div className="space-y-2">
+                        <textarea
+                            value={form.ssh_key}
+                            onChange={e => setForm({ ...form, ssh_key: e.target.value })}
+                            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
+                            rows={4}
+                            className="w-full px-3 py-2 rounded-lg bg-background border border-border font-mono text-xs"
+                        />
+                        <input
+                            type="password"
+                            value={form.ssh_key_passphrase}
+                            onChange={e => setForm({ ...form, ssh_key_passphrase: e.target.value })}
+                            placeholder="Passphrase (leave empty if the key has none)"
+                            className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                        />
+                    </div>
                 )}
             </div>
 
@@ -1014,6 +1253,8 @@ function ProvisionForm({
                     Provision & Install
                 </button>
             </div>
+            </>
+            )}
         </>
     );
 }
@@ -1138,6 +1379,16 @@ function ConnectForm({
                         placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
                         rows={4}
                         className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border font-mono text-xs"
+                    />
+                </div>
+                <div>
+                    <label className="text-xs font-medium text-muted-foreground">Key Passphrase <span className="text-muted-foreground/60">(optional)</span></label>
+                    <input
+                        type="password"
+                        value={form.ssh_key_passphrase}
+                        onChange={e => setForm({ ...form, ssh_key_passphrase: e.target.value })}
+                        placeholder="Passphrase for the SSH key"
+                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                     />
                 </div>
             </div>
@@ -1277,7 +1528,12 @@ function ServerCard({
                         </h3>
                         <p className="text-xs text-muted-foreground truncate">{server.host}</p>
                         <div className="mt-1 flex flex-wrap gap-1.5">
-                            {!server.is_primary && server.allow_user_workloads !== false && !server.is_lite_agent && (
+                            {server.node_type === 'media' && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-500 font-bold uppercase">
+                                    Media Node
+                                </span>
+                            )}
+                            {!server.is_primary && server.allow_user_workloads !== false && !server.is_lite_agent && server.node_type !== 'media' && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-bold uppercase">
                                     Full Stack
                                 </span>
@@ -1505,7 +1761,7 @@ function ServerCard({
 }
 
 function ProvisioningLogPanel({
-    serverId, server, logs, status, onClose, onRetry, onUpdate, logRef, now,
+    serverId, server, logs, status, onClose, onRetry, onUpdate, logRef, now, publicKey,
 }: {
     serverId: string;
     server: ManagedServer | null;
@@ -1516,10 +1772,21 @@ function ProvisioningLogPanel({
     onUpdate: () => void;
     logRef: React.RefObject<HTMLPreElement | null>;
     now: number;
+    publicKey?: string | null;
 }) {
     const heartbeat = classifyHeartbeat(server?.last_agent_heartbeat_at, now);
     const runtime = server?.agent_runtime_info;
     const psc = PROVISION_STATUS_CONFIG[status] || PROVISION_STATUS_CONFIG.NONE;
+    const [keyCopied, setKeyCopied] = useState(false);
+
+    const copyKey = async () => {
+        if (!publicKey) return;
+        try {
+            await navigator.clipboard.writeText(publicKey);
+            setKeyCopied(true);
+            setTimeout(() => setKeyCopied(false), 2000);
+        } catch { /* clipboard unavailable */ }
+    };
 
     return (
         <motion.div
@@ -1606,6 +1873,32 @@ function ProvisioningLogPanel({
                             <span>Mem <span className={`font-mono ${runtime.mem_used_pct > 85 ? 'text-red-400' : 'text-zinc-200'}`}>{formatPct(runtime.mem_used_pct)}</span></span>
                         </span>
                     )}
+                </div>
+            )}
+
+            {/* Generated SSH key — install on the target host */}
+            {publicKey && (
+                <div className="px-4 py-3 border-b border-emerald-500/30 bg-emerald-500/10">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <p className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1.5">
+                            <Fingerprint size={12} />
+                            Install this public key on the VPS (provider console or ~/.ssh/authorized_keys):
+                        </p>
+                        <button
+                            type="button"
+                            onClick={copyKey}
+                            className="inline-flex h-6 items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 text-[10px] font-medium text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                        >
+                            <Copy size={10} />
+                            {keyCopied ? 'Copied!' : 'Copy'}
+                        </button>
+                    </div>
+                    <pre className="mt-2 p-2 rounded-md bg-zinc-950 border border-zinc-800 text-[10px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap break-all">
+                        {publicKey}
+                    </pre>
+                    <p className="text-[10px] text-emerald-500/70 mt-1.5">
+                        The provisioner will keep retrying with this key — no restart needed once it&apos;s in place.
+                    </p>
                 </div>
             )}
 

@@ -87,8 +87,12 @@ class ServiceSerializerTests(TestCase):
         serializer = ServiceSerializer(data=payload)
         self.assertTrue(serializer.is_valid(), serializer.errors)
         service = serializer.save(owner=self.user)
-        self.assertEqual(service.env_vars.count(), 2)
+        # 2 provided + 1 auto-created SMSLY_API_KEY (signals/service.py)
+        self.assertEqual(service.env_vars.count(), 3)
         self.assertTrue(service.env_vars.get(key="SECRET_KEY").is_secret)
+        auto_key = service.env_vars.get(key="SMSLY_API_KEY")
+        self.assertTrue(auto_key.is_secret)
+        self.assertTrue(auto_key.value.startswith("smsly_"))
 
     def test_name_validation_strips_and_slugs(self):
         serializer = ServiceSerializer(data={"name": "  My  Cool  App!  "})

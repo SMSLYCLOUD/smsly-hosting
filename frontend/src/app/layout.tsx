@@ -33,6 +33,7 @@ import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import FloatingAILoader from "@/components/ai/FloatingAILoader";
 import { CommandPalette } from "@/components/CommandPalette";
+import { TelemetryProvider } from "@/components/telemetry/TelemetryProvider";
 
 // FloatingAI ships in a deferred chunk so it never blocks first paint.
 // ``next/dynamic({ ssr: false })`` is not allowed in Server Components in
@@ -60,6 +61,7 @@ export default function RootLayout({
               <TierProvider>
                 <ConfirmProvider>
                   <SpaceOpsProvider>
+                  <TelemetryProvider>
                   <AppBackground />
                   <CommandPalette />
                   <Navbar />
@@ -75,6 +77,7 @@ export default function RootLayout({
                   <ThreeCompat />
                   <PoweredByBadge />
                   <Toaster />
+                  </TelemetryProvider>
                   </SpaceOpsProvider>
                 </ConfirmProvider>
               </TierProvider>

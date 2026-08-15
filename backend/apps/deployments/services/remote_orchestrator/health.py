@@ -188,6 +188,7 @@ class HealthMixin:
             ssh = SSHClient(
                 ip=self.server.host,
                 key_content=self.server.ssh_key,
+                key_passphrase=self.server.ssh_key_passphrase,
                 password=self.server.ssh_password,
                 user=self.server.ssh_user,
                 port=self.server.ssh_port,

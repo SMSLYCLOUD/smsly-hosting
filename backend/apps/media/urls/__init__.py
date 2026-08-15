@@ -10,6 +10,7 @@ from ..views import (
     AttestationAuditLogViewSet,
     AttestationProfileViewSet,
     MediaCapacityView,
+    MediaNodeInterestView,
     MediaNodeProfileViewSet,
     MediaNodeRegistrationView,
     MediaParticipantViewSet,
@@ -34,6 +35,7 @@ rooms_router.register(r"participants", MediaParticipantViewSet, basename="media-
 
 urlpatterns = [
     path("media-nodes/register/", MediaNodeRegistrationView.as_view({"post": "register"}), name="media-node-register"),
+    path("interest/", MediaNodeInterestView.as_view({"post": "interest"}), name="media-node-interest"),
     path("", include(router.urls)),
     path("", include(nodes_router.urls)),
     path("", include(rooms_router.urls)),

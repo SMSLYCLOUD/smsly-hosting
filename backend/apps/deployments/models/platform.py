@@ -83,6 +83,10 @@ class ManagedServer(models.Model):
     ssh_user = models.CharField(max_length=100, default="root")  # type: ignore[var-annotated]
     ssh_password = EncryptedCharField(max_length=255, blank=True, default="")
     ssh_key = EncryptedTextField(blank=True, default="")
+    ssh_key_passphrase = EncryptedCharField(
+        max_length=255, blank=True, default="",
+        help_text="Passphrase for the encrypted ssh_key (if any). Encrypted at rest.",
+    )
 
     # ── Node DB credentials (encrypted at rest) ──
     node_db_password = EncryptedCharField(

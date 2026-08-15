@@ -38,13 +38,14 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
 
     if server.ssh_key:
         key_file = io.StringIO(server.ssh_key)
+        passphrase = getattr(server, "ssh_key_passphrase", "") or None
         pkey: paramiko.PKey | None = None
         try:
-            pkey = paramiko.RSAKey.from_private_key(key_file)
+            pkey = paramiko.RSAKey.from_private_key(key_file, password=passphrase)
         except paramiko.SSHException:
             key_file.seek(0)
             try:
-                pkey = paramiko.Ed25519Key.from_private_key(key_file)
+                pkey = paramiko.Ed25519Key.from_private_key(key_file, password=passphrase)
             except paramiko.SSHException:
                 pkey = None
         if pkey is not None:
@@ -75,13 +76,15 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     return client
 
 
-def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
+def _generate_ed25519_keypair() -> tuple[str, str]:
+    """Generate a fresh Ed25519 keypair.
+
+    Returns ``(private_key_pem, public_key_line)`` where the private key is
+    OpenSSH-format PEM and the public key is a single ``ssh-ed25519 ...`` line
+    (no trailing newline) suitable for ``authorized_keys``.
+    """
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519
-
-    master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
-    mesh_ip = _get_master_mesh_ip()
-    allowed_ips = f"{master_ip},{mesh_ip}" if mesh_ip else master_ip
 
     private_key = ed25519.Ed25519PrivateKey.generate()
 
@@ -91,12 +94,20 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
         encryption_algorithm=serialization.NoEncryption()
     ).decode("utf-8")
 
-    pub_key_bytes = private_key.public_key().public_bytes(
+    pub_key_line = private_key.public_key().public_bytes(
         encoding=serialization.Encoding.OpenSSH,
         format=serialization.PublicFormat.OpenSSH
-    ).decode("utf-8")
+    ).decode("utf-8").strip()
 
-    pub_key_line = pub_key_bytes.strip()
+    return priv_key_pem, pub_key_line
+
+
+def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
+    master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
+    mesh_ip = _get_master_mesh_ip()
+    allowed_ips = f"{master_ip},{mesh_ip}" if mesh_ip else master_ip
+
+    priv_key_pem, pub_key_line = _generate_ed25519_keypair()
 
     restricted_line = f'from="{allowed_ips}" {pub_key_line} smsly-self-heal\n'
     cmd = (

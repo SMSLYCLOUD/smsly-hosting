@@ -2,6 +2,7 @@
 Provisioning mixins for ManagedServerViewSet.
 """
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action, throttle_classes
@@ -37,23 +38,41 @@ class ProvisioningMixin:
         serializer.is_valid(raise_exception=True)
 
         validated = serializer.validated_data.copy()
-        validated.pop("ssh_auth_method", None)
+        auth_method = validated.pop("ssh_auth_method", "password")
         validated.pop("node_certificate", None)
 
-        server = ManagedServer.objects.create(
-            owner=request.user,
-            provision_status=ManagedServer.ProvisionStatus.PENDING,
-            **validated,
-        )
+        generated_public_key = None
+        if auth_method == "generated":
+            from apps.deployments.services.provisioner.helpers.ssh import _generate_ed25519_keypair
+            priv_key_pem, generated_public_key = _generate_ed25519_keypair()
+            validated["ssh_key"] = priv_key_pem
+
+        try:
+            server = ManagedServer.objects.create(
+                owner=request.user,
+                provision_status=ManagedServer.ProvisionStatus.PENDING,
+                **validated,
+            )
+        except DjangoValidationError as exc:
+            # Model pre_save signals (e.g. host policy in
+            # signals/validation.py) raise django ValidationError on
+            # save. Surface it as a 400, not a 500.
+            return Response(
+                {"error": getattr(exc, "message_dict", None) or str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if server.is_primary and server.allow_user_workloads:
             server.allow_user_workloads = False
             server.save(update_fields=["allow_user_workloads", "updated_at"])
 
-        from .services.provisioner import provision_server
+        from apps.deployments.services.provisioner import provision_server
         provision_server.delay(str(server.id))
 
+        data = ManagedServerSerializer(server).data
+        if generated_public_key:
+            data["generated_ssh_public_key"] = generated_public_key
         return Response(
-            ManagedServerSerializer(server).data,
+            data,
             status=status.HTTP_202_ACCEPTED,
         )
 
@@ -74,7 +93,8 @@ class ProvisioningMixin:
 
         created = []
         errors = []
-        from .services.provisioner import provision_server
+        from apps.deployments.services.provisioner import provision_server
+        from apps.deployments.services.provisioner.helpers.ssh import _generate_ed25519_keypair
 
         for idx, item in enumerate(servers_data):
             serializer = ManagedServerProvisionSerializer(data=item)
@@ -83,19 +103,35 @@ class ProvisioningMixin:
                 continue
 
             validated = serializer.validated_data.copy()
-            validated.pop("ssh_auth_method", None)
+            auth_method = validated.pop("ssh_auth_method", "password")
             validated.pop("node_certificate", None)
+
+            generated_public_key = None
+            if auth_method == "generated":
+                priv_key_pem, generated_public_key = _generate_ed25519_keypair()
+                validated["ssh_key"] = priv_key_pem
 
             validated["is_lite_agent"] = True
             validated["is_primary"] = False
 
-            server = ManagedServer.objects.create(
-                owner=request.user,
-                provision_status=ManagedServer.ProvisionStatus.PENDING,
-                **validated,
-            )
+            try:
+                server = ManagedServer.objects.create(
+                    owner=request.user,
+                    provision_status=ManagedServer.ProvisionStatus.PENDING,
+                    **validated,
+                )
+            except DjangoValidationError as exc:
+                errors.append({
+                    "index": idx,
+                    "host": item.get("host", ""),
+                    "errors": getattr(exc, "message_dict", None) or str(exc),
+                })
+                continue
             provision_server.delay(str(server.id))
-            created.append(ManagedServerSerializer(server).data)
+            entry = ManagedServerSerializer(server).data
+            if generated_public_key:
+                entry["generated_ssh_public_key"] = generated_public_key
+            created.append(entry)
 
         return Response(
             {"created": created, "errors": errors, "total": len(created)},
@@ -119,7 +155,7 @@ class ProvisioningMixin:
         server.provision_logs = f"--- Retry started by {request.user.username} at {timezone.now()} ---\n"
         server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
 
-        from .services.provisioner import provision_server
+        from apps.deployments.services.provisioner import provision_server
         provision_server.delay(str(server.id))
 
         return Response(
@@ -177,7 +213,7 @@ class ProvisioningMixin:
         server.provision_logs = f"--- Update started by {request.user.username} at {timezone.now()} ---\n"
         server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
 
-        from .services.provisioner import provision_server
+        from apps.deployments.services.provisioner import provision_server
         provision_server.delay(str(server.id), skip_reboot=True)
 
         return Response(

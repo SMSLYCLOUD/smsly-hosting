@@ -436,6 +436,32 @@ LOCALLM_ALLOWED_HOSTS = config(
     cast=Csv(),
 )
 
+# SECURITY (SSRF): allowlists for operator-configured OpenAI-compatible
+# router providers (orcarouter / zenmax / agentrouter) and Kimi. Empty
+# defaults are intentional for the custom routers — they are opt-in, and a
+# forgotten setting must not silently turn the AI engine into an SSRF
+# exfil channel. Kimi defaults to the public Moonshot endpoints.
+KIMI_ALLOWED_HOSTS = config(
+    'KIMI_ALLOWED_HOSTS',
+    default='api.moonshot.ai,api.moonshot.cn',
+    cast=Csv(),
+)
+ORCAROUTER_ALLOWED_HOSTS = config(
+    'ORCAROUTER_ALLOWED_HOSTS',
+    default='',
+    cast=Csv(),
+)
+ZENMAX_ALLOWED_HOSTS = config(
+    'ZENMAX_ALLOWED_HOSTS',
+    default='',
+    cast=Csv(),
+)
+AGENTROUTER_ALLOWED_HOSTS = config(
+    'AGENTROUTER_ALLOWED_HOSTS',
+    default='',
+    cast=Csv(),
+)
+
 # SECURITY: placeholder for the public key used to pin the license server
 # response when the (currently disabled) online validation path is ever
 # re-enabled. The default empty string is intentional: an empty value

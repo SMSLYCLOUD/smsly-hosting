@@ -410,9 +410,13 @@ export default function IntelligencePage() {
                           { id: "smslycloud", label: "Trulay Cloud" },
                          { id: "freemodel", label: "FreeModel.dev", hasUrl: true },
                          { id: "opencode", label: "OpenCode", hasUrl: true },
-                         { id: "mistral", label: "Mistral", hasUrl: true },
-                         { id: "nvidia", label: "NVIDIA NIM", hasUrl: true },
-                         { id: "cloudflare", label: "Cloudflare AI", hasUrl: true }
+                          { id: "mistral", label: "Mistral", hasUrl: true },
+                          { id: "nvidia", label: "NVIDIA NIM", hasUrl: true },
+                          { id: "cloudflare", label: "Cloudflare AI", hasUrl: true },
+                          { id: "kimi", label: "Kimi", hasUrl: true },
+                          { id: "orcarouter", label: "Orca Router", hasUrl: true },
+                          { id: "zenmax", label: "ZenMax", hasUrl: true },
+                          { id: "agentrouter", label: "Agent Router", hasUrl: true }
                        ].map(p => (
                          <div key={p.id} className="space-y-3 p-4 rounded-xl bg-muted/30 border border-border/50">
                            <div className="flex items-center justify-between">

@@ -29,7 +29,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "allow_user_workloads", "status", "last_health_check",
             "server_version", "services_count", "created_at",
             "provision_status", "provision_logs", "role", "wg_address",
-            "has_ssh_credentials", "is_lite_agent",
+            "has_ssh_credentials", "is_lite_agent", "node_type",
             # Agent self-registration signals: surfaced so operators
             # can tell at a glance whether the agent's installer
             # has finished bootstrapping and how recently the
@@ -49,6 +49,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "id", "status", "last_health_check", "server_version",
             "services_count", "created_at", "provision_status",
             "role", "wg_address", "has_ssh_credentials", "is_lite_agent",
+            "node_type",
             "agent_ready", "last_agent_heartbeat_at", "agent_runtime_info",
             "tls_cert_sha256_set",
         ]
@@ -70,13 +71,15 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
         fields = [
             "name", "host", "private_ip", "api_url", "api_token",
             "gateway_secret", "ssh_user", "ssh_password", "ssh_key",
-            "ssh_port", "is_primary", "allow_user_workloads",
+            "ssh_key_passphrase", "ssh_port", "is_primary",
+            "allow_user_workloads",
             "provider_metadata", "is_lite_agent", "node_certificate",
         ]
         extra_kwargs = {
             "api_token": {"write_only": True, "required": False},
             "gateway_secret": {"write_only": True, "required": False},
             "ssh_key": {"write_only": True, "required": False, "trim_whitespace": False},
+            "ssh_key_passphrase": {"write_only": True, "required": False},
             "ssh_password": {"write_only": True, "required": False},
             "provider_metadata": {"required": False},
         }
@@ -135,6 +138,9 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
             try:
                 import ipaddress as _ip
                 ip = _ip.ip_address(value)
+                # RFC1918 (private) hosts are allowed for non-primary
+                # servers (VPC / VPN / WireGuard fleets) — matches the
+                # pre_save signal in signals/validation.py.
                 if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
                     raise serializers.ValidationError(
                         f"Host {value} is in a forbidden range for non-primary servers."
@@ -198,11 +204,22 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
 
 
 class ManagedServerProvisionSerializer(serializers.ModelSerializer):
-    """For 'Provision New' mode — user provides SSH credentials."""
+    """For 'Provision New' mode — user provides SSH credentials.
+
+    ``ssh_auth_method`` supports three modes:
+    - ``password`` — user provides the SSH password (bootstrap credential).
+    - ``key`` — user pastes their own PEM private key.
+    - ``generated`` — the platform generates an Ed25519 keypair at
+      provisioning time; the private key is stored encrypted and the public
+      key is returned to the user, who installs it on the target host.
+    """
     ssh_auth_method = serializers.ChoiceField(
-        choices=["password", "key"], write_only=True, required=False, default="password"
+        choices=["password", "key", "generated"], write_only=True, required=False, default="password"
     )
     node_certificate = serializers.CharField(
+        write_only=True, required=False, allow_blank=True,
+    )
+    ssh_key_passphrase = serializers.CharField(
         write_only=True, required=False, allow_blank=True,
     )
 
@@ -210,7 +227,8 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
         model = ManagedServer
         fields = [
             "name", "host", "ssh_port", "ssh_user",
-            "ssh_password", "ssh_key", "ssh_auth_method",
+            "ssh_password", "ssh_key", "ssh_key_passphrase",
+            "ssh_auth_method",
             "is_primary", "allow_user_workloads", "is_lite_agent",
             "node_certificate",
         ]
@@ -243,6 +261,15 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"ssh_key": "SSH private key is required for key auth."}
             )
+        if method == "generated":
+            # The keypair is generated server-side during provision_new; no
+            # credentials are required from the user. Never store a
+            # user-supplied key in this mode — the generated one replaces it.
+            data.pop("ssh_key", None)
+            data.pop("ssh_password", None)
+            data.pop("ssh_key_passphrase", None)
+        elif method == "key" and not (data.get("ssh_key_passphrase") or "").strip():
+            data.pop("ssh_key_passphrase", None)
         # If provisioning via SSH, we don't require the certificate upfront.
         # The provisioner script will automatically fetch it from the remote node
         # once the lite agent is installed.

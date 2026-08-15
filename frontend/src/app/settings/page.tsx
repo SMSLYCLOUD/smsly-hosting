@@ -17,6 +17,7 @@ import { ApiKeysTab } from "@/components/settings/ApiKeysTab";
 import { AlertsTab } from "@/components/settings/AlertsTab";
 import { TeamsTab } from "@/components/settings/TeamsTab";
 import { SecurityTab } from "@/components/settings/SecurityTab";
+import { PrivacyTab } from "@/components/settings/PrivacyTab";
 import { MtlsTab } from "@/components/settings/MtlsTab";
 import { PlatformSettingsTab } from "@/components/settings/PlatformSettingsTab";
 import { ProvidersTab } from "@/components/settings/ProvidersTab";
@@ -141,6 +142,8 @@ function SettingsContent() {
               <SecurityTab />
               <Separator />
               <ApiKeysTab />
+              <Separator />
+              <PrivacyTab />
             </div>
           </TabsContent>
 

@@ -106,9 +106,13 @@ export function AiTab() {
     mistral: ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest", "codestral-latest", "pixtral-large-latest", "ministral-8b-latest"],
     nvidia: ["nvidia/llama-3.1-nemotron-70b-instruct", "nvidia/nemotron-4-340b-instruct", "meta/llama-3.1-8b-instruct", "mistralai/mixtral-8x22b-instruct-v0.1"],
     cloudflare: ["@cf/meta/llama-3.1-8b-instruct", "@cf/meta/llama-3.3-70b-instruct", "@cf/qwen/qwen3-30b-a3b-fp8", "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b", "@cf/mistral/mistral-small-3.1-24b-instruct"],
+    kimi: ["kimi-latest", "kimi-k2-0711-preview", "moonshot-v1-8k", "moonshot-v1-32k"],
+    orcarouter: ["orcarouter/auto"],
+    zenmax: ["zenmax/auto"],
+    agentrouter: ["agentrouter/auto"],
   };
 
-  const hasUrl = (id: string) => ["jules", "localllm", "freemodel", "opencode", "mistral", "nvidia", "cloudflare"].includes(id);
+  const hasUrl = (id: string) => ["jules", "localllm", "freemodel", "opencode", "mistral", "nvidia", "cloudflare", "kimi", "orcarouter", "zenmax", "agentrouter"].includes(id);
 
   return (
     <div className="space-y-6">
@@ -183,7 +187,7 @@ export function AiTab() {
                 setSaving(true);
                 try {
                   const data: Record<string, string> = {};
-                  const allIds = ["openai", "grok", "gemini", "claude", "openrouter", "groq", "alibaba", "deepseek", "jules", "localllm", "smslycloud", "freemodel", "opencode", "mistral", "nvidia", "cloudflare"];
+                  const allIds = ["openai", "grok", "gemini", "claude", "openrouter", "groq", "alibaba", "deepseek", "jules", "localllm", "smslycloud", "freemodel", "opencode", "mistral", "nvidia", "cloudflare", "kimi", "orcarouter", "zenmax", "agentrouter"];
                   allIds.forEach((id) => {
                     if (aiKeys[id]) data[`${id}_api_key`] = aiKeys[id];
                     if (aiModels[id]) data[`${id}_model`] = aiModels[id];

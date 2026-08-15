@@ -21,6 +21,10 @@ from .opencode import OpenCodeProvider
 from .mistral import MistralProvider
 from .nvidia_nim import NvidiaNimProvider
 from .cloudflare import CloudflareProvider
+from .kimi import KimiProvider
+from .orcarouter import OrcaRouterProvider
+from .zenmax import ZenMaxProvider
+from .agentrouter import AgentRouterProvider
 from .mock import MockProvider
 
 
@@ -41,6 +45,10 @@ PROVIDERS = {
     "mistral": MistralProvider,
     "nvidia": NvidiaNimProvider,
     "cloudflare": CloudflareProvider,
+    "kimi": KimiProvider,
+    "orcarouter": OrcaRouterProvider,
+    "zenmax": ZenMaxProvider,
+    "agentrouter": AgentRouterProvider,
     "mock": MockProvider,
 }
 
@@ -61,6 +69,10 @@ ENV_KEY_MAP = {
     "mistral": "MISTRAL_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
     "cloudflare": "CLOUDFLARE_API_KEY",
+    "kimi": "KIMI_API_KEY",
+    "orcarouter": "ORCAROUTER_API_KEY",
+    "zenmax": "ZENMAX_API_KEY",
+    "agentrouter": "AGENTROUTER_API_KEY",
 }
 
 

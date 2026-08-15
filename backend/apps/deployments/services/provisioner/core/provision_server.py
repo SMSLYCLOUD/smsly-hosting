@@ -799,6 +799,14 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
         server.save(update_fields=["provision_status", "updated_at"])
         _append_log(server, f"\n❌ Provisioning failed: {exc}")
+        if server.ssh_key and not server.ssh_password:
+            _append_log(
+                server,
+                "💡 If this was an SSH authentication failure with a generated or "
+                "pasted key: make sure the matching public key is installed on the "
+                "host (e.g. in ~/.ssh/authorized_keys or the provider's SSH key "
+                "console) before retrying.",
+            )
     finally:
         _stop_docker_mirror()
         if local_bundle_path and os.path.exists(local_bundle_path):

@@ -1,8 +1,25 @@
 """Serializers for Media Node app."""
 from rest_framework import serializers
 
-from ..models import MediaNodeProfile, MediaParticipant, MediaRoom
+from ..models import MediaNodeInterest, MediaNodeProfile, MediaParticipant, MediaRoom
 from ..models.attestation import AttestationAuditLog, AttestationProfile
+
+
+class MediaNodeInterestSerializer(serializers.ModelSerializer):
+    """Write-only lead capture for the enterprise media node workflow.
+
+    Only ``name`` and ``email`` are required; the rest is optional context
+    for the sales follow-up. Status is managed internally.
+    """
+
+    class Meta:
+        model = MediaNodeInterest
+        fields = ["id", "name", "company", "email", "host", "notes", "status", "created_at"]
+        read_only_fields = ["id", "status", "created_at"]
+
+    def validate(self, data):
+        data["status"] = MediaNodeInterest.Status.NEW
+        return data
 
 
 class MediaNodeProfileSerializer(serializers.ModelSerializer):

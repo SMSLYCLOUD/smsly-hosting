@@ -20,4 +20,8 @@ from .opencode import OpenCodeProvider
 from .mistral import MistralProvider
 from .nvidia_nim import NvidiaNimProvider
 from .cloudflare import CloudflareProvider
+from .kimi import KimiProvider
+from .orcarouter import OrcaRouterProvider
+from .zenmax import ZenMaxProvider
+from .agentrouter import AgentRouterProvider
 from .mock import MockProvider
