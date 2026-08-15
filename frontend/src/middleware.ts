@@ -176,6 +176,8 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    // Root path — hostname validation for unknown subdomains.
+    "/",
     // Auth-header injection for the upstream API proxy.
     "/api/:path*",
     "/health",
