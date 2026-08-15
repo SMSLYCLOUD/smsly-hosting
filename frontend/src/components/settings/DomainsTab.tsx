@@ -35,13 +35,17 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     });
     const [stagingChecking, setStagingChecking] = useState(false);
     const [stagedDeployment, setStagedDeployment] = useState<Deployment | null>(null);
+    const [platformDomain, setPlatformDomain] = useState('');
 
     const defaultDomain = service.public_domain || `${service.name}.cloud.Trulay.co`;
 
-    // Fetch server IP from system config
+    // Fetch server IP and platform domain from system config
     useEffect(() => {
         systemApi.getDomainConfig()
-            .then((cfg: any) => setServerIp(cfg.server_ip || ''))
+            .then((cfg: any) => {
+                setServerIp(cfg.server_ip || '');
+                setPlatformDomain(cfg.domain || '');
+            })
             .catch(() => {});
     }, []);
 
@@ -274,7 +278,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     {stagingDomain.trim() && (
                         <>
                             <p className="text-xs font-semibold text-muted-foreground mb-1 mt-4">
-                                Staging Domain — CNAME to default domain
+                                Staging Domain — CNAME to platform domain
                             </p>
                             <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-2">
                                 <code className="text-sm font-mono text-primary flex-1">{stagingDomain.trim()}</code>
@@ -287,7 +291,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                 <ArrowRight size={12} />
                                 <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
                                 <ArrowRight size={12} />
-                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
+                                <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{platformDomain || 'your-platform.domain'}</span>
                             </div>
                         </>
                     )}
