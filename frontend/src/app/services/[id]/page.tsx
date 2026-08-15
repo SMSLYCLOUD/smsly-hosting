@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { servicesApi, serversApi, Service, Deployment, EnvVar, ManagedServer } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, useSearchParams, notFound } from 'next/navigation';
 import { getWsUrl } from '@/lib/websocket';
 import ScalingTab from '@/components/settings/ScalingTab';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -299,27 +299,38 @@ export default function ServiceDetailPage() {
                     const d = await servicesApi.getDeployment(s.latest_deployment.id);
                     setDeployment(d);
                 }
-            } catch (err) { console.error(err); }
+            } catch (err: any) {
+                if (err?.response?.status === 404) {
+                    notFound();
+                    return;
+                }
+                console.error(err);
+            }
         };
         load();
     }, [id]);
 
     useEffect(() => {
+        let stopped = false;
         const refresh = async () => {
+            if (stopped) return;
             try {
                 const s = await servicesApi.get(id);
+                if (stopped) return;
                 setService(s);
                 if (s.latest_deployment) {
                     const d = await servicesApi.getDeployment(s.latest_deployment.id);
-                    setDeployment(d);
+                    if (!stopped) setDeployment(d);
                 }
-            } catch (err) { console.error(err); }
+            } catch (err: any) {
+                if (err?.response?.status === 404) {
+                    stopped = true;
+                    notFound();
+                }
+            }
         };
-        // Poll every 3s so health_status changes (driven by the 30s
-        // health-monitor beat) show up within a few seconds. Previous
-        // 5s was close to the user-perceived "stale" threshold.
         const interval = setInterval(refresh, 3000);
-        return () => clearInterval(interval);
+        return () => { stopped = true; clearInterval(interval); };
     }, [id]);
 
     useEffect(() => {
@@ -371,7 +382,12 @@ export default function ServiceDetailPage() {
         }
     }, [service]);
 
-    if (!service) return <div className="h-screen flex items-center justify-center bg-background text-muted-foreground">Loading...</div>;
+    if (!service) return (
+        <div className="h-screen flex items-center justify-center bg-background text-muted-foreground gap-2">
+            <Spinner className="h-5 w-5 animate-spin" />
+            Loading service...
+        </div>
+    );
 
     // Simple cost estimation logic (use defaults if not set)
     const customDomains = Array.isArray(service.custom_domains)
