@@ -979,6 +979,18 @@ export const aiApi = {
     return response.data;
   },
 
+  /** Fetch available models from a provider's /v1/models endpoint. */
+  fetchModels: async (providerId: string, apiKey?: string, baseUrl?: string): Promise<{ models: string[] }> => {
+    const response = await api.post('/ai/providers/fetch-models/', {
+      provider_id: providerId,
+      api_key: apiKey || '',
+      base_url: baseUrl || '',
+    }, {
+      _skipRemoteProxy: true,
+    });
+    return response.data;
+  },
+
   /** Test AI with a prompt. Returns response + which provider/mode was used. */
   testPrompt: async (prompt: string, systemPrompt?: string): Promise<AITestResponse> => {
     const response = await api.post('/ai/test/', {

@@ -11,6 +11,7 @@ from ..views import (
     ai_chat_stream,
     ai_cost_estimate,
     ai_intelligence_report,
+    ai_provider_fetch_models,
     ai_providers_status,
     ai_providers_update,
     ai_test_prompt,
@@ -20,6 +21,7 @@ from ..views import (
 urlpatterns = [
     path('providers/', ai_providers_status, name='ai-providers-status'),
     path('providers/update/', ai_providers_update, name='ai-providers-update'),
+    path('providers/fetch-models/', ai_provider_fetch_models, name='ai-provider-fetch-models'),
     path('test/', ai_test_prompt, name='ai-test-prompt'),
     path('analyze/', ai_analyze_logs, name='ai-analyze-logs'),
     path('cost-estimate/', ai_cost_estimate, name='ai-cost-estimate'),

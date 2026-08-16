@@ -24,6 +24,7 @@ from ..helpers import (
     _append_log,
     _build_local_source_bundle,
     _env_bool,
+    _get_master_mesh_ip,
     _installer_logs_confirm_success,
     _load_install_script,
     _node_queue_name,
@@ -72,18 +73,6 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             )
     except ManagedServer.DoesNotExist:
         logger.error("Server %s not found", server_id)
-        return
-
-    if server_install_mode(server) == "media":
-        _append_log(server, "⛔ Media nodes cannot be provisioned via provision_server.")
-        _append_log(
-            server,
-            "Media nodes use install-media-node.sh for bare-metal systemd deployment. "
-            "Provision them manually on the target host, then register via "
-            "POST /api/v1/media/media-nodes/ with the ManagedServer ID.",
-        )
-        server.provision_status = ManagedServer.ProvisionStatus.FAILED
-        server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
         return
 
     _append_log(server, "🚀 Starting Grid provisioning...")
@@ -223,6 +212,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             node_db_user = (server.provider_metadata or {}).get("node_db_user")
             if node_db_user:
                 resources.track_db_user(node_db_user)
+        elif install_mode == "media":
+            install_args.append("--mode=media-node")
+            _append_log(server, "📡 Media node: installing voice/video bare-metal stack")
+            master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
+            install_env["MASTER_IP"] = master_ip
+            install_env["MASTER_MESH_IP"] = _get_master_mesh_ip()
         elif install_mode == "node":
             install_args.append("--mode=node")
 

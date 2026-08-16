@@ -230,9 +230,10 @@ export default function MultiServerDocsPage() {
                     <p>A Lite Agent is a <code>ManagedServer</code> with <code>is_lite_agent=True</code>. It runs <code>docker-compose.agent-lite.yml</code>: a subset of the platform that includes the backend, worker, and a local Redis/RabbitMQ, but <strong>not</strong> PostgreSQL. The agent&apos;s database connection points at the master over the WireGuard mesh (<code>MASTER_MESH_IP</code>), and its reads (services, deployments) hit the shared master database directly rather than through a proxy.</p>
                     <p>Use Lite Agents when the remote VPS is small (1-2 vCPU, 1-2 GB RAM) and you do not want to run PostgreSQL on it, when the agent is in a private subnet and can reach the master over WireGuard but not the public internet, or when you want to add a node quickly without provisioning a database.</p>
 
-                    <h3>Media Node (Enterprise)</h3>
-                    <p>Media Nodes add live audio/video capabilities (LiveKit-based calling, rooms, participants, WebRTC relaying) to the fleet. They are a proprietary, enterprise-only offering: the installer stack is not part of the open-source distribution, and node-type registration is enforced server-side.</p>
-                    <p>To request access, open <strong>Servers</strong>, choose <strong>Provision New</strong>, and select the <strong>Media Node</strong> card in Node Mode. The lead form records your contact details, and the sales team will follow up with installer credentials and sizing guidance. No install details are exposed in the UI until the enterprise stack is delivered.</p>
+                    <h3>Media Node</h3>
+                    <p>Media Nodes add live audio/video capabilities (Kamailio SIP proxy, FreeSWITCH media server, rtpengine RTP relay, LiveKit WebRTC rooms, coturn TURN server) to the fleet. The installer deploys a bare-metal systemd stack — no Docker Compose for the media services.</p>
+                    <p>Hardware requirements: 4+ CPU cores, 8+ GB RAM, 50+ GB disk. Ports 80, 443, 5060 (SIP), 3478 (TURN), 9090, 9091, and 30000-31000/UDP (RTP) must be open on the target host.</p>
+                    <p>To provision, open <strong>Servers</strong>, choose <strong>Provision New</strong>, select the <strong>Media Node</strong> card in Node Mode, and enter SSH credentials. The platform runs <code>install.sh --mode=media-node</code> on the target host.</p>
 
                     {/* Connecting a Server */}
                     <h2 id="connecting" className="text-2xl font-bold flex items-center gap-2">

@@ -334,6 +334,68 @@ def ai_providers_update(request):
 
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
+@permission_classes([IsAdminUser])
+def ai_provider_fetch_models(request):
+    """
+    Fetch available models from an OpenAI-compatible provider.
+
+    POST /api/v1/ai/providers/fetch-models/
+    Body: { "provider_id": "openai", "api_key": "sk-...", "base_url": "https://api.openai.com/v1" }
+
+    Returns { "models": ["gpt-4o", "gpt-4o-mini", ...] }
+    """
+    provider_id = request.data.get("provider_id", "")
+    api_key = request.data.get("api_key", "")
+    base_url = request.data.get("base_url", "")
+
+    if not provider_id:
+        return Response({"error": "provider_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    from ..providers.registry import PROVIDERS
+
+    provider_cls = PROVIDERS.get(provider_id)
+    if not provider_cls:
+        return Response({"error": f"Unknown provider: {provider_id}"}, status=status.HTTP_400_BAD_REQUEST)
+
+    instance = provider_cls()
+    resolved_base_url = base_url or getattr(instance, "base_url", "")
+    resolved_api_key = api_key or getattr(instance, "api_key", "")
+
+    if not resolved_base_url:
+        return Response(
+            {"error": f"No base URL for {provider_id}. Set one in the Base URL field or via environment variable."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    import requests as _requests
+
+    try:
+        resp = _requests.get(
+            f"{resolved_base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {resolved_api_key}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        models = [m.get("id", "") for m in data.get("data", []) if m.get("id")]
+        models.sort()
+        return Response({"models": models})
+    except _requests.exceptions.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else 0
+        return Response(
+            {"error": f"Provider returned HTTP {status_code}. Check your API key and base URL."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as exc:
+        logger.warning("Fetch models failed for %s: %s", provider_id, exc)
+        return Response(
+            {"error": f"Failed to reach {provider_id}: {exc}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
+@api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @throttle_classes([AIChatRateThrottle])
 def ai_test_prompt(request):

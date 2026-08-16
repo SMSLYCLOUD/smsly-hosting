@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Loader2, Sparkles, Send } from "lucide-react";
+import { Loader2, Sparkles, Send, Download } from "lucide-react";
 import { aiApi } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,7 @@ export function AiTab() {
   const [testPrompt, setTestPrompt] = useState("");
   const [testResult, setTestResult] = useState<{ response: string; provider: string; mode: string } | null>(null);
   const [testingPrompt, setTestingPrompt] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState<string | null>(null);
 
   const fetchAIConfig = useCallback(async () => {
     try {
@@ -60,6 +61,12 @@ export function AiTab() {
         });
         return next;
       });
+      // Auto-fetch models for configured providers
+      aiData.providers
+        .filter((p: any) => p.configured)
+        .forEach((p: any) => {
+          handleFetchModels(p.id);
+        });
     }
   }, [aiData]);
 
@@ -89,30 +96,41 @@ export function AiTab() {
     }
   };
 
-  const modelOptions: Record<string, string[]> = {
-    openai: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "o1-mini", "o1-preview"],
-    grok: ["grok-3-mini", "grok-3", "grok-2", "grok-beta"],
-    gemini: ["gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-flash", "gemini-1.5-pro"],
-    claude: ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"],
-    openrouter: ["openrouter/auto", "openai/gpt-4o", "anthropic/claude-3.5-sonnet"],
-    groq: ["llama-3.3-70b-versatile", "llama3-70b-8192", "mixtral-8x7b-32768"],
-    alibaba: ["qwen-max", "qwen-plus", "qwen-turbo"],
-    deepseek: ["deepseek-coder", "deepseek-chat"],
-    jules: ["jules-latest", "jules-pro"],
-    localllm: ["local-model"],
-    smslycloud: ["smsly-latest"],
-    freemodel: ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo", "claude-3.5-sonnet", "llama-3.1-70b"],
-    opencode: ["opencode-latest", "gpt-4o", "claude-sonnet-4-20250514"],
-    mistral: ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest", "codestral-latest", "pixtral-large-latest", "ministral-8b-latest"],
-    nvidia: ["nvidia/llama-3.1-nemotron-70b-instruct", "nvidia/nemotron-4-340b-instruct", "meta/llama-3.1-8b-instruct", "mistralai/mixtral-8x22b-instruct-v0.1"],
-    cloudflare: ["@cf/meta/llama-3.1-8b-instruct", "@cf/meta/llama-3.3-70b-instruct", "@cf/qwen/qwen3-30b-a3b-fp8", "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b", "@cf/mistral/mistral-small-3.1-24b-instruct"],
-    kimi: ["kimi-latest", "kimi-k2-0711-preview", "moonshot-v1-8k", "moonshot-v1-32k"],
-    orcarouter: ["orcarouter/auto"],
-    zenmax: ["zenmax/auto"],
-    agentrouter: ["agentrouter/auto"],
+  const handleFetchModels = async (providerId: string) => {
+    setFetchingModels(providerId);
+    try {
+      const result = await aiApi.fetchModels(providerId, aiKeys[providerId], aiUrls[providerId]);
+      if (result.models && result.models.length > 0) {
+        setAiModels(prev => ({ ...prev, [providerId]: result.models[0] }));
+        setModelOptions(prev => ({ ...prev, [providerId]: result.models }));
+        toast({ title: `${providerId} models loaded`, description: `Found ${result.models.length} models. First one selected.` });
+      } else {
+        toast({ title: "No models found", description: "The provider returned no models. Check your API key and base URL.", variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "Fetch failed", description: err?.response?.data?.error || err.message || "Could not fetch models.", variant: "destructive" });
+    } finally {
+      setFetchingModels(null);
+    }
   };
 
+  const [modelOptions, setModelOptions] = useState<Record<string, string[]>>({});
+
   const hasUrl = (id: string) => ["jules", "localllm", "freemodel", "opencode", "mistral", "nvidia", "cloudflare", "kimi", "orcarouter", "zenmax", "agentrouter"].includes(id);
+
+  const baseUrlPlaceholders: Record<string, string> = {
+    jules: "https://api.jules.google.com/v1",
+    localllm: "http://localhost:11434/v1",
+    freemodel: "https://api.freemodel.dev/v1",
+    opencode: "https://api.opencode.ai/v1",
+    mistral: "https://api.mistral.ai/v1",
+    nvidia: "https://integrate.api.nvidia.com/v1",
+    cloudflare: "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai",
+    kimi: "https://api.moonshot.ai/v1",
+    orcarouter: "https://api.orcarouter.com/v1",
+    zenmax: "https://api.zenmax.ai/v1",
+    agentrouter: "https://api.agentrouter.com/v1",
+  };
 
   return (
     <div className="space-y-6">
@@ -153,20 +171,39 @@ export function AiTab() {
                 </div>
                 <div className="grid grid-cols-1 gap-3">
                   <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold uppercase text-muted-foreground tracking-wider">Model</Label>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-[10px] font-bold uppercase text-muted-foreground tracking-wider">Model</Label>
+                      <button
+                        onClick={() => handleFetchModels(p.id)}
+                        disabled={fetchingModels === p.id}
+                        className="text-[10px] text-blue-500 hover:text-blue-400 flex items-center gap-1 disabled:opacity-50"
+                      >
+                        {fetchingModels === p.id ? <Loader2 size={10} className="animate-spin" /> : <Download size={10} />}
+                        {fetchingModels === p.id ? "Fetching..." : "Fetch models"}
+                      </button>
+                    </div>
                     <div className="flex gap-2">
-                      <select className="flex-1 h-9 px-2 text-xs border rounded-md bg-background" value={aiModels[p.id] || p.model || ""} onChange={(e) => setAiModels((prev) => ({ ...prev, [p.id]: e.target.value }))}>
-                        {(modelOptions[p.id] || [p.model]).map((m: string) => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
-                      <Input placeholder="Custom Model" className="w-1/2 h-9 text-xs" onChange={(e) => setAiModels((prev) => ({ ...prev, [p.id]: e.target.value }))} />
+                      {modelOptions[p.id] && modelOptions[p.id].length > 0 ? (
+                        <select className="flex-1 h-9 px-2 text-xs border rounded-md bg-background" value={aiModels[p.id] || p.model || ""} onChange={(e) => setAiModels((prev) => ({ ...prev, [p.id]: e.target.value }))}>
+                          {modelOptions[p.id].map((m: string) => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <Input
+                          placeholder={p.model || "Enter model ID or click Fetch models"}
+                          className="flex-1 h-9 text-xs"
+                          value={aiModels[p.id] || ""}
+                          onChange={(e) => setAiModels((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                        />
+                      )}
+                      <Input placeholder="Override" className="w-1/2 h-9 text-xs" value={aiModels[p.id] || ""} onChange={(e) => setAiModels((prev) => ({ ...prev, [p.id]: e.target.value }))} />
                     </div>
                   </div>
                   {hasUrl(p.id) && (
                     <div className="space-y-1.5">
                       <Label className="text-[10px] font-bold uppercase text-muted-foreground tracking-wider">Base URL</Label>
-                      <Input placeholder="https://api.example.com/v1" className="h-9 text-xs font-mono" value={aiUrls[p.id] || ""} onChange={(e) => setAiUrls((prev) => ({ ...prev, [p.id]: e.target.value }))} />
+                      <Input placeholder={baseUrlPlaceholders[p.id] || "https://api.example.com/v1"} className="h-9 text-xs font-mono" value={aiUrls[p.id] || ""} onChange={(e) => setAiUrls((prev) => ({ ...prev, [p.id]: e.target.value }))} />
                     </div>
                   )}
                 </div>
@@ -218,7 +255,7 @@ export function AiTab() {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Set keys and models above, or via env vars (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY, JULES_API_KEY, FREEMODEL_API_KEY, OPENCODE_API_KEY, MISTRAL_API_KEY, NVIDIA_API_KEY, CLOUDFLARE_API_KEY), or admin panel.
+            Set keys and models above, or via env vars (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY, JULES_API_KEY, FREEMODEL_API_KEY, OPENCODE_API_KEY, MISTRAL_API_KEY, NVIDIA_API_KEY, CLOUDFLARE_API_KEY, KIMI_API_KEY, ORCAROUTER_API_KEY, ZENMAX_API_KEY, AGENTROUTER_API_KEY), or admin panel.
           </p>
         </CardContent>
       </Card>

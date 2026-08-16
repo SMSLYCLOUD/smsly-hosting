@@ -1127,10 +1127,19 @@ function ProvisionForm({
                 onMediaChange={v => setForm({ ...form, is_media_node: v, is_lite_agent: v ? false : form.is_lite_agent })}
             />
 
-            {form.is_media_node ? (
-                <MediaNodeGatePanel host={form.host} />
-            ) : (
-            <>
+            {form.is_media_node && (
+                <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+                    <p className="text-xs text-cyan-500 font-semibold flex items-center gap-1.5">
+                        <Mic size={12} /> Media Node — voice &amp; video bare-metal
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                        Installs Kamailio, FreeSWITCH, rtpengine, LiveKit, and coturn.
+                        Requires 4+ CPU cores, 8+ GB RAM, 50+ GB disk.
+                        Ports 80, 443, 5060, 3478, 9090, 9091, and 30000-31000/UDP must be open.
+                    </p>
+                </div>
+            )}
+
             {/* Node Certificate is automatically fetched by the provisioner over SSH for new Lite Agents */}
 
             {/* Auth Method Toggle */}
@@ -1253,8 +1262,6 @@ function ProvisionForm({
                     Provision & Install
                 </button>
             </div>
-            </>
-            )}
         </>
     );
 }
