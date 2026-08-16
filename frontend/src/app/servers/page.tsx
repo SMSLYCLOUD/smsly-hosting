@@ -264,6 +264,8 @@ export default function ServersPage() {
     const [provisionStatus, setProvisionStatus] = useState<ProvisionStatus | ''>('');
     const [liveServer, setLiveServer] = useState<ManagedServer | null>(null);
     const [generatedPublicKey, setGeneratedPublicKey] = useState<string | null>(null);
+    const [generatedPrivateKey, setGeneratedPrivateKey] = useState<string | null>(null);
+    const [generatingKey, setGeneratingKey] = useState(false);
     const logRef = useRef<HTMLPreElement>(null);
 
     // Live re-render for "Xs ago" labels.
@@ -447,6 +449,13 @@ export default function ServersPage() {
                 if (provisionForm.ssh_key_passphrase.trim()) {
                     payload.ssh_key_passphrase = provisionForm.ssh_key_passphrase;
                 }
+            } else if (provisionForm.ssh_auth_method === 'generated') {
+                if (generatedPrivateKey) {
+                    // Use pre-generated key: switch to 'key' method so backend doesn't regenerate
+                    payload.ssh_auth_method = 'key';
+                    payload.ssh_key = generatedPrivateKey;
+                }
+                // else: backend will generate a new keypair (legacy flow)
             }
             const result = await apiFetch('/api/v1/servers/provision/', 'POST', payload);
             setShowAdd(false);
@@ -520,6 +529,19 @@ export default function ServersPage() {
             fetchServers();
         } catch { /* ignore */ }
         setChecking(false);
+    };
+
+    const handleGenerateKey = async () => {
+        setGeneratingKey(true);
+        try {
+            const result = await apiFetch('/api/v1/servers/generate-key/', 'POST');
+            setGeneratedPublicKey(result.public_key);
+            setGeneratedPrivateKey(result.private_key);
+            toast({ title: 'Key pair generated', description: 'Install the public key on your VPS, then click Provision.' });
+        } catch (err: any) {
+            toast({ title: 'Failed to generate key', description: err.message, variant: 'destructive' });
+        }
+        setGeneratingKey(false);
     };
 
     // Derive summary stats for the header.
@@ -664,6 +686,9 @@ export default function ServersPage() {
                                         testing={testing}
                                         testResult={testResult}
                                         submitting={submitting}
+                                        onGenerateKey={handleGenerateKey}
+                                        generatingKey={generatingKey}
+                                        generatedPublicKey={generatedPublicKey}
                                     />
                                 ) : (
                                     <ConnectForm
@@ -1063,7 +1088,7 @@ function NodeCertificateInput({ value, onChange }: { value: string; onChange: (v
 }
 
 function ProvisionForm({
-    form, setForm, onSubmit, onTest, testing, testResult, submitting,
+    form, setForm, onSubmit, onTest, testing, testResult, submitting, onGenerateKey, generatingKey, generatedPublicKey,
 }: {
     form: any;
     setForm: (f: any) => void;
@@ -1072,6 +1097,9 @@ function ProvisionForm({
     testing: boolean;
     testResult: { ok: boolean; message: string } | null;
     submitting: boolean;
+    onGenerateKey: () => void;
+    generatingKey: boolean;
+    generatedPublicKey: string | null;
 }) {
     return (
         <>
@@ -1179,17 +1207,50 @@ function ProvisionForm({
                 </div>
 
                 {form.ssh_auth_method === 'generated' ? (
-                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
-                        <p className="text-xs text-emerald-500 font-semibold flex items-center gap-1.5">
-                            <Fingerprint size={12} /> Grid generates the keypair
-                        </p>
-                        <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-                            When provisioning starts, Grid creates an Ed25519 keypair and shows you
-                            the <strong>public key</strong> in the log panel. Install it on the VPS
-                            (provider console → SSH keys, or <code className="text-[10px]">~/.ssh/authorized_keys</code>)
-                            and provisioning continues automatically. The private key never leaves
-                            your instance.
-                        </p>
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <p className="text-xs text-emerald-500 font-semibold flex items-center gap-1.5">
+                                    <Fingerprint size={12} /> Grid generates the keypair
+                                </p>
+                                <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                                    Click below to generate an Ed25519 keypair. Install the public key
+                                    on the VPS (provider console or <code className="text-[10px]">~/.ssh/authorized_keys</code>),
+                                    then fill in the server details and click Provision.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={onGenerateKey}
+                                disabled={generatingKey}
+                                className="shrink-0 px-3 py-1.5 text-xs rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 font-medium flex items-center gap-1.5 hover:bg-emerald-500/20 disabled:opacity-50"
+                            >
+                                {generatingKey ? <Loader2 size={12} className="animate-spin" /> : <Key size={12} />}
+                                {generatingKey ? 'Generating...' : 'Generate Key Pair'}
+                            </button>
+                        </div>
+                        {generatedPublicKey && (
+                            <div className="space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-bold uppercase text-emerald-400 tracking-wider">Public Key — install on VPS</span>
+                                    <button
+                                        type="button"
+                                        onClick={async () => {
+                                            try {
+                                                await navigator.clipboard.writeText(generatedPublicKey);
+                                                toast({ title: 'Copied', description: 'Public key copied to clipboard.' });
+                                            } catch { /* clipboard unavailable */ }
+                                        }}
+                                        className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                                    >
+                                        <Copy size={10} /> Copy
+                                    </button>
+                                </div>
+                                <pre className="p-2 rounded-md bg-zinc-950 border border-zinc-800 text-[10px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap break-all max-h-24">
+                                    {generatedPublicKey}
+                                </pre>
+                            </div>
+                        )}
                     </div>
                 ) : form.ssh_auth_method === 'password' ? (
                     <input

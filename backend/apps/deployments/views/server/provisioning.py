@@ -18,6 +18,18 @@ from .serializers import (
 
 class ProvisioningMixin:
 
+    @action(detail=False, methods=["post"], url_path="generate-key")
+    def generate_key(self, request):
+        from apps.deployments.services.provisioner.helpers.ssh import _generate_ed25519_keypair
+        priv_key_pem, pub_key_line = _generate_ed25519_keypair()
+        return Response(
+            {
+                "private_key": priv_key_pem,
+                "public_key": pub_key_line,
+            },
+            status=status.HTTP_200_OK,
+        )
+
     @action(detail=False, methods=["post"], url_path="provision")
     @throttle_classes([ServerProvisionThrottle])
     def provision_new(self, request):
