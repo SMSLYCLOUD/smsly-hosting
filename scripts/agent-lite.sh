@@ -258,7 +258,26 @@ ensure_agent_env_defaults() {
         registry_host="$master_ip"
     fi
     if [ -n "$registry_host" ]; then
-        env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${registry_host}:5000"
+        local _reg_url=""
+        # Try primary port first (5000), then fallback to HTTPS (443)
+        if timeout -k 5 3 bash -c "</dev/tcp/${registry_host}/5000" 2>/dev/null; then
+            _reg_url="${registry_host}:5000"
+        elif timeout -k 5 3 bash -c "</dev/tcp/${registry_host}/443" 2>/dev/null; then
+            # Port 443 open — try Traefik-routed registry subdomain
+            local _domain="${DOMAIN:-}"
+            if [ -n "$_domain" ]; then
+                _reg_url="https://registry.${_domain}"
+            else
+                _reg_url="https://${registry_host}"
+            fi
+        fi
+        if [ -n "$_reg_url" ]; then
+            env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "$_reg_url"
+            echo -e "${GREEN}  -> Registry URL set to ${_reg_url}${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Registry unreachable on ${registry_host} (ports 5000 and 443 blocked)${NC}"
+            env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${registry_host}:5000"
+        fi
     fi
 
     rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"

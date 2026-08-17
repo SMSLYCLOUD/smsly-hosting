@@ -543,28 +543,15 @@ verify_agent_lite_connectivity() {
 
     # 4. The deploy path pulls master-built images from the master's registry.
     local registry_check_ip="${MASTER_MESH_IP}"
-    if ! timeout -k 5 2 bash -c "</dev/tcp/${registry_check_ip}/5000" ; then
-        echo -e "${RED}  ✗ ERROR: Master container registry (port 5000) is unreachable on ${registry_check_ip}.${NC}"
-        echo -e "${YELLOW}    Ensure the Master registry is running and the mesh/firewall allows port 5000 from this node.${NC}"
+    local registry_url
+    registry_url="$(registry_check_with_fallback "$registry_check_ip")"
+    if [ -z "$registry_url" ]; then
+        echo -e "${RED}  ✗ ERROR: Master container registry is unreachable (tried port ${REGISTRY_PRIMARY_PORT:-5000} and fallback ${REGISTRY_FALLBACK_PORT:-443}).${NC}"
+        echo -e "${YELLOW}    Ensure the Master registry is running and the firewall allows traffic from this node.${NC}"
         return 1
     fi
-    if command -v curl ; then
-        local registry_code
-        registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "http://${registry_check_ip}:5000/v2/"  || true)"
-        # Retry with HTTPS if HTTP returned 000 (connection refused / TLS redirect)
-        if [ "$registry_code" = "000" ] || [ "$registry_code" = "400" ]; then
-            registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://${registry_check_ip}:5000/v2/"  || true)"
-        fi
-        case "$registry_code" in
-            2*|401) ;;
-            *)
-                echo -e "${RED}  ✗ ERROR: Master container registry did not answer correctly on ${registry_check_ip}:5000 (HTTP ${registry_code:-000}).${NC}"
-                return 1
-                ;;
-        esac
-    fi
 
-    echo -e "${GREEN}  ✓ Connectivity to Master verified.${NC}"
+    echo -e "${GREEN}  ✓ Connectivity to Master verified (registry: ${registry_url}).${NC}"
     return 0
 }
 
@@ -3119,7 +3106,7 @@ _harden_ufw_bootstrap() {
 
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820; do
+        for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
         # Whitelist Docker bridges
@@ -3137,6 +3124,7 @@ _harden_ufw_bootstrap() {
     ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
+    ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
         ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
@@ -7701,7 +7689,7 @@ _harden_ufw_bootstrap() {
 
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820; do
+        for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
         # Whitelist Docker bridges
@@ -7719,6 +7707,7 @@ _harden_ufw_bootstrap() {
     ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
+    ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
         ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
@@ -8696,7 +8685,7 @@ _harden_ufw_bootstrap() {
 
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820; do
+        for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
         # Whitelist Docker bridges
@@ -8714,6 +8703,7 @@ _harden_ufw_bootstrap() {
     ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
+    ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
         ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
@@ -11691,7 +11681,7 @@ _harden_ufw_bootstrap() {
 
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820; do
+        for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
         # Whitelist Docker bridges
@@ -11709,6 +11699,7 @@ _harden_ufw_bootstrap() {
     ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
+    ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
         ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
@@ -12373,7 +12364,8 @@ WGCONF
         fi
         systemctl enable --now "wg-quick@${wg_iface}"  || true
         if ip link show "$wg_iface" ; then
-            echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) is up on node${NC}"
+            echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port 51820)${NC}"
+            wg_ensure_listening "$wg_iface" "$mesh_ip" || true
         else
             echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"
         fi
@@ -12408,7 +12400,8 @@ WGCONF
     fi
     systemctl enable --now "wg-quick@${wg_iface}"  || true
     if ip link show "$wg_iface" ; then
-        echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) is up${NC}"
+        echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port 51820)${NC}"
+        wg_ensure_listening "$wg_iface" "$mesh_ip" || true
     else
         echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start — PgCat mesh binding may fail${NC}"
     fi

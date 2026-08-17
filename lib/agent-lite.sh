@@ -121,7 +121,14 @@ EOF
     env_set_value "$env_file" "REDIS_HOST" "redis"
     env_set_value "$env_file" "REDIS_PORT" "6379"
     local registry_host="${MASTER_MESH_IP}"
-    env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${registry_host}:5000"
+    local registry_url
+    registry_url="$(registry_check_with_fallback "$registry_host")"
+    if [ -z "$registry_url" ]; then
+        echo -e "${RED}  ✗ ERROR: Master container registry is unreachable (tried port ${REGISTRY_PRIMARY_PORT:-5000} and fallback ${REGISTRY_FALLBACK_PORT:-443}).${NC}"
+        echo -e "${YELLOW}    Ensure the Master registry is running and the firewall allows traffic from this node.${NC}"
+        return 1
+    fi
+    env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "$registry_url"
     if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
         env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
     fi
@@ -187,27 +194,14 @@ verify_agent_lite_connectivity() {
 
     # 4. The deploy path pulls master-built images from the master's registry.
     local registry_check_ip="${MASTER_MESH_IP}"
-    if ! timeout -k 5 2 bash -c "</dev/tcp/${registry_check_ip}/5000" ; then
-        echo -e "${RED}  ✗ ERROR: Master container registry (port 5000) is unreachable on ${registry_check_ip}.${NC}"
-        echo -e "${YELLOW}    Ensure the Master registry is running and the mesh/firewall allows port 5000 from this node.${NC}"
+    local registry_url
+    registry_url="$(registry_check_with_fallback "$registry_check_ip")"
+    if [ -z "$registry_url" ]; then
+        echo -e "${RED}  ✗ ERROR: Master container registry is unreachable (tried port ${REGISTRY_PRIMARY_PORT:-5000} and fallback ${REGISTRY_FALLBACK_PORT:-443}).${NC}"
+        echo -e "${YELLOW}    Ensure the Master registry is running and the firewall allows traffic from this node.${NC}"
         return 1
     fi
-    if command -v curl ; then
-        local registry_code
-        registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "http://${registry_check_ip}:5000/v2/"  || true)"
-        # Retry with HTTPS if HTTP returned 000 (connection refused / TLS redirect)
-        if [ "$registry_code" = "000" ] || [ "$registry_code" = "400" ]; then
-            registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://${registry_check_ip}:5000/v2/"  || true)"
-        fi
-        case "$registry_code" in
-            2*|401) ;;
-            *)
-                echo -e "${RED}  ✗ ERROR: Master container registry did not answer correctly on ${registry_check_ip}:5000 (HTTP ${registry_code:-000}).${NC}"
-                return 1
-                ;;
-        esac
-    fi
 
-    echo -e "${GREEN}  ✓ Connectivity to Master verified.${NC}"
+    echo -e "${GREEN}  ✓ Connectivity to Master verified (registry: ${registry_url}).${NC}"
     return 0
 }

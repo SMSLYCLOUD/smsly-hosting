@@ -6,7 +6,7 @@ _harden_ufw_bootstrap() {
 
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820; do
+        for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
         # Whitelist Docker bridges
@@ -24,6 +24,7 @@ _harden_ufw_bootstrap() {
     ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
+    ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
         ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"

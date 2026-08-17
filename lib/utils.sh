@@ -155,3 +155,125 @@ reconcile_compose_stack_after_resume() {
 
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
 }
+
+# ─── Port fallback helpers ──────────────────────────────────────────────────────
+# Primary ports are the defaults; fallback ports are used when the cloud provider
+# firewall blocks the primary (common on free-tier / trial instances).
+
+WG_PRIMARY_PORT="${WG_PRIMARY_PORT:-51820}"
+WG_FALLBACK_PORT="${WG_FALLBACK_PORT:-33500}"
+REGISTRY_PRIMARY_PORT="${REGISTRY_PRIMARY_PORT:-5000}"
+REGISTRY_FALLBACK_PORT="${REGISTRY_FALLBACK_PORT:-443}"
+
+# probe_udp_port PORT HOST TIMEOUT_SECS
+# Returns 0 if at least one UDP packet round-trip completes within TIMEOUT.
+probe_udp_port() {
+    local port="${1:?}" host="${2:?}" timeout="${3:-5}"
+    # Use a quick WireGuard-style probe: send a single UDP packet and check
+    # for a response.  If the cloud firewall drops it, we'll timeout.
+    timeout -k "$timeout" "$timeout" bash -c "echo > /dev/udp/${host}/${port}" 2>/dev/null
+}
+
+# wg_ensure_listening WG_IFACE MESH_IP
+# Starts WireGuard on the primary port.  If no handshake appears within
+# 10 seconds (meaning the cloud firewall likely blocks the port), silently
+# rewrites the config to the fallback port and restarts.
+wg_ensure_listening() {
+    local wg_iface="${1:?}" mesh_ip="${2:?}"
+    local primary="$WG_PRIMARY_PORT" fallback="$WG_FALLBACK_PORT"
+    local conf="/etc/wireguard/${wg_iface}.conf"
+
+    # Already running with a handshake? Nothing to do.
+    if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
+        echo -e "${GREEN}  ✓ WireGuard $wg_iface already active (handshake present)${NC}"
+        return 0
+    fi
+
+    # Ensure primary port config
+    if [ -f "$conf" ]; then
+        sed -i "s/^ListenPort = .*/ListenPort = ${primary}/" "$conf"
+    fi
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null || true
+
+    echo -ne "${BLUE}  → Waiting for WireGuard handshake on port ${primary}...${NC}"
+    local waited=0
+    while [ "$waited" -lt 10 ]; do
+        sleep 2
+        waited=$((waited + 2))
+        if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
+            echo -e " ${GREEN}done${NC}"
+            echo -e "${GREEN}  ✓ WireGuard mesh active on port ${primary}${NC}"
+            return 0
+        fi
+        echo -ne "."
+    done
+    echo -e " ${YELLOW}timeout${NC}"
+
+    # Primary port blocked — fall back
+    echo -e "${YELLOW}  ⚠ Port ${primary} blocked by cloud firewall, falling back to ${fallback}...${NC}"
+    systemctl stop "wg-quick@${wg_iface}" 2>/dev/null || true
+    if [ -f "$conf" ]; then
+        sed -i "s/^ListenPort = .*/ListenPort = ${fallback}/" "$conf"
+    fi
+    systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
+    sleep 3
+    if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
+        echo -e "${GREEN}  ✓ WireGuard mesh active on fallback port ${fallback}${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port (peer may not be configured yet)${NC}"
+    return 0
+}
+
+# registry_check_with_fallback MASTER_IP_OR_MESH_IP
+# Tries the primary registry port, then the fallback.  Prints the working
+# URL and returns 0 on success, or returns 1 if both fail.
+registry_check_with_fallback() {
+    local host="${1:?}"
+    local primary="${REGISTRY_PRIMARY_PORT}"
+    local fallback="${REGISTRY_FALLBACK_PORT}"
+    local code
+
+    # 1. Try primary port (direct TCP)
+    if timeout -k 5 3 bash -c "</dev/tcp/${host}/${primary}" 2>/dev/null; then
+        if command -v curl; then
+            code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "http://${host}:${primary}/v2/" 2>/dev/null || true)"
+            if [ "$code" = "000" ] || [ "$code" = "400" ]; then
+                code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://${host}:${primary}/v2/" 2>/dev/null || true)"
+            fi
+            case "$code" in
+                2*|401)
+                    echo "${host}:${primary}"
+                    return 0
+                    ;;
+            esac
+        else
+            echo "${host}:${primary}"
+            return 0
+        fi
+    fi
+
+    # 2. Try fallback port (HTTPS via Traefik reverse proxy)
+    if timeout -k 5 3 bash -c "</dev/tcp/${host}/${fallback}" 2>/dev/null; then
+        if command -v curl; then
+            # Traefik on 443 may route by Host header — try registry subdomain
+            local domain="${DOMAIN:-}"
+            local registry_url=""
+            if [ -n "$domain" ]; then
+                registry_url="https://registry.${domain}"
+            else
+                registry_url="https://${host}"
+            fi
+            code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "${registry_url}/v2/" 2>/dev/null || true)"
+            case "$code" in
+                2*|401)
+                    echo "${registry_url}"
+                    return 0
+                    ;;
+            esac
+        fi
+    fi
+
+    echo ""
+    return 1
+}
