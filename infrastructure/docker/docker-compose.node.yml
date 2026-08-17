@@ -558,7 +558,7 @@ services:
       - caddy_logs:/var/log/caddy:ro
       - ../monitoring/promtail-node-config.yml:/etc/promtail/config.yml:ro
       - promtail-positions:/tmp
-    command: -config.file=/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml -config.expand-env=true
     depends_on:
       caddy:
         condition: service_started
