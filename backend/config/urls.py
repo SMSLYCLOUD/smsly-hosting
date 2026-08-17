@@ -76,8 +76,8 @@ if ! id -u grid &>/dev/null; then
     echo "Created grid user"
 fi
 
-cd /opt/smsly-hosting
-if [ -d ".git" ]; then
+if [ -d "/opt/smsly-hosting/.git" ]; then
+    cd /opt/smsly-hosting
     git pull --ff-only || true
 else
     rm -rf /opt/smsly-hosting
