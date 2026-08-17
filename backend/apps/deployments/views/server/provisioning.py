@@ -30,6 +30,69 @@ class ProvisioningMixin:
             status=status.HTTP_200_OK,
         )
 
+    @action(detail=False, methods=["post"], url_path="provision-token")
+    def provision_token(self, request):
+        """Generate a one-time bootstrap token for self-provisioning.
+
+        The target server runs:
+            curl -fsSL <master_url>/api/v1/servers/bootstrap/<token>/ | bash
+
+        The token is an HMAC-signed payload encoding the server name,
+        host, node type, and expiry. No SSH needed from the master.
+        """
+        import hmac as hmac_mod
+        import hashlib
+        import base64
+        import json as json_mod
+
+        name = request.data.get("name", "").strip()
+        host = request.data.get("host", "").strip()
+        node_type = request.data.get("node_type", "node")
+        is_lite_agent = request.data.get("is_lite_agent", False)
+        is_media_node = request.data.get("is_media_node", False)
+        is_primary = request.data.get("is_primary", False)
+        allow_user_workloads = request.data.get("allow_user_workloads", True)
+        ssh_user = request.data.get("ssh_user", "root")
+        ssh_port = request.data.get("ssh_port", 22)
+
+        if not name or not host:
+            return Response(
+                {"error": "name and host are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from django.conf import settings
+        secret = settings.SECRET_KEY.encode()
+        payload_data = {
+            "name": name,
+            "host": host,
+            "node_type": node_type,
+            "is_lite_agent": is_lite_agent,
+            "is_media_node": is_media_node,
+            "is_primary": is_primary,
+            "allow_user_workloads": allow_user_workloads,
+            "ssh_user": ssh_user,
+            "ssh_port": ssh_port,
+            "exp": int(time.time()) + 3600,
+            "nonce": secrets.token_hex(8),
+        }
+        payload_b64 = base64.urlsafe_b64encode(
+            json_mod.dumps(payload_data).encode()
+        ).decode()
+        sig = hmac_mod.new(secret, payload_b64.encode(), hashlib.sha256).hexdigest()
+        token = f"{payload_b64}.{sig}"
+
+        master_url = os.environ.get("PUBLIC_URL", "https://grid.smsly.cloud")
+
+        return Response(
+            {
+                "token": token,
+                "master_url": master_url,
+                "bootstrap_command": f'curl -fsSL "{master_url}/api/v1/servers/bootstrap/{token}/" | bash',
+            },
+            status=status.HTTP_200_OK,
+        )
+
     @action(detail=False, methods=["post"], url_path="provision")
     @throttle_classes([ServerProvisionThrottle])
     def provision_new(self, request):

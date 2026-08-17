@@ -253,10 +253,19 @@ export default function ServersPage() {
     const [showAdd, setShowAdd] = useState(false);
     const [checking, setChecking] = useState(false);
     const [serverChecking, setServerChecking] = useState<Record<string, boolean>>({});
-    const [addMode, setAddMode] = useState<'connect' | 'provision' | 'batch'>('provision');
+    const [addMode, setAddMode] = useState<'connect' | 'provision' | 'batch' | 'self'>('provision');
     const [submitting, setSubmitting] = useState(false);
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+    // Self-provision state
+    const [selfProvisionForm, setSelfProvisionForm] = useState({
+        name: '', host: '', ssh_user: 'root', ssh_port: 22,
+        is_lite_agent: false, is_media_node: false, is_primary: false,
+        allow_user_workloads: true,
+    });
+    const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null);
+    const [generatingToken, setGeneratingToken] = useState(false);
 
     // Provision log viewer
     const [viewingLogs, setViewingLogs] = useState<string | null>(null);
@@ -544,6 +553,19 @@ export default function ServersPage() {
         setGeneratingKey(false);
     };
 
+    const handleGenerateBootstrap = async () => {
+        if (!selfProvisionForm.name || !selfProvisionForm.host) return;
+        setGeneratingToken(true);
+        try {
+            const result = await apiFetch('/api/v1/servers/provision-token/', 'POST', selfProvisionForm);
+            setBootstrapCommand(result.bootstrap_command);
+            toast({ title: 'Bootstrap token generated', description: 'Copy the command and run it on the target server.' });
+        } catch (err: any) {
+            toast({ title: 'Failed to generate token', description: err.message, variant: 'destructive' });
+        }
+        setGeneratingToken(false);
+    };
+
     // Derive summary stats for the header.
     const stats = useMemo(() => {
         const total = servers.length;
@@ -652,6 +674,17 @@ export default function ServersPage() {
                                         <Server size={14} />
                                         Batch Provision
                                     </button>
+                                    <button
+                                        onClick={() => { setAddMode('self'); setTestResult(null); setBootstrapCommand(null); }}
+                                        className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
+                                            addMode === 'self'
+                                                ? 'bg-gradient-to-r from-emerald-500 to-cyan-600 text-white shadow-md'
+                                                : 'text-muted-foreground hover:text-foreground'
+                                        }`}
+                                    >
+                                        <Terminal size={14} />
+                                        Self-Provision
+                                    </button>
                                 </div>
 
                                 {addMode === 'batch' ? (
@@ -676,6 +709,96 @@ export default function ServersPage() {
                                                 }).catch((e: any) => alert(e.message));
                                             }}>Provision Batch</Button>
                                         </div>
+                                    </div>
+                                ) : addMode === 'self' ? (
+                                    <div className="space-y-4">
+                                        <div>
+                                            <p className="text-sm text-muted-foreground mb-2">
+                                                Generate a one-time bootstrap command. Run it on the target server — it installs Grid and registers with the master. No SSH access needed from here.
+                                            </p>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-xs font-medium text-muted-foreground">Server Name</label>
+                                                <input
+                                                    value={selfProvisionForm.name}
+                                                    onChange={e => setSelfProvisionForm({ ...selfProvisionForm, name: e.target.value })}
+                                                    placeholder="Production VPS"
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-medium text-muted-foreground">Host / IP Address</label>
+                                                <input
+                                                    value={selfProvisionForm.host}
+                                                    onChange={e => setSelfProvisionForm({ ...selfProvisionForm, host: e.target.value })}
+                                                    placeholder="198.51.100.5"
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-medium text-muted-foreground">SSH User</label>
+                                                <input
+                                                    value={selfProvisionForm.ssh_user}
+                                                    onChange={e => setSelfProvisionForm({ ...selfProvisionForm, ssh_user: e.target.value })}
+                                                    placeholder="root"
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-medium text-muted-foreground">SSH Port</label>
+                                                <input
+                                                    type="number"
+                                                    value={selfProvisionForm.ssh_port}
+                                                    onChange={e => setSelfProvisionForm({ ...selfProvisionForm, ssh_port: parseInt(e.target.value) || 22 })}
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                        <NodeModePicker
+                                            idPrefix="self"
+                                            value={selfProvisionForm.is_lite_agent}
+                                            onChange={v => setSelfProvisionForm({ ...selfProvisionForm, is_lite_agent: v })}
+                                            media={selfProvisionForm.is_media_node}
+                                            onMediaChange={v => setSelfProvisionForm({ ...selfProvisionForm, is_media_node: v, is_lite_agent: v ? false : selfProvisionForm.is_lite_agent })}
+                                        />
+                                        {bootstrapCommand ? (
+                                            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-3">
+                                                <p className="text-xs text-emerald-500 font-semibold flex items-center gap-1.5">
+                                                    <Terminal size={12} /> Run this on the target server
+                                                </p>
+                                                <div className="flex items-center gap-2">
+                                                    <pre className="flex-1 p-3 rounded-md bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap break-all">
+                                                        {bootstrapCommand}
+                                                    </pre>
+                                                    <button
+                                                        onClick={async () => {
+                                                            try {
+                                                                await navigator.clipboard.writeText(bootstrapCommand);
+                                                                toast({ title: 'Copied', description: 'Bootstrap command copied to clipboard.' });
+                                                            } catch { /* clipboard unavailable */ }
+                                                        }}
+                                                        className="shrink-0 px-3 py-1.5 text-xs rounded-lg border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 flex items-center gap-1.5"
+                                                    >
+                                                        <Copy size={12} /> Copy
+                                                    </button>
+                                                </div>
+                                                <p className="text-[10px] text-muted-foreground">
+                                                    Token expires in 1 hour. The server will appear in the dashboard after installation completes.
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end">
+                                                <button
+                                                    onClick={handleGenerateBootstrap}
+                                                    disabled={generatingToken || !selfProvisionForm.name || !selfProvisionForm.host}
+                                                    className="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-emerald-500 to-cyan-600 text-white font-semibold flex items-center gap-2 disabled:opacity-50"
+                                                >
+                                                    {generatingToken ? <Loader2 size={14} className="animate-spin" /> : <Terminal size={14} />}
+                                                    Generate Bootstrap Command
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 ) : addMode === 'provision' ? (
                                     <ProvisionForm
