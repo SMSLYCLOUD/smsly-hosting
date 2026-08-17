@@ -151,7 +151,7 @@ services:
   backend:
     image: ${SMSLY_IMAGE_BACKEND:-smsly-hosting-backend}
     build:
-      context: ../backend
+      context: ../../backend
       dockerfile: Dockerfile
     restart: unless-stopped
     cap_add:
