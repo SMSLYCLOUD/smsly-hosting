@@ -290,6 +290,8 @@ export default function ServersPage() {
         is_lite_agent: false, node_certificate: '',
         node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
     });
+    const [batchLite, setBatchLite] = useState(true);
+    const [batchComponents, setBatchComponents] = useState({ observability: true, security: true, crowdsec: false, falco: false, spire: false });
 
     // Provision form
     const [provisionForm, setProvisionForm] = useState({
@@ -695,11 +697,21 @@ export default function ServersPage() {
 
                                 {addMode === 'batch' ? (
                                     <div className="space-y-4">
-                                        <p className="text-sm text-muted-foreground">Enter a list of IPs and passwords to provision multiple Lite Agents in parallel.</p>
+                                        <p className="text-sm text-muted-foreground">Enter a list of IPs and passwords to provision multiple servers in parallel.</p>
                                         <textarea
                                             placeholder="192.168.1.10, root, mypassword\n192.168.1.11, root, mypassword"
                                             className="w-full h-32 px-3 py-2 rounded-lg bg-background border border-border text-sm font-mono"
                                             id="batch-provision-input"
+                                        />
+                                        <NodeModePicker
+                                            idPrefix="batch"
+                                            value={batchLite}
+                                            onChange={setBatchLite}
+                                        />
+                                        <NodeComponents
+                                            value={batchComponents}
+                                            onChange={setBatchComponents}
+                                            show={!batchLite}
                                         />
                                         <div className="flex justify-end gap-2">
                                             <Button variant="outline" onClick={() => setAddMode('provision')}>Cancel</Button>
@@ -708,7 +720,7 @@ export default function ServersPage() {
                                                 const lines = val.split('\n').filter(l => l.trim());
                                                 const nodes = lines.map(l => {
                                                     const [host, user, pass] = l.split(',').map(s => s.trim());
-                                                    return { host, ssh_user: user, ssh_password: pass, is_lite_agent: true };
+                                                    return { host, ssh_user: user, ssh_password: pass, is_lite_agent: batchLite, node_components: batchComponents };
                                                 });
                                                 apiFetch('/api/v1/servers/provision-batch/', 'POST', { nodes }).then(() => {
                                                     setAddMode('provision');
