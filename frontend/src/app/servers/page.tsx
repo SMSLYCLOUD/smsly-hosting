@@ -288,6 +288,7 @@ export default function ServersPage() {
         ssh_key_passphrase: '',
         ssh_port: 22, is_primary: false, allow_user_workloads: true,
         is_lite_agent: false, node_certificate: '',
+        node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
     });
 
     // Provision form
@@ -299,6 +300,7 @@ export default function ServersPage() {
         allow_user_workloads: true, is_lite_agent: false,
         is_media_node: false,
         node_certificate: '',
+        node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
     });
 
     const fetchServers = useCallback(async () => {
@@ -420,6 +422,7 @@ export default function ServersPage() {
                 ssh_key_passphrase: '',
                 ssh_port: 22, is_primary: false, allow_user_workloads: true,
                 is_lite_agent: false, node_certificate: '',
+                node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
             });
             setTestResult(null);
             fetchServers();
@@ -448,6 +451,7 @@ export default function ServersPage() {
                 allow_user_workloads: provisionForm.allow_user_workloads,
                 is_lite_agent: provisionForm.is_lite_agent,
                 ssh_auth_method: provisionForm.ssh_auth_method,
+                node_components: provisionForm.node_components,
             };
             if (provisionForm.is_lite_agent && provisionForm.node_certificate.trim()) {
                 payload.node_certificate = provisionForm.node_certificate.trim();
@@ -476,6 +480,7 @@ export default function ServersPage() {
                 is_primary: false, allow_user_workloads: true, is_lite_agent: false,
                 is_media_node: false,
                 node_certificate: '',
+                node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
             });
             setTestResult(null);
             fetchServers();
@@ -1327,6 +1332,12 @@ function ProvisionForm({
                 onMediaChange={v => setForm({ ...form, is_media_node: v, is_lite_agent: v ? false : form.is_lite_agent })}
             />
 
+            <NodeComponents
+                value={form.node_components}
+                onChange={v => setForm({ ...form, node_components: v })}
+                show={!form.is_lite_agent && !form.is_media_node}
+            />
+
             {form.is_media_node && (
                 <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
                     <p className="text-xs text-cyan-500 font-semibold flex items-center gap-1.5">
@@ -1637,6 +1648,12 @@ function ConnectForm({
                 idPrefix="conn"
                 value={form.is_lite_agent}
                 onChange={v => setForm({ ...form, is_lite_agent: v })}
+            />
+
+            <NodeComponents
+                value={form.node_components}
+                onChange={v => setForm({ ...form, node_components: v })}
+                show={!form.is_lite_agent}
             />
 
             {form.is_lite_agent && (
