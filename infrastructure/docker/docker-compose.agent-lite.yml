@@ -197,7 +197,7 @@ services:
       - LOG_LEVEL=${AGENT_REGISTRAR_LOG_LEVEL:-INFO}
       - TZ=${TZ:-UTC}
     volumes:
-      - ../../backend/agent_registrar.py:/usr/local/bin/agent_registrar.py:ro
+      - ../../scripts/agent_registrar.py:/usr/local/bin/agent_registrar.py:ro
       # Mount the docker socket read-only so the registrar can
       # read docker version / image list for its runtime snapshot.
       # This is a *read-only* mount — the registrar cannot start

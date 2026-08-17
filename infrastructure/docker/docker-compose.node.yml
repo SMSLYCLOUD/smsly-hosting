@@ -334,7 +334,7 @@ services:
       - LOG_LEVEL=${AGENT_REGISTRAR_LOG_LEVEL:-INFO}
       - TZ=${TZ:-UTC}
     volumes:
-      - ../../backend/agent_registrar.py:/usr/local/bin/agent_registrar.py:ro
+      - ../../scripts/agent_registrar.py:/usr/local/bin/agent_registrar.py:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       backend:
@@ -464,7 +464,7 @@ services:
       - spire-agent-data:/opt/spire/data
       - spire-agent-socket:/opt/spire/run
       - spire-agent-svids:/opt/spire/svids
-      - ./infrastructure/spire/agent.conf:/etc/spire/agent.conf:ro,z
+      - ../spire/agent.conf:/etc/spire/agent.conf:ro,z
     environment:
       SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -556,7 +556,7 @@ services:
       - SMSLY_NODE_ID=${SMSLY_NODE_ID:-unknown}
     volumes:
       - caddy_logs:/var/log/caddy:ro
-      - ./infrastructure/monitoring/promtail-node-config.yml:/etc/promtail/config.yml:ro
+      - ../monitoring/promtail-node-config.yml:/etc/promtail/config.yml:ro
       - promtail-positions:/tmp
     command: -config.file=/etc/promtail/config.yml
     depends_on:
@@ -589,7 +589,7 @@ services:
       - MAX_WORKERS=8
       - DOCKER_SOCK=/var/run/docker.sock
     volumes:
-      - ./infrastructure/monitoring/docker-labels-exporter.py:/app/exporter.py:ro
+      - ../monitoring/docker-labels-exporter.py:/app/exporter.py:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - smsly-net
