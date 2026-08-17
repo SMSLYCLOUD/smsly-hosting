@@ -12874,6 +12874,24 @@ EOF
         apply_agent_lite_env_overrides "$ENV_TMP"
     fi
 
+    # ── Node Mode Overrides ──────────────────────────────────────
+    if [ "$MODE_NODE" = "true" ]; then
+        SMSLY_NODE_HOST="${SMSLY_NODE_HOST:-$(detect_public_ip 2>/dev/null || true)}"
+        [ -n "$SMSLY_NODE_HOST" ] || SMSLY_NODE_HOST="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo node)"
+        SMSLY_NODE_ID="${SMSLY_NODE_ID:-$SMSLY_NODE_HOST}"
+        env_set_value "$ENV_TMP" "SMSLY_NODE_ID" "$SMSLY_NODE_ID"
+        env_set_value "$ENV_TMP" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
+        env_set_value "$ENV_TMP" "MASTER_IP" "$MASTER_IP"
+        env_set_value "$ENV_TMP" "MASTER_MESH_IP" "${MASTER_MESH_IP:-$MASTER_IP}"
+        env_set_value "$ENV_TMP" "COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.node.yml"
+        env_set_value "$ENV_TMP" "DATABASE_URL" "postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting"
+        env_set_value "$ENV_TMP" "DIRECT_DATABASE_URL" "postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting"
+        env_set_value "$ENV_TMP" "CELERY_BROKER_URL" "amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//"
+        env_set_value "$ENV_TMP" "REDIS_URL" "redis://:$REDIS_PASSWORD@redis:6379/0"
+        env_set_value "$ENV_TMP" "REDIS_HOST" "redis"
+        echo -e "${BLUE}  → Node mode: SMSLY_NODE_ID=$SMSLY_NODE_ID, MASTER_IP=$MASTER_IP${NC}"
+    fi
+
     # Atomic move and validation
     if validate_env_file "$ENV_TMP"; then
         mv "$ENV_TMP" "$INSTALL_DIR/.env"
@@ -12907,6 +12925,17 @@ fi
 if [ -f "$INSTALL_DIR/.env" ]; then
     ensure_env_runtime_defaults "$INSTALL_DIR/.env"
     apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
+    # ── Node Mode Overrides (post-config) ─────────────────────────
+    if [ "$MODE_NODE" = "true" ]; then
+        SMSLY_NODE_HOST="${SMSLY_NODE_HOST:-$(detect_public_ip 2>/dev/null || true)}"
+        [ -n "$SMSLY_NODE_HOST" ] || SMSLY_NODE_HOST="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo node)"
+        SMSLY_NODE_ID="${SMSLY_NODE_ID:-$SMSLY_NODE_HOST}"
+        env_set_value "$INSTALL_DIR/.env" "SMSLY_NODE_ID" "$SMSLY_NODE_ID"
+        env_set_value "$INSTALL_DIR/.env" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
+        env_set_value "$INSTALL_DIR/.env" "MASTER_IP" "${MASTER_IP:-}"
+        env_set_value "$INSTALL_DIR/.env" "MASTER_MESH_IP" "${MASTER_MESH_IP:-${MASTER_IP:-}}"
+        env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.node.yml"
+    fi
     # Ensure .env symlink exists for Docker Compose v2+ .env resolution
     _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
     rm -f "$_compose_env_link"  || true
