@@ -863,9 +863,9 @@ compose_stack_build() {
         stop_node_excluded_services
         services="$(compose_stack_build_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" build "$@" $services
+        timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build "$@" $services
     else
-        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" build "$@"
+        timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build "$@"
     fi
 }
 
@@ -875,9 +875,9 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 300 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 300 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -2161,9 +2161,9 @@ compose_stack_build() {
         stop_node_excluded_services
         services="$(compose_stack_build_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" build "$@" $services
+        timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build "$@" $services
     else
-        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" build "$@"
+        timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build "$@"
     fi
 }
 
@@ -2173,9 +2173,9 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 300 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 300 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -13076,7 +13076,11 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     kill $HEARTBEAT_PID  || true
     wait $HEARTBEAT_PID  || true
     if [ "$DEPLOY_RC" -ne 0 ]; then
-        echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
+        if [ "$DEPLOY_RC" -eq 124 ]; then
+            echo -e "${RED}  ✗ Docker Compose stack deployment timed out (600s limit).${NC}"
+        else
+            echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
+        fi
         echo -e "${YELLOW}  ↳ Re-run with --resume to skip completed steps: sudo bash install.sh --resume${NC}"
         docker compose -f "$COMPOSE_FILE" ps  || true
         docker compose -f "$COMPOSE_FILE" logs --tail=120  || true
