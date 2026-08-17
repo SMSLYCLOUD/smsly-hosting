@@ -69,10 +69,12 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         except (OSError, PermissionError) as chmod_exc:
             logger.warning("chmod on %s failed (%s) — continuing with probe", CADDY_CONFIG_DIR, chmod_exc)
         probe = os.path.join(CADDY_CONFIG_DIR, ".perm_probe")
+        probe_ok = False
         try:
             with open(probe, "w") as f:
                 f.write("ok")
             os.remove(probe)
+            probe_ok = True
         except (OSError, PermissionError) as probe_exc:
             try:
                 CADDY_GID = int(os.environ.get("CADDY_GID", "1000"))
@@ -90,13 +92,21 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                     "(previous probe failed: %s)",
                     os.getuid(), CADDY_GID, probe_exc,
                 )
+                probe_ok = True
             except (OSError, PermissionError, ValueError) as chown_exc:
-                raise PermissionError(
-                    f"Cannot write to {CADDY_CONFIG_DIR}. "
-                    "Fix host permissions: sudo chown -R 0:1000 "
-                    f"{CADDY_CONFIG_DIR} && sudo chmod 775 {CADDY_CONFIG_DIR}. "
-                    f"probe_error={probe_exc} chown_error={chown_exc}"
+                logger.warning(
+                    "Cannot chmod/chown %s (probe_exc=%s chown_exc=%s) — "
+                    "continuing anyway; if Caddyfile write fails, fix host perms",
+                    CADDY_CONFIG_DIR, probe_exc, chown_exc,
                 )
+                probe_ok = True  # chmod/chown failing is non-fatal
+
+        if not probe_ok:
+            raise PermissionError(
+                f"Cannot write to {CADDY_CONFIG_DIR}. "
+                "Fix host permissions: sudo chown -R 0:1000 "
+                f"{CADDY_CONFIG_DIR} && sudo chmod 775 {CADDY_CONFIG_DIR}."
+            )
 
         tmp_path = os.path.join(CADDY_CONFIG_DIR, ".Caddyfile.tmp")
         with open(tmp_path, "w", encoding="utf-8") as handle:
