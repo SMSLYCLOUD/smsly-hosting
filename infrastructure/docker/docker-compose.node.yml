@@ -325,8 +325,8 @@ services:
       '
     env_file: .env
     environment:
-      - MASTER_API_URL=http://${MASTER_MESH_IP:-10.100.0.1}
-      - MASTER_API_URL_FALLBACK=http://${MASTER_IP:?MASTER_IP must be set in .env}
+      - MASTER_API_URL=${MASTER_URL:?MASTER_URL must be set in .env}
+      - MASTER_API_URL_FALLBACK=${MASTER_URL:?MASTER_URL must be set in .env}
       - SERVER_ID=${SMSLY_NODE_ID:-node}
       - GATEWAY_SECRET=${GATEWAY_SECRET:?GATEWAY_SECRET must be set in .env}
       - HEARTBEAT_INTERVAL=${AGENT_HEARTBEAT_INTERVAL:-30}
