@@ -359,7 +359,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./infrastructure/docker/Caddyfile.node:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.node:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
       - caddy_logs:/var/log/caddy
