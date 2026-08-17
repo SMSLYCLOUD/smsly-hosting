@@ -100,6 +100,7 @@ NODE_OBSERVABILITY={_comp_flag("observability")}
 NODE_SECURITY={_comp_flag("security")}
 NODE_CROWDSEC={_comp_flag("crowdsec")}
 NODE_FALCO={_comp_flag("falco")}
+NODE_SPIRE={_comp_flag("spire")}
 ENVEOF
 
 chmod 600 .env 2>/dev/null || true

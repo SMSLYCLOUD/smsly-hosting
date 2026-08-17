@@ -203,6 +203,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         install_env["NODE_SECURITY"] = "1" if node_components.get("security") else "0"
         install_env["NODE_CROWDSEC"] = "1" if node_components.get("crowdsec") else "0"
         install_env["NODE_FALCO"] = "1" if node_components.get("falco") else "0"
+        install_env["NODE_SPIRE"] = "1" if node_components.get("spire") else "0"
 
         install_args: list[str] = []
         install_mode = server_install_mode(server)

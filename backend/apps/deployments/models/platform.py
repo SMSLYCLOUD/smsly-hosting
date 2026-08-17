@@ -145,7 +145,7 @@ class ManagedServer(models.Model):
             "Optional components enabled on this node. Keys: "
             "observability (cadvisor/node-exporter/docker-labels/promtail), "
             "security (fail2ban/ufw/apparmor/auditd/kernel/gvisor), "
-            "crowdsec, falco."
+            "crowdsec, falco, spire (spire-agent, spire-agent-ecosystem)."
         ),
     )
 

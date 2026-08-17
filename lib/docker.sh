@@ -156,13 +156,14 @@ compose_stack_services() {
     local services=""
     services="$(docker compose -f "$COMPOSE_FILE" config --services)" || return $?
     if is_node_mode; then
-        # Base exclusion: no frontend/caddy on nodes
-        local exclude_pattern='^(frontend|caddy)$'
+        # Base exclusion: no frontend/caddy/spire-server on nodes
+        local exclude_pattern='^(frontend|caddy|spire-server|spire-server-ecosystem)$'
         # Read component flags from .env (set by bootstrap script)
         local node_obs="${NODE_OBSERVABILITY:-0}"
         local node_sec="${NODE_SECURITY:-0}"
         local node_crowd="${NODE_CROWDSEC:-0}"
         local node_falco="${NODE_FALCO:-0}"
+        local node_spire="${NODE_SPIRE:-0}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
         if [ "$node_obs" != "1" ]; then
             exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
@@ -174,6 +175,10 @@ compose_stack_services() {
         # Falco excluded when NODE_FALCO=0
         if [ "$node_falco" != "1" ]; then
             exclude_pattern="$exclude_pattern|^(falco)$"
+        fi
+        # SPIRE excluded when NODE_SPIRE=0
+        if [ "$node_spire" != "1" ]; then
+            exclude_pattern="$exclude_pattern|^(spire-agent|spire-agent-ecosystem)$"
         fi
         printf '%s\n' "$services" | grep -Ev "$exclude_pattern"
     else
@@ -206,10 +211,12 @@ stop_node_excluded_services() {
     local node_obs="${NODE_OBSERVABILITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
     local extras=""
     [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
+    [ "$node_spire" != "1" ] && extras="$extras spire-agent spire-agent-ecosystem"
     if [ -n "$extras" ]; then
         docker compose -f "$COMPOSE_FILE" stop --timeout 15 $extras 2>/dev/null || true
         docker compose -f "$COMPOSE_FILE" rm -f $extras 2>/dev/null || true

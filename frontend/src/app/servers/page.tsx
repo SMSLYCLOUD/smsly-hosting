@@ -263,7 +263,7 @@ export default function ServersPage() {
         name: '', host: '', ssh_user: 'root', ssh_port: 22,
         is_lite_agent: false, is_media_node: false, is_primary: false,
         allow_user_workloads: true,
-        node_components: { observability: true, security: true, crowdsec: false, falco: false },
+        node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
     });
     const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null);
     const [generatingToken, setGeneratingToken] = useState(false);
@@ -1046,23 +1046,24 @@ function NodeModePicker({ value, onChange, idPrefix, media, onMediaChange }: {
 }
 
 function NodeComponents({ value, onChange, show }: {
-    value: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean };
+    value: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean };
     onChange: (v: typeof value) => void;
     show: boolean;
 }) {
     if (!show) return null;
     const toggle = (key: keyof typeof value) => onChange({ ...value, [key]: !value[key] });
-    const items: { key: keyof typeof value; icon: typeof Activity; label: string; desc: string; active: string; inactive: string }[] = [
-        { key: 'observability', icon: Activity, label: 'Observability', desc: 'Promtail, cAdvisor, node-exporter, docker-labels', active: 'border-emerald-500/50 bg-emerald-500/5', inactive: 'border-border hover:border-muted-foreground/30' },
-        { key: 'security', icon: Shield, label: 'Security Stack', desc: 'fail2ban, UFW, AppArmor, auditd, kernel hardening, gVisor', active: 'border-amber-500/50 bg-amber-500/5', inactive: 'border-border hover:border-muted-foreground/30' },
-        { key: 'crowdsec', icon: AlertTriangle, label: 'CrowdSec WAF', desc: 'Community-powered web application firewall', active: 'border-orange-500/50 bg-orange-500/5', inactive: 'border-border hover:border-muted-foreground/30' },
-        { key: 'falco', icon: Zap, label: 'Falco', desc: 'Runtime security monitoring (~200MB)', active: 'border-red-500/50 bg-red-500/5', inactive: 'border-border hover:border-muted-foreground/30' },
+    const items: { key: keyof typeof value; icon: typeof Activity; label: string; desc: string; active: string; inactive: string; iconColor: string }[] = [
+        { key: 'observability', icon: Activity, label: 'Observability', desc: 'Promtail, cAdvisor, node-exporter, docker-labels', active: 'border-emerald-500/50 bg-emerald-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-emerald-500' },
+        { key: 'security', icon: Shield, label: 'Security Stack', desc: 'fail2ban, UFW, AppArmor, auditd, kernel hardening, gVisor', active: 'border-amber-500/50 bg-amber-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-amber-500' },
+        { key: 'crowdsec', icon: AlertTriangle, label: 'CrowdSec WAF', desc: 'Community-powered web application firewall', active: 'border-orange-500/50 bg-orange-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-orange-500' },
+        { key: 'falco', icon: Zap, label: 'Falco', desc: 'Runtime security monitoring (~200MB)', active: 'border-red-500/50 bg-red-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-red-500' },
+        { key: 'spire', icon: Key, label: 'SPIRE', desc: 'mTLS workload identity & attestation', active: 'border-violet-500/50 bg-violet-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-violet-500' },
     ];
     return (
         <div>
             <label className="text-xs font-medium text-muted-foreground block mb-2">Node Components</label>
             <div className="grid grid-cols-2 gap-2">
-                {items.map(({ key, icon: Icon, label, desc, active, inactive }) => (
+                {items.map(({ key, icon: Icon, label, desc, active, inactive, iconColor }) => (
                     <label
                         key={key}
                         className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-all ${value[key] ? active : inactive}`}
@@ -1075,10 +1076,7 @@ function NodeComponents({ value, onChange, show }: {
                         />
                         <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
-                                {key === 'observability' && <Activity size={12} className="text-emerald-500" />}
-                                {key === 'security' && <Shield size={12} className="text-amber-500" />}
-                                {key === 'crowdsec' && <AlertTriangle size={12} className="text-orange-500" />}
-                                {key === 'falco' && <Zap size={12} className="text-red-500" />}
+                                <Icon size={12} className={iconColor} />
                                 <span className="text-sm font-medium">{label}</span>
                             </div>
                             <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{desc}</p>

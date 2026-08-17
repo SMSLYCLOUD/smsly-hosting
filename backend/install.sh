@@ -3400,6 +3400,38 @@ _harden_falco_verify() {
 }
 
 # --- end lib/harden_falco.sh ---
+# --- lib/harden_spire.sh ---
+#!/bin/bash
+
+_harden_spire_bootstrap() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local compose_file="${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml"
+    [ -f "$compose_file" ] || return 1
+
+    local env_args=()
+    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    docker compose \
+        "${env_args[@]}" \
+        -f "$compose_file" \
+        up -d --no-deps spire-agent spire-agent-ecosystem 2>/dev/null || echo -e "${YELLOW}    ⚠ spire agent compose up failed${NC}"
+    for _i in $(seq 1 15); do
+        docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent" && break
+        sleep 2
+    done
+}
+
+_harden_spire_verify() {
+    command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent"; then
+        _harden_log warn "spire-agent — container not running"
+        return 1
+    fi
+    _harden_log ok "spire deployed"
+    return 0
+}
+
+# --- end lib/harden_spire.sh ---
 # --- lib/harden_container_runtime.sh ---
 #!/bin/bash
 
@@ -3597,6 +3629,7 @@ harden_security_bootstrap() {
     local node_sec="${NODE_SECURITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
     if [ "$node_sec" = "1" ]; then
         _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
         _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
@@ -3620,6 +3653,11 @@ harden_security_bootstrap() {
     else
         echo -e "${YELLOW}  → [harden] Falco skipped (NODE_FALCO=0)${NC}"
     fi
+    if [ "$node_spire" = "1" ]; then
+        _harden_spire_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] SPIRE skipped (NODE_SPIRE=0)${NC}"
+    fi
     if [ "$_harden_failures" -gt 0 ]; then
         echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
     else
@@ -3638,6 +3676,7 @@ harden_security_verify() {
     local node_sec="${NODE_SECURITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
 
     if [ "$node_sec" = "1" ]; then
         # NOTE: never use standalone `((checks++))` here — when the counter is 0
@@ -3671,8 +3710,11 @@ harden_security_verify() {
         if ! _harden_falco_verify; then failures=$((failures + 1)); fi
         checks=$((checks + 1))
     fi
+    if [ "$node_spire" = "1" ]; then
+        if ! _harden_spire_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
 
-    local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
@@ -7938,6 +7980,38 @@ _harden_falco_verify() {
 }
 
 # --- end lib/harden_falco.sh ---
+# --- lib/harden_spire.sh ---
+#!/bin/bash
+
+_harden_spire_bootstrap() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local compose_file="${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml"
+    [ -f "$compose_file" ] || return 1
+
+    local env_args=()
+    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    docker compose \
+        "${env_args[@]}" \
+        -f "$compose_file" \
+        up -d --no-deps spire-agent spire-agent-ecosystem 2>/dev/null || echo -e "${YELLOW}    ⚠ spire agent compose up failed${NC}"
+    for _i in $(seq 1 15); do
+        docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent" && break
+        sleep 2
+    done
+}
+
+_harden_spire_verify() {
+    command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent"; then
+        _harden_log warn "spire-agent — container not running"
+        return 1
+    fi
+    _harden_log ok "spire deployed"
+    return 0
+}
+
+# --- end lib/harden_spire.sh ---
 # --- lib/harden_container_runtime.sh ---
 #!/bin/bash
 
@@ -8135,6 +8209,7 @@ harden_security_bootstrap() {
     local node_sec="${NODE_SECURITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
     if [ "$node_sec" = "1" ]; then
         _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
         _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
@@ -8158,6 +8233,11 @@ harden_security_bootstrap() {
     else
         echo -e "${YELLOW}  → [harden] Falco skipped (NODE_FALCO=0)${NC}"
     fi
+    if [ "$node_spire" = "1" ]; then
+        _harden_spire_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] SPIRE skipped (NODE_SPIRE=0)${NC}"
+    fi
     if [ "$_harden_failures" -gt 0 ]; then
         echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
     else
@@ -8176,6 +8256,7 @@ harden_security_verify() {
     local node_sec="${NODE_SECURITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
 
     if [ "$node_sec" = "1" ]; then
         # NOTE: never use standalone `((checks++))` here — when the counter is 0
@@ -8209,8 +8290,11 @@ harden_security_verify() {
         if ! _harden_falco_verify; then failures=$((failures + 1)); fi
         checks=$((checks + 1))
     fi
+    if [ "$node_spire" = "1" ]; then
+        if ! _harden_spire_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
 
-    local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
@@ -8891,6 +8975,38 @@ _harden_falco_verify() {
 }
 
 # --- end lib/harden_falco.sh ---
+# --- lib/harden_spire.sh ---
+#!/bin/bash
+
+_harden_spire_bootstrap() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local compose_file="${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml"
+    [ -f "$compose_file" ] || return 1
+
+    local env_args=()
+    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    docker compose \
+        "${env_args[@]}" \
+        -f "$compose_file" \
+        up -d --no-deps spire-agent spire-agent-ecosystem 2>/dev/null || echo -e "${YELLOW}    ⚠ spire agent compose up failed${NC}"
+    for _i in $(seq 1 15); do
+        docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent" && break
+        sleep 2
+    done
+}
+
+_harden_spire_verify() {
+    command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent"; then
+        _harden_log warn "spire-agent — container not running"
+        return 1
+    fi
+    _harden_log ok "spire deployed"
+    return 0
+}
+
+# --- end lib/harden_spire.sh ---
 # --- lib/harden_container_runtime.sh ---
 #!/bin/bash
 
@@ -9088,6 +9204,7 @@ harden_security_bootstrap() {
     local node_sec="${NODE_SECURITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
     if [ "$node_sec" = "1" ]; then
         _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
         _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
@@ -9111,6 +9228,11 @@ harden_security_bootstrap() {
     else
         echo -e "${YELLOW}  → [harden] Falco skipped (NODE_FALCO=0)${NC}"
     fi
+    if [ "$node_spire" = "1" ]; then
+        _harden_spire_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] SPIRE skipped (NODE_SPIRE=0)${NC}"
+    fi
     if [ "$_harden_failures" -gt 0 ]; then
         echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
     else
@@ -9129,6 +9251,7 @@ harden_security_verify() {
     local node_sec="${NODE_SECURITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
 
     if [ "$node_sec" = "1" ]; then
         # NOTE: never use standalone `((checks++))` here — when the counter is 0
@@ -9162,8 +9285,11 @@ harden_security_verify() {
         if ! _harden_falco_verify; then failures=$((failures + 1)); fi
         checks=$((checks + 1))
     fi
+    if [ "$node_spire" = "1" ]; then
+        if ! _harden_spire_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
 
-    local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
@@ -11834,6 +11960,38 @@ _harden_falco_verify() {
 }
 
 # --- end lib/harden_falco.sh ---
+# --- lib/harden_spire.sh ---
+#!/bin/bash
+
+_harden_spire_bootstrap() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local compose_file="${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml"
+    [ -f "$compose_file" ] || return 1
+
+    local env_args=()
+    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    docker compose \
+        "${env_args[@]}" \
+        -f "$compose_file" \
+        up -d --no-deps spire-agent spire-agent-ecosystem 2>/dev/null || echo -e "${YELLOW}    ⚠ spire agent compose up failed${NC}"
+    for _i in $(seq 1 15); do
+        docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent" && break
+        sleep 2
+    done
+}
+
+_harden_spire_verify() {
+    command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent"; then
+        _harden_log warn "spire-agent — container not running"
+        return 1
+    fi
+    _harden_log ok "spire deployed"
+    return 0
+}
+
+# --- end lib/harden_spire.sh ---
 # --- lib/harden_container_runtime.sh ---
 #!/bin/bash
 
@@ -12031,6 +12189,7 @@ harden_security_bootstrap() {
     local node_sec="${NODE_SECURITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
     if [ "$node_sec" = "1" ]; then
         _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
         _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
@@ -12054,6 +12213,11 @@ harden_security_bootstrap() {
     else
         echo -e "${YELLOW}  → [harden] Falco skipped (NODE_FALCO=0)${NC}"
     fi
+    if [ "$node_spire" = "1" ]; then
+        _harden_spire_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] SPIRE skipped (NODE_SPIRE=0)${NC}"
+    fi
     if [ "$_harden_failures" -gt 0 ]; then
         echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
     else
@@ -12072,6 +12236,7 @@ harden_security_verify() {
     local node_sec="${NODE_SECURITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
+    local node_spire="${NODE_SPIRE:-0}"
 
     if [ "$node_sec" = "1" ]; then
         # NOTE: never use standalone `((checks++))` here — when the counter is 0
@@ -12105,8 +12270,11 @@ harden_security_verify() {
         if ! _harden_falco_verify; then failures=$((failures + 1)); fi
         checks=$((checks + 1))
     fi
+    if [ "$node_spire" = "1" ]; then
+        if ! _harden_spire_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
 
-    local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
