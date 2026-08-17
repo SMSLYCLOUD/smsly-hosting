@@ -37,6 +37,7 @@ class SecurityMiddleware:
             '/api/v1/templates/',  # Public template marketplace (AllowAny)
             '/api/v1/integrations/',  # OAuth authorize/callback flows (public — authenticated elsewhere)
             '/api/v1/oauth/',  # OAuth provider credentials status (public read)
+            '/api/v1/servers/bootstrap/',  # Self-provisioning bootstrap (HMAC-signed token in URL)
         ]
 
     def __call__(self, request):
