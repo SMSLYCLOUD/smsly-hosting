@@ -713,6 +713,7 @@ fi
 # fall through to the inlined fresh.sh below.
 if [ -f "$SCRIPT_DIR/backend/install.sh" ] && [ "$(basename "$SCRIPT_PATH")" != "backend/install.sh" ]; then
     echo -e "${BLUE}  → Delegating fresh install to self-contained backend/install.sh${NC}"
+    release_install_lock 2>/dev/null || true
     exec bash "$SCRIPT_DIR/backend/install.sh" "$@"
 fi
 source "$LIB_DIR/fresh.sh"
