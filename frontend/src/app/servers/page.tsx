@@ -77,6 +77,9 @@ interface ManagedServer {
     agent_runtime_info?: AgentRuntimeInfo;
 }
 
+type NodeComponents = { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean };
+const DEFAULT_NODE_COMPONENTS: NodeComponents = { observability: true, security: true, crowdsec: false, falco: false, spire: false };
+
 // Minimal shape of an apiFetch error. The shared apiFetch helper
 // throws an Error whose .message is a human-readable string.
 type ApiError = Error & { status?: number };
@@ -265,7 +268,7 @@ export default function ServersPage() {
         name: '', host: '', ssh_user: 'root', ssh_port: 22,
         is_lite_agent: false, is_media_node: false, is_primary: false,
         allow_user_workloads: true,
-        node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
+        node_components: DEFAULT_NODE_COMPONENTS,
     });
     const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null);
     const [generatingToken, setGeneratingToken] = useState(false);
@@ -290,10 +293,10 @@ export default function ServersPage() {
         ssh_key_passphrase: '',
         ssh_port: 22, is_primary: false, allow_user_workloads: true,
         is_lite_agent: false, node_certificate: '',
-        node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
+        node_components: DEFAULT_NODE_COMPONENTS,
     });
     const [batchLite, setBatchLite] = useState(true);
-    const [batchComponents, setBatchComponents] = useState({ observability: true, security: true, crowdsec: false, falco: false, spire: false });
+    const [batchComponents, setBatchComponents] = useState(DEFAULT_NODE_COMPONENTS);
 
     // Provision form
     const [provisionForm, setProvisionForm] = useState({
@@ -304,7 +307,7 @@ export default function ServersPage() {
         allow_user_workloads: true, is_lite_agent: false,
         is_media_node: false,
         node_certificate: '',
-        node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
+        node_components: DEFAULT_NODE_COMPONENTS,
     });
 
     const fetchServers = useCallback(async () => {
@@ -426,7 +429,7 @@ export default function ServersPage() {
                 ssh_key_passphrase: '',
                 ssh_port: 22, is_primary: false, allow_user_workloads: true,
                 is_lite_agent: false, node_certificate: '',
-                node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
+                node_components: DEFAULT_NODE_COMPONENTS,
             });
             setTestResult(null);
             fetchServers();
@@ -484,7 +487,7 @@ export default function ServersPage() {
                 is_primary: false, allow_user_workloads: true, is_lite_agent: false,
                 is_media_node: false,
                 node_certificate: '',
-                node_components: { observability: true, security: true, crowdsec: false, falco: false, spire: false },
+                node_components: DEFAULT_NODE_COMPONENTS,
             });
             setTestResult(null);
             fetchServers();
@@ -1102,154 +1105,6 @@ function NodeComponents({ value, onChange, show }: {
                         </div>
                     </label>
                 ))}
-            </div>
-        </div>
-    );
-}
-
-function MediaNodeGatePanel({ host }: { host: string }) {
-    const [form, setForm] = useState({
-        name: '', company: '', email: '', notes: '',
-    });
-    const [submitting, setSubmitting] = useState(false);
-    const [submitted, setSubmitted] = useState(false);
-
-    const submitInterest = async () => {
-        if (!form.name.trim() || !form.email.trim()) return;
-        setSubmitting(true);
-        try {
-            await apiFetch('/api/v1/media/interest/', 'POST', {
-                name: form.name.trim(),
-                company: form.company.trim(),
-                email: form.email.trim(),
-                host: host.trim(),
-                notes: form.notes.trim(),
-            });
-            setSubmitted(true);
-            toast({
-                title: 'Request recorded',
-                description: 'The Trulay team will reach out to onboard your media node.',
-            });
-        } catch (err: any) {
-            toast({ title: 'Failed to send request', description: err.message, variant: 'destructive' });
-        }
-        setSubmitting(false);
-    };
-
-    const mailtoHref = `mailto:sales@Trulay.co?subject=${encodeURIComponent(
-        'Media Node (Voice & Video) Access Request'
-    )}&body=${encodeURIComponent(
-        `Hi Trulay team,\n\nI'd like to get access to the Media Node workflow.\n\nName: ${form.name || '...'}\nCompany: ${form.company || '-'}\nEmail: ${form.email || '...'}\nTarget host: ${host || '-'}\nNotes: ${form.notes || '-'}`
-    )}`;
-
-    if (submitted) {
-        return (
-            <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-cyan-500">
-                    <CheckCircle2 size={16} /> Request received
-                </div>
-                <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-                    We&apos;ve recorded your interest and the Trulay team will reach out to
-                    onboard your voice &amp; video infrastructure. Want to follow up directly?
-                </p>
-                <a
-                    href={mailtoHref}
-                    className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-md border border-border text-xs font-medium text-muted-foreground hover:text-foreground"
-                >
-                    <Mail size={12} /> Email sales@Trulay.co
-                </a>
-            </div>
-        );
-    }
-
-    return (
-        <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4 space-y-4">
-            <div>
-                <div className="flex items-center gap-2 text-sm font-semibold">
-                    <Mic size={14} className="text-cyan-500" />
-                    Media Node — enterprise access
-                </div>
-                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                    Media Nodes run Trulay&apos;s proprietary voice &amp; video stack (Kamailio,
-                    FreeSWITCH, rtpengine, LiveKit, coturn) on baremetal. The installation workflow
-                    is provided under an enterprise agreement — tell us about your infrastructure
-                    and we&apos;ll onboard you.
-                </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-                <div>
-                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                        <User size={10} /> Your name <span className="text-red-400">*</span>
-                    </label>
-                    <input
-                        value={form.name}
-                        onChange={e => setForm({ ...form, name: e.target.value })}
-                        placeholder="Ada Lovelace"
-                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
-                    />
-                </div>
-                <div>
-                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                        <Building2 size={10} /> Company
-                    </label>
-                    <input
-                        value={form.company}
-                        onChange={e => setForm({ ...form, company: e.target.value })}
-                        placeholder="Acme Communications"
-                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
-                    />
-                </div>
-                <div>
-                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                        <Mail size={10} /> Work email <span className="text-red-400">*</span>
-                    </label>
-                    <input
-                        type="email"
-                        value={form.email}
-                        onChange={e => setForm({ ...form, email: e.target.value })}
-                        placeholder="ada@acme.com"
-                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
-                    />
-                </div>
-                <div>
-                    <label className="text-xs font-medium text-muted-foreground">Target host</label>
-                    <input
-                        value={host}
-                        disabled
-                        placeholder="198.51.100.5"
-                        className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm opacity-60"
-                    />
-                </div>
-            </div>
-
-            <div>
-                <label className="text-xs font-medium text-muted-foreground">Notes</label>
-                <textarea
-                    value={form.notes}
-                    onChange={e => setForm({ ...form, notes: e.target.value })}
-                    placeholder="Expected call volume, video rooms, regions..."
-                    rows={2}
-                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-xs"
-                />
-            </div>
-
-            <div className="flex items-center justify-between flex-wrap gap-2">
-                <button
-                    type="button"
-                    onClick={submitInterest}
-                    disabled={submitting || !form.name.trim() || !form.email.trim()}
-                    className="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-semibold flex items-center gap-2 disabled:opacity-50"
-                >
-                    {submitting ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-                    Request access
-                </button>
-                <a
-                    href={mailtoHref}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-cyan-500 hover:underline"
-                >
-                    <Mail size={12} /> Or email us directly
-                </a>
             </div>
         </div>
     );
