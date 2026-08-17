@@ -74,6 +74,48 @@ def _block_reverse_proxies_to_control_plane(block: str) -> list[str]:
     return matches
 
 
+def _wildcard_has_safe_service_handlers(block_lines: list[str], service_domains: set[str]) -> bool:
+    """Check if a wildcard block has @host matchers that safely route service
+    domains to non-control-plane upstreams (e.g. traefik:80).
+
+    When this is true, the catch-all ``handle { reverse_proxy frontend:3000 }``
+    never fires for those service domains, so the block is safe.
+    """
+    # Collect @host matcher names and their upstreams
+    matchers: dict[str, str] = {}  # matcher_name -> upstream
+    in_handle_for: str | None = None
+    for raw_line in block_lines:
+        stripped = raw_line.strip()
+        # Detect @name host ... lines
+        if stripped.startswith("@") and " host " in stripped:
+            name = stripped.split()[0]
+            _, _, host_list = stripped.partition(" host ")
+            hosts = {_normalize_caddy_site_label(h) for h in host_list.split()}
+            if hosts & service_domains:
+                matchers[name] = "_pending_"  # will be filled when we see its handler
+        # Detect handle @name { lines and the next reverse_proxy
+        if stripped.startswith("handle @") and stripped.endswith("{"):
+            handle_name = stripped.split()[1].lstrip("@").rstrip("{").strip()
+            in_handle_for = handle_name
+            continue
+        if in_handle_for and stripped.startswith("reverse_proxy "):
+            parts = stripped.split()
+            if len(parts) >= 2:
+                upstream = parts[1].strip("{").strip()
+                if upstream not in CONTROL_PLANE_UPSTREAMS:
+                    matchers[in_handle_for] = upstream
+            in_handle_for = None
+            continue
+        if in_handle_for and (stripped == "}" or (not stripped.startswith("reverse_proxy") and stripped.endswith("}"))):
+            in_handle_for = None
+
+    # If any matcher that references a service domain routes safely, the block is safe
+    for name, upstream in matchers.items():
+        if upstream and upstream != "_pending_" and upstream not in CONTROL_PLANE_UPSTREAMS:
+            return True
+    return False
+
+
 def validate_service_routes_do_not_hit_control_plane(content: str) -> list[str]:
     service_domains = _known_service_route_domains()
     if not service_domains:
@@ -122,6 +164,14 @@ def validate_service_routes_do_not_hit_control_plane(content: str) -> list[str]:
 
         if not is_service_site and not wildcard_service_hosts:
             continue
+
+        # If the wildcard block has @host matchers that route service domains
+        # to non-control-plane upstreams (e.g. traefik:80), the catch-all
+        # ``handle { reverse_proxy frontend:3000 }`` never fires for those
+        # domains — the block is safe.
+        if wildcard_service_hosts and not is_service_site:
+            if _wildcard_has_safe_service_handlers(block_lines, service_domains):
+                continue
 
         bad_lines = _block_reverse_proxies_to_control_plane(block)
         if not bad_lines:
