@@ -118,7 +118,10 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             logger.warning("chmod on %s failed (%s) — continuing", CADDY_FILE_PATH, chmod_exc)
 
         if cloudflare_token:
-            os.chmod(CADDY_CONFIG_DIR, 0o775)
+            try:
+                os.chmod(CADDY_CONFIG_DIR, 0o775)
+            except (OSError, PermissionError):
+                pass
             with os.fdopen(os.open(CADDY_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
                 handle.write(cloudflare_token)
             cache_payload = json.dumps({
