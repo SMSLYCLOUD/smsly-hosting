@@ -37,6 +37,10 @@ class MeshNetwork(models.Model):
         default=51820,
         help_text="WireGuard listen port on each server",
     )
+    listen_port_fallback = models.IntegerField(  # type: ignore[var-annotated]
+        default=33500,
+        help_text="Fallback WireGuard port (used when primary is blocked by cloud firewall)",
+    )
     interface_name = models.CharField(  # type: ignore[var-annotated]
         max_length=15, default="wg0",
         help_text="WireGuard interface name",

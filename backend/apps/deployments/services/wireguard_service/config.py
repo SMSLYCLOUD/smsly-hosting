@@ -40,8 +40,8 @@ class ConfigMixin:
             """)
 
         config += textwrap.dedent(f"""\
-            PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2; iptables -A INPUT -p udp --dport {mesh.listen_port} -j ACCEPT
-            PostDown = iptables -D INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; sysctl -w net.ipv4.conf.all.rp_filter=1
+            PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2; iptables -A INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; iptables -A INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT
+            PostDown = iptables -D INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; iptables -D INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT; sysctl -w net.ipv4.conf.all.rp_filter=1
         """)
 
         for other in other_peers:
