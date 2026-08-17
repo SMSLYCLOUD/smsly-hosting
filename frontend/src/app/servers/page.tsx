@@ -20,65 +20,15 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
+import {
+    ManagedServer, ManagedServerRuntimeInfo, ServerStatus, ProvisionStatus, ServerRole,
+} from '@/lib/api';
 
-// Local types — kept in sync with the backend's ManagedServer model
-// in backend/apps/deployments/models/platform.py.
-type ServerStatus = 'ONLINE' | 'OFFLINE' | 'UNKNOWN' | 'DEGRADED';
-type ProvisionStatus = 'NONE' | 'PENDING' | 'PROVISIONING' | 'DONE' | 'FAILED';
-type ServerRole = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
+// Alias for backward compatibility with local code
+type AgentRuntimeInfo = ManagedServerRuntimeInfo;
 
-interface SmslyImage {
-    repo: string;
-    tag: string;
-    id: string;
-    size: string;
-}
-
-interface AgentRuntimeInfo {
-    node_id?: string;
-    ts?: string;
-    platform?: string;
-    python?: string;
-    docker_version?: string;
-    smsly_images?: SmslyImage[];
-    host_uptime_s?: number;
-    disk_used_pct?: number;
-    mem_used_pct?: number;
-    registrar_version?: string;
-}
-
-interface ManagedServer {
-    id: string;
-    name: string;
-    host: string;
-    private_ip?: string | null;
-    api_url: string;
-    ssh_port: number;
-    ssh_user?: string;
-    provider_metadata?: Record<string, any>;
-    has_ssh_credentials?: boolean;
-    is_primary: boolean;
-    allow_user_workloads: boolean;
-    status: ServerStatus;
-    last_health_check: string | null;
-    server_version: string;
-    services_count: number;
-    created_at: string;
-    provision_status: ProvisionStatus;
-    role?: ServerRole;
-    is_lite_agent?: boolean;
-    node_type?: 'master' | 'node' | 'agent-lite' | 'media';
-    wg_address?: string | null;
-    // Node components installed on this server
-    node_components?: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean };
-    // Agent self-registration signals
-    agent_ready?: boolean;
-    last_agent_heartbeat_at?: string | null;
-    agent_runtime_info?: AgentRuntimeInfo;
-}
-
-type NodeComponents = { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean };
-const DEFAULT_NODE_COMPONENTS: NodeComponents = { observability: true, security: true, crowdsec: false, falco: false, spire: false };
+type NodeComponents = { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean; log_shipping: boolean };
+const DEFAULT_NODE_COMPONENTS: NodeComponents = { observability: true, security: true, crowdsec: false, falco: false, spire: false, log_shipping: true };
 
 // Minimal shape of an apiFetch error. The shared apiFetch helper
 // throws an Error whose .message is a human-readable string.
@@ -910,7 +860,7 @@ export default function ServersPage() {
                                     server={server}
                                     index={idx}
                                     now={now}
-                                    onOpenLogs={() => { setViewingLogs(server.id); setProvisionLogs(''); setProvisionStatus(server.provision_status); setLiveServer(server); }}
+                                    onOpenLogs={() => { setViewingLogs(server.id); setProvisionLogs(''); setProvisionStatus(server.provision_status || ''); setLiveServer(server); }}
                                     onHealthCheck={() => healthCheck(server.id)}
                                     onRetry={() => handleRetryProvision(server.id)}
                                     onDelete={() => deleteServer(server.id)}
@@ -1068,7 +1018,7 @@ function NodeModePicker({ value, onChange, idPrefix, media, onMediaChange }: {
 }
 
 function NodeComponents({ value, onChange, show }: {
-    value: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean };
+    value: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean; log_shipping: boolean };
     onChange: (v: typeof value) => void;
     show: boolean;
 }) {
@@ -1080,6 +1030,7 @@ function NodeComponents({ value, onChange, show }: {
         { key: 'crowdsec', icon: AlertTriangle, label: 'CrowdSec WAF', desc: 'Community-powered web application firewall', active: 'border-orange-500/50 bg-orange-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-orange-500' },
         { key: 'falco', icon: Zap, label: 'Falco', desc: 'Runtime security monitoring (~200MB)', active: 'border-red-500/50 bg-red-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-red-500' },
         { key: 'spire', icon: Key, label: 'SPIRE', desc: 'mTLS workload identity & attestation', active: 'border-violet-500/50 bg-violet-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-violet-500' },
+        { key: 'log_shipping', icon: Activity, label: 'Log Shipping', desc: 'Ship Caddy access logs to master CrowdSec', active: 'border-blue-500/50 bg-blue-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-blue-500' },
     ];
     return (
         <div>

@@ -194,7 +194,7 @@ compose_stack_build_service_args() {
     local candidates="pgcat backend celery celery-beat frontend celery-fast celery-deploy caddy"
     local svc=""
     if is_node_mode; then
-        candidates="pgcat backend celery celery-beat celery-fast celery-deploy"
+        candidates="db backend celery-worker celery-beat caddy"
     fi
     for svc in $candidates; do
         if docker compose -f "$COMPOSE_FILE" config --services  | grep -qx "$svc"; then
@@ -205,9 +205,17 @@ compose_stack_build_service_args() {
 
 stop_node_excluded_services() {
     is_node_mode || return 0
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend caddy || echo -e "${YELLOW}    ⚠ frontend/caddy stop failed${NC}"
-    docker compose -f "$COMPOSE_FILE" rm -f frontend caddy || echo -e "${YELLOW}    ⚠ frontend/caddy rm failed${NC}"
-    # Also stop/remove excluded component containers
+    # Stop base excluded services (frontend may not exist in node compose)
+    # Note: Caddy IS used by nodes, do NOT exclude it
+    local base_excluded=""
+    docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx frontend && base_excluded="$base_excluded frontend"
+    docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx spire-server && base_excluded="$base_excluded spire-server"
+    docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx spire-server-ecosystem && base_excluded="$base_excluded spire-server-ecosystem"
+    if [ -n "$base_excluded" ]; then
+        docker compose -f "$COMPOSE_FILE" stop --timeout 15 $base_excluded 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" rm -f $base_excluded 2>/dev/null || true
+    fi
+    # Stop/remove excluded component containers
     local node_obs="${NODE_OBSERVABILITY:-0}"
     local node_crowd="${NODE_CROWDSEC:-0}"
     local node_falco="${NODE_FALCO:-0}"
@@ -216,7 +224,7 @@ stop_node_excluded_services() {
     [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
-    [ "$node_spire" != "1" ] && extras="$extras spire-agent spire-agent-ecosystem"
+    [ "$node_spire" != "1" ] && extras="$extras spire-agent"
     if [ -n "$extras" ]; then
         docker compose -f "$COMPOSE_FILE" stop --timeout 15 $extras 2>/dev/null || true
         docker compose -f "$COMPOSE_FILE" rm -f $extras 2>/dev/null || true
@@ -703,6 +711,11 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+    # Node-specific containers (celery-worker instead of celery/celery-fast/celery-deploy)
+    if is_node_mode; then
+        ensure_container_on_network "smsly-net" "smsly-hosting-celery-worker-1"
+        ensure_container_on_network "smsly-net" "smsly-hosting-agent-registrar-1"
+    fi
 
     for svc in "${app_services[@]}"; do
         container_name="smsly-hosting-${svc}-1"

@@ -151,7 +151,7 @@ export default function MultiServerDocsPage() {
                                 </tr>
                                 <tr>
                                     <td className="p-3 font-mono font-medium text-violet-600 dark:text-violet-400">Follower (Full Node)</td>
-                                    <td className="p-3">Remote <code>ManagedServer</code> that runs the entire platform stack locally — its own Traefik, RabbitMQ, and (optionally) PostgreSQL — but no frontend or Caddy.</td>
+                                    <td className="p-3">Remote <code>ManagedServer</code> that runs the entire platform stack locally — Caddy, PostgreSQL (single instance), Redis, RabbitMQ, and Celery workers — but no frontend. Logs shipped to master CrowdSec.</td>
                                 </tr>
                                 <tr>
                                     <td className="p-3 font-mono font-medium text-violet-600 dark:text-violet-400">Lite Agent</td>

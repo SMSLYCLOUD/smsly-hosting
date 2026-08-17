@@ -1,13 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { EcosystemSuggestion } from '@/components/dashboard/EcosystemSuggestion';
 import {
   Brain, Cpu, Zap, Shield, Eye, Activity, BarChart3, Sparkles,
   RefreshCw, Send, CheckCircle2, XCircle, Loader2, TrendingUp,
   Gauge, CircuitBoard, Bot, MessageSquare, AlertTriangle, Flame,
-  Target, Lightbulb, DollarSign, Clock, ArrowUpRight, Settings, Save, Lock,
+  Target, Lightbulb, DollarSign, Clock, ArrowUpRight, Settings, Lock,
   Code2, Server, Siren
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -51,20 +51,6 @@ const MODE_CONFIG: Record<string, { label: string; color: string; icon: React.Re
   senate_committee: { label: 'Senate Committee', color: 'bg-purple-500/20 text-purple-400', icon: <Shield className="w-4 h-4" />, description: 'Multiple providers for consensus' },
 };
 
-const baseUrlPlaceholders: Record<string, string> = {
-  jules: 'https://api.jules.google.com/v1',
-  localllm: 'http://localhost:11434/v1',
-  freemodel: 'https://api.freemodel.dev/v1',
-  opencode: 'https://api.opencode.ai/v1',
-  mistral: 'https://api.mistral.ai/v1',
-  nvidia: 'https://integrate.api.nvidia.com/v1',
-  cloudflare: 'https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai',
-  kimi: 'https://api.moonshot.ai/v1',
-  orcarouter: 'https://api.orcarouter.com/v1',
-  zenmax: 'https://api.zenmax.ai/v1',
-  agentrouter: 'https://api.agentrouter.com/v1',
-};
-
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function IntelligencePage() {
@@ -79,12 +65,6 @@ export default function IntelligencePage() {
   const [chatLoading, setChatLoading] = useState(false);
   const chatAbortRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
-
-  // Config State
-  const [configOpen, setConfigOpen] = useState(false);
-  const [configData, setConfigData] = useState<Record<string, string>>({});
-  const [fetchedModels, setFetchedModels] = useState<Record<string, string[]>>({});
-  const [fetchingModelsId, setFetchingModelsId] = useState<string | null>(null);
 
   // Cost Estimate State
   const [costConfig, setCostConfig] = useState({ cpu: 1, ram: 512 });
@@ -310,38 +290,6 @@ export default function IntelligencePage() {
     }
   };
 
-  const handleUpdateProviders = async () => {
-    try {
-      await aiApi.updateProviders(configData);
-      toast({ title: "Providers Updated", description: "AI settings saved successfully." });
-      setConfigOpen(false);
-      setConfigData({});
-      fetchData();
-    } catch (err) {
-      toast({ title: "Update Failed", description: "Could not save AI settings.", variant: "destructive" });
-    }
-  };
-
-  const handleFetchProviderModels = async (providerId: string) => {
-    setFetchingModelsId(providerId);
-    try {
-      const apiKey = configData[`${providerId}_api_key`] || '';
-      const baseUrl = configData[`${providerId}_base_url`] || '';
-      const result = await aiApi.fetchModels(providerId, apiKey, baseUrl);
-      if (result.models && result.models.length > 0) {
-        setFetchedModels(prev => ({ ...prev, [providerId]: result.models }));
-        setConfigData(prev => ({ ...prev, [`${providerId}_model`]: result.models[0] }));
-        toast({ title: `${providerId} models loaded`, description: `Found ${result.models.length} models.` });
-      } else {
-        toast({ title: "No models found", description: "Check your API key and base URL.", variant: "destructive" });
-      }
-    } catch (err: any) {
-      toast({ title: "Fetch failed", description: err?.response?.data?.error || err.message || "Could not fetch models.", variant: "destructive" });
-    } finally {
-      setFetchingModelsId(null);
-    }
-  };
-
   const handleCostAnalysis = async () => {
     setCostLoading(true);
     try {
@@ -398,9 +346,11 @@ export default function IntelligencePage() {
               </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setConfigOpen(!configOpen)}>
-                <Settings className="w-4 h-4 mr-2" /> Configure
-              </Button>
+              <a href="/settings?tab=ai">
+                <Button variant="outline">
+                  <Settings className="w-4 h-4 mr-2" /> Configure AI
+                </Button>
+              </a>
               <Button onClick={handleRefresh} disabled={refreshing} variant="ghost" size="icon">
                 <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
               </Button>
@@ -416,105 +366,6 @@ export default function IntelligencePage() {
           >
             <EcosystemSuggestion context="intelligence" dismissible={true} />
           </motion.div>
-
-          {/* ── Configuration Panel ────────────────────────────────── */}
-          <AnimatePresence>
-            {configOpen && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden"
-              >
-                <Card className="bg-muted/20 border-purple-500/20 mb-8">
-                  <CardContent className="p-6">
-                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-                       <Shield className="text-purple-500" size={18} /> Configure AI Providers
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                       {[
-                         { id: "openai", label: "OpenAI" },
-                         { id: "gemini", label: "Gemini" },
-                         { id: "claude", label: "Claude" },
-                         { id: "openrouter", label: "OpenRouter" },
-                         { id: "groq", label: "Groq" },
-                         { id: "alibaba", label: "Alibaba" },
-                         { id: "grok", label: "xAI Grok" },
-                         { id: "deepseek", label: "DeepSeek" },
-                         { id: "jules", label: "Jules", hasUrl: true },
-                         { id: "localllm", label: "Local LLM", hasUrl: true },
-                          { id: "smslycloud", label: "Trulay Cloud" },
-                         { id: "freemodel", label: "FreeModel.dev", hasUrl: true },
-                         { id: "opencode", label: "OpenCode", hasUrl: true },
-                          { id: "mistral", label: "Mistral", hasUrl: true },
-                          { id: "nvidia", label: "NVIDIA NIM", hasUrl: true },
-                          { id: "cloudflare", label: "Cloudflare AI", hasUrl: true },
-                          { id: "kimi", label: "Kimi", hasUrl: true },
-                          { id: "orcarouter", label: "Orca Router", hasUrl: true },
-                          { id: "zenmax", label: "ZenMax", hasUrl: true },
-                          { id: "agentrouter", label: "Agent Router", hasUrl: true }
-                       ].map(p => (
-                           <div key={p.id} className="space-y-3 p-4 rounded-xl bg-muted/30 border border-border/50">
-                             <div className="flex items-center justify-between">
-                               <label className="text-sm font-bold uppercase tracking-tight text-foreground">{p.label}</label>
-                               {providers?.providers?.find(pp => pp.id === p.id)?.configured && (
-                                 <span className="text-[10px] bg-emerald-500/20 text-emerald-500 px-2 py-0.5 rounded-full font-bold">ACTIVE</span>
-                               )}
-                             </div>
-                             <Input
-                               type="password"
-                               placeholder={`Enter ${p.label} API Key...`}
-                               onChange={e => setConfigData({...configData, [`${p.id}_api_key`]: e.target.value})}
-                             />
-                             <div className="grid grid-cols-2 gap-2">
-                               {fetchedModels[p.id] && fetchedModels[p.id].length > 0 ? (
-                                 <select
-                                   className="text-xs h-8 px-2 border rounded-md bg-background"
-                                   value={configData[`${p.id}_model`] || ''}
-                                   onChange={e => setConfigData({...configData, [`${p.id}_model`]: e.target.value})}
-                                 >
-                                   {fetchedModels[p.id].map((m: string) => (
-                                     <option key={m} value={m}>{m}</option>
-                                   ))}
-                                 </select>
-                               ) : (
-                                 <div className="flex gap-1">
-                                   <Input
-                                     placeholder={`Model ID`}
-                                     className="text-xs h-8 flex-1"
-                                     value={configData[`${p.id}_model`] || ''}
-                                     onChange={e => setConfigData({...configData, [`${p.id}_model`]: e.target.value})}
-                                   />
-                                   <button
-                                     onClick={() => handleFetchProviderModels(p.id)}
-                                     disabled={fetchingModelsId === p.id}
-                                     className="px-2 h-8 text-[10px] bg-blue-500/10 text-blue-500 rounded border border-blue-500/20 hover:bg-blue-500/20 disabled:opacity-50 shrink-0"
-                                   >
-                                     {fetchingModelsId === p.id ? '...' : 'Fetch'}
-                                   </button>
-                                 </div>
-                               )}
-                               {p.hasUrl && (
-                                 <Input
-                                   placeholder={baseUrlPlaceholders[p.id] || 'Base URL'}
-                                   className="text-xs h-8"
-                                   onChange={e => setConfigData({...configData, [`${p.id}_base_url`]: e.target.value})}
-                                 />
-                               )}
-                             </div>
-                           </div>
-                       ))}
-                    </div>
-                    <div className="flex justify-end mt-4">
-                      <Button onClick={handleUpdateProviders} className="bg-purple-600 hover:bg-purple-700">
-                        <Save className="w-4 h-4 mr-2" /> Save Configuration
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
-            )}
-          </AnimatePresence>
 
           {/* ── Stats Row ──────────────────────────────────────────── */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

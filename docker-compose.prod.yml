@@ -1155,6 +1155,7 @@ services:
       - ./infrastructure/crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro,z
       - traefik_logs:/var/log/traefik:ro
       - caddy_logs:/var/log/caddy:ro
+      - node_logs:/var/log/crowdsec/nodes:ro
     networks:
       - smsly-net
     healthcheck:
@@ -1425,6 +1426,35 @@ services:
       resources:
         limits:
           memory: ${PROMTAIL_MEMORY_LIMIT:-512M}
+    labels:
+      - managed_by=smsly-hosting
+    depends_on:
+      - loki
+
+  # Loki → file bridge for CrowdSec node log analysis
+  # Queries Loki for node Caddy access logs and writes them to
+  # /var/log/crowdsec/nodes/ for CrowdSec to watch.
+  loki-log-bridge:
+    build:
+      context: ./infrastructure/monitoring
+      dockerfile: Dockerfile.log-bridge
+    container_name: smsly-loki-log-bridge
+    restart: unless-stopped
+    environment:
+      LOKI_URL: http://smsly-loki:3100
+      CROWDSEC_LOG_DIR: /var/log/crowdsec/nodes
+      POLL_INTERVAL: "10"
+      LOOKBACK: "5m"
+    volumes:
+      - node_logs:/var/log/crowdsec/nodes
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://smsly-loki:3100/ready', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     labels:
       - managed_by=smsly-hosting
     depends_on:
@@ -1837,6 +1867,7 @@ volumes:
 
   traefik_logs: null
   caddy_logs: null
+  node_logs: null
   crowdsec_data: null
   crowdsec_config: null
   

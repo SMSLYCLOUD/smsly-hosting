@@ -92,7 +92,7 @@ def get_available_providers(include_balance: bool = False) -> list[dict]:
             "name": instance.name(),
             "configured": instance.is_configured(),
             "model": getattr(instance, 'model', ''),
-            "base_url": getattr(instance, 'base_url', ''),
+            "base_url": getattr(instance, 'base_url', '') or getattr(instance, 'BASE_URL', ''),
         }
         result.append(info)
 

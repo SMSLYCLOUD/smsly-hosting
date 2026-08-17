@@ -358,7 +358,7 @@ def ai_provider_fetch_models(request):
         return Response({"error": f"Unknown provider: {provider_id}"}, status=status.HTTP_400_BAD_REQUEST)
 
     instance = provider_cls()
-    resolved_base_url = base_url or getattr(instance, "base_url", "")
+    resolved_base_url = base_url or getattr(instance, "base_url", "") or getattr(instance, "BASE_URL", "")
     resolved_api_key = api_key or getattr(instance, "api_key", "")
 
     if not resolved_base_url:

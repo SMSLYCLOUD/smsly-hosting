@@ -158,18 +158,27 @@ if should_manage_caddy; then
         echo -e "${RED}  ✗ Caddy container is not running${NC}"
     fi
 else
-    echo -e "${BLUE}  → [4/4] Checking Traefik...${NC}"
-    TRAEFIK_CHECK_URL="http://127.0.0.1:8081/"
     if is_node_mode; then
-        TRAEFIK_CHECK_URL="http://127.0.0.1/health/live"
-    fi
-    traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
-    if docker inspect -f '{{.State.Running}}' "$traefik_container"  | grep -q "true" \
-       && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" ; then
-        echo -e "${GREEN}  ✓ Traefik edge proxy active (${TRAEFIK_CHECK_URL})${NC}"
-        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+        echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
+        caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
+        if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true" \
+           && curl -fsS --max-time 5 "http://127.0.0.1:2019/config/" ; then
+            echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
+            VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+        else
+            echo -e "${RED}  ✗ Caddy reverse proxy check failed${NC}"
+        fi
     else
-        echo -e "${RED}  ✗ Traefik edge proxy check failed (${TRAEFIK_CHECK_URL})${NC}"
+        echo -e "${BLUE}  → [4/4] Checking Traefik...${NC}"
+        TRAEFIK_CHECK_URL="http://127.0.0.1:8081/"
+        traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
+        if docker inspect -f '{{.State.Running}}' "$traefik_container"  | grep -q "true" \
+           && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" ; then
+            echo -e "${GREEN}  ✓ Traefik edge proxy active (${TRAEFIK_CHECK_URL})${NC}"
+            VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+        else
+            echo -e "${RED}  ✗ Traefik edge proxy check failed (${TRAEFIK_CHECK_URL})${NC}"
+        fi
     fi
 fi
 fi

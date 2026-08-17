@@ -34,7 +34,7 @@ A Grid fleet is a leader-elected cluster of `ManagedServer` records, all reading
 | Role | Description |
 | --- | --- |
 | **Master / Controller** | The platform's primary server. Runs the database (PgCat, PostgreSQL, Redis, RabbitMQ), the Caddy reverse proxy, the frontend build, the management API, and the Celery workers. Receives heartbeats from followers, schedules the leader-election term, and stores every `ManagedServer`, `Service`, `Deployment`, and `AuditLog` row. There is exactly one master per cluster. |
-| **Follower (Full-Stack Node)** | A remote `ManagedServer` that runs the entire platform stack locally — its own Traefik, RabbitMQ, and (optionally) PostgreSQL — but no frontend or Caddy. The dashboard proxies reads and writes to it. Transfers to and from a follower move entire service containers. |
+| **Follower (Full-Stack Node)** | A remote `ManagedServer` that runs the entire platform stack locally — its own Caddy reverse proxy, PostgreSQL (single instance), Redis, RabbitMQ, and Celery workers — but no frontend. The dashboard proxies reads and writes to it. Transfers to and from a follower move entire service containers. Logs are shipped to the master's CrowdSec for centralized security analysis. |
 | **Lite Agent** | A compute-only worker that does not run a local database. Connects to the master's PostgreSQL, RabbitMQ, and Redis over the WireGuard mesh, executes builds and deploys locally, and reports results back. Ideal for edge or low-resource nodes. |
 | **Media Node** | A specialized node for telephony (SMSLY-VOICE) and WebRTC SFU (SMSLY-VIDEO) workloads. Provisioned with LiveKit and media-specific tooling. Uses `node_type='media'` on the `ManagedServer` model. |
 
@@ -42,9 +42,9 @@ A Grid fleet is a leader-elected cluster of `ManagedServer` records, all reading
 
 | Property | Primary (Master) | Follower (Full Node) | Lite Agent |
 | --- | --- | --- | --- |
-| Runs PostgreSQL | Yes | Yes (own) | No — uses master's via WireGuard |
-| Runs RabbitMQ / Redis | Yes | Yes (own) | Local Redis + RabbitMQ; master for shared state |
-| Runs Caddy | Yes | No — Traefik on port 80 | No — Traefik on port 80 |
+| Runs PostgreSQL | Yes | Yes (single instance) | No — uses master's via WireGuard |
+| Runs RabbitMQ / Redis | Yes | Yes (single, no HA) | Local Redis + RabbitMQ; master for shared state |
+| Runs Caddy | Yes | Yes (direct TLS via Let's Encrypt) | No — master handles TLS |
 | Runs the frontend | Yes | No | No |
 | Accepts user deployments | No (`allow_user_workloads=False`) | Yes | Yes |
 | Is a transfer source / target | No (ServerGuard rejects) | Yes | Yes |
@@ -53,6 +53,7 @@ A Grid fleet is a leader-elected cluster of `ManagedServer` records, all reading
 | WireGuard mesh member | Yes (local peer) | Yes | Yes |
 | Cluster role | `LEADER` (elected) | `FOLLOWER` (elected) | `FOLLOWER` (elected) |
 | Connection strategy | Direct | Token + HMAC V2 fallback | Local-DB reads + mesh-VPN for upstream |
+| Security (CrowdSec) | Local CrowdSec analysis | Log shipping to master's CrowdSec | None by default |
 
 ## Node Modes
 
@@ -69,11 +70,11 @@ You cannot disable the master. If you want a different machine to be the master,
 
 ### Follower (Full-Stack Node)
 
-A follower is a `ManagedServer` with `is_primary=False, is_lite_agent=False, allow_user_workloads=True`. It runs its own Docker Compose stack using `docker-compose.prod.yml` (no frontend, no Caddy) and serves containers via Traefik on port 80. The dashboard proxies reads through to it; writes are emitted to the local Celery worker queue, which talks to the follower over the mesh.
+A follower is a `ManagedServer` with `is_primary=False, is_lite_agent=False, allow_user_workloads=True`. It runs its own Docker Compose stack using `docker-compose.node.yml` — a lightweight configuration with Caddy, PostgreSQL (single instance), Redis, RabbitMQ, and Celery workers (autoscale 8,2). No frontend. Caddy handles TLS directly via Let's Encrypt HTTP-01 challenge. Logs are shipped to the master's CrowdSec for centralized security analysis.
 
 Use followers when:
 
-- The remote VPS has enough resources to run its own database and broker.
+- The remote VPS has enough resources to run its own database and broker (~8GB+ RAM recommended).
 - You want each region to be self-contained for performance or data-residency reasons.
 - You are running a multi-tenant fleet and want to isolate tenants onto dedicated hosts.
 

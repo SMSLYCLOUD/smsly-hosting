@@ -43,6 +43,7 @@ sync_install_mode_env_file() {
         node_type="node"
         traefik_bind="0.0.0.0:80"
         startup_caddy_sync="false"
+        env_set_value "$env_file" "COMPOSE_FILE" "infrastructure/docker/docker-compose.node.yml"
     fi
 
     env_set_value "$env_file" "NODE_TYPE" "$node_type"

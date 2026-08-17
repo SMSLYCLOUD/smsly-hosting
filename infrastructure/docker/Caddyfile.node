@@ -1,0 +1,50 @@
+{$DOMAIN:localhost} {
+	encode gzip
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100mb
+			roll_keep 5
+		}
+		format json
+	}
+
+	# Health check endpoint (no TLS required)
+	handle /health* {
+		reverse_proxy backend:8000
+	}
+
+	# API endpoints
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	# Admin interface
+	handle /admin/* {
+		reverse_proxy backend:8000
+	}
+
+	# Auth endpoints
+	handle /accounts/* {
+		reverse_proxy backend:8000
+	}
+
+	handle /dj-rest-auth/* {
+		reverse_proxy backend:8000
+	}
+
+	# WebSocket support
+	handle /ws/* {
+		reverse_proxy backend:8000
+	}
+
+	# Default: proxy everything else to backend
+	handle {
+		reverse_proxy backend:8000
+	}
+}
+
+# HTTP→HTTPS redirect
+http://{$DOMAIN:localhost} {
+	redir https://{host}{uri} permanent
+}

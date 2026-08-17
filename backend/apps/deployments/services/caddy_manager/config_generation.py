@@ -424,6 +424,58 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
     return {upstream: sorted(hosts) for upstream, hosts in remote_hosts.items()}
 
 
+def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> list[str]:
+    """Generate Caddyfile blocks for node subdomains (node-{slug}.{domain}).
+
+    These blocks reverse proxy to nodes via WireGuard mesh IP.
+    Used as fallback when nodes are accessed through the master.
+    """
+    if not wildcard_domain:
+        return []
+
+    try:
+        from apps.deployments.models.core import ManagedServer
+
+        if not _table_exists(ManagedServer._meta.db_table):
+            return []
+
+        blocks: list[str] = []
+        suffix = f".{wildcard_domain}"
+
+        for server in ManagedServer.objects.filter(
+            is_primary=False,
+        ).only("id", "host", "wg_address", "node_components").all():
+            node_slug = str(server.id).split("-")[0]
+            node_domain = f"node-{node_slug}{suffix}"
+
+            mesh_ip = str(getattr(server, "wg_address", "") or "").strip()
+            if not mesh_ip:
+                continue
+
+            block = [
+                f"{node_domain} {{",
+                "    tls {",
+            ]
+            if cloudflare_token:
+                block.append(f"        dns cloudflare {cloudflare_token}")
+            block.extend([
+                "    }",
+                "    log {",
+                "        output file /var/log/caddy/access.log",
+                "    }",
+                f"    reverse_proxy http://{mesh_ip}:80 {{",
+                "        header_up Host {host}",
+                "    }",
+                "}",
+            ])
+            blocks.append("\n".join(block))
+
+        return blocks
+    except Exception as exc:
+        logger.warning("Could not load node subdomains for Caddy: %s", exc)
+        return []
+
+
 def generate_caddyfile(config) -> str:
     if is_agent_lite():
         logger.debug("Agent-lite mode: skipping generate_caddyfile()")
@@ -684,6 +736,11 @@ def generate_caddyfile(config) -> str:
                 ]
             )
             sections.append("\n".join(wildcard_lines))
+
+        # Node subdomains (node-{slug}.{domain}) — reverse proxy to nodes via WireGuard
+        node_blocks = _get_node_subdomain_blocks(domain, cloudflare_token)
+        for block in node_blocks:
+            sections.append(block)
 
     if domain and not use_ssl:
         sections.append(

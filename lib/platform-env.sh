@@ -312,10 +312,10 @@ ensure_env_runtime_defaults() {
 
         if [ "$MODE_NODE" = "true" ] && [ -n "$postgres_password" ]; then
             local node_env_mode="$(mode_env_value)"
-            local node_expected_db_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
+            local node_expected_db_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
             local node_expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
             if [ "$current_database_url" != "$node_expected_db_url" ]; then
-                echo -e "${BLUE}  -> Setting DATABASE_URL for node mode (local DB via PgCat)${NC}"
+                echo -e "${BLUE}  -> Setting DATABASE_URL for node mode (local DB direct)${NC}"
                 env_set_value "$env_file" "DATABASE_URL" "$node_expected_db_url"
                 current_database_url="$node_expected_db_url"
             fi
@@ -327,9 +327,10 @@ ensure_env_runtime_defaults() {
             fi
             env_set_value "$env_file" "NODE_TYPE" "node"
             env_set_value "$env_file" "MODE" "$node_env_mode"
+            env_set_value "$env_file" "COMPOSE_FILE" "infrastructure/docker/docker-compose.node.yml"
         fi
 
-        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
+        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
             echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"
             local migrated_url="${current_database_url/@db:5432/@pgcat:5432}"
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"

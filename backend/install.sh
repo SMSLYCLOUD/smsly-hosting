@@ -831,8 +831,9 @@ compose_stack_build_service_args() {
 
 stop_node_excluded_services() {
     is_node_mode || return 0
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend caddy || echo -e "${YELLOW}    ⚠ frontend/caddy stop failed${NC}"
-    docker compose -f "$COMPOSE_FILE" rm -f frontend caddy || echo -e "${YELLOW}    ⚠ frontend/caddy rm failed${NC}"
+    # Note: Caddy IS used by nodes, do NOT stop it
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ frontend stop failed${NC}"
+    docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ frontend rm failed${NC}"
 }
 
 prune_stopped_conflicting() {
@@ -1165,7 +1166,7 @@ bust_core_build_cache() {
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         core_svcs="backend celery-worker"
     elif [ "$MODE_NODE" = "true" ]; then
-        core_svcs="backend celery celery-deploy celery-fast celery-beat"
+        core_svcs="backend celery-worker celery-beat"
     fi
 
     for svc in $core_svcs; do
@@ -1315,6 +1316,11 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+    # Node-specific containers (celery-worker instead of celery/celery-fast/celery-deploy)
+    if [ "$MODE_NODE" = "true" ]; then
+        ensure_container_on_network "smsly-net" "smsly-hosting-celery-worker-1"
+        ensure_container_on_network "smsly-net" "smsly-hosting-agent-registrar-1"
+    fi
 
     for svc in "${app_services[@]}"; do
         container_name="smsly-hosting-${svc}-1"
@@ -1412,7 +1418,11 @@ ensure_celery_workers_running() {
     local celery_services=()
     local down_services=()
     local base_workers=(celery celery-deploy celery-fast celery-beat)
-    if [ "${CELERY_AUTOSCALE_ENABLED:-false}" != "true" ]; then
+    if [ "$MODE_NODE" = "true" ]; then
+        base_workers=(celery-worker celery-beat)
+    elif [ "$MODE_AGENT_LITE" = "true" ]; then
+        base_workers=(celery-worker)
+    elif [ "${CELERY_AUTOSCALE_ENABLED:-false}" != "true" ]; then
         base_workers+=(celery-2 celery-3)
     fi
     for svc in "${base_workers[@]}"; do
@@ -2129,8 +2139,9 @@ compose_stack_build_service_args() {
 
 stop_node_excluded_services() {
     is_node_mode || return 0
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend caddy || echo -e "${YELLOW}    ⚠ frontend/caddy stop failed${NC}"
-    docker compose -f "$COMPOSE_FILE" rm -f frontend caddy || echo -e "${YELLOW}    ⚠ frontend/caddy rm failed${NC}"
+    # Note: Caddy IS used by nodes, do NOT stop it
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ frontend stop failed${NC}"
+    docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ frontend rm failed${NC}"
 }
 
 prune_stopped_conflicting() {
@@ -2463,7 +2474,7 @@ bust_core_build_cache() {
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         core_svcs="backend celery-worker"
     elif [ "$MODE_NODE" = "true" ]; then
-        core_svcs="backend celery celery-deploy celery-fast celery-beat"
+        core_svcs="backend celery-worker celery-beat"
     fi
 
     for svc in $core_svcs; do
@@ -2613,6 +2624,11 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+    # Node-specific containers (celery-worker instead of celery/celery-fast/celery-deploy)
+    if [ "$MODE_NODE" = "true" ]; then
+        ensure_container_on_network "smsly-net" "smsly-hosting-celery-worker-1"
+        ensure_container_on_network "smsly-net" "smsly-hosting-agent-registrar-1"
+    fi
 
     for svc in "${app_services[@]}"; do
         container_name="smsly-hosting-${svc}-1"
@@ -2710,7 +2726,11 @@ ensure_celery_workers_running() {
     local celery_services=()
     local down_services=()
     local base_workers=(celery celery-deploy celery-fast celery-beat)
-    if [ "${CELERY_AUTOSCALE_ENABLED:-false}" != "true" ]; then
+    if [ "$MODE_NODE" = "true" ]; then
+        base_workers=(celery-worker celery-beat)
+    elif [ "$MODE_AGENT_LITE" = "true" ]; then
+        base_workers=(celery-worker)
+    elif [ "${CELERY_AUTOSCALE_ENABLED:-false}" != "true" ]; then
         base_workers+=(celery-2 celery-3)
     fi
     for svc in "${base_workers[@]}"; do
@@ -5971,10 +5991,10 @@ ensure_env_runtime_defaults() {
 
         if [ "$MODE_NODE" = "true" ] && [ -n "$postgres_password" ]; then
             local node_env_mode="$(mode_env_value)"
-            local node_expected_db_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
+            local node_expected_db_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
             local node_expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
             if [ "$current_database_url" != "$node_expected_db_url" ]; then
-                echo -e "${BLUE}  -> Setting DATABASE_URL for node mode (local DB via PgCat)${NC}"
+                echo -e "${BLUE}  -> Setting DATABASE_URL for node mode (local DB direct)${NC}"
                 env_set_value "$env_file" "DATABASE_URL" "$node_expected_db_url"
                 current_database_url="$node_expected_db_url"
             fi
@@ -5986,9 +6006,10 @@ ensure_env_runtime_defaults() {
             fi
             env_set_value "$env_file" "NODE_TYPE" "node"
             env_set_value "$env_file" "MODE" "$node_env_mode"
+            env_set_value "$env_file" "COMPOSE_FILE" "infrastructure/docker/docker-compose.node.yml"
         fi
 
-        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
+        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
             echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"
             local migrated_url="${current_database_url/@db:5432/@pgcat:5432}"
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
@@ -6748,10 +6769,10 @@ ensure_env_runtime_defaults() {
 
         if [ "$MODE_NODE" = "true" ] && [ -n "$postgres_password" ]; then
             local node_env_mode="$(mode_env_value)"
-            local node_expected_db_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
+            local node_expected_db_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
             local node_expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
             if [ "$current_database_url" != "$node_expected_db_url" ]; then
-                echo -e "${BLUE}  -> Setting DATABASE_URL for node mode (local DB via PgCat)${NC}"
+                echo -e "${BLUE}  -> Setting DATABASE_URL for node mode (local DB direct)${NC}"
                 env_set_value "$env_file" "DATABASE_URL" "$node_expected_db_url"
                 current_database_url="$node_expected_db_url"
             fi
@@ -6763,9 +6784,10 @@ ensure_env_runtime_defaults() {
             fi
             env_set_value "$env_file" "NODE_TYPE" "node"
             env_set_value "$env_file" "MODE" "$node_env_mode"
+            env_set_value "$env_file" "COMPOSE_FILE" "infrastructure/docker/docker-compose.node.yml"
         fi
 
-        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
+        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
             echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"
             local migrated_url="${current_database_url/@db:5432/@pgcat:5432}"
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"

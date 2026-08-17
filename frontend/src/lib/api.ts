@@ -1215,6 +1215,10 @@ export const deploymentApprovalApi = {
 
 // ─── Servers API ────────────────────────────────────────────────────────────
 
+export type ServerStatus = 'ONLINE' | 'OFFLINE' | 'UNKNOWN' | 'DEGRADED';
+export type ProvisionStatus = 'NONE' | 'PENDING' | 'PROVISIONING' | 'DONE' | 'FAILED';
+export type ServerRole = 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
+
 export interface ManagedServerRuntimeInfo {
   node_id?: string;
   ts?: string;
@@ -1242,7 +1246,7 @@ export interface ManagedServer {
   is_primary: boolean;
   is_lite_agent?: boolean;
   node_type?: 'master' | 'node' | 'agent-lite' | 'media';
-  node_components?: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean };
+  node_components?: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean; log_shipping: boolean };
   allow_user_workloads: boolean;
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN' | 'DEGRADED';
   last_health_check: string | null;

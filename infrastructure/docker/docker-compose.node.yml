@@ -1,0 +1,633 @@
+name: smsly-hosting
+
+services:
+  # ============================================================
+  # Docker Socket Proxy (Secure Docker access)
+  # ============================================================
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      POST: 1
+      BUILD: 1
+      EXEC: 1
+      COMMIT: 1
+      PUT: 1
+      DELETE: 1
+      PING: 1
+      VERSION: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket-proxy
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 2375"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: ${SOCKET_PROXY_MEMORY_LIMIT:-64M}
+
+  # ============================================================
+  # PostgreSQL (Local — single instance, no replica, no PgCat)
+  # Node has its own DB for independence from master
+  # ============================================================
+  db:
+    image: postgres:16-alpine
+    container_name: smsly-postgres-primary
+    restart: unless-stopped
+    security_opt:
+      - apparmor:docker-default
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
+      POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - postgres-primary-data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c wal_keep_size=1GB
+      -c max_connections=${DB_MAX_CONNECTIONS:-200}
+      -c shared_buffers=${DB_SHARED_BUFFERS:-512MB}
+      -c effective_cache_size=${DB_EFFECTIVE_CACHE_SIZE:-384MB}
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - PGPASSWORD="$${POSTGRES_PASSWORD}" pg_isready -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    labels:
+      - managed_by=smsly-hosting
+    networks:
+      smsly-net:
+        aliases:
+          - postgres-primary
+          - db
+          - pgcat
+    deploy:
+      resources:
+        reservations:
+          memory: ${DB_PRIMARY_RESERVATION:-256M}
+        limits:
+          memory: ${DB_PRIMARY_LIMIT:-2G}
+
+  # ============================================================
+  # Redis (Local — single instance, no HA)
+  # Used for Celery result backend + RedBeat scheduler
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    read_only: true
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --save 60 100
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - smsly-net
+    deploy:
+      resources:
+        reservations:
+          memory: ${REDIS_RESERVATION:-64M}
+        limits:
+          memory: ${REDIS_LIMIT:-256M}
+
+  # ============================================================
+  # RabbitMQ (Local message broker for Celery)
+  # ============================================================
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-smsly_user}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-${RABBITMQ_PASSWORD:-}}
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - smsly-net
+    deploy:
+      resources:
+        reservations:
+          memory: ${RABBITMQ_RESERVATION:-256M}
+        limits:
+          memory: ${RABBITMQ_LIMIT:-512M}
+
+  # ============================================================
+  # Backend (1 gunicorn worker — lightweight)
+  # ============================================================
+  backend:
+    image: ${SMSLY_IMAGE_BACKEND:-smsly-hosting-backend}
+    restart: unless-stopped
+    cap_add:
+      - SETGID
+      - SETUID
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    cap_drop:
+      - ALL
+    command: >
+      gunicorn config.asgi:application
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-1}
+      --worker-class uvicorn.workers.UvicornWorker
+      --timeout ${GUNICORN_TIMEOUT:-600}
+    env_file: .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-}
+      DOCKER_HOST: tcp://socket-proxy:2375
+      DOCKER_NETWORK: smsly-net
+      SMSLY_ENABLE_STARTUP_CADDY_SYNC: "false"
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_healthy
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+      - /opt/smsly-cache:/opt/smsly-cache:z
+      - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
+      - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+      - backups_data:/app/backups
+      - ./auth:/auth:rw,z
+      - ./.env:/app/.env:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/health/live || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - smsly-net
+      - socket-proxy
+    deploy:
+      resources:
+        reservations:
+          memory: ${BACKEND_RESERVATION:-256M}
+        limits:
+          memory: ${BACKEND_LIMIT:-1G}
+
+  # ============================================================
+  # Celery Worker (Autoscale — all queues in one worker)
+  # Handles: celery (main), fast, deploy queues
+  # ============================================================
+  celery-worker:
+    image: ${SMSLY_IMAGE_BACKEND:-smsly-hosting-backend}
+    restart: unless-stopped
+    cap_add:
+      - SETGID
+      - SETUID
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    cap_drop:
+      - ALL
+    command: >
+      celery -A config worker -l info
+      --autoscale=${CELERY_AUTOSCALE:-8,2}
+      -Q celery,fast,deploy
+      --hostname=${SMSLY_NODE_ID:-node}@%h
+    env_file: .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-}
+      DOCKER_HOST: tcp://socket-proxy:2375
+      DOCKER_NETWORK: smsly-net
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_healthy
+    volumes:
+      - media_volume:/app/media
+      - /opt/smsly-cache:/opt/smsly-cache:z
+      - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
+      - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+      - backups_data:/app/backups
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 120s
+    networks:
+      - smsly-net
+      - socket-proxy
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_MEMORY_LIMIT:-2G}
+
+  # ============================================================
+  # Celery Beat (RedBeat scheduler for periodic tasks)
+  # ============================================================
+  celery-beat:
+    image: ${SMSLY_IMAGE_BACKEND:-smsly-hosting-backend}
+    restart: unless-stopped
+    cap_add:
+      - SETGID
+      - SETUID
+    cap_drop:
+      - ALL
+    command: celery -A config beat -l info -S redbeat.RedBeatScheduler --pidfile=/app/celerybeat.pid
+    env_file: .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CELERY_REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/3
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "cat /proc/1/status > /dev/null 2>&1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_BEAT_MEMORY_LIMIT:-256M}
+          cpus: "0.50"
+
+  # ============================================================
+  # Agent Registrar — self-registration + heartbeats to master
+  # ============================================================
+  agent-registrar:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    command: >
+      sh -c '
+        apk add --no-cache docker-cli curl tzdata >/dev/null 2>&1 || true;
+        pip install --no-cache-dir requests >/dev/null 2>&1 || true;
+        python /usr/local/bin/agent_registrar.py
+      '
+    env_file: .env
+    environment:
+      - MASTER_API_URL=http://${MASTER_MESH_IP:-10.100.0.1}
+      - MASTER_API_URL_FALLBACK=http://${MASTER_IP:?MASTER_IP must be set in .env}
+      - SERVER_ID=${SMSLY_NODE_ID:?SMSLY_NODE_ID must be set in .env}
+      - GATEWAY_SECRET=${GATEWAY_SECRET:?GATEWAY_SECRET must be set in .env}
+      - HEARTBEAT_INTERVAL=${AGENT_HEARTBEAT_INTERVAL:-30}
+      - REGISTER_ON_START=true
+      - LOG_LEVEL=${AGENT_REGISTRAR_LOG_LEVEL:-INFO}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ../../backend/agent_registrar.py:/usr/local/bin/agent_registrar.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python /usr/local/bin/agent_registrar.py' >/dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - smsly-net
+
+  # ============================================================
+  # Caddy (Reverse proxy + automatic TLS via Let's Encrypt)
+  # Handles all internet-facing traffic for the node
+  # ============================================================
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/docker/Caddyfile.node:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEMORY_LIMIT:-128M}
+
+  # ============================================================
+  # OPTIONAL: CrowdSec (Threat Intelligence — NODE_CROWDSEC=1)
+  # ============================================================
+
+  # ============================================================
+  # OPTIONAL: CrowdSec (Threat Intelligence — NODE_CROWDSEC=1)
+  # ============================================================
+  crowdsec:
+    image: crowdsecurity/crowdsec:v1.7.8
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+      ENROLL_KEY: "${CROWDSEC_ENROLL_KEY:-}"
+      ENROLL_INSTANCE_NAME: "${DOMAIN:-smsly-hosting}"
+      BOUNCER_KEY_traefik_bouncer: "${CROWDSEC_BOUNCER_KEY:-}"
+    volumes:
+      - crowdsec_data:/var/lib/crowdsec/data
+      - crowdsec_config:/etc/crowdsec
+      - ./infrastructure/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro,z
+      - ./infrastructure/crowdsec/profiles.yaml:/etc/crowdsec/profiles.yaml:ro,z
+      - ./infrastructure/crowdsec/whitelists.yaml:/etc/crowdsec/parsers/s02-enrich/01-whitelists-acme.yaml:ro,z
+      - ./infrastructure/crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro,z
+      - traefik_logs:/var/log/traefik:ro
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "cscli version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${CROWDSEC_MEMORY_LIMIT:-512M}
+
+  # ============================================================
+  # OPTIONAL: Falco (Runtime Security — NODE_FALCO=1)
+  # ============================================================
+  falco:
+    image: falcosecurity/falco:0.39.2
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+      - SYS_RESOURCE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro,z
+      - /var/run/docker.sock:/host/var/run/docker.sock:ro,z
+      - /proc:/host/proc:ro,z
+      - /etc:/host/etc:ro,z
+    environment:
+      - HOST_ROOT=/host
+    command: ["/usr/bin/falco", "-o", "json_output=true", "-o", "engine.kind=modern_ebpf"]
+    networks:
+      - smsly-net
+    pid: host
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${FALCO_MEMORY_LIMIT:-256M}
+
+  # ============================================================
+  # OPTIONAL: SPIRE Agent (Workload Identity — NODE_SPIRE=1)
+  # ============================================================
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.9.6
+    restart: unless-stopped
+    volumes:
+      - spire-agent-data:/opt/spire/data
+      - spire-agent-socket:/opt/spire/run
+      - spire-agent-svids:/opt/spire/svids
+      - ./infrastructure/spire/agent.conf:/etc/spire/agent.conf:ro,z
+    environment:
+      SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
+      DOCKER_HOST: tcp://socket-proxy:2375
+    command: ["-config", "/etc/spire/agent.conf"]
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/opt/spire/run/agent.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: ${SPIRE_AGENT_MEMORY_LIMIT:-128M}
+
+  # ============================================================
+  # OPTIONAL: cAdvisor (Container Metrics — NODE_OBSERVABILITY=1)
+  # ============================================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true, apparmor:docker-default]
+    command:
+      - --containerd=unix:///var/run/containerd/containerd.sock
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/containerd/containerd.sock:/var/run/containerd/containerd.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${CADVISOR_MEMORY_LIMIT:-256M}
+
+  # ============================================================
+  # OPTIONAL: Node Exporter (Host Metrics — NODE_OBSERVABILITY=1)
+  # ============================================================
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9100/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${NODE_EXPORTER_MEMORY_LIMIT:-128M}
+
+  # ============================================================
+  # OPTIONAL: Promtail (Log Shipping to Master — NODE_OBSERVABILITY=1)
+  # Ships Caddy access logs to master's Loki for CrowdSec analysis
+  # ============================================================
+  promtail:
+    image: grafana/promtail:2.9.3
+    restart: unless-stopped
+    environment:
+      - MASTER_MESH_IP=${MASTER_MESH_IP:-10.100.0.1}
+      - SMSLY_NODE_ID=${SMSLY_NODE_ID:-unknown}
+    volumes:
+      - caddy_logs:/var/log/caddy:ro
+      - ./infrastructure/monitoring/promtail-node-config.yml:/etc/promtail/config.yml:ro
+      - promtail-positions:/tmp
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      caddy:
+        condition: service_started
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "cat /proc/1/status > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${PROMTAIL_MEMORY_LIMIT:-256M}
+
+  # ============================================================
+  # OPTIONAL: Docker Labels Exporter (NODE_OBSERVABILITY=1)
+  # ============================================================
+  docker-labels:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    command: python3 -u /app/exporter.py
+    environment:
+      - NODE_NAME=local
+      - REFRESH_INTERVAL=60
+      - STATS_TIMEOUT=50
+      - MAX_WORKERS=8
+      - DOCKER_SOCK=/var/run/docker.sock
+    volumes:
+      - ./infrastructure/monitoring/docker-labels-exporter.py:/app/exporter.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9234/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          memory: ${DOCKER_LABELS_MEMORY_LIMIT:-256M}
+
+volumes:
+  postgres-primary-data:
+  redis_data:
+  crowdsec_data:
+  crowdsec_config:
+  static_volume:
+  media_volume:
+  backups_data:
+  promtail-positions:
+  spire-agent-data:
+  spire-agent-socket:
+  spire-agent-svids:
+  caddy_data:
+  caddy_config:
+  caddy_logs:
+
+networks:
+  smsly-net:
+    external: true
+    name: smsly-net
+  socket-proxy:
+    driver: bridge
+    internal: true

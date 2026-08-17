@@ -227,6 +227,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             install_env["MASTER_MESH_IP"] = _get_master_mesh_ip()
         elif install_mode == "node":
             install_args.append("--mode=node")
+            install_env["COMPOSE_FILE"] = "infrastructure/docker/docker-compose.node.yml"
 
             from apps.deployments.models.core import PlatformConfig
             from apps.domains.services.dns import ensure_dns_records
@@ -247,6 +248,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     install_env["CLOUDFLARE_API_TOKEN"] = cf_token
                     install_env["DOMAIN"] = node_domain
                     install_env["USE_SSL"] = "true"
+                    install_env["ACME_EMAIL"] = f"admin@{root_domain}"
                 except Exception as e:
                     logger.error("Failed to provision DNS/TLS for node %s: %s", server.name, e)
                     _append_log(server, f"⚠️ Automated TLS: Failed to generate DNS record: {e}")
