@@ -94,11 +94,10 @@ NODE_NAME={name}
 NODE_HOST={host}
 ENVEOF
 
-chmod 600 .env
-bash install.sh --mode=node {node_type_flag}
-
+chmod 600 .env 2>/dev/null || true
 echo ""
-echo "=== Provisioning complete ==="
+echo "=== Starting installer... ==="
+exec bash install.sh --mode=node {node_type_flag}
 """
     return HttpResponse(script, content_type="text/x-shellscript")
 
