@@ -3594,17 +3594,32 @@ _harden_infisical_verify() {
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
     local _harden_failures=0
-    _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_kernel_bootstrap
-    _harden_docker_daemon_bootstrap
-    _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_container_runtime_bootstrap
-    _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    local node_sec="${NODE_SECURITY:-0}"
+    local node_crowd="${NODE_CROWDSEC:-0}"
+    local node_falco="${NODE_FALCO:-0}"
+    if [ "$node_sec" = "1" ]; then
+        _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_kernel_bootstrap
+        _harden_docker_daemon_bootstrap
+        _harden_container_runtime_bootstrap
+        _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] Security stack skipped (NODE_SECURITY=0)${NC}"
+    fi
+    if [ "$node_crowd" = "1" ]; then
+        _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] CrowdSec skipped (NODE_CROWDSEC=0)${NC}"
+    fi
+    if [ "$node_falco" = "1" ]; then
+        _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] Falco skipped (NODE_FALCO=0)${NC}"
+    fi
     if [ "$_harden_failures" -gt 0 ]; then
         echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
     else
@@ -3620,33 +3635,42 @@ harden_security_verify() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 
     local failures=0 checks=0
+    local node_sec="${NODE_SECURITY:-0}"
+    local node_crowd="${NODE_CROWDSEC:-0}"
+    local node_falco="${NODE_FALCO:-0}"
 
-    # NOTE: never use standalone `((checks++))` here — when the counter is 0
-    # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
-    # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
-    # install dies silently after the first check.
-    if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_falco_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
+    if [ "$node_sec" = "1" ]; then
+        # NOTE: never use standalone `((checks++))` here — when the counter is 0
+        # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
+        # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
+        # install dies silently after the first check.
+        if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
+    if [ "$node_crowd" = "1" ]; then
+        if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
+    if [ "$node_falco" = "1" ]; then
+        if ! _harden_falco_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
 
     local passed=$((checks - failures))
     echo ""
@@ -8108,17 +8132,32 @@ _harden_infisical_verify() {
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
     local _harden_failures=0
-    _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_kernel_bootstrap
-    _harden_docker_daemon_bootstrap
-    _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_container_runtime_bootstrap
-    _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    local node_sec="${NODE_SECURITY:-0}"
+    local node_crowd="${NODE_CROWDSEC:-0}"
+    local node_falco="${NODE_FALCO:-0}"
+    if [ "$node_sec" = "1" ]; then
+        _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_kernel_bootstrap
+        _harden_docker_daemon_bootstrap
+        _harden_container_runtime_bootstrap
+        _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] Security stack skipped (NODE_SECURITY=0)${NC}"
+    fi
+    if [ "$node_crowd" = "1" ]; then
+        _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] CrowdSec skipped (NODE_CROWDSEC=0)${NC}"
+    fi
+    if [ "$node_falco" = "1" ]; then
+        _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] Falco skipped (NODE_FALCO=0)${NC}"
+    fi
     if [ "$_harden_failures" -gt 0 ]; then
         echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
     else
@@ -8134,33 +8173,42 @@ harden_security_verify() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 
     local failures=0 checks=0
+    local node_sec="${NODE_SECURITY:-0}"
+    local node_crowd="${NODE_CROWDSEC:-0}"
+    local node_falco="${NODE_FALCO:-0}"
 
-    # NOTE: never use standalone `((checks++))` here — when the counter is 0
-    # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
-    # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
-    # install dies silently after the first check.
-    if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_falco_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
+    if [ "$node_sec" = "1" ]; then
+        # NOTE: never use standalone `((checks++))` here — when the counter is 0
+        # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
+        # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
+        # install dies silently after the first check.
+        if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
+    if [ "$node_crowd" = "1" ]; then
+        if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
+    if [ "$node_falco" = "1" ]; then
+        if ! _harden_falco_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
 
     local passed=$((checks - failures))
     echo ""
@@ -9037,17 +9085,32 @@ _harden_infisical_verify() {
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
     local _harden_failures=0
-    _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_kernel_bootstrap
-    _harden_docker_daemon_bootstrap
-    _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_container_runtime_bootstrap
-    _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    local node_sec="${NODE_SECURITY:-0}"
+    local node_crowd="${NODE_CROWDSEC:-0}"
+    local node_falco="${NODE_FALCO:-0}"
+    if [ "$node_sec" = "1" ]; then
+        _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_kernel_bootstrap
+        _harden_docker_daemon_bootstrap
+        _harden_container_runtime_bootstrap
+        _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] Security stack skipped (NODE_SECURITY=0)${NC}"
+    fi
+    if [ "$node_crowd" = "1" ]; then
+        _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] CrowdSec skipped (NODE_CROWDSEC=0)${NC}"
+    fi
+    if [ "$node_falco" = "1" ]; then
+        _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] Falco skipped (NODE_FALCO=0)${NC}"
+    fi
     if [ "$_harden_failures" -gt 0 ]; then
         echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
     else
@@ -9063,33 +9126,42 @@ harden_security_verify() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 
     local failures=0 checks=0
+    local node_sec="${NODE_SECURITY:-0}"
+    local node_crowd="${NODE_CROWDSEC:-0}"
+    local node_falco="${NODE_FALCO:-0}"
 
-    # NOTE: never use standalone `((checks++))` here — when the counter is 0
-    # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
-    # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
-    # install dies silently after the first check.
-    if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_falco_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
+    if [ "$node_sec" = "1" ]; then
+        # NOTE: never use standalone `((checks++))` here — when the counter is 0
+        # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
+        # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
+        # install dies silently after the first check.
+        if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
+    if [ "$node_crowd" = "1" ]; then
+        if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
+    if [ "$node_falco" = "1" ]; then
+        if ! _harden_falco_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
 
     local passed=$((checks - failures))
     echo ""
@@ -11956,17 +12028,32 @@ _harden_infisical_verify() {
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
     local _harden_failures=0
-    _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_kernel_bootstrap
-    _harden_docker_daemon_bootstrap
-    _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_container_runtime_bootstrap
-    _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    local node_sec="${NODE_SECURITY:-0}"
+    local node_crowd="${NODE_CROWDSEC:-0}"
+    local node_falco="${NODE_FALCO:-0}"
+    if [ "$node_sec" = "1" ]; then
+        _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_kernel_bootstrap
+        _harden_docker_daemon_bootstrap
+        _harden_container_runtime_bootstrap
+        _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+        _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] Security stack skipped (NODE_SECURITY=0)${NC}"
+    fi
+    if [ "$node_crowd" = "1" ]; then
+        _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] CrowdSec skipped (NODE_CROWDSEC=0)${NC}"
+    fi
+    if [ "$node_falco" = "1" ]; then
+        _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    else
+        echo -e "${YELLOW}  → [harden] Falco skipped (NODE_FALCO=0)${NC}"
+    fi
     if [ "$_harden_failures" -gt 0 ]; then
         echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
     else
@@ -11982,33 +12069,42 @@ harden_security_verify() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 
     local failures=0 checks=0
+    local node_sec="${NODE_SECURITY:-0}"
+    local node_crowd="${NODE_CROWDSEC:-0}"
+    local node_falco="${NODE_FALCO:-0}"
 
-    # NOTE: never use standalone `((checks++))` here — when the counter is 0
-    # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
-    # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
-    # install dies silently after the first check.
-    if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_falco_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
-    if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
-    checks=$((checks + 1))
+    if [ "$node_sec" = "1" ]; then
+        # NOTE: never use standalone `((checks++))` here — when the counter is 0
+        # the arithmetic expression evaluates to 0 → exit status 1 → under `set -e`
+        # (re-enabled by fresh_hardening.sh after harden.sh's `set +e`) the whole
+        # install dies silently after the first check.
+        if ! _harden_fail2ban_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_ufw_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_apparmor_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_auditd_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_kernel_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_container_runtime_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_trivy_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+        if ! _harden_infisical_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
+    if [ "$node_crowd" = "1" ]; then
+        if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
+    if [ "$node_falco" = "1" ]; then
+        if ! _harden_falco_verify; then failures=$((failures + 1)); fi
+        checks=$((checks + 1))
+    fi
 
     local passed=$((checks - failures))
     echo ""

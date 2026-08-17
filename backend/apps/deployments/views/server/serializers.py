@@ -30,6 +30,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "server_version", "services_count", "created_at",
             "provision_status", "provision_logs", "role", "wg_address",
             "has_ssh_credentials", "is_lite_agent", "node_type",
+            "node_components",
             # Agent self-registration signals: surfaced so operators
             # can tell at a glance whether the agent's installer
             # has finished bootstrapping and how recently the
@@ -49,7 +50,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "id", "status", "last_health_check", "server_version",
             "services_count", "created_at", "provision_status",
             "role", "wg_address", "has_ssh_credentials", "is_lite_agent",
-            "node_type",
+            "node_type", "node_components",
             "agent_ready", "last_agent_heartbeat_at", "agent_runtime_info",
             "tls_cert_sha256_set",
         ]
@@ -230,6 +231,7 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
             "ssh_password", "ssh_key", "ssh_key_passphrase",
             "ssh_auth_method",
             "is_primary", "allow_user_workloads", "is_lite_agent",
+            "node_type", "node_components",
             "node_certificate",
         ]
         extra_kwargs = {

@@ -48,6 +48,7 @@ def bootstrap_view(request, token):
     name = payload_data["name"]
     is_lite_agent = payload_data.get("is_lite_agent", False)
     is_media_node = payload_data.get("is_media_node", False)
+    node_components = payload_data.get("node_components", {})
 
     master_url = os.environ.get("PUBLIC_URL", "https://grid.smsly.cloud")
     master_ip = os.environ.get("PUBLIC_IP", "")
@@ -58,6 +59,9 @@ def bootstrap_view(request, token):
         node_type_flag = "--mode=media-node"
     elif is_lite_agent:
         node_type_flag = "--mode=lite-agent"
+
+    def _comp_flag(key):
+        return "1" if node_components.get(key) else "0"
 
     script = f"""#!/bin/bash
 set -euo pipefail
@@ -92,6 +96,10 @@ MASTER_URL={master_url}
 GATEWAY_SECRET={gateway_secret}
 NODE_NAME={name}
 NODE_HOST={host}
+NODE_OBSERVABILITY={_comp_flag("observability")}
+NODE_SECURITY={_comp_flag("security")}
+NODE_CROWDSEC={_comp_flag("crowdsec")}
+NODE_FALCO={_comp_flag("falco")}
 ENVEOF
 
 chmod 600 .env 2>/dev/null || true

@@ -263,6 +263,7 @@ export default function ServersPage() {
         name: '', host: '', ssh_user: 'root', ssh_port: 22,
         is_lite_agent: false, is_media_node: false, is_primary: false,
         allow_user_workloads: true,
+        node_components: { observability: true, security: true, crowdsec: false, falco: false },
     });
     const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null);
     const [generatingToken, setGeneratingToken] = useState(false);
@@ -762,6 +763,11 @@ export default function ServersPage() {
                                             media={selfProvisionForm.is_media_node}
                                             onMediaChange={v => setSelfProvisionForm({ ...selfProvisionForm, is_media_node: v, is_lite_agent: v ? false : selfProvisionForm.is_lite_agent })}
                                         />
+                                        <NodeComponents
+                                            value={selfProvisionForm.node_components}
+                                            onChange={v => setSelfProvisionForm({ ...selfProvisionForm, node_components: v })}
+                                            show={!selfProvisionForm.is_lite_agent && !selfProvisionForm.is_media_node}
+                                        />
                                         {bootstrapCommand ? (
                                             <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-3">
                                                 <p className="text-xs text-emerald-500 font-semibold flex items-center gap-1.5">
@@ -1034,6 +1040,52 @@ function NodeModePicker({ value, onChange, idPrefix, media, onMediaChange }: {
                         </div>
                     </label>
                 )}
+            </div>
+        </div>
+    );
+}
+
+function NodeComponents({ value, onChange, show }: {
+    value: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean };
+    onChange: (v: typeof value) => void;
+    show: boolean;
+}) {
+    if (!show) return null;
+    const toggle = (key: keyof typeof value) => onChange({ ...value, [key]: !value[key] });
+    const items = [
+        { key: 'observability' as const, icon: Activity, label: 'Observability', desc: 'Promtail, cAdvisor, node-exporter, docker-labels', color: 'emerald' },
+        { key: 'security' as const, icon: Shield, label: 'Security Stack', desc: 'fail2ban, UFW, AppArmor, auditd, kernel hardening, gVisor', color: 'amber' },
+        { key: 'crowdsec' as const, icon: AlertTriangle, label: 'CrowdSec WAF', desc: 'Community-powered web application firewall', color: 'orange' },
+        { key: 'falco' as const, icon: Zap, label: 'Falco', desc: 'Runtime security monitoring (~200MB)', color: 'red' },
+    ];
+    return (
+        <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-2">Node Components</label>
+            <div className="grid grid-cols-2 gap-2">
+                {items.map(({ key, icon: Icon, label, desc, color }) => (
+                    <label
+                        key={key}
+                        className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-all ${
+                            value[key]
+                                ? `border-${color}-500/50 bg-${color}-500/5`
+                                : 'border-border hover:border-muted-foreground/30'
+                        }`}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={value[key]}
+                            onChange={() => toggle(key)}
+                            className={`accent-${color}-500 mt-0.5`}
+                        />
+                        <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                                <Icon size={12} className={`text-${color}-500`} />
+                                <span className="text-sm font-medium">{label}</span>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{desc}</p>
+                        </div>
+                    </label>
+                ))}
             </div>
         </div>
     );

@@ -133,6 +133,22 @@ class ManagedServer(models.Model):
         help_text="Determines provisioning mode and available services.",
     )
 
+    # ── Node Component Selection ──
+    # JSON field storing which optional components are enabled on node servers.
+    # Keys are component names, values are booleans.  Only meaningful when
+    # node_type is "node".  Example:
+    #   {"observability": true, "security": true, "crowdsec": false, "falco": false}
+    node_components = models.JSONField(  # type: ignore[var-annotated]
+        default=dict,
+        blank=True,
+        help_text=(
+            "Optional components enabled on this node. Keys: "
+            "observability (cadvisor/node-exporter/docker-labels/promtail), "
+            "security (fail2ban/ufw/apparmor/auditd/kernel/gvisor), "
+            "crowdsec, falco."
+        ),
+    )
+
     # ── Provisioning ──
     is_lite_agent = models.BooleanField(  # type: ignore[var-annotated]
         default=False,

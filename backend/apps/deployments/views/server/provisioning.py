@@ -54,6 +54,7 @@ class ProvisioningMixin:
         allow_user_workloads = request.data.get("allow_user_workloads", True)
         ssh_user = request.data.get("ssh_user", "root")
         ssh_port = request.data.get("ssh_port", 22)
+        node_components = request.data.get("node_components", {})
 
         if not name or not host:
             return Response(
@@ -73,6 +74,7 @@ class ProvisioningMixin:
             "allow_user_workloads": allow_user_workloads,
             "ssh_user": ssh_user,
             "ssh_port": ssh_port,
+            "node_components": node_components,
             "exp": int(time.time()) + 3600,
             "nonce": secrets.token_hex(8),
         }
