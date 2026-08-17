@@ -1242,6 +1242,7 @@ export interface ManagedServer {
   is_primary: boolean;
   is_lite_agent?: boolean;
   node_type?: 'master' | 'node' | 'agent-lite' | 'media';
+  node_components?: { observability: boolean; security: boolean; crowdsec: boolean; falco: boolean; spire: boolean };
   allow_user_workloads: boolean;
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN' | 'DEGRADED';
   last_health_check: string | null;

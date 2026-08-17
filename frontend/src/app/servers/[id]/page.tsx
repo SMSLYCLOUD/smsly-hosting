@@ -451,6 +451,31 @@ export default function ServerDetailPage() {
                                         Full Stack
                                     </span>
                                 )}
+                                {server.node_components?.observability && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-medium">
+                                        Observability
+                                    </span>
+                                )}
+                                {server.node_components?.security && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-medium">
+                                        Security
+                                    </span>
+                                )}
+                                {server.node_components?.crowdsec && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-500 font-medium">
+                                        CrowdSec
+                                    </span>
+                                )}
+                                {server.node_components?.falco && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 font-medium">
+                                        Falco
+                                    </span>
+                                )}
+                                {server.node_components?.spire && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-500 font-medium">
+                                        SPIRE
+                                    </span>
+                                )}
                                 <span className={`text-xs font-bold px-2 py-0.5 rounded ${sc.bg} ${sc.color}`}>
                                     {sc.label}
                                 </span>
