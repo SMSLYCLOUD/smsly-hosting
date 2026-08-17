@@ -459,6 +459,7 @@ services:
   # ============================================================
   spire-agent:
     image: ghcr.io/spiffe/spire-agent:1.9.6
+    profiles: ["spire"]
     restart: unless-stopped
     volumes:
       - spire-agent-data:/opt/spire/data
