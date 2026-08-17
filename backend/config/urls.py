@@ -77,8 +77,12 @@ if ! id -u grid &>/dev/null; then
 fi
 
 cd /opt/smsly-hosting
-if [ ! -d ".git" ]; then
+if [ -d ".git" ]; then
+    git pull --ff-only || true
+else
+    rm -rf /opt/smsly-hosting
     git clone https://github.com/SMSLYCLOUD/smsly-hosting.git /opt/smsly-hosting
+    cd /opt/smsly-hosting
 fi
 
 cat > .env << ENVEOF
