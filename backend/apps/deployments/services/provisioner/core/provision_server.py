@@ -198,6 +198,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             "SMSLY_NODE_HOST": server.host,
         }
 
+        node_components = getattr(server, "node_components", None) or {}
+        install_env["NODE_OBSERVABILITY"] = "1" if node_components.get("observability") else "0"
+        install_env["NODE_SECURITY"] = "1" if node_components.get("security") else "0"
+        install_env["NODE_CROWDSEC"] = "1" if node_components.get("crowdsec") else "0"
+        install_env["NODE_FALCO"] = "1" if node_components.get("falco") else "0"
+
         install_args: list[str] = []
         install_mode = server_install_mode(server)
         if install_mode == "agent-lite":

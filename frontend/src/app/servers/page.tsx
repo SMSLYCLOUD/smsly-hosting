@@ -1052,34 +1052,33 @@ function NodeComponents({ value, onChange, show }: {
 }) {
     if (!show) return null;
     const toggle = (key: keyof typeof value) => onChange({ ...value, [key]: !value[key] });
-    const items = [
-        { key: 'observability' as const, icon: Activity, label: 'Observability', desc: 'Promtail, cAdvisor, node-exporter, docker-labels', color: 'emerald' },
-        { key: 'security' as const, icon: Shield, label: 'Security Stack', desc: 'fail2ban, UFW, AppArmor, auditd, kernel hardening, gVisor', color: 'amber' },
-        { key: 'crowdsec' as const, icon: AlertTriangle, label: 'CrowdSec WAF', desc: 'Community-powered web application firewall', color: 'orange' },
-        { key: 'falco' as const, icon: Zap, label: 'Falco', desc: 'Runtime security monitoring (~200MB)', color: 'red' },
+    const items: { key: keyof typeof value; icon: typeof Activity; label: string; desc: string; active: string; inactive: string }[] = [
+        { key: 'observability', icon: Activity, label: 'Observability', desc: 'Promtail, cAdvisor, node-exporter, docker-labels', active: 'border-emerald-500/50 bg-emerald-500/5', inactive: 'border-border hover:border-muted-foreground/30' },
+        { key: 'security', icon: Shield, label: 'Security Stack', desc: 'fail2ban, UFW, AppArmor, auditd, kernel hardening, gVisor', active: 'border-amber-500/50 bg-amber-500/5', inactive: 'border-border hover:border-muted-foreground/30' },
+        { key: 'crowdsec', icon: AlertTriangle, label: 'CrowdSec WAF', desc: 'Community-powered web application firewall', active: 'border-orange-500/50 bg-orange-500/5', inactive: 'border-border hover:border-muted-foreground/30' },
+        { key: 'falco', icon: Zap, label: 'Falco', desc: 'Runtime security monitoring (~200MB)', active: 'border-red-500/50 bg-red-500/5', inactive: 'border-border hover:border-muted-foreground/30' },
     ];
     return (
         <div>
             <label className="text-xs font-medium text-muted-foreground block mb-2">Node Components</label>
             <div className="grid grid-cols-2 gap-2">
-                {items.map(({ key, icon: Icon, label, desc, color }) => (
+                {items.map(({ key, icon: Icon, label, desc, active, inactive }) => (
                     <label
                         key={key}
-                        className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-all ${
-                            value[key]
-                                ? `border-${color}-500/50 bg-${color}-500/5`
-                                : 'border-border hover:border-muted-foreground/30'
-                        }`}
+                        className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-all ${value[key] ? active : inactive}`}
                     >
                         <input
                             type="checkbox"
                             checked={value[key]}
                             onChange={() => toggle(key)}
-                            className={`accent-${color}-500 mt-0.5`}
+                            className="mt-0.5"
                         />
                         <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
-                                <Icon size={12} className={`text-${color}-500`} />
+                                {key === 'observability' && <Activity size={12} className="text-emerald-500" />}
+                                {key === 'security' && <Shield size={12} className="text-amber-500" />}
+                                {key === 'crowdsec' && <AlertTriangle size={12} className="text-orange-500" />}
+                                {key === 'falco' && <Zap size={12} className="text-red-500" />}
                                 <span className="text-sm font-medium">{label}</span>
                             </div>
                             <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{desc}</p>
