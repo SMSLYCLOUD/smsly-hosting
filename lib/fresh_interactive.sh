@@ -25,10 +25,14 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
 
     # Deployment Mode Selection - Only prompt if not preset and in interactive shell
     if is_node_mode; then
-        USE_SSL="false"
-        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
-        MODE_CHOICE=1
-        echo -e "${BLUE}  → Node mode: using Traefik HTTP on $DOMAIN; Caddy/HTTPS is master-owned.${NC}"
+        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ]; then
+            echo -e "${BLUE}  → Node mode: SSL preset detected for ${PRESET_DOMAIN}.${NC}"
+        else
+            USE_SSL="false"
+            DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+            MODE_CHOICE=1
+            echo -e "${BLUE}  → Node mode: using Caddy HTTP on $DOMAIN.${NC}"
+        fi
     elif [ -n "${PRESET_USE_SSL}" ]; then
         if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
             echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
@@ -47,8 +51,10 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
 
     # Set configuration based on choice or presets
     if is_node_mode; then
-        USE_SSL="false"
-        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+        if [ "${PRESET_USE_SSL}" != "true" ] || [ -z "${PRESET_DOMAIN:-}" ]; then
+            USE_SSL="false"
+            DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+        fi
     elif [ "$MODE_CHOICE" -eq "2" ] || [ "${PRESET_USE_SSL}" = "true" ]; then
         USE_SSL="true"
         DOMAIN="${PRESET_DOMAIN:-}"
@@ -127,8 +133,10 @@ fi
 
 if is_node_mode; then
     PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
-    USE_SSL="false"
-    DOMAIN="${DOMAIN:-$PUBLIC_IP}"
-    WILDCARD_SUBDOMAINS="false"
-    CLOUDFLARE_API_TOKEN=""
+    if [ "${USE_SSL:-false}" != "true" ] || [ -z "${DOMAIN:-}" ] || echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        USE_SSL="false"
+        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    fi
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 fi

@@ -10945,6 +10945,8 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     oom_containers="smsly-hosting-backend-1 $(get_db_service | sed 's|^|smsly-hosting-|' || echo smsly-hosting-postgres-primary) smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
+    elif is_node_mode; then
+        oom_containers="smsly-hosting-caddy-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1 smsly-postgres-primary"
     fi
     for CONTAINER in $oom_containers; do
         resolved_container="$(resolve_container_target "$CONTAINER")"
@@ -11206,10 +11208,14 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
 
     # Deployment Mode Selection - Only prompt if not preset and in interactive shell
     if is_node_mode; then
-        USE_SSL="false"
-        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
-        MODE_CHOICE=1
-        echo -e "${BLUE}  → Node mode: using Traefik HTTP on $DOMAIN; Caddy/HTTPS is master-owned.${NC}"
+        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ]; then
+            echo -e "${BLUE}  → Node mode: SSL preset detected for ${PRESET_DOMAIN}.${NC}"
+        else
+            USE_SSL="false"
+            DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+            MODE_CHOICE=1
+            echo -e "${BLUE}  → Node mode: using Caddy HTTP on $DOMAIN.${NC}"
+        fi
     elif [ -n "${PRESET_USE_SSL}" ]; then
         if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
             echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
@@ -11228,8 +11234,10 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
 
     # Set configuration based on choice or presets
     if is_node_mode; then
-        USE_SSL="false"
-        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+        if [ "${PRESET_USE_SSL}" != "true" ] || [ -z "${PRESET_DOMAIN:-}" ]; then
+            USE_SSL="false"
+            DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+        fi
     elif [ "$MODE_CHOICE" -eq "2" ] || [ "${PRESET_USE_SSL}" = "true" ]; then
         USE_SSL="true"
         DOMAIN="${PRESET_DOMAIN:-}"
@@ -11308,10 +11316,12 @@ fi
 
 if is_node_mode; then
     PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
-    USE_SSL="false"
-    DOMAIN="${DOMAIN:-$PUBLIC_IP}"
-    WILDCARD_SUBDOMAINS="false"
-    CLOUDFLARE_API_TOKEN=""
+    if [ "${USE_SSL:-false}" != "true" ] || [ -z "${DOMAIN:-}" ] || echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        USE_SSL="false"
+        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    fi
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 fi
 
 # --- end lib/fresh_interactive.sh ---
@@ -13770,6 +13780,8 @@ fi
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1)
+elif is_node_mode; then
+    CRITICAL_CONTAINERS=(smsly-hosting-caddy-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1 smsly-postgres-primary)
 else
     CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-postgres-primary smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1)
 fi

@@ -149,6 +149,8 @@ fi
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1)
+elif is_node_mode; then
+    CRITICAL_CONTAINERS=(smsly-hosting-caddy-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1 smsly-postgres-primary)
 else
     CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-postgres-primary smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1)
 fi
