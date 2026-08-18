@@ -487,7 +487,7 @@ class SSHClient:
             "from apps.deployments.models.api_token import APIToken; "
             "User=get_user_model(); "
             "u=User.objects.filter(is_superuser=True,is_active=True).first(); "
-            "assert u, 'no active superuser'; "
+            "if not u: u=User.objects.create_superuser(username='admin',email='admin@smsly.cloud',password=None); "
             "APIToken.objects.filter(user=u,name='node:auto-ssh',is_active=True).update(is_active=False); "
             "obj, raw=APIToken.create_token(u, name='node:auto-ssh'); "
             "print('SMSLY_TOKEN: '+raw)"

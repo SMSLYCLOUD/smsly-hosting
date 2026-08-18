@@ -291,8 +291,12 @@ class Command(BaseCommand):
 
         admin = User.objects.filter(is_superuser=True).first()
         if not admin:
-            self.stdout.write(self.style.ERROR("   No superuser found — cannot auto-create token."))
-            return
+            admin = User.objects.create_superuser(
+                username="admin",
+                email="admin@smsly.cloud",
+                password=None,
+            )
+            self.stdout.write(self.style.SUCCESS(f"   ✅ Created superuser: {admin.username}"))
 
         _token_instance, raw_token = APIToken.create_token(admin, name="Inter-Node Access")
         self.stdout.write(self.style.SUCCESS(
