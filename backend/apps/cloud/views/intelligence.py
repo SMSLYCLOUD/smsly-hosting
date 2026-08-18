@@ -529,11 +529,11 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         # Validate project access if provided
         project = None
         if project_id:
-        from apps.deployments.models.service import Project
+            from apps.deployments.models.service import Project
             try:
                 project = Project.objects.get(id=project_id)
                 if project.owner != request.user:
-                    from apps.deployments.models_project import ProjectMember
+                    from apps.organizations.models.project import ProjectMember
                     is_member = ProjectMember.objects.filter(
                         project=project, user=request.user,
                     ).exists()
@@ -651,7 +651,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             try:
                 project = Project.objects.get(id=project_id)
                 if project.owner != request.user:
-                    from apps.deployments.models_project import ProjectMember
+                    from apps.organizations.models.project import ProjectMember
                     if not ProjectMember.objects.filter(project=project, user=request.user).exists():
                         return Response(
                             {'error': 'You do not have access to this project.'},
