@@ -417,6 +417,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     use_shared_addons = plan.get("use_shared_addons", True)
     cancel_on_failure = plan.get("cancel_others_on_failure", False)
     shared_addon_config: dict[str, dict] = plan.get("shared_addon_config", {})
+    mtls_config: dict = plan.get("mtls_config", {})
     if not isinstance(services_plan, list) or not services_plan:
         return {"error": "No services in deploy plan"}
 
@@ -948,11 +949,33 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # Ensure required production env vars are present
             _validate_required_env(resolved_env, service_addon_types)
 
+            # ── Inject SPIFFE/mTLS env vars if mTLS is enabled ──
+            if mtls_config.get("enabled"):
+                trust_domain = mtls_config.get("trust_domain", "trulay.co")
+                strict_mode = mtls_config.get("strict_mode", True)
+                caller_validation = mtls_config.get("caller_validation", True)
+                config_source = mtls_config.get("config_source", "none")
+                config_repo_url = mtls_config.get("config_repo_url", "")
+                config_files = mtls_config.get("config_files", {})
+
+                mtls_env = {
+                    "SPIFFE_TRUST_DOMAIN": trust_domain,
+                    "SPIFFE_ENDPOINT_SOCKET": "unix:///opt/spire/run/agent.sock",
+                    "MTLS_STRICT": str(strict_mode).lower(),
+                    "MTLS_CALLER_VALIDATION": str(caller_validation).lower(),
+                    "MTLS_CONFIG_SOURCE": config_source,
+                }
+                if config_repo_url:
+                    mtls_env["MTLS_CONFIG_REPO"] = config_repo_url
+                resolved_env.update(mtls_env)
+                logger.info("Injected SPIFFE env vars for %s (config_source=%s)", requested_name, config_source)
+
             for key, value in resolved_env.items():
                 key_upper = str(key or "").strip().upper()
                 if not key_upper:
                     continue
-                is_secret = any(hint in key_upper for hint in _SECRET_HINTS)
+                from apps.cloud.services.build_constants import is_secret_env_var
+                is_secret = is_secret_env_var(key_upper)
                 EnvironmentVariable.objects.update_or_create(
                     service=service,
                     key=key_upper,
@@ -970,7 +993,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 build_logs=(
                     f"Ecosystem deploy: {repo} ({stack})\n"
                     f"Port: {port} | Build strategy: {build_method}\n"
-                    f"Env vars: {len(resolved_env)} configured\n"
+                    f"Env vars: {len(resolved_env)} configured"
+                    f"{' | mTLS enabled (config: ' + mtls_config.get('config_source', 'default') + ')' if mtls_config.get('enabled') else ''}\n"
                     f"Depends on: {', '.join(_extract_dependencies(entry['depends_on'])) or '(none)'}\n\n"
                 ),
             )

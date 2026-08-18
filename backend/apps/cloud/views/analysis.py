@@ -391,11 +391,12 @@ class RepoAnalysisView(GenericAPIView):
             seen.add(key)
 
             hints = ENV_VAR_HINTS.get(key, {})
+            from apps.cloud.services.build_constants import is_secret_env_var
             obj = {
                 'key': key,
                 'hint': hints.get('hint', ''),
                 'required': hints.get('required', True),
-                'is_secret': hints.get('is_secret', 'key' in key.lower() or 'secret' in key.lower() or 'password' in key.lower()),
+                'is_secret': hints.get('is_secret', is_secret_env_var(key)),
                 'user_required': hints.get('user_required', False),
             }
 

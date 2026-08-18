@@ -605,8 +605,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 if not key_upper:
                     continue
 
-                # Simple heuristic for secrets
-                is_secret = any(hint in key_upper for hint in ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN", "_URL", "_URI"))
+                from apps.cloud.services.build_constants import is_secret_env_var
+                is_secret = is_secret_env_var(key_upper)
 
                 EnvironmentVariable.objects.update_or_create(
                     service=service,
@@ -921,9 +921,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             # Mask secret values in download
             masked_env = {}
             for k, v in raw_env.items():
-                key_upper = str(k).strip().upper()
-                is_secret = any(hint in key_upper for hint in ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN", "_URL", "_URI"))
-                masked_env[k] = '********' if is_secret else v
+                from apps.cloud.services.build_constants import is_secret_env_var
+                masked_env[k] = '********' if is_secret_env_var(k) else v
             services_export[name] = {
                 'env_vars': masked_env,
                 'addons': service.get('addons', []) or [],
@@ -938,9 +937,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         shared_env = plan_data.get('shared_env', {}) or {}
         masked_shared = {}
         for k, v in shared_env.items():
-            key_upper = str(k).strip().upper()
-            is_secret = any(hint in key_upper for hint in ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN", "_URL", "_URI"))
-            masked_shared[k] = '********' if is_secret else v
+            from apps.cloud.services.build_constants import is_secret_env_var
+            masked_shared[k] = '********' if is_secret_env_var(k) else v
 
         payload = {
             'plan_id': str(plan.id),

@@ -54,32 +54,45 @@ class EnvironmentIntelligenceService:
     )
 
     @classmethod
-    def resolve_environment(cls, env_context: dict[str, list[str]], stack: str = "", service_name: str = "") -> dict[str, str]:
+    def resolve_environment(cls, env_context: dict[str, str], stack: str = "", service_name: str = "", fill_keys: set[str] | None = None) -> dict[str, str]:
         """
-        Takes detected variables + context and returns a dictionary of suggested values.
+        Takes the full env dict and returns suggested values for vars in fill_keys.
+
+        Args:
+            env_context: ALL env vars for the service (key → value). Used as context.
+            stack: Detected tech stack (e.g. "python", "node").
+            service_name: Name of the service.
+            fill_keys: Only fill these vars. If None, fill all vars.
         """
         if not env_context:
             return {}
 
-        # Prepare the committee brief
+        if fill_keys is None:
+            fill_keys = set(env_context.keys())
+
+        # Prepare the committee brief — show ALL vars for context
         brief_lines = [
             f"Service Name: {service_name}",
             f"Detected Stack: {stack}\n",
-            "Detected Variables and Context:"
+            "All environment variables (existing values shown for context):"
         ]
-        for var, contexts in env_context.items():
-            ctx_summary = " | ".join(contexts[:2]).replace("\n", " ")
-            brief_lines.append(f"- {var}: {ctx_summary}")
+        for var, val in sorted(env_context.items()):
+            val_str = str(val or "").strip()
+            if var in fill_keys:
+                brief_lines.append(f"- {var}: [NEEDS VALUE] (current: {val_str or '(empty)'})")
+            else:
+                brief_lines.append(f"- {var}: {val_str or '(empty)'}")
 
         prompt = (
-            "Review every single environment variable below. Provide a suggested production value for each.\n"
-            "REQUIREMENT: 100% coverage. Do not skip any variable.\n"
+            "Review every environment variable below.\n"
+            f"Only provide values for variables marked [NEEDS VALUE] ({len(fill_keys)} variables).\n"
+            "Use the existing values as context to make better decisions.\n"
             "For SECRETS: state 'GENERATE'.\n"
-            "For INTERNAL URLs: use service names.\n"
+            "For INTERNAL URLs: use service names (e.g., http://service-name:PORT).\n"
             "NEVER set PORT — the platform manages it.\n"
             f"STACK: {stack}. Only set vars appropriate for this stack.\n"
             "For standard settings: use production-safe defaults.\n\n"
-            "Return a JSON object: { \"VAR_NAME\": \"value\" }\n\n"
+            "Return a JSON object with ONLY the [NEEDS VALUE] variables: { \"VAR_NAME\": \"value\" }\n\n"
             + "\n".join(brief_lines)
         )
 
@@ -137,10 +150,8 @@ class EnvironmentIntelligenceService:
                 # If AI returned a real value, trust it even if the var name
                 # matches secret patterns — the AI knew what it was doing.
                 if val == "GENERATE":
-                    # Only actually generate a secret if the var name
-                    # clearly indicates it's a secret. If the AI marked
-                    # something non-secret as GENERATE, leave it empty.
-                    if any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                    from apps.cloud.services.build_constants import is_secret_env_var
+                    if is_secret_env_var(var_upper):
                         if "ENCRYPTION_KEY" in var_upper:
                             import base64
                             final_env[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
@@ -175,7 +186,8 @@ class EnvironmentIntelligenceService:
                     continue
                 # Only generate secrets for clearly secret-named vars.
                 # Everything else is left empty — the user must fill it.
-                if any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                from apps.cloud.services.build_constants import is_secret_env_var
+                if is_secret_env_var(var_upper):
                     if "ENCRYPTION_KEY" in var_upper:
                         fallback[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
                     else:
@@ -274,7 +286,7 @@ class EnvironmentIntelligenceService:
         if source_dir:
             return cls.apply_manifest_to_service(service, source_dir)
 
-        env_context = dict(scan_results.get('env_vars_context', {}))
+        scan_env_context = dict(scan_results.get('env_vars_context', {}))
         stack = scan_results.get('stack', '') or getattr(service, 'stack', '') or ''
         service_name = service.name
 
@@ -302,15 +314,26 @@ class EnvironmentIntelligenceService:
             v_lower = v.lower()
             return any(pattern in v_lower for pattern in _MOCK_PATTERNS)
 
-        # Ensure any unfilled, placeholder, or mock environment variables on the
-        # service are added to env_context for AI Senate resolution.
+        # Build the full env dict from the service model (actual stored values)
+        full_env = {}
+        known_keys = set(scan_env_context.keys())
         for ev in service.env_vars.all():
-            val_str = str(ev.value or "").strip()
-            if _needs_real_value(val_str):
-                if ev.key not in env_context:
-                    env_context[ev.key] = [f"Unfilled required environment variable on service {service_name}"]
+            full_env[ev.key] = ev.value or ""
+            known_keys.add(ev.key)
+        # Add any scan-detected vars not yet on the service
+        for k in scan_env_context:
+            if k not in full_env:
+                full_env[k] = ""
 
-        suggestions = cls.resolve_environment(env_context, stack, service_name)
+        # Identify which vars need filling (placeholder/mock values)
+        fill_keys = set()
+        for k, v in full_env.items():
+            if _needs_real_value(str(v or "")):
+                fill_keys.add(k)
+
+        suggestions = {}
+        if fill_keys:
+            suggestions = cls.resolve_environment(full_env, stack, service_name, fill_keys=fill_keys)
 
         # Only accept suggestions for vars that were detected from the user's
         # code or already exist on the service with placeholder values.
@@ -339,7 +362,8 @@ class EnvironmentIntelligenceService:
                     val, key, service_name,
                 )
                 # If the var looks like a secret, generate one instead.
-                if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                from apps.cloud.services.build_constants import is_secret_env_var
+                if is_secret_env_var(key):
                     if "ENCRYPTION_KEY" in key.upper():
                         import base64
                         val = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
@@ -348,12 +372,13 @@ class EnvironmentIntelligenceService:
                 else:
                     continue  # skip entirely — can't provide a real value
 
+            from apps.cloud.services.build_constants import is_secret_env_var
             ev, created = EnvironmentVariable.objects.get_or_create(
                 service=service,
                 key=key,
                 defaults={
                     'value': val,
-                    'is_secret': any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]),
+                    'is_secret': is_secret_env_var(key),
                     'source': 'SYSTEM'
                 }
             )

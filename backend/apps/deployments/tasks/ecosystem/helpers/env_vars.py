@@ -351,23 +351,23 @@ def _resolve_from_manifest_or_fallback(
             # empty/placeholder, heuristic/mock, and unresolved.
             _PLACEHOLDER_VALS = ("", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO")
             _MOCK_PATTERNS = ("localhost", "127.0.0.1", "mock", "test_", "fake_")
-            _needs_senate = {}
+            _needs_senate = set()
             for k, v in resolved_env.items():
                 v_str = str(v or "").strip()
                 if v_str in _PLACEHOLDER_VALS or v_str.startswith("REPLACE_WITH_") or any(p in v_str.lower() for p in _MOCK_PATTERNS):
-                    _needs_senate[k] = v
+                    _needs_senate.add(k)
             # Also include unresolved and heuristic vars from manifest resolver
             if source_dir:
                 for k in getattr(resolver, 'unresolved_vars', []):
-                    if k not in _needs_senate:
-                        _needs_senate[k] = ""
+                    _needs_senate.add(k)
                 for k in getattr(resolver, 'heuristic_vars', []):
-                    if k not in _needs_senate:
-                        _needs_senate[k] = resolved_env.get(k, "")
+                    if k not in resolved_env:
+                        _needs_senate.add(k)
 
             if _needs_senate:
+                # Send ALL env vars as context so AI can make informed decisions
                 senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
-                    _needs_senate, stack, service_name,
+                    resolved_env, stack, service_name, fill_keys=_needs_senate,
                 )
                 for k, v in senate_suggestions.items():
                     if k in resolved_env and (not resolved_env[k] or resolved_env[k] in ("", "{{GENERATE}}", "{{FILL_ME}}")):

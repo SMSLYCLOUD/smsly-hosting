@@ -80,7 +80,8 @@ class ReviewActionsMixin:
 
             placeholder = ManifestEnvResolver.generate_placeholder_for_external(var_name)
 
-            is_secret = any(hint in key_upper for hint in ["SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY", "API_KEY"])
+            from apps.cloud.services.build_constants import is_secret_env_var
+            is_secret = is_secret_env_var(key_upper)
 
             EnvironmentVariable.objects.create(
                 service=deployment.service,

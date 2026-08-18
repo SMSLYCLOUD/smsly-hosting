@@ -37,7 +37,8 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
                     continue
 
                 key_upper = key.upper()
-                if any(k in key_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH", "SALT"]):
+                from apps.cloud.services.build_constants import is_secret_env_var
+                if is_secret_env_var(key_upper):
                     env_map[key] = "{{GENERATE}}"
                 elif "CORS" in key_upper or "ORIGIN" in key_upper:
                     env_map[key] = f"http://localhost:{svc_port}"
@@ -619,7 +620,8 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         for key in list(env_map.keys()):
             vals = _key_values.get(key)
             if vals and len(vals) > 1:
-                if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD"]):
+                from apps.cloud.services.build_constants import is_secret_env_var
+                if is_secret_env_var(key):
                     env_map[key] = "{{GENERATE}}"
                     _generate_keys.add(key)
     _generate_pool: dict[str, str] = {}

@@ -18,11 +18,13 @@ BUILD_SECRET_SUFFIXES: tuple[str, ...] = (
     "_PASSWORD",
     "_TOKEN",
     "_DSN",
+    "_SALT",
     "_CREDENTIAL",
     "_CREDENTIALS",
 )
 
 # Full env-var names that are always secrets, regardless of suffix.
+# Connection URLs that embed credentials in the value.
 BUILD_SECRET_EXACT_NAMES: frozenset[str] = frozenset({
     "SECRET",
     "SECRET_KEY",
@@ -30,6 +32,8 @@ BUILD_SECRET_EXACT_NAMES: frozenset[str] = frozenset({
     "DATABASE_URL",
     "POSTGRES_URL",
     "REDIS_URL",
+    "CELERY_BROKER_URL",
+    "CELERY_RESULT_BACKEND",
     "JWT_SECRET",
     "JWT",
     "DSN",

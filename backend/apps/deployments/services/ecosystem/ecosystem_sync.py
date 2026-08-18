@@ -1,6 +1,7 @@
 import logging
 import secrets
 
+from apps.cloud.services.build_constants import is_secret_env_var
 from .ecosystem_ai_analysis import analyze_ecosystem
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ def sync_ecosystem_envs(project_id: str) -> dict:
                         key=key,
                         defaults={
                             "value": final_val,
-                            "is_secret": val == "{{GENERATE}}" or any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD"]),
+                            "is_secret": val == "{{GENERATE}}" or is_secret_env_var(key),
                             "source": "SYSTEM"
                         }
                     )
