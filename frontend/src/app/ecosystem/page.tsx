@@ -160,8 +160,8 @@ export default function EcosystemPage() {
     const [cancelOthersOnFailure, setCancelOthersOnFailure] = useState<boolean>(() => loadState('cancelOthersOnFailure', false));
     const [sharedAddonConfig, setSharedAddonConfig] = useState<SharedAddonConfig>(() => loadState('sharedAddonConfig', {}));
     const [mtlsConfig, setMtlsConfig] = useState<MtlsConfig>(() => loadState('mtlsConfig', {
-        enabled: false,
-        trust_domain: 'trulay.co',
+        enabled: true,
+        trust_domain: 'ecosystem.local',
         strict_mode: true,
         caller_validation: true,
         config_source: 'none',
@@ -1907,7 +1907,7 @@ export default function EcosystemPage() {
                                     <Plus size={16} /> Add More Repos
                                 </button>
                                 <button
-                                    onClick={() => { clearState(); setStep('idle'); setDeployResults([]); setError(null); setUseSharedAddons(true); setCancelOthersOnFailure(false); setSharedAddonConfig({}); setMtlsConfig({ enabled: false, trust_domain: 'trulay.co', strict_mode: true, caller_validation: true, config_source: 'none', config_repo_url: '', config_files: {} }); setCommunicationRules({}); }}
+                                    onClick={() => { clearState(); setStep('idle'); setDeployResults([]); setError(null); setUseSharedAddons(true); setCancelOthersOnFailure(false); setSharedAddonConfig({}); setMtlsConfig({ enabled: true, trust_domain: 'ecosystem.local', strict_mode: true, caller_validation: true, config_source: 'none', config_repo_url: '', config_files: {} }); setCommunicationRules({}); }}
                                     className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-muted-foreground font-semibold transition-colors"
                                 >
                                     Deploy Another
