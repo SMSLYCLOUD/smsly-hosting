@@ -290,7 +290,8 @@ export default function ServiceDetailPage() {
             || service.node_metadata?.id
             || LOCAL_DEPLOY_TARGET;
         setTargetServerId(deployTarget);
-    }, [service?.server_id, service?.latest_deployment?.target_server]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when specific fields change, not on every poll
+    }, [service, service?.server_id, service?.latest_deployment?.target_server]);
 
     useEffect(() => {
         const load = async () => {

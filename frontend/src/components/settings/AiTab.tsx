@@ -68,6 +68,7 @@ export function AiTab() {
           handleFetchModels(p.id);
         });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleFetchModels is stable; only re-run when aiData changes
   }, [aiData]);
 
   const handleTestAI = async () => {
