@@ -486,6 +486,12 @@ class PlatformConfig(models.Model):
         default=12,
         help_text="Auto-promote deployments in STAGED status after this many hours (0 = disabled)")
 
+    # ── Blue-Green Rollback ─────────────────────────────────────────────
+    rollback_grace_minutes = models.PositiveIntegerField(
+        default=10,
+        help_text="Minutes to preserve rollback backup containers before the stale scanner removes them. "
+                  "Set to 0 to disable grace period (rollback containers cleaned immediately after promote).")
+
     # ── Logging ──────────────────────────────────────────────────────────
     django_log_level = models.CharField(
         max_length=10, default='INFO',

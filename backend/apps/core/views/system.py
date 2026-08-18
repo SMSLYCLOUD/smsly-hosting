@@ -196,6 +196,8 @@ class SystemConfigView(GenericAPIView):
         'ENABLE_LEGACY_TUNNEL_API': ('enable_legacy_tunnel_api', bool),
         'SMSLY_STRICT_SSH_HOST_KEY_CHECK': ('smsly_strict_ssh_host_key_check', bool),
         'ENFORCE_DEVICE_TRUST': ('enforce_device_trust', bool),
+        # Blue-green rollback
+        'ROLLBACK_GRACE_MINUTES': ('rollback_grace_minutes', int),
     }
 
     _PC_SECRET_FIELDS = {'SMTP_PASSWORD', 'SMSLY_INTERNAL_API_KEY', 'REGISTRY_PASSWORD'}

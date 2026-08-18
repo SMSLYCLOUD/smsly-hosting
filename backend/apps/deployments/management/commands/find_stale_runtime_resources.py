@@ -1,3 +1,5 @@
+import time
+
 import docker
 from django.core.management.base import BaseCommand
 
@@ -34,6 +36,14 @@ class Command(BaseCommand):
         active_service_slugs = set(Service.objects.exclude(status='DELETED').values_list('name', flat=True))
         active_addon_ids = {str(a.id) for a in Addon.objects.exclude(status='DELETED')}
 
+        # Read rollback grace period from platform config
+        grace_minutes = 10
+        try:
+            from apps.deployments.models.platform import PlatformConfig
+            grace_minutes = PlatformConfig.load().rollback_grace_minutes
+        except Exception:
+            pass
+
         for c in all_containers:
             c_name = c.name.lower()
 
@@ -45,7 +55,6 @@ class Command(BaseCommand):
             if 'smsly-addon-' in c_name:
                 parts = c_name.split('-')
                 if len(parts) >= 4:
-                    # extract potential UUID
                     "-".join(parts[-5:]) if len(parts) >= 8 else "-".join(parts[-1:])
                     # Actually uuid is 36 chars. Let's just substring check against active ids
                     is_active = any(aid in c_name for aid in active_addon_ids)
@@ -55,7 +64,6 @@ class Command(BaseCommand):
 
             # Identify old green deployments: "slug-green-xyz"
             if '-green-' in c_name:
-                # The slug is everything before "-green-"
                 slug = c_name.split('-green-')[0]
                 if slug not in active_service_slugs:
                     stale_containers.append((c, f"Orphan green container for slug {slug}"))
@@ -67,12 +75,18 @@ class Command(BaseCommand):
                 if slug not in active_service_slugs:
                     stale_containers.append((c, f"Orphan rollback backup container for slug {slug}"))
                 else:
+                    # Check TTL label before marking as stale
+                    labels = c.labels or {}
+                    ttl_str = labels.get('smsly.rollback.ttl')
+                    if ttl_str and grace_minutes > 0:
+                        try:
+                            ttl_epoch = float(ttl_str)
+                            if time.time() < ttl_epoch:
+                                continue  # Still within grace period — skip
+                        except (ValueError, TypeError):
+                            pass
                     stale_containers.append((c, f"Stale rollback backup container for active slug {slug}"))
                 continue
-
-            # Check if container name matches any known service slug
-            # This is tricky because custom names could be anything.
-            # We'll rely on the labels or specific patterns above for safety.
 
         report_lines = []
         report_lines.append("# Runtime Cleanup Report\n")

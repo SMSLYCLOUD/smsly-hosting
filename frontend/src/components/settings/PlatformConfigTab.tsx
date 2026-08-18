@@ -117,6 +117,36 @@ export function PlatformConfigTab() {
         </Card>
       </ScrollReveal>
 
+      {/* Rollback Grace Period */}
+      <ScrollReveal variant="slideRight" delay={0.18}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">Blue-Green Rollback</CardTitle>
+            <CardDescription>How long to preserve rollback backup containers before cleanup.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Rollback Grace Period (minutes)</Label>
+                  <Input type="number" min={0} max={1440} value={config.ROLLBACK_GRACE_MINUTES ?? 10} onChange={(e) => setConfig({ ...config, ROLLBACK_GRACE_MINUTES: parseInt(e.target.value) || 0 })} />
+                  <p className="text-xs text-muted-foreground">Minutes to keep rollback containers. Set 0 to clean immediately after promote.</p>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={async () => {
+                  try {
+                    const result = await systemApi.updateConfig({ ROLLBACK_GRACE_MINUTES: config.ROLLBACK_GRACE_MINUTES });
+                    setConfig(result);
+                    toast({ title: "Saved", description: "Rollback config updated." });
+                  } catch { toast({ title: "Failed", variant: "destructive" }); }
+                }}>Save Rollback</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </ScrollReveal>
+
       {/* Security — blurReveal */}
       <ScrollReveal variant="blurReveal" delay={0.2}>
         <Card>

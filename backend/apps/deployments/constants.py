@@ -59,3 +59,7 @@ RETRY_DELAY_BACKUP = 600   # seconds — server backup creation
 # ── Stale task thresholds ───────────────────────────────────────────────────
 STALL_RECOVERY_THRESHOLD_MINUTES = 10  # how long before a deletion is considered stalled
 STALL_RECOVERY_BATCH_SIZE = 20         # max stalled deletions to re-queue per cycle
+
+# ── Blue-green rollback grace period ────────────────────────────────────────
+# Rollback containers younger than this are ignored by the stale scanner.
+DEFAULT_ROLLBACK_GRACE_MINUTES = 10
