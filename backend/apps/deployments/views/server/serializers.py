@@ -275,6 +275,8 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
         # If provisioning via SSH, we don't require the certificate upfront.
         # The provisioner script will automatically fetch it from the remote node
         # once the lite agent is installed.
+        if data.get("node_type") == "node" and data.get("is_lite_agent"):
+            data["is_lite_agent"] = False
         return data
 
 

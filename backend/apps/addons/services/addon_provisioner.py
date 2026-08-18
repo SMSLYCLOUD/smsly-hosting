@@ -1624,7 +1624,7 @@ class AddonProvisioner:
         hostname = alias_name or container_name
         connection_url = f"redis://:{password}@{hostname}:{port}/0"
 
-        self._wait_for_health(container_name, port)
+        self._wait_for_health(container_name, port, timeout=90)
         return container_id, connection_url
 
     def _get_published_host_port(self, container_name: str) -> int | None:
@@ -1859,7 +1859,7 @@ class AddonProvisioner:
         return container_id, connection_url
 
     def _wait_for_health(self, container_name: str,
-                         port: int, timeout: int = 30,
+                         port: int, timeout: int = 60,
                          use_http: bool = False, path: str = "/"):
         """Wait for the container to be healthy and accepting connections.
 

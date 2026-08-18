@@ -118,6 +118,9 @@ class ProvisioningMixin:
         auth_method = validated.pop("ssh_auth_method", "password")
         validated.pop("node_certificate", None)
 
+        if validated.get("node_type") == "node":
+            validated["is_lite_agent"] = False
+
         generated_public_key = None
         if auth_method == "generated":
             from apps.deployments.services.provisioner.helpers.ssh import _generate_ed25519_keypair

@@ -307,15 +307,6 @@ def ecosystem_release_wave_task(
                     deployment_by_repo_key=deployment_by_repo_key,
                     reason="previous wave timed out and cancel-others-on-failure is enabled",
                 )
-            elif dependencies and deployment_by_repo_key:
-                cancelled = _cancel_dependent_deployments(
-                    waves,
-                    from_wave_index=wave_index,
-                    failed_deployment_ids=failed_ids,
-                    dependencies=dependencies,
-                    deployment_by_repo_key=deployment_by_repo_key,
-                    reason="previous wave timed out waiting for success",
-                )
             else:
                 cancelled = 0
             cancelled += _cancel_unreleased_deployments(waves, wave_index, "ecosystem wave timed out")
@@ -342,22 +333,12 @@ def ecosystem_release_wave_task(
     cancelled = 0
     if failed_ids:
         if cancel_others_on_failure and deployment_by_repo_key:
-            # Fail-fast mode: cancel ALL remaining queued deployments
             cancelled = _cancel_all_remaining_deployments(
                 waves,
                 from_wave_index=wave_index,
                 failed_deployment_ids=failed_ids,
                 deployment_by_repo_key=deployment_by_repo_key,
                 reason="a service deployment failed and cancel-others-on-failure is enabled",
-            )
-        elif dependencies and deployment_by_repo_key:
-            cancelled = _cancel_dependent_deployments(
-                waves,
-                from_wave_index=wave_index,
-                failed_deployment_ids=failed_ids,
-                dependencies=dependencies,
-                deployment_by_repo_key=deployment_by_repo_key,
-                reason="upstream dependency deployment failed",
             )
 
     if wave_index == len(waves):

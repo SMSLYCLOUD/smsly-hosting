@@ -625,7 +625,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             "api_url", "api_token", "provision_status", "status",
             "provider_metadata", "updated_at",
         ]
-        if getattr(server, "wg_address", None):
+        if getattr(server, "wg_address", None) and "wg_address" not in update_fields:
             update_fields.append("wg_address")
         if remote_gateway_secret:
             server.gateway_secret = remote_gateway_secret
@@ -714,6 +714,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         _verify_agent_db_connectivity(ssh, server, start_time=provision_start_time)
 
+        if getattr(server, "wg_address", None) and "wg_address" not in update_fields:
+            update_fields.append("wg_address")
         server.provision_status = ManagedServer.ProvisionStatus.DONE
         server.status = ManagedServer.Status.ONLINE
         server.save(update_fields=update_fields)

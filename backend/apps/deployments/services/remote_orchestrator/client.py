@@ -183,7 +183,8 @@ class RemoteClientMixin:
                 if not enforce_tls:
                     append(f"http://{host_port}:8090")
                     append(f"http://{host_port}")
-                append(f"https://{host_port}")
+                if not _is_node_server(self.server):
+                    append(f"https://{host_port}")
         else:
             append(self.base_url)
             append(f"https://{host_port}")
