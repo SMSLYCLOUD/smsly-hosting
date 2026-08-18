@@ -510,7 +510,7 @@ class CodeIntelligenceView(GenericAPIView):
         from rest_framework.exceptions import PermissionDenied
 
         from apps.deployments.models import Service
-        from apps.deployments.tasks.ecosystem import _repository_url
+        from apps.deployments.tasks.ecosystem.helpers.repo import _repository_url
 
         for repo in repos_data:
             if not isinstance(repo, dict):

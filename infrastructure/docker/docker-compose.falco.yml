@@ -33,6 +33,8 @@ services:
       - /var/run/docker.sock:/host/var/run/docker.sock:ro,z
       - /proc:/host/proc:ro,z
       - /etc:/host/etc:ro,z
+      # Custom rules to silence gVisor/systemd noise
+      - ../config/falco_rules.local.yaml:/etc/falco/falco_rules.local.yaml:ro,z
     environment:
       - HOST_ROOT=/host
     command: ["/usr/bin/falco", "-o", "json_output=true", "-o", "engine.kind=modern_ebpf"]

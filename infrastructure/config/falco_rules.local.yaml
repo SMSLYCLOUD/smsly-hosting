@@ -1,0 +1,17 @@
+# Silence gVisor ptrace noise from containerd-shim/runsc
+- rule: Silence gVisor ptrace
+  desc: Silence noisy ptrace from gVisor runtime
+  condition: >
+    evt.type=ptrace and proc.pname=containerd-shim
+  output: ""
+  priority: DEBUG
+  enabled: true
+
+# Silence systemd reading PAM files
+- rule: Silence systemd PAM reads
+  desc: Silence noisy sensitive file reads from systemd
+  condition: >
+    openat and fd.name startswith /etc/pam.d and proc.exepath=/usr/lib/systemd/systemd-executor
+  output: ""
+  priority: DEBUG
+  enabled: true
