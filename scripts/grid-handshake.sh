@@ -100,4 +100,18 @@ else:
     fi
 fi
 
+# ─── 4. Ensure Local Docker Cloud Provider ──────────────────────────────────
+echo -e "${BLUE}  → Ensuring Local Docker Cloud Provider...${NC}"
+timeout -k 5 120 docker exec -i "$BACKEND_CONTAINER" python manage.py shell <<EOF || echo -e "${YELLOW}    ⚠ Cloud provider setup failed${NC}"
+from apps.cloud.models import CloudProvider
+cp, created = CloudProvider.objects.get_or_create(
+    provider_type='LOCAL',
+    defaults={'name': 'Local Docker', 'is_active': True}
+)
+if not created and not cp.is_active:
+    cp.is_active = True
+    cp.save()
+print('CREATED' if created else 'EXISTS')
+EOF
+
 echo -e "${BLUE}=== Handshake Complete ===${NC}"

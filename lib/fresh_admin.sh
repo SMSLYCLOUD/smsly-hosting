@@ -69,6 +69,24 @@ print('CREATED' if created else 'EXISTS')
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
 fi
+
+# ─── 6c. Ensure Local Cloud Provider exists (independent of admin creation) ──
+# The provider may be missing even if admin exists (e.g. failed first install).
+if [ "$MODE_AGENT_LITE" != "true" ]; then
+    echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
+    echo "
+from apps.cloud.models import CloudProvider
+cp, created = CloudProvider.objects.get_or_create(
+    provider_type='LOCAL',
+    defaults={'name': 'Local Docker', 'is_active': True}
+)
+if not created and not cp.is_active:
+    cp.is_active = True
+    cp.save()
+print('CREATED' if created else 'EXISTS')
+" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1
+    echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
+fi
     echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
 env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 if should_manage_caddy; then
