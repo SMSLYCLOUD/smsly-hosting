@@ -458,6 +458,8 @@ def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> l
             ]
             if cloudflare_token:
                 block.append(f"        dns cloudflare {cloudflare_token}")
+            else:
+                block.append("        on_demand")
             block.extend([
                 "    }",
                 "    log {",
