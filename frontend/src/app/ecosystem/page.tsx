@@ -1594,7 +1594,7 @@ export default function EcosystemPage() {
                                                             <th className="text-left p-2 text-muted-foreground font-medium">Target ↓ / Caller →</th>
                                                             {plan.services.filter(s => !s.skip).map(svc => (
                                                                 <th key={svc.repo} className="p-2 text-center text-muted-foreground font-medium min-w-[80px]">
-                                                                    {svc.name || svc.repo.split('/').pop()}
+                                                                    {svc.name || svc.repo.split('/').pop() || ''}
                                                                 </th>
                                                             ))}
                                                         </tr>
@@ -1611,7 +1611,7 @@ export default function EcosystemPage() {
                                                                         {targetName}
                                                                     </td>
                                                                     {plan.services.filter(s => !s.skip).map(callerSvc => {
-                                                                        const callerName = callerSvc.name || callerSvc.repo.split('/').pop();
+                                                                        const callerName = callerSvc.name || callerSvc.repo.split('/').pop() || '';
                                                                         const callerKey = callerName.toLowerCase().replace(/[^a-z0-9]/g, '-');
                                                                         const callerSpiffeId = `spiffe://${mtlsConfig.trust_domain}/service/${callerKey}`;
                                                                         const isAllowed = rules.allowed_callers.includes(callerSpiffeId);
