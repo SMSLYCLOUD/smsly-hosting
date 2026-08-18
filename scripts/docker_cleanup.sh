@@ -4,8 +4,8 @@
 set -euo pipefail
 
 LOG="/var/log/docker_cleanup.log"
-KEEP_FRONTEND=2
-KEEP_MARKETER=2
+KEEP_FRONTEND=1
+KEEP_MARKETER=1
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG"; }
 
