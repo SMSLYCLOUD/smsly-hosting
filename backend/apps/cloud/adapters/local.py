@@ -924,6 +924,15 @@ class LocalAdapter(BaseCloudAdapter):
                 raise RuntimeError("Docker client unavailable")
             old_container = self.docker_client.containers.get(name)
             backup_name = f"{name}-rollback-{secrets.token_hex(3)}"
+            # Stop the old container BEFORE renaming/creating the new one
+            # to avoid a Traefik router conflict: both containers would
+            # share identical routing labels (Docker labels are immutable on
+            # running containers).  The rollback logic below restarts the
+            # backup if promote fails.
+            try:
+                old_container.stop(timeout=10)
+            except Exception:
+                pass
             old_container.rename(backup_name)
             # Labels are immutable on running containers — Docker SDK update()
             # does not support them. Store TTL as an env var instead so the
@@ -1077,6 +1086,18 @@ class LocalAdapter(BaseCloudAdapter):
                         raise RuntimeError(
                             "Promotion failed and previous live container could not be restored"
                         ) from restore_exc
+
+                    # The backup container was stopped before promote to
+                    # avoid a Traefik label conflict.  Start it again now
+                    # that the (failed) promoted container has been removed.
+                    try:
+                        if old_container.status != "running":
+                            old_container.start()
+                    except Exception as start_exc:
+                        logger.warning(
+                            "Blue-green rollback: failed to start backup container %s: %s",
+                            name, start_exc,
+                        )
 
                     try:
                         if self.docker_client is None:
