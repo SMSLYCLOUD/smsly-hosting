@@ -158,7 +158,7 @@ def is_valid_host(host_str: str) -> bool:
     try:
         from django.db.models import Q
 
-        from apps.deployments.models_core import ManagedServer
+        from apps.deployments.models.platform import ManagedServer
         if ManagedServer.objects.filter(Q(host=domain) | Q(private_ip=domain)).exists():
             return True
     except Exception as exc:

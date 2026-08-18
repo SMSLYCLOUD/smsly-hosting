@@ -35,7 +35,7 @@ def deep_scan_and_verify_task(self, user_id, repos_data, deploy_plan, ai_provide
             logger.error("Could not load ownership for %s: %s", user_id, e)
             return {"error": f"ownership check failed: {e}"}
 
-        from apps.deployments.tasks.ecosystem import _repository_url
+        from apps.deployments.tasks.ecosystem.helpers.repo import _repository_url
 
         safe_repos = []
         for repo in repos_data:

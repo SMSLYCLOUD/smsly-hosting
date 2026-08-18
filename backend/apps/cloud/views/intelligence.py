@@ -670,7 +670,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             plan_record = None
 
         if not project:
-            from apps.deployments.tasks.ecosystem import _ecosystem_project_name
+            from apps.deployments.tasks.ecosystem.helpers.service import _ecosystem_project_name
             services_plan = plan.get("services", []) if isinstance(plan, dict) else []
             raw_name = str(
                 (plan.get("project_name") if isinstance(plan, dict) else None)
