@@ -2269,6 +2269,8 @@ export const ecosystemApi = {
     use_shared_addons: boolean;
     cancel_others_on_failure: boolean;
     shared_addon_config: Record<string, unknown>;
+    mtls_config?: Record<string, unknown>;
+    communication_rules?: Record<string, unknown>;
   }) => api.post('/cloud/ecosystem/deploy/', data).then(r => r.data),
 
   downloadEnv: () =>
