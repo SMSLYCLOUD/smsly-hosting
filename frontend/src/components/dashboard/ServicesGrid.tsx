@@ -47,7 +47,8 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
     if (!await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) return;
     setActionLoading(serviceId);
     try {
-      await servicesApi.deploy(serviceId);
+      const svc = services.find(s => s.id === serviceId);
+      await servicesApi.deploy(serviceId, 'HEAD', svc?.server_id || svc?.node_metadata?.id || null);
       // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Deploy failed:', err);

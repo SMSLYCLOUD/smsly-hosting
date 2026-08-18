@@ -728,6 +728,180 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'status': 'deploying',
         })
 
+    @action(detail=False, methods=['post'])
+    def ecosystem_add_service(self, request):
+        """
+        Add a custom service to the ecosystem plan.
+
+        Generates docker-compose.yml, .env.production, and SPIFFE config
+        for the new service and returns it to be added to the plan.
+        """
+        service_name = request.data.get('name', '').strip()
+        port = request.data.get('port')
+        stack = request.data.get('stack', 'python')
+        directory = request.data.get('directory', '')
+        trust_domain = request.data.get('trust_domain', 'trulay.co')
+
+        if not service_name:
+            return Response({'error': 'Service name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not port:
+            return Response({'error': 'Port is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            return Response({'error': 'Port must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Derive names
+        service_name = service_name.lower().replace(' ', '-').replace('_', '-')
+        service_upper = service_name.upper().replace('-', '_')
+        container_name = f"smsly-{service_name}"
+        spiffe_id = f"spiffe://{trust_domain}/service/{service_name}"
+        if not directory:
+            directory = f"{service_upper}/smsly-{service_name}"
+
+        # Generate docker-compose.yml
+        docker_compose = f"""# =============================================================================
+# SMSLY {service_upper} - Production Docker Compose
+# =============================================================================
+# mTLS: All inter-service communication via SPIFFE/SPIRE
+
+services:
+  {service_name}:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: {container_name}
+    restart: unless-stopped
+    ports:
+      - "{port}:{port}"
+    environment:
+      - DATABASE_URL=${{DATABASE_URL}}
+      - PORT={port}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+
+      # SPIFFE/SPIRE mTLS
+      - SPIFFE_TRUST_DOMAIN=${{SPIFFE_TRUST_DOMAIN}}
+      - SPIFFE_ENDPOINT_SOCKET=unix:///opt/spire/run/agent.sock
+      - FEATURE_SPIFFE_MTLS=true
+      - SPIFFE_MTLS_STRICT_MODE=true
+      - SPIFFE_HMAC_FALLBACK=false
+      - CALLER_SVID_VALIDATION=true
+      - MIGRATION_PHASE=phase4
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:{port}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - spire_agent_socket:/opt/spire/run:ro
+    networks:
+      - smsly-network
+    labels:
+      - "com.smsly.service={service_name}"
+
+volumes:
+  spire_agent_socket:
+    external: true
+    name: spire-agent-socket
+
+networks:
+  smsly-network:
+    driver: bridge
+    name: smsly-network
+"""
+
+        # Generate .env.production
+        env_production = f"""# =============================================================================
+# SMSLY {service_upper} - Production Configuration
+# =============================================================================
+
+ENVIRONMENT=production
+LOG_LEVEL=INFO
+PORT={port}
+
+# PostgreSQL
+DATABASE_URL=${{DATABASE_URL}}
+
+# Secrets (generate with: python -c "import secrets; print(secrets.token_urlsafe(64))")
+SECRET_KEY=${{SECRET_KEY}}
+HMAC_SECRET=${{HMAC_SECRET}}
+
+# Inter-service URLs (internal Docker network)
+SECURITY_GATEWAY_URL=${{SECURITY_GATEWAY_URL}}
+BACKEND_URL=${{BACKEND_URL}}
+PLATFORM_API_URL=${{PLATFORM_API_URL}}
+IDENTITY_SERVICE_URL=${{IDENTITY_SERVICE_URL}}
+AUDIT_SERVICE_URL=${{AUDIT_SERVICE_URL}}
+RATE_LIMIT_SERVICE_URL=${{RATE_LIMIT_SERVICE_URL}}
+
+# SPIFFE/SPIRE mTLS
+SPIFFE_TRUST_DOMAIN=${{SPIFFE_TRUST_DOMAIN}}
+SPIFFE_ENDPOINT_SOCKET=unix:///opt/spire/run/agent.sock
+FEATURE_SPIFFE_MTLS=true
+SPIFFE_MTLS_STRICT_MODE=true
+SPIFFE_HMAC_FALLBACK=false
+CALLER_SVID_VALIDATION=true
+MIGRATION_PHASE=phase4
+"""
+
+        # Generate SPIFFE entry
+        spiffe_entry = {
+            "spiffe_id": {
+                "trust_domain": trust_domain,
+                "path": f"service/{service_name}"
+            },
+            "parent_id": {
+                "trust_domain": trust_domain,
+                "path": "/spire-server"
+            },
+            "selectors": [
+                {
+                    "type": "docker",
+                    "value": f"label:com.smsly.service={service_name}"
+                }
+            ],
+            "x509_svid_ttl": "1h"
+        }
+
+        # Build the service plan entry
+        service_plan = {
+            "repo": f"custom/{service_name}",
+            "name": service_name,
+            "stack": stack,
+            "port": port,
+            "build": "dockerfile",
+            "addons": ["POSTGRES"],
+            "env_vars": {
+                "PORT": str(port),
+                "ENVIRONMENT": "production",
+                "SPIFFE_TRUST_DOMAIN": trust_domain,
+            },
+            "depends_on": [],
+            "deploy_order": 0,
+            "skip": False,
+            "_custom": True,
+            "_directory": directory,
+            "_docker_compose": docker_compose,
+            "_env_production": env_production,
+            "_spiffe_entry": spiffe_entry,
+        }
+
+        return Response({
+            'service': service_plan,
+            'checklist': {
+                'docker_compose': f'{directory}/docker-compose.yml',
+                'env_production': f'{directory}//.env.production',
+                'spiffe_entry': spiffe_entry,
+                'services_to_update': [
+                    'gateway', 'platform-api', 'backend', 'identity',
+                    'audit', 'policy', 'rate-limit', 'email', 'transaction-chain'
+                ],
+            }
+        })
+
     @action(detail=False, methods=['get'])
     def task_status(self, request):
         """

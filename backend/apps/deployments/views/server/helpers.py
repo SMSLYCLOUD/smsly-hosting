@@ -93,6 +93,14 @@ def _server_host_is_ip(host_port: str) -> bool:
         return False
 
 
+def _is_node_server(server) -> bool:
+    if getattr(server, "is_primary", False):
+        return False
+    if getattr(server, "is_lite_agent", False):
+        return False
+    return True
+
+
 def _candidate_api_urls(server) -> list[str]:
     """Return likely API base URLs in the order we should probe.
 
@@ -140,7 +148,8 @@ def _candidate_api_urls(server) -> list[str]:
         else:
             _append_unique(urls, f"http://{host_port}:8090")
             _append_unique(urls, f"http://{host_port}")
-        _append_unique(urls, f"https://{host_port}")
+        if not _is_node_server(server):
+            _append_unique(urls, f"https://{host_port}")
 
         if host_port.startswith("127.0.0.1") or host_port.startswith("localhost"):
             _append_unique(urls, f"http://{host_port}:8000")

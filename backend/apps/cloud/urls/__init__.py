@@ -51,6 +51,11 @@ urlpatterns = [
         name='ecosystem-deploy',
     ),
     path(
+        'ecosystem/add-service/',
+        IntelligenceViewSet.as_view({'post': 'ecosystem_add_service'}),
+        name='ecosystem-add-service',
+    ),
+    path(
         'ecosystem/task_status/',
         IntelligenceViewSet.as_view({'get': 'task_status'}),
         name='ecosystem-task-status',

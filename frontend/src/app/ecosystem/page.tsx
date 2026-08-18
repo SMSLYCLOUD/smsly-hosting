@@ -10,7 +10,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2, Plus,
     Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles,
-    Code, CheckCircle, AlertTriangle, Variable, Terminal, Download
+    Code, CheckCircle, AlertTriangle, Variable, Terminal, Download, Lock, Shield
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { ecosystemApi } from '@/lib/api';
@@ -83,6 +83,23 @@ interface SharedAddonConfig {
     [addonType: string]: { shared: boolean; shared_by?: string[] };
 }
 
+interface MtlsConfig {
+    enabled: boolean;
+    trust_domain: string;
+    strict_mode: boolean;
+    caller_validation: boolean;
+    config_source: 'upload' | 'repo' | 'none';
+    config_repo_url?: string;
+    config_files?: Record<string, string>; // filename -> content
+}
+
+interface CommunicationRules {
+    [service: string]: {
+        allowed_callers: string[];
+        description?: string;
+    };
+}
+
 // SECURITY: Use sessionStorage, not localStorage. The deployment plan
 // contains environment variable values that may include secrets.
 // sessionStorage is cleared when the tab closes, limiting exposure.
@@ -98,7 +115,7 @@ function loadState<T>(key: string, fallback: T): T {
 }
 
 function clearState() {
-    ['step', 'plan', 'planId', 'scanTaskId', 'deployTaskId', 'selectedRepos', 'aiProvider', 'useSharedAddons', 'cancelOthersOnFailure', 'sharedAddonConfig'].forEach(
+    ['step', 'plan', 'planId', 'scanTaskId', 'deployTaskId', 'selectedRepos', 'aiProvider', 'useSharedAddons', 'cancelOthersOnFailure', 'sharedAddonConfig', 'mtlsConfig', 'communicationRules'].forEach(
         key => sessionStorage.removeItem(`ecosystem:${key}`)
     );
 }
@@ -142,6 +159,17 @@ export default function EcosystemPage() {
     const [useSharedAddons, setUseSharedAddons] = useState<boolean>(() => loadState('useSharedAddons', true));
     const [cancelOthersOnFailure, setCancelOthersOnFailure] = useState<boolean>(() => loadState('cancelOthersOnFailure', false));
     const [sharedAddonConfig, setSharedAddonConfig] = useState<SharedAddonConfig>(() => loadState('sharedAddonConfig', {}));
+    const [mtlsConfig, setMtlsConfig] = useState<MtlsConfig>(() => loadState('mtlsConfig', {
+        enabled: false,
+        trust_domain: 'trulay.co',
+        strict_mode: true,
+        caller_validation: true,
+        config_source: 'none',
+        config_repo_url: '',
+        config_files: {},
+    }));
+    const [communicationRules, setCommunicationRules] = useState<CommunicationRules>(() => loadState('communicationRules', {}));
+    const [rulesExpanded, setRulesExpanded] = useState(false);
 
     const [aiProviders, setAiProviders] = useState<any[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<string>(() => loadState('aiProvider', 'auto'));
@@ -179,6 +207,8 @@ export default function EcosystemPage() {
     useEffect(() => { saveState('useSharedAddons', useSharedAddons); }, [useSharedAddons]);
     useEffect(() => { saveState('cancelOthersOnFailure', cancelOthersOnFailure); }, [cancelOthersOnFailure]);
     useEffect(() => { saveState('sharedAddonConfig', sharedAddonConfig); }, [sharedAddonConfig]);
+    useEffect(() => { saveState('mtlsConfig', mtlsConfig); }, [mtlsConfig]);
+    useEffect(() => { saveState('communicationRules', communicationRules); }, [communicationRules]);
     useEffect(() => { saveState('scanTaskId', scanTaskId); }, [scanTaskId]);
     useEffect(() => { saveState('deployTaskId', deployTaskId); }, [deployTaskId]);
     useEffect(() => { saveState('selectedRepos', selectedRepos); }, [selectedRepos]);
@@ -446,6 +476,8 @@ export default function EcosystemPage() {
                 use_shared_addons: useSharedAddons,
                 cancel_others_on_failure: cancelOthersOnFailure,
                 shared_addon_config: sharedAddonConfig,
+                mtls_config: mtlsConfig,
+                communication_rules: communicationRules,
             });
             setDeployTaskId(data.task_id);
             if (data.plan_id) setPlanId(data.plan_id);
@@ -1328,6 +1360,368 @@ export default function EcosystemPage() {
                                 </>
                             )}
 
+                            {/* mTLS Configuration */}
+                            <div className="bg-card border border-border p-5 rounded-xl">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div>
+                                        <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                            <Shield size={14} className="text-cyan-500" /> mTLS Configuration
+                                        </h3>
+                                        <p className="text-xs text-muted-foreground mt-0.5">
+                                            {mtlsConfig.enabled
+                                                ? 'SPIFFE-based mutual TLS — inter-service certificate auth'
+                                                : 'Inter-service HMAC auth'}
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => setMtlsConfig(prev => ({ ...prev, enabled: !prev.enabled }))}
+                                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                            mtlsConfig.enabled ? 'bg-cyan-500' : 'bg-muted'
+                                        }`}
+                                    >
+                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                            mtlsConfig.enabled ? 'translate-x-6' : 'translate-x-1'
+                                        }`} />
+                                    </button>
+                                </div>
+
+                                {mtlsConfig.enabled && (
+                                    <div className="space-y-4 pt-3 border-t border-border/50">
+                                        {/* Trust Domain */}
+                                        <div className="flex items-center gap-3">
+                                            <label className="text-xs text-muted-foreground w-28 shrink-0">Trust Domain</label>
+                                            <input
+                                                type="text"
+                                                value={mtlsConfig.trust_domain}
+                                                onChange={(e) => setMtlsConfig(prev => ({ ...prev, trust_domain: e.target.value }))}
+                                                className="text-xs font-mono bg-background border border-border rounded px-2 py-1.5 flex-1"
+                                                placeholder="trulay.co"
+                                            />
+                                        </div>
+
+                                        {/* Config Source */}
+                                        <div className="flex items-center gap-3">
+                                            <label className="text-xs text-muted-foreground w-28 shrink-0">Config Source</label>
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={() => setMtlsConfig(prev => ({ ...prev, config_source: 'repo' }))}
+                                                    className={`text-xs px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-1.5 ${
+                                                        mtlsConfig.config_source === 'repo'
+                                                            ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+                                                            : 'border-border text-muted-foreground hover:text-foreground'
+                                                    }`}
+                                                >
+                                                    <GitBranch size={12} /> From Repo
+                                                </button>
+                                                <button
+                                                    onClick={() => setMtlsConfig(prev => ({ ...prev, config_source: 'upload' }))}
+                                                    className={`text-xs px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-1.5 ${
+                                                        mtlsConfig.config_source === 'upload'
+                                                            ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+                                                            : 'border-border text-muted-foreground hover:text-foreground'
+                                                    }`}
+                                                >
+                                                    <Download size={12} /> Upload Files
+                                                </button>
+                                                <button
+                                                    onClick={() => setMtlsConfig(prev => ({ ...prev, config_source: 'none' }))}
+                                                    className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                                                        mtlsConfig.config_source === 'none'
+                                                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                                                            : 'border-border text-muted-foreground hover:text-foreground'
+                                                    }`}
+                                                >
+                                                    Use Defaults
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* Repo Source */}
+                                        {mtlsConfig.config_source === 'repo' && (
+                                            <div className="flex items-center gap-3">
+                                                <label className="text-xs text-muted-foreground w-28 shrink-0">Repo URL</label>
+                                                <input
+                                                    type="text"
+                                                    value={mtlsConfig.config_repo_url || ''}
+                                                    onChange={(e) => setMtlsConfig(prev => ({ ...prev, config_repo_url: e.target.value }))}
+                                                    className="text-xs font-mono bg-background border border-border rounded px-2 py-1.5 flex-1"
+                                                    placeholder="github.com/org/spiffe-config"
+                                                />
+                                            </div>
+                                        )}
+
+                                        {/* File Upload */}
+                                        {mtlsConfig.config_source === 'upload' && (
+                                            <div className="space-y-2">
+                                                <p className="text-[10px] text-muted-foreground">
+                                                    Upload SPIFFE config files (server.conf, agent.conf, registration_entries.json)
+                                                </p>
+                                                <div className="border-2 border-dashed border-border rounded-lg p-4 text-center hover:border-cyan-500/30 transition-colors">
+                                                    <input
+                                                        type="file"
+                                                        multiple
+                                                        accept=".conf,.json,.pem,.crt,.key"
+                                                        onChange={(e) => {
+                                                            const files = e.target.files;
+                                                            if (!files) return;
+                                                            const configFiles: Record<string, string> = {};
+                                                            Array.from(files).forEach(file => {
+                                                                const reader = new FileReader();
+                                                                reader.onload = (ev) => {
+                                                                    configFiles[file.name] = ev.target?.result as string;
+                                                                    setMtlsConfig(prev => ({ ...prev, config_files: { ...prev.config_files, ...configFiles } }));
+                                                                };
+                                                                reader.readAsText(file);
+                                                            });
+                                                        }}
+                                                        className="hidden"
+                                                        id="mtls-upload"
+                                                    />
+                                                    <label htmlFor="mtls-upload" className="cursor-pointer">
+                                                        <Download size={20} className="mx-auto mb-2 text-muted-foreground" />
+                                                        <p className="text-xs text-muted-foreground">
+                                                            {mtlsConfig.config_files && Object.keys(mtlsConfig.config_files).length > 0
+                                                                ? `${Object.keys(mtlsConfig.config_files).length} file(s) selected`
+                                                                : 'Click to upload config files'}
+                                                        </p>
+                                                    </label>
+                                                </div>
+                                                {mtlsConfig.config_files && Object.keys(mtlsConfig.config_files).length > 0 && (
+                                                    <div className="flex flex-wrap gap-1.5">
+                                                        {Object.keys(mtlsConfig.config_files).map(name => (
+                                                            <span key={name} className="text-[10px] px-2 py-1 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex items-center gap-1">
+                                                                {name}
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const { [name]: _, ...rest } = mtlsConfig.config_files || {};
+                                                                        setMtlsConfig(prev => ({ ...prev, config_files: rest }));
+                                                                    }}
+                                                                    className="ml-1 hover:text-red-400"
+                                                                >
+                                                                    ×
+                                                                </button>
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Strict Mode */}
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <h4 className="text-xs font-bold flex items-center gap-2">
+                                                    <Lock size={11} className="text-cyan-500" /> Strict Mode
+                                                </h4>
+                                                <p className="text-[10px] text-muted-foreground">
+                                                    Reject requests without valid mTLS certificates
+                                                </p>
+                                            </div>
+                                            <button
+                                                onClick={() => setMtlsConfig(prev => ({ ...prev, strict_mode: !prev.strict_mode }))}
+                                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                                    mtlsConfig.strict_mode ? 'bg-cyan-500' : 'bg-muted'
+                                                }`}
+                                            >
+                                                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                                    mtlsConfig.strict_mode ? 'translate-x-5' : 'translate-x-0.5'
+                                                }`} />
+                                            </button>
+                                        </div>
+
+                                        {/* Caller Validation */}
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <h4 className="text-xs font-bold flex items-center gap-2">
+                                                    <Shield size={11} className="text-emerald-500" /> Caller Validation
+                                                </h4>
+                                                <p className="text-[10px] text-muted-foreground">
+                                                    Validate SPIFFE ID of connecting services
+                                                </p>
+                                            </div>
+                                            <button
+                                                onClick={() => setMtlsConfig(prev => ({ ...prev, caller_validation: !prev.caller_validation }))}
+                                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                                    mtlsConfig.caller_validation ? 'bg-emerald-500' : 'bg-muted'
+                                                }`}
+                                            >
+                                                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                                    mtlsConfig.caller_validation ? 'translate-x-5' : 'translate-x-0.5'
+                                                }`} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Service Communication Rules */}
+                            {mtlsConfig.enabled && plan.services.length > 0 && (
+                                <div className="bg-card border border-border p-5 rounded-xl">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <div>
+                                            <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                                <Shield size={14} className="text-purple-500" /> Service Communication Rules
+                                            </h3>
+                                            <p className="text-xs text-muted-foreground mt-0.5">
+                                                Define which services can call which (SPIFFE ID allowlist)
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={() => setRulesExpanded(!rulesExpanded)}
+                                            className="text-xs text-primary hover:underline"
+                                        >
+                                            {rulesExpanded ? 'Collapse' : 'Expand'}
+                                        </button>
+                                    </div>
+
+                                    {!rulesExpanded ? (
+                                        <p className="text-xs text-muted-foreground">
+                                            {Object.keys(communicationRules).length > 0
+                                                ? `${Object.keys(communicationRules).length} services configured`
+                                                : 'Using default rules (gateway → all services)'}
+                                        </p>
+                                    ) : (
+                                        <div className="space-y-3 pt-3 border-t border-border/50">
+                                            <p className="text-[10px] text-muted-foreground">
+                                                Toggle to allow/reject connections. Rows = target service, columns = allowed callers.
+                                            </p>
+                                            
+                                            {/* Communication matrix */}
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-xs">
+                                                    <thead>
+                                                        <tr>
+                                                            <th className="text-left p-2 text-muted-foreground font-medium">Target ↓ / Caller →</th>
+                                                            {plan.services.filter(s => !s.skip).map(svc => (
+                                                                <th key={svc.repo} className="p-2 text-center text-muted-foreground font-medium min-w-[80px]">
+                                                                    {svc.name || svc.repo.split('/').pop()}
+                                                                </th>
+                                                            ))}
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {plan.services.filter(s => !s.skip).map(targetSvc => {
+                                                            const targetName = targetSvc.name || targetSvc.repo.split('/').pop();
+                                                            const targetKey = targetName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+                                                            const rules = communicationRules[targetKey] || { allowed_callers: [] };
+                                                            
+                                                            return (
+                                                                <tr key={targetSvc.repo} className="border-t border-border/30">
+                                                                    <td className="p-2 font-medium text-muted-foreground">
+                                                                        {targetName}
+                                                                    </td>
+                                                                    {plan.services.filter(s => !s.skip).map(callerSvc => {
+                                                                        const callerName = callerSvc.name || callerSvc.repo.split('/').pop();
+                                                                        const callerKey = callerName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+                                                                        const callerSpiffeId = `spiffe://${mtlsConfig.trust_domain}/service/${callerKey}`;
+                                                                        const isAllowed = rules.allowed_callers.includes(callerSpiffeId);
+                                                                        const isSelf = targetKey === callerKey;
+                                                                        
+                                                                        return (
+                                                                            <td key={callerSvc.repo} className="p-2 text-center">
+                                                                                {isSelf ? (
+                                                                                    <span className="text-muted-foreground/30">—</span>
+                                                                                ) : (
+                                                                                    <button
+                                                                                        onClick={() => {
+                                                                                            const newRules = { ...communicationRules };
+                                                                                            if (!newRules[targetKey]) {
+                                                                                                newRules[targetKey] = { allowed_callers: [] };
+                                                                                            }
+                                                                                            const current = newRules[targetKey].allowed_callers;
+                                                                                            if (isAllowed) {
+                                                                                                newRules[targetKey] = {
+                                                                                                    ...newRules[targetKey],
+                                                                                                    allowed_callers: current.filter(c => c !== callerSpiffeId),
+                                                                                                };
+                                                                                            } else {
+                                                                                                newRules[targetKey] = {
+                                                                                                    ...newRules[targetKey],
+                                                                                                    allowed_callers: [...current, callerSpiffeId],
+                                                                                                };
+                                                                                            }
+                                                                                            setCommunicationRules(newRules);
+                                                                                        }}
+                                                                                        className={`w-6 h-6 rounded border transition-colors ${
+                                                                                            isAllowed
+                                                                                                ? 'bg-emerald-500 border-emerald-500 text-white'
+                                                                                                : 'bg-background border-border text-muted-foreground hover:border-emerald-500/50'
+                                                                                        }`}
+                                                                                    >
+                                                                                        {isAllowed ? '✓' : ''}
+                                                                                    </button>
+                                                                                )}
+                                                                            </td>
+                                                                        );
+                                                                    })}
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            {/* Quick presets */}
+                                            <div className="flex items-center gap-2 pt-2 border-t border-border/30">
+                                                <span className="text-[10px] text-muted-foreground">Presets:</span>
+                                                <button
+                                                    onClick={() => {
+                                                        const newRules: CommunicationRules = {};
+                                                        const services = plan.services.filter(s => !s.skip);
+                                                        services.forEach(svc => {
+                                                            const name = (svc.name || svc.repo.split('/').pop()).toLowerCase().replace(/[^a-z0-9]/g, '-');
+                                                            if (name === 'audit') {
+                                                                // Audit receives from all
+                                                                newRules[name] = {
+                                                                    allowed_callers: services
+                                                                        .filter(s => (s.name || s.repo.split('/').pop()).toLowerCase().replace(/[^a-z0-9]/g, '-') !== 'audit')
+                                                                        .map(s => `spiffe://${mtlsConfig.trust_domain}/service/${(s.name || s.repo.split('/').pop()).toLowerCase().replace(/[^a-z0-9]/g, '-')}`),
+                                                                };
+                                                            } else if (name === 'gateway') {
+                                                                // Gateway only receives from platform
+                                                                newRules[name] = { allowed_callers: [] };
+                                                            } else {
+                                                                // Default: gateway + platform-api
+                                                                newRules[name] = {
+                                                                    allowed_callers: [
+                                                                        `spiffe://${mtlsConfig.trulay || mtlsConfig.trust_domain}/service/gateway`,
+                                                                        `spiffe://${mtlsConfig.trulay || mtlsConfig.trust_domain}/service/platform-api`,
+                                                                    ].filter(c => !c.includes('undefined')),
+                                                                };
+                                                            }
+                                                        });
+                                                        setCommunicationRules(newRules);
+                                                    }}
+                                                    className="text-[10px] px-2 py-1 rounded bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                                                >
+                                                    Default (Gateway → All)
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        const newRules: CommunicationRules = {};
+                                                        const services = plan.services.filter(s => !s.skip);
+                                                        services.forEach(svc => {
+                                                            const name = (svc.name || svc.repo.split('/').pop()).toLowerCase().replace(/[^a-z0-9]/g, '-');
+                                                            newRules[name] = { allowed_callers: [] };
+                                                        });
+                                                        setCommunicationRules(newRules);
+                                                    }}
+                                                    className="text-[10px] px-2 py-1 rounded bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                                                >
+                                                    Lockdown (No Calls)
+                                                </button>
+                                                <button
+                                                    onClick={() => setCommunicationRules({})}
+                                                    className="text-[10px] px-2 py-1 rounded bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                                                >
+                                                    Reset to Defaults
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Deploy Button */}
                             <div className="flex justify-center pt-4">
                                 <motion.button
@@ -1513,7 +1907,7 @@ export default function EcosystemPage() {
                                     <Plus size={16} /> Add More Repos
                                 </button>
                                 <button
-                                    onClick={() => { clearState(); setStep('idle'); setDeployResults([]); setError(null); setUseSharedAddons(true); setCancelOthersOnFailure(false); setSharedAddonConfig({}); }}
+                                    onClick={() => { clearState(); setStep('idle'); setDeployResults([]); setError(null); setUseSharedAddons(true); setCancelOthersOnFailure(false); setSharedAddonConfig({}); setMtlsConfig({ enabled: false, trust_domain: 'trulay.co', strict_mode: true, caller_validation: true, config_source: 'none', config_repo_url: '', config_files: {} }); setCommunicationRules({}); }}
                                     className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-muted-foreground font-semibold transition-colors"
                                 >
                                     Deploy Another

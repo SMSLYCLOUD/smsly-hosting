@@ -925,7 +925,9 @@ class LocalAdapter(BaseCloudAdapter):
             old_container = self.docker_client.containers.get(name)
             backup_name = f"{name}-rollback-{secrets.token_hex(3)}"
             old_container.rename(backup_name)
-            # Set TTL label so the stale scanner ignores this container during grace period
+            # Labels are immutable on running containers — Docker SDK update()
+            # does not support them. Store TTL as an env var instead so the
+            # stale scanner can read it from inspect.
             try:
                 grace_min = 10
                 from apps.deployments.models.platform import PlatformConfig
@@ -934,7 +936,11 @@ class LocalAdapter(BaseCloudAdapter):
                 grace_min = 10
             import time as _time
             ttl_epoch = str(_time.time() + grace_min * 60)
-            old_container.update(labels={'smsly.rollback.ttl': ttl_epoch})
+            try:
+                old_container.update(labels={'smsly.rollback.ttl': ttl_epoch})
+            except (TypeError, ValueError):
+                # Docker SDK update() does not support labels — non-fatal.
+                pass
             logger.info(
                 "Blue-green promote: preserved live container as %s (TTL %s min)",
                 backup_name,
