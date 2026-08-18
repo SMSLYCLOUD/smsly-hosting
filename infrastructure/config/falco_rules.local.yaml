@@ -3,7 +3,7 @@
   desc: Silence noisy ptrace from gVisor runtime
   condition: >
     evt.type=ptrace and proc.pname=containerd-shim
-  output: ""
+  output: "gVisor ptrace (silenced)"
   priority: DEBUG
   enabled: true
 
@@ -12,6 +12,6 @@
   desc: Silence noisy sensitive file reads from systemd
   condition: >
     openat and fd.name startswith /etc/pam.d and proc.exepath=/usr/lib/systemd/systemd-executor
-  output: ""
+  output: "systemd PAM read (silenced)"
   priority: DEBUG
   enabled: true
