@@ -175,9 +175,12 @@ class RegistryMixin:
 
     def _push_image(self):
         """Step 3: Push to Registry."""
-        # Skip push for DOCKER type: image is already in the registry
+        # Skip push for DOCKER type when deployment is local: image is
+        # already in the local Docker cache.  For remote deployments the
+        # image MUST be pushed so the target node can pull it.
         if self.service.deploy_type == 'DOCKER' and self.service.docker_image:
-            return
+            if is_deployment_local(self.deployment):
+                return
 
         # ── Auto-ensure Docker network exists ─────────────────────
         self._ensure_docker_network()
