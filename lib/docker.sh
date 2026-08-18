@@ -26,7 +26,7 @@ PY
 }
 
 configure_docker_mirror() {
-    if [ "${MODE_AGENT_LITE:-false}" = "true" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+    if { [ "${MODE_AGENT_LITE:-false}" = "true" ] || [ "${MODE_NODE:-false}" = "true" ]; } && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
         [ -n "${MASTER_IP:-}" ] || MASTER_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_IP"  || true)"
         [ -n "${MASTER_MESH_IP:-}" ] || MASTER_MESH_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_MESH_IP"  || true)"
     fi
@@ -111,6 +111,9 @@ install_registry_docker_certs() {
     )
     if [ -n "$my_ip" ] && [ "$my_ip" != "127.0.0.1" ]; then
         dirs+=("/etc/docker/certs.d/${my_ip}:5000")
+    fi
+    if [ -n "${MASTER_MESH_IP:-}" ] && [ "${MASTER_MESH_IP:-}" != "127.0.0.1" ]; then
+        dirs+=("/etc/docker/certs.d/${MASTER_MESH_IP}:5000")
     fi
     local installed=false
     for d in "${dirs[@]}"; do
