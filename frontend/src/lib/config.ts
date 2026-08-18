@@ -1,9 +1,12 @@
-const API_BASE = typeof window !== "undefined"
-  ? `${window.location.origin}/api/v1`
-  : process.env.NEXT_PUBLIC_API_URL || "/api/v1"
+const API_BASE = "/api/v1"
 
 export const config = {
   api: {
-    baseUrl: API_BASE,
+    get baseUrl() {
+      if (typeof window !== "undefined") {
+        return `${window.location.origin}${API_BASE}`;
+      }
+      return process.env.NEXT_PUBLIC_API_URL || API_BASE;
+    },
   },
 }

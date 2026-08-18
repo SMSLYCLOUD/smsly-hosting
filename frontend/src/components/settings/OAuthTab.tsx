@@ -203,7 +203,7 @@ export function OAuthTab({ provider }: { provider?: string }) {
           </div>
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Authorization callback URL: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/github/login/callback/</code>
+              Authorization callback URL: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all" suppressHydrationWarning>{typeof window !== "undefined" ? window.location.origin : ""}/accounts/github/login/callback/</code>
             </p>
             <Button onClick={() => handleSave("github")} disabled={saving || !githubClientId}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
@@ -270,7 +270,7 @@ export function OAuthTab({ provider }: { provider?: string }) {
           </div>
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/google/login/callback/</code>
+              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded" suppressHydrationWarning>{typeof window !== "undefined" ? window.location.origin : ""}/accounts/google/login/callback/</code>
             </p>
             <Button onClick={() => handleSave("google")} disabled={saving || !googleClientId}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
@@ -316,7 +316,7 @@ export function OAuthTab({ provider }: { provider?: string }) {
           </div>
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/gitlab/login/callback/</code>
+              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all" suppressHydrationWarning>{typeof window !== "undefined" ? window.location.origin : ""}/accounts/gitlab/login/callback/</code>
             </p>
             <Button onClick={() => handleSave("gitlab")} disabled={saving || !gitlabClientId}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
@@ -362,7 +362,7 @@ export function OAuthTab({ provider }: { provider?: string }) {
           </div>
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/bitbucket_oauth2/login/callback/</code>
+              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all" suppressHydrationWarning>{typeof window !== "undefined" ? window.location.origin : ""}/accounts/bitbucket_oauth2/login/callback/</code>
             </p>
             <Button onClick={() => handleSave("bitbucket")} disabled={saving || !bitbucketClientId}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}

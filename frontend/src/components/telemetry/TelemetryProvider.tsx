@@ -117,10 +117,11 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
 
 /** Hook for the Settings → Privacy toggle. */
 export function useTelemetryOptOut(): [boolean, (v: boolean) => void] {
-    const [optedOut, setOptedOut] = useState<boolean>(() => {
-        if (typeof window === "undefined") return true;
-        return isTelemetryOptedOut();
-    });
+    const [optedOut, setOptedOut] = useState<boolean>(true);
+
+    useEffect(() => {
+        setOptedOut(isTelemetryOptedOut());
+    }, []);
 
     const toggle = (v: boolean) => {
         setTelemetryOptedOut(v);

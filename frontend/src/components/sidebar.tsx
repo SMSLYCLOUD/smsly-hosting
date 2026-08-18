@@ -18,23 +18,22 @@ export function Sidebar() {
   const [activeServer, setActiveServer] = React.useState<string | null>(null);
   const [showSelector, setShowSelector] = React.useState(false);
   const [user, setUser] = React.useState<{is_staff?: boolean} | null>(null);
-  const [infraOpen, setInfraOpen] = React.useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("smsly_infra_open") !== "false";
-    }
-    return true;
-  });
+  const [infraOpen, setInfraOpen] = React.useState(true);
 
   React.useEffect(() => {
+    try {
+      const stored = localStorage.getItem("smsly_infra_open");
+      if (stored === "false") setInfraOpen(false);
+    } catch {}
     serversApi.list().then(setServers).catch(() => {});
-    if (typeof window !== "undefined") {
+    try {
       setActiveServer(localStorage.getItem("smsly_active_server"));
-      // Fetch user via the cookie-authenticated axios instance. The
-      // HttpOnly auth cookie is attached automatically.
-      api.get('/auth/user/')
-        .then(res => setUser({ is_staff: Boolean(res.data?.is_staff || res.data?.is_superuser) }))
-        .catch(() => setUser(null));
-    }
+    } catch {}
+    // Fetch user via the cookie-authenticated axios instance. The
+    // HttpOnly auth cookie is attached automatically.
+    api.get('/auth/user/')
+      .then(res => setUser({ is_staff: Boolean(res.data?.is_staff || res.data?.is_superuser) }))
+      .catch(() => setUser(null));
   }, []);
 
   // Auto-expand infra section if user is on an infra page
