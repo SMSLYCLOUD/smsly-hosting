@@ -44,8 +44,8 @@ PLATFORM_SPIFFE_TRUST_DOMAIN = os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"
 SPIRE_SOCKET_CONTAINER_PATH = "/opt/spire/run"
 SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 
-# Only allow ecosystem trust domain for user services — prevents spoofing
-ALLOWED_ECOSYSTEM_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN}
+# Allow both ecosystem and platform trust domains for user services
+ALLOWED_ECOSYSTEM_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN, PLATFORM_SPIFFE_TRUST_DOMAIN}
 
 
 def is_mtls_enabled(service) -> bool:

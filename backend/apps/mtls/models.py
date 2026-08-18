@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError
 
 
-ALLOWED_TRUST_DOMAINS = {"ecosystem.local"}
+ALLOWED_TRUST_DOMAINS = {"ecosystem.local", "platform.local"}
 
 
 class MtlsConfig(models.Model):
@@ -32,7 +32,7 @@ class MtlsConfig(models.Model):
     )
     trust_domain = models.CharField(
         max_length=255,
-        default="ecosystem.local",
+        default="platform.local",
         help_text="SPIFFE trust domain for this service.",
     )
     spiffe_id = models.CharField(

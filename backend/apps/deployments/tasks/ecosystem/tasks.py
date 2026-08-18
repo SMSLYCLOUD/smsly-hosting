@@ -694,6 +694,16 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     internal_port=anchor_port,
                     provider=provider,
                 )
+                # Ecosystem services use ecosystem.local trust domain
+                if mtls_config.get("enabled"):
+                    try:
+                        from apps.mtls.models import MtlsConfig
+                        eco_td = mtls_config.get("trust_domain", "ecosystem.local")
+                        MtlsConfig.objects.filter(service=addon_anchor_service).update(
+                            trust_domain=eco_td,
+                        )
+                    except Exception:
+                        pass
                 _rollback_services.append(str(addon_anchor_service.id))
                 _apply_service_profile(addon_anchor_service, {**svc_plan, "repo": repo}, provider, anchor_port)
 
@@ -907,6 +917,16 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     provider=provider,
                     server=server,
                 )
+                # Ecosystem services use ecosystem.local trust domain
+                if mtls_config.get("enabled"):
+                    try:
+                        from apps.mtls.models import MtlsConfig
+                        eco_td = mtls_config.get("trust_domain", "ecosystem.local")
+                        MtlsConfig.objects.filter(service=service).update(
+                            trust_domain=eco_td,
+                        )
+                    except Exception:
+                        pass
                 _rollback_services.append(str(service.id))
             elif project and service.project != project:
                 service.project = project
