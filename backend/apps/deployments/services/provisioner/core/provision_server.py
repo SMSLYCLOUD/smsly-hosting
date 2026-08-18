@@ -235,6 +235,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             cf_token = config.cloudflare_api_token
             root_domain = config.domain
 
+            if root_domain:
+                install_env["MASTER_URL"] = f"https://{root_domain}"
+
             if cf_token and root_domain:
                 node_slug = str(server.id).split('-')[0]
                 node_domain = f"node-{node_slug}.{root_domain}"

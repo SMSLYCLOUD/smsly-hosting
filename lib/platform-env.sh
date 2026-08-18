@@ -328,6 +328,11 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "NODE_TYPE" "node"
             env_set_value "$env_file" "MODE" "$node_env_mode"
             env_set_value "$env_file" "COMPOSE_FILE" "infrastructure/docker/docker-compose.node.yml"
+
+            if [ -z "$(env_get_value "$env_file" "MASTER_URL" 2>/dev/null || true)" ] && [ -n "${MASTER_URL:-}" ]; then
+                env_set_value "$env_file" "MASTER_URL" "$MASTER_URL"
+                echo -e "${GREEN}  OK MASTER_URL set to ${MASTER_URL}${NC}"
+            fi
         fi
 
         if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then

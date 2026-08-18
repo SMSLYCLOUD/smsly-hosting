@@ -5995,6 +5995,9 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "NODE_TYPE" "node"
             env_set_value "$env_file" "MODE" "$node_env_mode"
             env_set_value "$env_file" "COMPOSE_FILE" "infrastructure/docker/docker-compose.node.yml"
+            if [ -n "${MASTER_URL:-}" ] && [ -z "$(env_get_value "$env_file" "MASTER_URL" 2>/dev/null || true)" ]; then
+                env_set_value "$env_file" "MASTER_URL" "$MASTER_URL"
+            fi
         fi
 
         if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
@@ -6773,6 +6776,9 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "NODE_TYPE" "node"
             env_set_value "$env_file" "MODE" "$node_env_mode"
             env_set_value "$env_file" "COMPOSE_FILE" "infrastructure/docker/docker-compose.node.yml"
+            if [ -n "${MASTER_URL:-}" ] && [ -z "$(env_get_value "$env_file" "MASTER_URL" 2>/dev/null || true)" ]; then
+                env_set_value "$env_file" "MASTER_URL" "$MASTER_URL"
+            fi
         fi
 
         if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
@@ -12887,6 +12893,9 @@ EOF
         env_set_value "$ENV_TMP" "MASTER_IP" "$MASTER_IP"
         env_set_value "$ENV_TMP" "MASTER_MESH_IP" "${MASTER_MESH_IP:-$MASTER_IP}"
         env_set_value "$ENV_TMP" "COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.node.yml"
+        if [ -n "${MASTER_URL:-}" ]; then
+            env_set_value "$ENV_TMP" "MASTER_URL" "$MASTER_URL"
+        fi
         env_set_value "$ENV_TMP" "DATABASE_URL" "postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting"
         env_set_value "$ENV_TMP" "DIRECT_DATABASE_URL" "postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting"
         env_set_value "$ENV_TMP" "CELERY_BROKER_URL" "amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//"
@@ -12938,6 +12947,9 @@ if [ -f "$INSTALL_DIR/.env" ]; then
         env_set_value "$INSTALL_DIR/.env" "MASTER_IP" "${MASTER_IP:-}"
         env_set_value "$INSTALL_DIR/.env" "MASTER_MESH_IP" "${MASTER_MESH_IP:-${MASTER_IP:-}}"
         env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.node.yml"
+        if [ -n "${MASTER_URL:-}" ]; then
+            env_set_value "$INSTALL_DIR/.env" "MASTER_URL" "$MASTER_URL"
+        fi
     fi
     # Ensure .env symlink exists for Docker Compose v2+ .env resolution
     _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
