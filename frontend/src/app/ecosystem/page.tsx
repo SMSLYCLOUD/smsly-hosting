@@ -1669,13 +1669,13 @@ export default function EcosystemPage() {
                                                         const newRules: CommunicationRules = {};
                                                         const services = plan.services.filter(s => !s.skip);
                                                         services.forEach(svc => {
-                                                            const name = (svc.name || svc.repo.split('/').pop()).toLowerCase().replace(/[^a-z0-9]/g, '-');
+                                                            const name = (svc.name || svc.repo.split('/').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '-');
                                                             if (name === 'audit') {
                                                                 // Audit receives from all
                                                                 newRules[name] = {
                                                                     allowed_callers: services
-                                                                        .filter(s => (s.name || s.repo.split('/').pop()).toLowerCase().replace(/[^a-z0-9]/g, '-') !== 'audit')
-                                                                        .map(s => `spiffe://${mtlsConfig.trust_domain}/service/${(s.name || s.repo.split('/').pop()).toLowerCase().replace(/[^a-z0-9]/g, '-')}`),
+                                                                        .filter(s => (s.name || s.repo.split('/').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '-') !== 'audit')
+                                                                        .map(s => `spiffe://${mtlsConfig.trust_domain}/service/${(s.name || s.repo.split('/').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '-')}`),
                                                                 };
                                                             } else if (name === 'gateway') {
                                                                 // Gateway only receives from platform
@@ -1684,8 +1684,8 @@ export default function EcosystemPage() {
                                                                 // Default: gateway + platform-api
                                                                 newRules[name] = {
                                                                     allowed_callers: [
-                                                                        `spiffe://${mtlsConfig.trulay || mtlsConfig.trust_domain}/service/gateway`,
-                                                                        `spiffe://${mtlsConfig.trulay || mtlsConfig.trust_domain}/service/platform-api`,
+                                                                        `spiffe://${mtlsConfig.trust_domain}/service/gateway`,
+                                                                        `spiffe://${mtlsConfig.trust_domain}/service/platform-api`,
                                                                     ].filter(c => !c.includes('undefined')),
                                                                 };
                                                             }
@@ -1701,7 +1701,7 @@ export default function EcosystemPage() {
                                                         const newRules: CommunicationRules = {};
                                                         const services = plan.services.filter(s => !s.skip);
                                                         services.forEach(svc => {
-                                                            const name = (svc.name || svc.repo.split('/').pop()).toLowerCase().replace(/[^a-z0-9]/g, '-');
+                                                            const name = (svc.name || svc.repo.split('/').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '-');
                                                             newRules[name] = { allowed_callers: [] };
                                                         });
                                                         setCommunicationRules(newRules);
