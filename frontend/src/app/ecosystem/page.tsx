@@ -141,6 +141,76 @@ async function apiGet(path: string) {
     return res.json();
 }
 
+function MtlsRepoSelector({ value, onChange }: { value: string; onChange: (url: string) => void }) {
+    const [repos, setRepos] = useState<any[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [search, setSearch] = useState('');
+
+    useEffect(() => {
+        let cancelled = false;
+        const load = async () => {
+            setLoading(true);
+            try {
+                const data = await apiGet('/api/v1/integrations/github/repos/?per_page=100');
+                if (!cancelled) setRepos(data.repos || []);
+            } catch {
+                if (!cancelled) setRepos([]);
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        };
+        load();
+        return () => { cancelled = true; };
+    }, []);
+
+    const filtered = repos.filter((r: any) =>
+        r.full_name.toLowerCase().includes(search.toLowerCase())
+    );
+
+    return (
+        <div className="flex items-center gap-3">
+            <label className="text-xs text-muted-foreground w-28 shrink-0">Config Repo</label>
+            <div className="flex-1 relative">
+                {loading ? (
+                    <div className="text-xs text-muted-foreground py-1.5">Loading repos...</div>
+                ) : (
+                    <>
+                        <input
+                            type="text"
+                            value={search || value}
+                            onChange={(e) => {
+                                setSearch(e.target.value);
+                                if (!e.target.value) onChange('');
+                            }}
+                            onFocus={() => setSearch('')}
+                            className="text-xs font-mono bg-background border border-border rounded px-2 py-1.5 w-full"
+                            placeholder="Search repos..."
+                        />
+                        {search && filtered.length > 0 && (
+                            <div className="absolute z-50 mt-1 w-full bg-card border border-border rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                                {filtered.map((r: any) => (
+                                    <button
+                                        key={r.full_name}
+                                        onClick={() => {
+                                            onChange(r.full_name);
+                                            setSearch('');
+                                        }}
+                                        className="w-full text-left px-3 py-2 text-xs hover:bg-muted flex items-center gap-2"
+                                    >
+                                        <GitBranch size={12} className="text-muted-foreground shrink-0" />
+                                        <span className="truncate">{r.full_name}</span>
+                                        {r.private && <span className="text-[10px] text-muted-foreground ml-auto">private</span>}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}
+
 export default function EcosystemPage() {
     const [step, setStep] = useState<Step>(() => loadState('step', 'idle'));
     const [plan, setPlan] = useState<DeployPlan | null>(() => loadState('plan', null));
@@ -1438,16 +1508,10 @@ export default function EcosystemPage() {
 
                                         {/* Repo Source */}
                                         {mtlsConfig.config_source === 'repo' && (
-                                            <div className="flex items-center gap-3">
-                                                <label className="text-xs text-muted-foreground w-28 shrink-0">Repo URL</label>
-                                                <input
-                                                    type="text"
-                                                    value={mtlsConfig.config_repo_url || ''}
-                                                    onChange={(e) => setMtlsConfig(prev => ({ ...prev, config_repo_url: e.target.value }))}
-                                                    className="text-xs font-mono bg-background border border-border rounded px-2 py-1.5 flex-1"
-                                                    placeholder="github.com/org/spiffe-config"
-                                                />
-                                            </div>
+                                            <MtlsRepoSelector
+                                                value={mtlsConfig.config_repo_url || ''}
+                                                onChange={(url) => setMtlsConfig(prev => ({ ...prev, config_repo_url: url }))}
+                                            />
                                         )}
 
                                         {/* File Upload */}

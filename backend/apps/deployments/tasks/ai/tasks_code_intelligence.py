@@ -4,13 +4,13 @@ logger = logging.getLogger(__name__)
 
 from celery import shared_task
 from django.contrib.auth import get_user_model
-from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM
+from apps.deployments.constants import TASK_TIME_LIMIT_DEPLOY
 from apps.deployments.services.code_intelligence import analyze_codebase_chunked
 
 User = get_user_model()
 
 
-@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1])
 def deep_scan_and_verify_task(self, user_id, repos_data, deploy_plan, ai_provider=None):
     """
     Background task to perform a deep codebase scan and cross-verify with the deployment plan.
