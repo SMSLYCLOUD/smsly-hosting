@@ -1601,7 +1601,7 @@ export default function EcosystemPage() {
                                                     </thead>
                                                     <tbody>
                                                         {plan.services.filter(s => !s.skip).map(targetSvc => {
-                                                            const targetName = targetSvc.name || targetSvc.repo.split('/').pop();
+                                                            const targetName = targetSvc.name || targetSvc.repo.split('/').pop() || 'unknown';
                                                             const targetKey = targetName.toLowerCase().replace(/[^a-z0-9]/g, '-');
                                                             const rules = communicationRules[targetKey] || { allowed_callers: [] };
                                                             
