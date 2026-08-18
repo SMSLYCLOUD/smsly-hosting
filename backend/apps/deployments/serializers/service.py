@@ -19,12 +19,20 @@ def _get_latest_deployment(obj) -> dict | None:
         dep = obj.deployments.order_by('-created_at').first()
     if not dep:
         return None
+    target_server_name = None
+    if dep.target_server_id:
+        target_server_name = getattr(dep.target_server, 'name', None)
+    elif dep.target_is_local:
+        target_server_name = 'Local Server'
     return {
         'id': str(dep.id),
         'status': dep.status,
         'commit_hash': dep.commit_hash or '',
         'created_at': dep.created_at.isoformat() if dep.created_at else None,
         'vulnerability_report': dep.vulnerability_report,
+        'target_server': str(dep.target_server_id) if dep.target_server_id else None,
+        'target_server_name': target_server_name,
+        'target_is_local': dep.target_is_local,
     }
 
 

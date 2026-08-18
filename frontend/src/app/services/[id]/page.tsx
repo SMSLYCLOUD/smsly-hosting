@@ -282,19 +282,29 @@ export default function ServiceDetailPage() {
 
     const userPickedNodeRef = useRef(false);
     useEffect(() => {
-        if (!service?.server_id) return;
+        if (!service) return;
         if (userPickedNodeRef.current) return;
-        setTargetServerId(service.server_id);
-    }, [service?.server_id]);
+        // Prefer latest deployment target, then service assigned node, then 'local'
+        const deployTarget = service.latest_deployment?.target_server
+            || service.server_id
+            || service.node_metadata?.id
+            || LOCAL_DEPLOY_TARGET;
+        setTargetServerId(deployTarget);
+    }, [service?.server_id, service?.latest_deployment?.target_server]);
 
     useEffect(() => {
         const load = async () => {
             try {
                 const s = await servicesApi.get(id);
                 setService(s);
-                if (s.node_metadata) {
-                    setTargetServerId(s.node_metadata.id);
-                }
+                // Prefer the target server from the latest deployment (handles
+                // failed deploys where the user wants to retry on the same node).
+                // Fall back to the service's assigned node, then 'local'.
+                const deployTarget = s.latest_deployment?.target_server
+                    || s.server_id
+                    || s.node_metadata?.id
+                    || LOCAL_DEPLOY_TARGET;
+                setTargetServerId(deployTarget);
                 if (s.latest_deployment) {
                     const d = await servicesApi.getDeployment(s.latest_deployment.id);
                     setDeployment(d);

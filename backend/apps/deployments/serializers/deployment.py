@@ -8,6 +8,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
     duration_seconds = serializers.FloatField(read_only=True, allow_null=True)
     service_name = serializers.CharField(
         source='service.name', read_only=True)
+    target_server_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Deployment
@@ -20,7 +21,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
             'staging_url', 'staged_at',
             'started_at', 'finished_at', 'duration_seconds',
             'is_rollback', 'source_node', 'rollback_from',
-            'target_server', 'target_is_local',
+            'target_server', 'target_server_name', 'target_is_local',
             'ecosystem_retry_count', 'queued_min_replicas',
             'metadata', 'registry_override',
             'verified_target_type', 'verified_host_ip',
@@ -35,6 +36,13 @@ class DeploymentSerializer(serializers.ModelSerializer):
             'verified_runtime_id', 'verified_at',
             'started_at', 'finished_at', 'created_at', 'updated_at',
         ]
+
+    def get_target_server_name(self, obj):
+        if obj.target_server_id:
+            return getattr(obj.target_server, 'name', None)
+        if obj.target_is_local:
+            return 'Local Server'
+        return None
 
 
 class DeploymentTimelineSerializer(serializers.ModelSerializer):

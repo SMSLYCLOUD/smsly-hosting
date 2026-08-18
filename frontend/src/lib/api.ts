@@ -365,6 +365,9 @@ export interface Service {
     status: string;
     commit_hash?: string;
     created_at: string;
+    target_server?: string | null;
+    target_server_name?: string | null;
+    target_is_local?: boolean;
   };
   // Compose deployment
   deploy_mode?: 'SINGLE' | 'COMPOSE';
@@ -445,6 +448,9 @@ export interface Deployment {
   finished_at?: string;
   is_rollback?: boolean;
   rollback_from?: string | null;
+  target_server?: string | null;
+  target_server_name?: string | null;
+  target_is_local?: boolean;
 }
 
 export interface DeploymentRollbackResponse {

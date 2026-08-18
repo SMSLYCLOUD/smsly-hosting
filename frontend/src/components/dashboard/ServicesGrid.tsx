@@ -48,7 +48,8 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
     setActionLoading(serviceId);
     try {
       const svc = services.find(s => s.id === serviceId);
-      await servicesApi.deploy(serviceId, 'HEAD', svc?.server_id || svc?.node_metadata?.id || null);
+      const targetId = svc?.server_id || svc?.node_metadata?.id || undefined;
+      await servicesApi.deploy(serviceId, 'HEAD', targetId);
       // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Deploy failed:', err);
@@ -241,7 +242,11 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
               </p>
             )}
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span>{service.node_metadata?.name || 'Unassigned node'}</span>
+              <span>
+                {(['BUILDING', 'QUEUED', 'REVIEW', 'DEPLOYING', 'HEALTH_CHECK'].includes(service.latest_deployment?.status || ''))
+                  ? (service.latest_deployment?.target_server_name || service.node_metadata?.name || 'Local Server')
+                  : (service.node_metadata?.name || 'Unassigned node')}
+              </span>
               <span title={`Estimated (${service.estimated_cost?.basis || 'fallback'})`}>
                 Est. {service.estimated_cost?.currency || 'USD'} {Number(service.estimated_cost?.monthly || 0).toFixed(2)}/mo
               </span>

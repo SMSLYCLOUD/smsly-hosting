@@ -178,6 +178,22 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 )
                 return
 
+            # DOCKER-type remote deploys: the master must push the image
+            # to the registry so the target node can pull it.  The pipeline
+            # handles registry login + push via _push_image().
+            if service.deploy_type == 'DOCKER' and str(service.docker_image or "").strip():
+                with fleet_build_lock(deployment):
+                    pipeline = PipelineManager(
+                        deployment,
+                        staged_only=skip_review and not deployment.is_rollback,
+                    )
+                    built_image = pipeline.run()
+                _handle_remote_deployment(
+                    deployment, effective_server,
+                    skip_review=skip_review, image_name=built_image,
+                )
+                return
+
             _handle_remote_deployment(deployment, effective_server, skip_review=skip_review)
             return
 

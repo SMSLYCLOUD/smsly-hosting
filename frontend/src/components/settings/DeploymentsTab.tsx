@@ -55,7 +55,11 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                     serversApi.list(),
                 ]);
                 setServers(sList);
-                setTargetServerId((srv.node_metadata?.id) || srv.server_id || LOCAL_DEPLOY_TARGET);
+                const deployTarget = srv.latest_deployment?.target_server
+                    || srv.node_metadata?.id
+                    || srv.server_id
+                    || LOCAL_DEPLOY_TARGET;
+                setTargetServerId(deployTarget);
             } catch (err) { console.error(err); }
         };
         init();
