@@ -116,6 +116,10 @@ class AgentMixin:
             if server.status == ManagedServer.Status.ONLINE:
                 server.status = ManagedServer.Status.DEGRADED
                 server.save(update_fields=["status", "updated_at"])
+        else:
+            if server.status != ManagedServer.Status.ONLINE:
+                server.status = ManagedServer.Status.ONLINE
+                server.save(update_fields=["status", "updated_at"])
 
         return Response({
             "server_id": str(server.id),
