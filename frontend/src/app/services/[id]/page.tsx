@@ -530,6 +530,20 @@ export default function ServiceDetailPage() {
                                     {service.public_domain || `${service.name}.cloud.trulay.co`}
                                 </a>
                             </div>
+                            {service.node_url && (
+                                <div className="flex justify-between border-b border-border pb-3">
+                                    <span className="text-muted-foreground font-medium">Direct Domain</span>
+                                    <a
+                                        href={service.node_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="font-mono text-primary hover:underline flex items-center gap-1"
+                                    >
+                                        <Globe className="w-3 h-3" />
+                                        {service.node_url.replace('https://', '')}
+                                    </a>
+                                </div>
+                            )}
                             <div className="flex justify-between border-b border-border pb-3 gap-4">
                                 <span className="text-muted-foreground font-medium">Custom Domains</span>
                                 <div className="flex flex-wrap items-center justify-end gap-2">
