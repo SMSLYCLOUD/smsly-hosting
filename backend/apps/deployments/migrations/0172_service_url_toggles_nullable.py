@@ -4,11 +4,11 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('deployments', '0170_add_rollback_grace_minutes'),
+        ('deployments', '0171_service_url_toggles'),
     ]
 
     operations = [
-        migrations.AddField(
+        migrations.AlterField(
             model_name='service',
             name='wildcard_url_enabled',
             field=models.BooleanField(
@@ -16,7 +16,7 @@ class Migration(migrations.Migration):
                 help_text='Enable the master-proxied wildcard URL (e.g. service.grid.smsly.cloud)',
             ),
         ),
-        migrations.AddField(
+        migrations.AlterField(
             model_name='service',
             name='node_url_enabled',
             field=models.BooleanField(

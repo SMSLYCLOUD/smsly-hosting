@@ -379,10 +379,10 @@ class Service(TimeStampedModel):
 
     # URL entry toggles (for node-deployed services)
     wildcard_url_enabled = models.BooleanField(  # type: ignore[var-annotated]
-        default=True,
+        default=True, null=True, blank=True,
         help_text="Enable the master-proxied wildcard URL (e.g. service.grid.smsly.cloud)")
     node_url_enabled = models.BooleanField(  # type: ignore[var-annotated]
-        default=True,
+        default=True, null=True, blank=True,
         help_text="Enable the direct node URL (e.g. service.grid-node1.smsly.cloud)")
 
     # Deploy Mode (single container vs docker-compose)
