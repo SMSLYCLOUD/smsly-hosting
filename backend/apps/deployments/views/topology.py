@@ -105,6 +105,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
                 project_id = str(service.project.id)
                 project_name = service.project.name
 
+            running_replicas = getattr(service, 'running_replicas', 0)
             nodes.append({
                 'id': svc_id,
                 'type': 'service',
@@ -117,7 +118,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
                         service, 'buildpack', 'NIXPACKS'),
                     'region': '',
                     'port': service.internal_port,
-                    'replicas': getattr(service, 'min_replicas', 1),
+                    'replicas': running_replicas,
                     'health': getattr(service, 'health_status', 'unknown'),
                     'domain': getattr(service, 'public_domain', None),
                     'url': getattr(service, 'public_domain', None),
@@ -129,7 +130,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     'project_id': project_id,
                     'project_name': project_name,
                     'metadata': {
-                        'replicas': getattr(service, 'min_replicas', 1),
+                        'replicas': running_replicas,
                         'port': service.internal_port,
                     },
                 }

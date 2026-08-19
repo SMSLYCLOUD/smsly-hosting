@@ -385,6 +385,7 @@ export interface Service {
   public_domain_hidden?: boolean;
   // Environment scan depth
   env_scan_depth?: 'shallow' | 'standard' | 'deep';
+  running_replicas?: number;
   node_metadata?: { id: string; name: string; host: string; status: string };
   estimated_cost?: {
     enabled: boolean;

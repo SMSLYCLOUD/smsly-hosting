@@ -231,13 +231,9 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
             </div>
 
             <div className="flex items-center gap-2">
-              {!service.isAddon && (
-                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-purple-500/15 text-purple-400" title={service.autoscale_enabled ? `Auto-scaling: ${service.min_replicas ?? 1}-${service.max_replicas ?? 1} replicas` : `${service.min_replicas ?? 1} replica`}>
-                  <Scaling size={10} />
-                  {service.min_replicas ?? 1}
-                  {service.autoscale_enabled && service.max_replicas && service.max_replicas > (service.min_replicas ?? 1) && (
-                    <span className="text-purple-300/60">-{service.max_replicas}</span>
-                  )}
+              {!service.isAddon && (service.running_replicas ?? 0) > 0 && (
+                <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-sm font-bold bg-purple-500/15 text-purple-400" title={`${service.running_replicas} replica(s) running`}>
+                  {service.running_replicas}
                 </span>
               )}
               <div className={`w-2 h-2 rounded-full ${

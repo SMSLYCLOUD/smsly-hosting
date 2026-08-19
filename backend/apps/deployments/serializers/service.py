@@ -303,6 +303,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'latest_deployment', 'service_url', 'node_url',
             'project_name', 'project_slug', 'project_emoji',
             'estimated_cost', 'node_metadata', 'domain_instances',
+            'running_replicas',
         ]
         read_only_fields = [
             'id',

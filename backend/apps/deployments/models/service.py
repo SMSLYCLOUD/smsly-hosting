@@ -588,6 +588,14 @@ class Service(TimeStampedModel):
         except ValueError:
             return f"https://{self.public_domain}"
 
+    @property
+    def running_replicas(self) -> int:
+        """Count of RUNNING replicas (excludes the primary container)."""
+        from apps.autoscaler.models.replica import ServiceReplica
+        return ServiceReplica.objects.filter(
+            service=self, status='RUNNING'
+        ).count()
+
     def generate_staging_url(self, commit_hash: str = "") -> str:
         """Generate a staging preview URL for webhook deployments.
 
