@@ -10,7 +10,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2, Plus,
     Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles,
-    Code, CheckCircle, AlertTriangle, Variable, Terminal, Download, Lock, Shield
+    Code, CheckCircle, AlertTriangle, Variable, Terminal, Download, Lock, Shield, FolderOpen
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { ecosystemApi } from '@/lib/api';
@@ -217,6 +217,7 @@ export default function EcosystemPage() {
     const [planId, setPlanId] = useState<string>(() => loadState('planId', ''));
     const [scanTaskId, setScanTaskId] = useState<string | null>(() => loadState('scanTaskId', null));
     const [deployTaskId, setDeployTaskId] = useState<string | null>(() => loadState('deployTaskId', null));
+    const [deployProjectId, setDeployProjectId] = useState<string | null>(null);
     const [deployResults, setDeployResults] = useState<DeployResult[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [scanProgress, setScanProgress] = useState('Initializing scan...');
@@ -539,9 +540,19 @@ export default function EcosystemPage() {
         setStep('deploying');
         setError(null);
 
+        // Ensure every service has server_id defaulting to 'local'
+        // so the backend doesn't fall through to auto-node-selection.
+        const normalizedPlan = {
+            ...plan,
+            services: plan.services.map(s => ({
+                ...s,
+                server_id: s.server_id || 'local',
+            })),
+        };
+
         try {
             const data = await ecosystemApi.deploy({
-                plan,
+                plan: normalizedPlan,
                 plan_id: planId,
                 use_shared_addons: useSharedAddons,
                 cancel_others_on_failure: cancelOthersOnFailure,
@@ -551,6 +562,7 @@ export default function EcosystemPage() {
             });
             setDeployTaskId(data.task_id);
             if (data.plan_id) setPlanId(data.plan_id);
+            if (data.project_id) setDeployProjectId(data.project_id);
 
             pollTask(data.task_id, (result) => {
                 if (result.error) {
@@ -1853,6 +1865,21 @@ export default function EcosystemPage() {
                                     </div>
                                 ))}
                             </div>
+
+                            {/* Project Info */}
+                            {deployProjectId && (
+                                <div
+                                    className="bg-card border border-border rounded-xl p-4 cursor-pointer hover:border-primary/50 transition-colors"
+                                    onClick={() => window.open(`/projects/${deployProjectId}`, '_blank')}
+                                >
+                                    <div className="flex items-center gap-2 text-sm">
+                                        <FolderOpen size={14} className="text-primary" />
+                                        <span className="text-muted-foreground">Project:</span>
+                                        <span className="font-medium text-primary hover:underline">{deployProjectId.slice(0, 8)}...</span>
+                                        <span className="text-xs text-muted-foreground ml-auto">Open →</span>
+                                    </div>
+                                </div>
+                            )}
 
                             {/* Addons created from plan */}
                             {plan?.addons && plan.addons.length > 0 && (

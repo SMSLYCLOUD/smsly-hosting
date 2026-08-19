@@ -149,20 +149,20 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Owner and Team scoped: users see their own projects and team projects.
 
-        Ephemeral projects (auto-created for custom-registry deploys) are
-        hidden from the default listing unless the user is a superuser or
-        explicitly requests ``?include_ephemeral=true``.
+        All projects (including ephemeral) are shown by default.
+        Pass ``?include_ephemeral=false`` to hide ephemeral projects.
         """
         qs = Project.objects.all().order_by('id')
         if self.request.user.is_superuser:
-            return qs
-        qs = qs.filter(
-            Q(owner=self.request.user) |
-            Q(team__members__user=self.request.user)
-        ).distinct().order_by('id')
+            qs = qs
+        else:
+            qs = qs.filter(
+                Q(owner=self.request.user) |
+                Q(team__members__user=self.request.user)
+            ).distinct().order_by('id')
 
-        # Hide ephemeral projects by default
-        include_ephemeral = self.request.query_params.get('include_ephemeral', '').lower() in ('true', '1', 'yes')
+        # Include all projects by default; optionally exclude ephemeral
+        include_ephemeral = self.request.query_params.get('include_ephemeral', '').lower() not in ('false', '0', 'no')
         if not include_ephemeral:
             qs = qs.filter(is_ephemeral=False)
 

@@ -849,7 +849,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
         server_id = svc_plan.get("server_id") or plan.get("server_id")
         server = None
-        if server_id:
+        if server_id and str(server_id).strip():
             from apps.deployments.models import ManagedServer
             try:
                 if str(server_id).lower() in ("local", "primary"):
@@ -859,8 +859,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             except Exception as exc:
                 logger.debug("Failed to resolve deployment server %s: %s", server_id, exc)
         else:
-            from apps.deployments.services.node_selector import select_eligible_node
-            server = select_eligible_node(user)
+            # No server specified — default to local (master) deployment
+            # instead of auto-selecting a remote node.
+            server = None
 
         target_server, target_is_local = _deployment_target_for_server(server, provider)
 
