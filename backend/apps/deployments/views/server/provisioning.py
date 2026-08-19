@@ -2,7 +2,17 @@
 Provisioning mixins for ManagedServerViewSet.
 """
 
+import base64
+import hashlib
+import hmac as hmac_mod
+import json as json_mod
+import logging
+import os
+import secrets
+import time
+
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import models as db_models
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action, throttle_classes
@@ -14,6 +24,8 @@ from .serializers import (
     ManagedServerSerializer,
     ServerProvisionThrottle,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ProvisioningMixin:
@@ -32,19 +44,17 @@ class ProvisioningMixin:
 
     @action(detail=False, methods=["post"], url_path="provision-token")
     def provision_token(self, request):
-        """Generate a one-time bootstrap token for self-provisioning.
+        """Create a ManagedServer, pre-provision VPN + DNS, and return a
+        bootstrap command the user runs on the target server.
 
-        The target server runs:
-            curl -fsSL <master_url>/api/v1/servers/bootstrap/<token>/ | bash
-
-        The token is an HMAC-signed payload encoding the server name,
-        host, node type, and expiry. No SSH needed from the master.
+        Flow:
+        1. User fills name, host, node_type, infra selections
+        2. Master creates ManagedServer (PENDING), assigns node_number,
+           computes node_domain (grid{N}), sets up WireGuard peer + DNS
+        3. Master returns bootstrap command with server_id, WG keys, etc.
+        4. User runs bootstrap on target → node installs Grid, registers
+        5. If no heartbeat within 12 hours, master purges the record
         """
-        import hmac as hmac_mod
-        import hashlib
-        import base64
-        import json as json_mod
-
         name = request.data.get("name", "").strip()
         host = request.data.get("host", "").strip()
         node_type = request.data.get("node_type", "node")
@@ -52,8 +62,6 @@ class ProvisioningMixin:
         is_media_node = request.data.get("is_media_node", False)
         is_primary = request.data.get("is_primary", False)
         allow_user_workloads = request.data.get("allow_user_workloads", True)
-        ssh_user = request.data.get("ssh_user", "root")
-        ssh_port = request.data.get("ssh_port", 22)
         node_components = request.data.get("node_components", {})
 
         if not name or not host:
@@ -63,8 +71,135 @@ class ProvisioningMixin:
             )
 
         from django.conf import settings
-        secret = settings.SECRET_KEY.encode()
+        from apps.deployments.models.core import PlatformConfig
+        from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+        from apps.deployments.services.wireguard_service import WireGuardService
+
+        config = PlatformConfig.load()
+        base_domain = getattr(config, "server_domain", "") or "grid.smsly.cloud"
+        server_ip = getattr(config, "server_ip", "") or os.environ.get("PUBLIC_IP", "")
+
+        # ── 1. Assign node_number ──
+        max_num = ManagedServer.objects.filter(is_primary=False).aggregate(
+            m=db_models.Max("node_number")
+        )["m"] or 0
+        node_number = max_num + 1
+
+        # ── 2. Compute node_domain using grid{N} naming ──
+        domain_parts = base_domain.split(".")
+        if len(domain_parts) > 2:
+            node_domain = f"grid{node_number}.{'.'.join(domain_parts[1:])}"
+        else:
+            node_domain = f"grid{node_number}.{base_domain}"
+
+        # ── 3. Create ManagedServer ──
+        gateway_secret = secrets.token_hex(32)
+        try:
+            server = ManagedServer.objects.create(
+                owner=request.user,
+                name=name,
+                host=host,
+                node_type=node_type,
+                is_lite_agent=is_lite_agent,
+                is_primary=is_primary,
+                allow_user_workloads=allow_user_workloads,
+                node_components=node_components,
+                node_number=node_number,
+                node_domain=node_domain,
+                gateway_secret=gateway_secret,
+                provision_status=ManagedServer.ProvisionStatus.PENDING,
+                status=ManagedServer.Status.UNKNOWN,
+            )
+        except DjangoValidationError as exc:
+            return Response(
+                {"error": getattr(exc, "message_dict", None) or str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── 4. Pre-provision WireGuard peer on master ──
+        wg_address = None
+        wg_private_key = None
+        wg_public_key = None
+        master_wg_pubkey = ""
+        master_wg_endpoint = ""
+
+        try:
+            mesh = MeshNetwork.objects.filter(
+                name="default", is_active=True,
+            ).first()
+            if not mesh:
+                mesh = MeshNetwork.objects.create(
+                    name="default",
+                    subnet="10.100.0.0/24",
+                    listen_port=51820,
+                    listen_port_fallback=33500,
+                    interface_name="wg0",
+                    is_active=True,
+                )
+
+            wg_private_key, wg_public_key = WireGuardService.generate_keypair()
+            wg_address = mesh.next_available_ip()
+
+            from apps.deployments.services.provisioner.helpers.server_config import (
+                _get_master_wg_pubkey,
+            )
+            master_wg_pubkey = _get_master_wg_pubkey() or ""
+            if server_ip:
+                master_wg_endpoint = f"{server_ip}:{mesh.listen_port}"
+
+            endpoint = ""
+            if master_wg_endpoint:
+                endpoint = WireGuardService.validate_endpoint(master_wg_endpoint)
+
+            peer = WireGuardPeer.objects.create(
+                mesh=mesh,
+                server=server,
+                private_key=wg_private_key,
+                public_key=wg_public_key,
+                wg_address=wg_address,
+                endpoint=endpoint,
+                allowed_ips=f"{wg_address}/32",
+                is_active=True,
+                is_local=False,
+            )
+
+            server.wg_address = wg_address
+            server.save(update_fields=["wg_address", "updated_at"])
+
+            local_peer = WireGuardPeer.objects.filter(
+                mesh=mesh, is_local=True,
+            ).first()
+            if local_peer and local_peer.private_key:
+                try:
+                    WireGuardService.deploy_config(local_peer)
+                except Exception as deploy_exc:
+                    logger.warning(
+                        "WG deploy to master failed for %s: %s",
+                        server.name, deploy_exc,
+                    )
+        except Exception as exc:
+            logger.warning(
+                "WireGuard pre-provisioning failed for %s: %s", server.name, exc,
+            )
+
+        # ── 5. Pre-provision DNS A record ──
+        dns_result = None
+        try:
+            cf_token = getattr(config, "cloudflare_api_token", "") or ""
+            if cf_token and node_domain and server_ip:
+                from apps.domains.services.dns import ensure_dns_records
+                dns_result = ensure_dns_records(
+                    [node_domain], server_ip, cf_token,
+                )
+        except Exception as exc:
+            logger.warning(
+                "DNS pre-provisioning failed for %s: %s", server.name, exc,
+            )
+
+        # ── 6. Generate signed bootstrap token ──
+        app_secret = settings.SECRET_KEY.encode()
         payload_data = {
+            "server_id": str(server.id),
             "name": name,
             "host": host,
             "node_type": node_type,
@@ -72,28 +207,42 @@ class ProvisioningMixin:
             "is_media_node": is_media_node,
             "is_primary": is_primary,
             "allow_user_workloads": allow_user_workloads,
-            "ssh_user": ssh_user,
-            "ssh_port": ssh_port,
             "node_components": node_components,
+            "node_number": node_number,
+            "node_domain": node_domain,
+            "wg_address": wg_address or "",
+            "wg_private_key": wg_private_key or "",
+            "wg_public_key": wg_public_key or "",
+            "gateway_secret": gateway_secret,
+            "master_wg_pubkey": master_wg_pubkey,
+            "master_wg_endpoint": master_wg_endpoint,
             "exp": int(time.time()) + 3600,
             "nonce": secrets.token_hex(8),
         }
         payload_b64 = base64.urlsafe_b64encode(
             json_mod.dumps(payload_data).encode()
         ).decode()
-        sig = hmac_mod.new(secret, payload_b64.encode(), hashlib.sha256).hexdigest()
+        sig = hmac_mod.new(
+            app_secret, payload_b64.encode(), hashlib.sha256,
+        ).hexdigest()
         token = f"{payload_b64}.{sig}"
 
         master_url = os.environ.get("PUBLIC_URL", "https://grid.smsly.cloud")
 
-        return Response(
-            {
-                "token": token,
-                "master_url": master_url,
-                "bootstrap_command": f'curl -fsSL "{master_url}/api/v1/servers/bootstrap/{token}/" | bash',
-            },
-            status=status.HTTP_200_OK,
-        )
+        data = ManagedServerSerializer(server).data
+        data.update({
+            "token": token,
+            "server_id": str(server.id),
+            "node_number": node_number,
+            "node_domain": node_domain,
+            "wg_address": wg_address,
+            "dns_result": dns_result,
+            "master_url": master_url,
+            "bootstrap_command": (
+                f'curl -fsSL "{master_url}/api/v1/servers/bootstrap/{token}/" | bash'
+            ),
+        })
+        return Response(data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="provision")
     @throttle_classes([ServerProvisionThrottle])

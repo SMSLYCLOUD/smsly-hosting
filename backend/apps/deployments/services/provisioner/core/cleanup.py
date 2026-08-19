@@ -16,10 +16,7 @@ logger = logging.getLogger(__name__)
 def _rollback_stale_provisioning(server: ManagedServer) -> None:
     """Best-effort cleanup of resources created during a stale provisioning attempt.
 
-    This is a simplified rollback — it handles the common cases (DB user,
-    SSH key, iptables rules, WireGuard peer) using only information stored
-    on the server record.  It does NOT attempt DNS cleanup or remote SSH
-    key removal because those require connectivity that may not exist.
+    Handles: DB user, iptables rules, WireGuard peer, DNS record, sensitive fields.
     """
     metadata = server.provider_metadata or {}
 
@@ -57,7 +54,21 @@ def _rollback_stale_provisioning(server: ManagedServer) -> None:
         except Exception as exc:
             logger.debug("Rollback: WG peer removal failed for %s: %s", server.name, exc)
 
-    # 4. Clear sensitive fields
+    # 4. Remove DNS record if node_domain was assigned
+    node_domain = getattr(server, "node_domain", "") or ""
+    if node_domain:
+        try:
+            from apps.deployments.models.core import PlatformConfig
+            from apps.domains.services.dns import delete_dns_record
+            config = PlatformConfig.load()
+            cf_token = getattr(config, "cloudflare_api_token", "") or ""
+            if cf_token:
+                delete_dns_record(node_domain, cf_token)
+                logger.info("Rollback: deleted DNS record for %s", node_domain)
+        except Exception as exc:
+            logger.debug("Rollback: DNS cleanup failed for %s: %s", server.name, exc)
+
+    # 5. Clear sensitive fields
     update_fields = []
     if server.ssh_key:
         server.ssh_key = ""
@@ -100,6 +111,7 @@ def _drop_db_user(username: str) -> None:
 
 @shared_task(name="apps.deployments.services.provisioner.cleanup_stale_server_provisioning", soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
 def cleanup_stale_server_provisioning():
+    # ── 1. Mark stale PROVISIONING servers as FAILED ──
     stale_after_seconds = max(3600, PROVISION_TIMEOUT_SECONDS * 2)
     cutoff = timezone.now() - timedelta(seconds=stale_after_seconds)
     stale_servers = ManagedServer.objects.filter(
@@ -121,22 +133,32 @@ def cleanup_stale_server_provisioning():
         )
         cleaned += 1
 
-    pending_cutoff = timezone.now() - timedelta(hours=24)
+    # ── 2. Purge PENDING servers that never connected within 12 hours ──
+    #    These are self-provisioned nodes where the user ran the bootstrap
+    #    script but the node never called back (agent-registrar heartbeat).
+    #    Full rollback: VPN peer, DNS record, iptables, DB user, then delete.
+    pending_cutoff = timezone.now() - timedelta(hours=12)
     stale_pending = ManagedServer.objects.filter(
         provision_status=ManagedServer.ProvisionStatus.PENDING,
         updated_at__lt=pending_cutoff,
     )
     for server in stale_pending:
-        server.provision_status = ManagedServer.ProvisionStatus.FAILED
-        server.save(update_fields=["provision_status", "updated_at"])
         _append_log(
             server,
             (
-                "Provisioning was auto-marked as failed because the server was "
-                "never provisioned (stuck in PENDING for over 24 hours)."
+                "Purging server record — no connection heard within 12 hours of "
+                "provisioning. Rolling back VPN peer, DNS, and other resources."
             ),
         )
+        _rollback_stale_provisioning(server)
+        server_name = server.name
+        server_id = str(server.id)
+        server.delete()
         cleaned += 1
+        logger.warning(
+            "Purged stale PENDING server %s (%s) — no connection within 12h",
+            server_name, server_id,
+        )
 
     if cleaned:
         logger.warning("Auto-cleaned %d stale provisioning records", cleaned)
