@@ -571,7 +571,7 @@ def generate_node_caddyfile(node) -> str:
         node_url_enabled=True,
     ).only(
         "id", "name", "slug", "internal_port", "public_domain",
-        "node_url_enabled",
+        "node_url_enabled", "server__id", "server__name", "server__wg_address",
     ).order_by("id")
 
     for service in services:
