@@ -162,14 +162,9 @@ class TopologyViewSet(viewsets.GenericViewSet):
                 })
 
             # ── Replica nodes ─────────────────────────────────────────
-            from apps.autoscaler.models.replica import ServiceReplica
-            replicas = list(
-                ServiceReplica.objects.filter(
-                    service=service,
-                    status__in=['RUNNING', 'SPAWNING', 'DRAINING'],
-                )
-            )
-            for replica in replicas:
+            for replica in service.replicas.all():
+                if replica.status not in ('RUNNING', 'SPAWNING', 'DRAINING'):
+                    continue
                 replica_id = f"replica-{replica.id}"
                 replica_status = {
                     'RUNNING': 'ACTIVE',
