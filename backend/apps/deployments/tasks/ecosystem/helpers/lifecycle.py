@@ -47,9 +47,23 @@ def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 500) -> i
 
 
 def _count_active_ecosystem_builds() -> int:
-    """Count ecosystem deployments currently being built (from cache counter)."""
+    """Count ecosystem deployments currently being built (from DB — source of truth).
+
+    The cache counter drifts because _decrement is never reliably called.
+    Counting from DB eliminates drift entirely.
+    """
     try:
-        return int(cache.get(_ACTIVE_BUILDS_CACHE_KEY, 0))
+        from apps.deployments.models import Deployment
+        active_statuses = {
+            Deployment.Status.QUEUED,
+            Deployment.Status.BUILDING,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+        }
+        return Deployment.objects.filter(
+            commit_hash="ecosystem-deploy",
+            status__in=active_statuses,
+        ).count()
     except Exception:
         return 0
 
