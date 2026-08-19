@@ -176,6 +176,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             'health_status', 'deploy_type', 'buildpack', 'created_at',
             'updated_at', 'latest_deployment', 'node_metadata', 'node_url',
             'wildcard_url_enabled', 'node_url_enabled',
+            'env_scan_depth',
         ]
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
@@ -295,6 +296,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'last_scale_at',
             'locked', 'locked_reason', 'restrict_to_creator',
             'allowed_actions', 'restricted_environments',
+            'env_scan_depth',
             'created_at', 'updated_at',
             # SerializerMethodField / nested fields
             'env_vars', 'server_id',

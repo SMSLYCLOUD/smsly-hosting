@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { platformApi, servicesApi, addonsApi, Service } from '@/lib/api';
+import { platformApi, servicesApi, addonsApi, Service, Addon } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { Plus, LayoutGrid, Radar, Puzzle, Store } from 'lucide-react';
 
@@ -38,6 +38,7 @@ export default function ServicesPage() {
   const router = useRouter();
   const [viewMode, setViewMode] = useState<'GRID' | 'RADAR' | 'ADDONS'>('GRID');
   const [services, setServices] = useState<Service[]>([]);
+  const [addons, setAddons] = useState<Addon[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [pollIntervalMs, setPollIntervalMs] = useState(5000);
   const [resourceData, setResourceData] = useState<any>(null);
@@ -53,10 +54,10 @@ export default function ServicesPage() {
   const fetchData = useCallback(async () => {
     try {
       const nextServices = await servicesApi.list();
-      const addons = await addonsApi.list().catch(() => []);
+      const nextAddons = await addonsApi.list().catch(() => []);
       
       // Transform addons into service-like objects for the grid
-      const addonServices = addons.map(a => ({
+      const addonServices = nextAddons.map(a => ({
         ...a,
         isAddon: true,
         health_status: a.status === 'ACTIVE' || a.status === 'RUNNING' ? 'healthy' : 'unhealthy'
@@ -68,6 +69,7 @@ export default function ServicesPage() {
       if (nextFingerprint !== fingerprintRef.current) {
         fingerprintRef.current = nextFingerprint;
         setServices(combined);
+        setAddons(nextAddons);
       }
       consecutiveFailuresRef.current = 0;
       setFetchError(null);
@@ -220,7 +222,7 @@ export default function ServicesPage() {
 
         {viewMode === 'GRID' && (
             <div className="h-full overflow-y-auto">
-                <ServicesGrid services={primaryServices} />
+                <ServicesGrid services={primaryServices} addons={addons} />
             </div>
         )}
         {viewMode === 'RADAR' && (

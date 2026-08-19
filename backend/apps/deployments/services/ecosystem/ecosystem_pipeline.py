@@ -164,17 +164,18 @@ def _build_heuristic_plan(repos_data: list[dict], error: str = "") -> dict:
 # Full Scan Pipeline
 # ──────────────────────────────────────────────────────────────────────────────
 
-def scan_and_analyze(token: str, ai_provider: str | None = None, selected_repos: list | None = None, existing_services: list | None = None, scan_window_days: int | None = None) -> dict:
+def scan_and_analyze(token: str, ai_provider: str | None = None, selected_repos: list | None = None, existing_services: list | None = None, scan_window_days: int | None = None, scan_depth: str = 'shallow') -> dict:
     """
     Full pipeline: fetch all repos → analyze each → AI ecosystem plan.
     If selected_repos is provided, only processes those specific repositories.
     If scan_window_days is provided, filters repos by recency (pushed_at).
+    If scan_depth is provided, controls how deeply each repo is scanned for env vars.
 
     Returns the deploy plan dict ready for the frontend.
     """
     logger.info("Starting ecosystem scan...")
     try:
-        return _scan_and_analyze_impl(token, ai_provider=ai_provider, selected_repos=selected_repos, existing_services=existing_services, scan_window_days=scan_window_days)
+        return _scan_and_analyze_impl(token, ai_provider=ai_provider, selected_repos=selected_repos, existing_services=existing_services, scan_window_days=scan_window_days, scan_depth=scan_depth)
     except TypeError as exc:
         logger.exception("Ecosystem scan failed with unhashable type error: %s", exc)
         return {
@@ -195,7 +196,7 @@ def scan_and_analyze(token: str, ai_provider: str | None = None, selected_repos:
         }
 
 
-def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_repos: list | None = None, existing_services: list | None = None, scan_window_days: int | None = None) -> dict:
+def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_repos: list | None = None, existing_services: list | None = None, scan_window_days: int | None = None, scan_depth: str = 'shallow') -> dict:
     """Internal implementation of scan_and_analyze."""
     from datetime import datetime, timedelta
 
@@ -219,14 +220,14 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
         logger.info(f"Filtered by scan_window_days={scan_window_days}: {before} → {len(all_repos)} repos")
 
     # Filter by user selection if provided
-        logger.info(f"Filtering by selected repos: {selected_repos}")
-        if isinstance(selected_repos, list):
-            all_repos = [r for r in all_repos if r.get("full_name") in selected_repos]
-        elif isinstance(selected_repos, str):
-            all_repos = [r for r in all_repos if r.get("full_name") == selected_repos]
-        else:
-            logger.warning("selected_repos is unexpected type %s, skipping filter", type(selected_repos).__name__)
-        logger.info(f"Filtered down to {len(all_repos)} selected repositories")
+    logger.info(f"Filtering by selected repos: {selected_repos}")
+    if isinstance(selected_repos, list):
+        all_repos = [r for r in all_repos if r.get("full_name") in selected_repos]
+    elif isinstance(selected_repos, str):
+        all_repos = [r for r in all_repos if r.get("full_name") == selected_repos]
+    else:
+        logger.warning("selected_repos is unexpected type %s, skipping filter", type(selected_repos).__name__)
+    logger.info(f"Filtered down to {len(all_repos)} selected repositories")
 
     # 2. Analyze each repo
     logger.info("Step 2: Analyzing repositories...")
@@ -265,6 +266,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
         # Quick heuristic analysis
         heuristic = heuristic_analysis(files)
 
+        # Use the scan_depth parameter for all repos in this ecosystem scan
         repos_data.append({
             "repo": full_name,
             "description": description,
@@ -272,6 +274,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
             "files": files,
             "heuristic": heuristic,
             "private": repo.get("private", False),
+            "scan_depth": scan_depth,
         })
 
     if skipped_forks or skipped_empty or skipped_errors:

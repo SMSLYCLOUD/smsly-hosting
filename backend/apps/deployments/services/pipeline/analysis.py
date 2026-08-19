@@ -22,7 +22,8 @@ class AnalysisMixin:
         """Step 1.5: AI Analysis → structured resource + exhaustive AI Senate env filling."""
         try:
             from apps.intelligence.scanner import RepoScanner
-            scanner = RepoScanner(self.source_dir)
+            scan_depth = getattr(self.service, 'env_scan_depth', 'standard')
+            scanner = RepoScanner(self.source_dir, scan_depth=scan_depth)
 
             # Step A: Perform aggressive scan
             scan_result = scanner.scan()
@@ -450,7 +451,8 @@ class AnalysisMixin:
         try:
             # pylint: disable=import-outside-toplevel
             from apps.intelligence.scanner import RepoScanner
-            scanner = RepoScanner(self.source_dir)
+            scan_depth = getattr(self.service, 'env_scan_depth', 'standard')
+            scanner = RepoScanner(self.source_dir, scan_depth=scan_depth)
             scan_result = scanner.scan()
 
             detected = scan_result.get('env_vars', [])

@@ -92,8 +92,9 @@ MAX_LOCK_READ = 500
 class RepoScanner:
     """Scans a cloned repository and builds AI-ready context."""
 
-    def __init__(self, source_dir: str):
+    def __init__(self, source_dir: str, scan_depth: str = 'standard'):
         self.source_dir = source_dir
+        self.scan_depth = scan_depth
 
     def scan(self) -> dict[str, Any]:
         """
@@ -223,9 +224,19 @@ class RepoScanner:
     # -----------------------------------------------------------------------
 
     def _read_config_files(self) -> dict[str, str]:
-        """Read all config, package, build, and env files."""
+        """Read all config, package, build, and env files based on scan depth."""
         configs = {}
-        all_targets = CONFIG_FILES | PACKAGE_FILES | BUILD_FILES | ENV_FILES
+
+        # Define target files per scan depth
+        if self.scan_depth == 'shallow':
+            # Only .env files
+            all_targets = ENV_FILES
+        elif self.scan_depth == 'standard':
+            # .env files + core config files + package manifests
+            all_targets = ENV_FILES | CONFIG_FILES | PACKAGE_FILES
+        else:  # deep
+            # Everything
+            all_targets = CONFIG_FILES | PACKAGE_FILES | BUILD_FILES | ENV_FILES
 
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -271,7 +282,7 @@ class RepoScanner:
             if context and context not in env_vars[name]:
                 env_vars[name].append(context)
 
-        # 1. Parse .env files for variable names
+        # 1. Parse .env files for variable names (always scanned)
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
 
@@ -290,160 +301,189 @@ class RepoScanner:
                     except Exception as exc:  # pylint: disable=broad-exception-caught
                         logger.debug("Failed to scan env file %s: %s", f, exc)
 
-        # 2. Scan code files for env var patterns across 50+ frameworks
-        code_patterns = [
-            # ── Python ──
-            re.compile(r'os\.environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'os\.environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'os\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'config\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'env\(["\']([A-Z_][A-Z0-9_]*)["\']\)?'),
-            re.compile(r'env\.[a-z]+\(["\']([A-Z_][A-Z0-9_]*)["\']\)?'),
-            re.compile(r'^\s*([A-Z_][A-Z0-9_]{3,})\s*:\s*(?:str|int|bool|float|list|dict|AnyHttpUrl|PostgresDsn|RedisDsn|SecretStr|SecretBytes|EmailStr|AnyUrl|Field)'), # Pydantic settings
-            re.compile(r'Field\(.*?(?:env|alias)=["\']([A-Z_][A-Z0-9_]*)["\']'),
+        # 2. Scan code files for env var patterns (standard and deep only)
+        if self.scan_depth in ('standard', 'deep'):
+            # For standard: only core patterns; for deep: all patterns
+            if self.scan_depth == 'standard':
+                code_patterns = [
+                    # Core Python patterns only
+                    re.compile(r'os\.environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'os\.environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'os\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'config\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    # Core JS/TS patterns only
+                    re.compile(r'process\.env\.([A-Z_][A-Z0-9_]*)'),
+                    re.compile(r'process\.env\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'import\.meta\.env\.([A-Z_][A-Z0-9_]*)'),
+                    # Core Go pattern
+                    re.compile(r'os\.Getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    # Core Rust pattern
+                    re.compile(r'std::env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    # Core PHP pattern
+                    re.compile(r'getenv\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
+                    # Core Ruby pattern
+                    re.compile(r'ENV\[["\']([A-Z_][A-Z0-9_]*)["\']\]'),
+                    # Core Java pattern
+                    re.compile(r'System\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
+                    # Core C# pattern
+                    re.compile(r'Environment\.GetEnvironmentVariable\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
+                ]
+            else:  # deep - all patterns
+                code_patterns = [
+                    # ── Python ──
+                    re.compile(r'os\.environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'os\.environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'os\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'config\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'env\(["\']([A-Z_][A-Z0-9_]*)["\']\)?'),
+                    re.compile(r'env\.[a-z]+\(["\']([A-Z_][A-Z0-9_]*)["\']\)?'),
+                    re.compile(r'^\s*([A-Z_][A-Z0-9_]{3,})\s*:\s*(?:str|int|bool|float|list|dict|AnyHttpUrl|PostgresDsn|RedisDsn|SecretStr|SecretBytes|EmailStr|AnyUrl|Field)'), # Pydantic settings
+                    re.compile(r'Field\(.*?(?:env|alias)=["\']([A-Z_][A-Z0-9_]*)["\']'),
 
-            # ── JavaScript / TypeScript ──
-            re.compile(r'process\.env\.([A-Z_][A-Z0-9_]*)'),
-            re.compile(r'process\.env\[["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'import\.meta\.env\.([A-Z_][A-Z0-9_]*)'),
-            re.compile(r'config\.get\(["\']([A-Z_][A-Z0-9_]*)["\']\)'), # Node config package
-            re.compile(r'configService\.get(?:OrThrow)?\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'env: ["\']([A-Z_][A-Z0-9_]*)["\']'), # Next.js / Vite configs
-            re.compile(r'RuntimeConfig.*?([A-Z_][A-Z0-9_]*)'),
-            re.compile(r'(?:const|let|var)\s*\{\s*[^}]*\b([A-Z_][A-Z0-9_]*)\b[^}]*\}\s*=\s*process\.env'),
+                    # ── JavaScript / TypeScript ──
+                    re.compile(r'process\.env\.([A-Z_][A-Z0-9_]*)'),
+                    re.compile(r'process\.env\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'import\.meta\.env\.([A-Z_][A-Z0-9_]*)'),
+                    re.compile(r'config\.get\(["\']([A-Z_][A-Z0-9_]*)["\']\)'), # Node config package
+                    re.compile(r'configService\.get(?:OrThrow)?\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'env: ["\']([A-Z_][A-Z0-9_]*)["\']'), # Next.js / Vite configs
+                    re.compile(r'RuntimeConfig.*?([A-Z_][A-Z0-9_]*)'),
+                    re.compile(r'(?:const|let|var)\s*\{\s*[^}]*\b([A-Z_][A-Z0-9_]*)\b[^}]*\}\s*=\s*process\.env'),
 
-            # ── Go ──
-            re.compile(r'os\.Getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'viper\.(?:Get|GetString|GetInt|GetBool)\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    # ── Go ──
+                    re.compile(r'os\.Getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'viper\.(?:Get|GetString|GetInt|GetBool)\(["\']([A-Z_][A-Z0-9_]*)["\']'),
 
-            # ── Rust ──
-            re.compile(r'std::env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'dotenv!\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    # ── Rust ──
+                    re.compile(r'std::env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    re.compile(r'dotenv!\(["\']([A-Z_][A-Z0-9_]*)["\']'),
 
-            # ── PHP ──
-            re.compile(r'getenv\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
-            re.compile(r'\$_(?:ENV|SERVER)\[["\']([A-Z_][A-Z0-9_]*)["\']\]'),
+                    # ── PHP ──
+                    re.compile(r'getenv\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
+                    re.compile(r'\$_(?:ENV|SERVER)\[["\']([A-Z_][A-Z0-9_]*)["\']\]'),
 
-            # ── Ruby ──
-            re.compile(r'ENV\[["\']([A-Z_][A-Z0-9_]*)["\']\]'),
-            re.compile(r'ENV\.fetch\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+                    # ── Ruby ──
+                    re.compile(r'ENV\[["\']([A-Z_][A-Z0-9_]*)["\']\]'),
+                    re.compile(r'ENV\.fetch\(["\']([A-Z_][A-Z0-9_]*)["\']'),
 
-            # ── Java / Kotlin ──
-            re.compile(r'System\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
+                    # ── Java / Kotlin ──
+                    re.compile(r'System\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
 
-            # ── C# / .NET ──
-            re.compile(r'Environment\.GetEnvironmentVariable\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
-        ]
+                    # ── C# / .NET ──
+                    re.compile(r'Environment\.GetEnvironmentVariable\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
+                ]
 
-        code_extensions = {'.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rs', '.rb', '.php', '.java', '.kt', '.cs', '.yaml', '.yml', '.toml', '.json'}
+            code_extensions = {'.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rs', '.rb', '.php', '.java', '.kt', '.cs', '.yaml', '.yml', '.toml', '.json'}
 
-        for root, dirs, files in os.walk(self.source_dir):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for root, dirs, files in os.walk(self.source_dir):
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
 
 
-            for f in files:
-                _, ext = os.path.splitext(f)
-                if ext not in code_extensions and f not in CONFIG_FILES:
-                    continue
+                for f in files:
+                    _, ext = os.path.splitext(f)
+                    if ext not in code_extensions and f not in CONFIG_FILES:
+                        continue
 
-                filepath = os.path.join(root, f)
-                try:
-                    # Increase read limit for aggressive scanning
-                    content = self._safe_read(filepath, 100000)
-                    lines = content.splitlines()
-                    for i, line in enumerate(lines):
-                        for pattern in code_patterns:
-                            for match in pattern.finditer(line):
-                                try:
-                                    var_name = match.group(1)
-                                    context = line.strip()
-                                    # Capture 1 line above and below for better context
-                                    prev_line = lines[i-1].strip() if i > 0 else ""
-                                    next_line = lines[i+1].strip() if i < len(lines)-1 else ""
-                                    full_ctx = f"{prev_line}\n{context}\n{next_line}".strip()
-                                    add_var(var_name, full_ctx)
-                                except (IndexError, AttributeError):
-                                    continue
-                except Exception as exc:
-                    logger.debug("Failed to scan file %s for env vars: %s", filepath, exc)
+                    filepath = os.path.join(root, f)
+                    try:
+                        # Increase read limit for aggressive scanning
+                        content = self._safe_read(filepath, 100000)
+                        lines = content.splitlines()
+                        for i, line in enumerate(lines):
+                            for pattern in code_patterns:
+                                for match in pattern.finditer(line):
+                                    try:
+                                        var_name = match.group(1)
+                                        context = line.strip()
+                                        # Capture 1 line above and below for better context
+                                        prev_line = lines[i-1].strip() if i > 0 else ""
+                                        next_line = lines[i+1].strip() if i < len(lines)-1 else ""
+                                        full_ctx = f"{prev_line}\n{context}\n{next_line}".strip()
+                                        add_var(var_name, full_ctx)
+                                    except (IndexError, AttributeError):
+                                        continue
+                    except Exception as exc:
+                        logger.debug("Failed to scan file %s for env vars: %s", filepath, exc)
 
-        # 3. Post-processing: detect pydantic env_prefix and lowercase snake_case fields
-        pydantic_prefix_pat = re.compile(r'env_prefix\s*=\s*["\']([A-Z_][A-Z0-9_]*)["\']')
-        pydantic_field_pat = re.compile(r'^\s+([a-z_][a-z0-9_]+)\s*:\s*(?:str|int|bool|float|SecretStr|SecretBytes|AnyHttpUrl|PostgresDsn|RedisDsn|AnyUrl)\s*(?:[=,\n]|$)')
+        # 3. Post-processing: detect pydantic env_prefix and lowercase snake_case fields (deep only)
+        if self.scan_depth == 'deep':
+            pydantic_prefix_pat = re.compile(r'env_prefix\s*=\s*["\']([A-Z_][A-Z0-9_]*)["\']')
+            pydantic_field_pat = re.compile(r'^\s+([a-z_][a-z0-9_]+)\s*:\s*(?:str|int|bool|float|SecretStr|SecretBytes|AnyHttpUrl|PostgresDsn|RedisDsn|AnyUrl)\s*(?:[=,\n]|$)')
 
-        for root, dirs, files in os.walk(self.source_dir):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            for f in files:
-                if not f.endswith('.py'):
-                    continue
-                filepath = os.path.join(root, f)
-                try:
-                    content = self._safe_read(filepath, MAX_FILE_READ)
-                    prefix = ""
-                    pm = pydantic_prefix_pat.search(content)
-                    if pm:
-                        prefix = pm.group(1)
-                        self._detected_prefixes.add(prefix)
-                    for m in pydantic_field_pat.finditer(content):
-                        env_var = (prefix + m.group(1).upper()) if prefix else m.group(1).upper()
-                        ctx_line = m.group(0).strip()
-                        add_var(env_var, f"Found in {f} (pydantic field): {ctx_line}")
-                except Exception as exc:
-                    logger.debug("Failed to scan file %s for env vars: %s", f, exc)
+            for root, dirs, files in os.walk(self.source_dir):
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+                for f in files:
+                    if not f.endswith('.py'):
+                        continue
+                    filepath = os.path.join(root, f)
+                    try:
+                        content = self._safe_read(filepath, MAX_FILE_READ)
+                        prefix = ""
+                        pm = pydantic_prefix_pat.search(content)
+                        if pm:
+                            prefix = pm.group(1)
+                            self._detected_prefixes.add(prefix)
+                        for m in pydantic_field_pat.finditer(content):
+                            env_var = (prefix + m.group(1).upper()) if prefix else m.group(1).upper()
+                            ctx_line = m.group(0).strip()
+                            add_var(env_var, f"Found in {f} (pydantic field): {ctx_line}")
+                    except Exception as exc:
+                        logger.debug("Failed to scan file %s for env vars: %s", f, exc)
 
-        # 4. Scan docker-compose files for ${VAR} interpolation
-        compose_pattern = re.compile(r'\$\{([A-Z_][A-Z0-9_]*)(?::?[-?+])?[^}]*\}')
-        docker_env_pattern = re.compile(r'ENV\s+([A-Z_][A-Z0-9_]*)(.*)')
-        docker_arg_pattern = re.compile(r'ARG\s+([A-Z_][A-Z0-9_]*)(.*)')
+        # 4. Scan docker-compose files for ${VAR} interpolation (standard and deep)
+        if self.scan_depth in ('standard', 'deep'):
+            compose_pattern = re.compile(r'\$\{([A-Z_][A-Z0-9_]*)(?::?[-?+])?[^}]*\}')
+            docker_env_pattern = re.compile(r'ENV\s+([A-Z_][A-Z0-9_]*)(.*)')
+            docker_arg_pattern = re.compile(r'ARG\s+([A-Z_][A-Z0-9_]*)(.*)')
 
-        for root, dirs, files in os.walk(self.source_dir):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            for f in files:
-                if not (f.startswith('docker-compose') or f == 'Dockerfile' or f.endswith(('.yml', '.yaml'))):
-                    continue
-                filepath = os.path.join(root, f)
-                try:
-                    content = self._safe_read(filepath, MAX_FILE_READ)
-                    # Scan for compose interpolations
-                    for match in compose_pattern.finditer(content):
-                        add_var(match.group(1), f"Found in {f} (interpolation)")
+            for root, dirs, files in os.walk(self.source_dir):
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+                for f in files:
+                    if not (f.startswith('docker-compose') or f == 'Dockerfile' or f.endswith(('.yml', '.yaml'))):
+                        continue
+                    filepath = os.path.join(root, f)
+                    try:
+                        content = self._safe_read(filepath, MAX_FILE_READ)
+                        # Scan for compose interpolations
+                        for match in compose_pattern.finditer(content):
+                            add_var(match.group(1), f"Found in {f} (interpolation)")
 
-                    # Scan for Docker ENV/ARG
-                    for match in docker_env_pattern.finditer(content):
-                        val = match.group(2).strip()
-                        add_var(match.group(1), f"Found in {f} (ENV: {val})")
-                    for match in docker_arg_pattern.finditer(content):
-                        val = match.group(2).strip()
-                        add_var(match.group(1), f"Found in {f} (ARG: {val})")
+                        # Scan for Docker ENV/ARG
+                        for match in docker_env_pattern.finditer(content):
+                            val = match.group(2).strip()
+                            add_var(match.group(1), f"Found in {f} (ENV: {val})")
+                        for match in docker_arg_pattern.finditer(content):
+                            val = match.group(2).strip()
+                            add_var(match.group(1), f"Found in {f} (ARG: {val})")
 
-                    # Scan for environment blocks in docker-compose YAML files
-                    if f.startswith('docker-compose') or f in ('compose.yml', 'compose.yaml'):
-                        import yaml
-                        try:
-                            compose_data = yaml.safe_load(content)
-                            if compose_data and isinstance(compose_data, dict):
-                                services = compose_data.get('services', {})
-                                if isinstance(services, dict):
-                                    for svc_name, svc_def in services.items():
-                                        if isinstance(svc_def, dict):
-                                            env = svc_def.get('environment')
-                                            if isinstance(env, dict):
-                                                for k in env:
-                                                    add_var(str(k), f"Found in {f} ({svc_name} environment block)")
-                                            elif isinstance(env, list):
-                                                for item in env:
-                                                    if isinstance(item, str) and '=' in item:
-                                                        k = item.split('=', 1)[0].strip()
-                                                        add_var(k, f"Found in {f} ({svc_name} environment block)")
-                                                    elif isinstance(item, str):
-                                                        add_var(item, f"Found in {f} ({svc_name} environment block pass-through)")
-                        except Exception as exc:
-                            logger.debug("Failed to parse YAML environment blocks in %s: %s", f, exc)
-                except Exception as exc:
-                    logger.debug("Failed to scan compose/Dockerfile %s: %s", filepath, exc)
+                        # Scan for environment blocks in docker-compose YAML files
+                        if f.startswith('docker-compose') or f in ('compose.yml', 'compose.yaml'):
+                            import yaml
+                            try:
+                                compose_data = yaml.safe_load(content)
+                                if compose_data and isinstance(compose_data, dict):
+                                    services = compose_data.get('services', {})
+                                    if isinstance(services, dict):
+                                        for svc_name, svc_def in services.items():
+                                            if isinstance(svc_def, dict):
+                                                env = svc_def.get('environment')
+                                                if isinstance(env, dict):
+                                                    for k in env:
+                                                        add_var(str(k), f"Found in {f} ({svc_name} environment block)")
+                                                elif isinstance(env, list):
+                                                    for item in env:
+                                                        if isinstance(item, str) and '=' in item:
+                                                            k = item.split('=', 1)[0].strip()
+                                                            add_var(k, f"Found in {f} ({svc_name} environment block)")
+                                                        elif isinstance(item, str):
+                                                            add_var(item, f"Found in {f} ({svc_name} environment block pass-through)")
+                            except Exception as exc:
+                                logger.debug("Failed to parse YAML environment blocks in %s: %s", f, exc)
+                    except Exception as exc:
+                        logger.debug("Failed to scan compose/Dockerfile %s: %s", filepath, exc)
 
         return env_vars
 

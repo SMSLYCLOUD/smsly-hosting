@@ -9,7 +9,8 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
-import { Save, AlertTriangle, Check, Loader2 } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Save, AlertTriangle, Check, Loader2, Search, FileText, Code2 } from 'lucide-react';
 
 export function AdvancedTab({ service }: { service: Service }) {
     const confirm = useConfirm();
@@ -18,6 +19,7 @@ export function AdvancedTab({ service }: { service: Service }) {
         start_command: service.start_command || '',
         restart_policy: service.restart_policy || 'unless-stopped',
     });
+    const [scanDepth, setScanDepth] = useState<'shallow' | 'standard' | 'deep'>(service.env_scan_depth || 'standard');
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [error, setError] = useState('');
@@ -157,6 +159,84 @@ export function AdvancedTab({ service }: { service: Service }) {
                         {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                         {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Configuration'}
                     </Button>
+                </div>
+            </Card>
+
+            {/* Environment Scan Depth */}
+            <Card className="p-6 border-border shadow-md">
+                <div className="flex justify-between items-center mb-4">
+                    <div>
+                        <h3 className="font-bold text-lg flex items-center gap-2">
+                            <Search size={20} /> Environment Variable Scan Depth
+                        </h3>
+                        <p className="text-sm text-muted-foreground">Control how deeply the AI scans your repository for environment variables during deployment analysis.</p>
+                    </div>
+                </div>
+                <div className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Scan Depth</label>
+                        <Select value={scanDepth} onValueChange={(value) => setScanDepth(value as 'shallow' | 'standard' | 'deep')}>
+                            <SelectTrigger className="w-[250px]">
+                                <SelectValue placeholder="Select scan depth" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="shallow">
+                                    <div className="flex items-center gap-2">
+                                        <FileText className="w-4 h-4 text-muted-foreground" />
+                                        <span>Shallow</span>
+                                    </div>
+                                </SelectItem>
+                                <SelectItem value="standard">
+                                    <div className="flex items-center gap-2">
+                                        <Code2 className="w-4 h-4 text-muted-foreground" />
+                                        <span>Standard</span>
+                                    </div>
+                                </SelectItem>
+                                <SelectItem value="deep">
+                                    <div className="flex items-center gap-2">
+                                        <Search className="w-4 h-4 text-muted-foreground" />
+                                        <span>Deep</span>
+                                    </div>
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                            {scanDepth === 'shallow' && 'Only scans .env files. Fastest but may miss variables.'}
+                            {scanDepth === 'standard' && 'Scans .env files + config files + package manifests. Good balance.'}
+                            {scanDepth === 'deep' && 'Full codebase scan including all source files. Most thorough but slowest.'}
+                        </p>
+                    </div>
+                    <Button 
+                        onClick={async () => {
+                            setSaving(true);
+                            setError('');
+                            setSaved(false);
+                            try {
+                                await servicesApi.update(service.id, { env_scan_depth: scanDepth });
+                                setSaved(true);
+                                setTimeout(() => setSaved(false), 3000);
+                            } catch (err: any) {
+                                setError(err?.response?.data?.detail || 'Failed to save scan depth');
+                            } finally {
+                                setSaving(false);
+                            }
+                        }} 
+                        disabled={saving} 
+                        className="gap-2"
+                    >
+                        {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                        {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Scan Depth'}
+                    </Button>
+                    {error && (
+                        <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-500 text-sm">
+                            {error}
+                        </div>
+                    )}
+                    {saved && (
+                        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-4 py-3 text-emerald-500 text-sm flex items-center gap-2">
+                            <Check size={16} /> Scan depth saved successfully
+                        </div>
+                    )}
                 </div>
             </Card>
 

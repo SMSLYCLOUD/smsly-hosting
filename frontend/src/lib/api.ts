@@ -383,6 +383,8 @@ export interface Service {
   // Domain visibility
   is_public?: boolean;
   public_domain_hidden?: boolean;
+  // Environment scan depth
+  env_scan_depth?: 'shallow' | 'standard' | 'deep';
   node_metadata?: { id: string; name: string; host: string; status: string };
   estimated_cost?: {
     enabled: boolean;

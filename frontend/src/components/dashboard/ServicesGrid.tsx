@@ -1,8 +1,9 @@
 'use client';
 
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import {
   Server,
   Database,
@@ -25,23 +26,34 @@ import {
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Service, servicesApi, addonsApi, scalingApi } from '@/lib/api';
+import { Service, Addon, servicesApi, addonsApi, scalingApi } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
 import { usePermissions, PERMISSION } from '@/hooks/usePermissions';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { getAddonMetadata } from '@/lib/addonRegistry';
 
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 
 interface ServicesGridProps {
   services: (Service & { isAddon?: boolean; addon_type?: string; connection_url?: string })[];
+  addons?: Addon[];
 }
 
-export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGridProps) {
+export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }: ServicesGridProps) {
   const router = useRouter();
   const confirm = useConfirm();
   const { has } = usePermissions();
   const [actionLoading, setActionLoading] = React.useState<string | null>(null);
+
+  const addonsByService = useMemo(() => {
+    const map: Record<string, Addon[]> = {};
+    for (const addon of addons) {
+      if (!map[addon.service]) map[addon.service] = [];
+      map[addon.service].push(addon);
+    }
+    return map;
+  }, [addons]);
 
   const handleDeploy = async (serviceId: string) => {
     if (!await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) return;
@@ -207,6 +219,12 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
             </div>
 
             <div className="flex items-center gap-2">
+              {!service.isAddon && (service.autoscale_enabled || (service.min_replicas ?? 0) > 1 || (service.max_replicas ?? 0) > 1) && (
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-purple-500/15 text-purple-400" title={`Replicas: ${service.min_replicas ?? 1}-${service.max_replicas ?? 1}${service.autoscale_enabled ? ' (auto)' : ''}`}>
+                  <Scaling size={10} />
+                  {service.min_replicas ?? 1}-{service.max_replicas ?? 1}
+                </span>
+              )}
               <div className={`w-2 h-2 rounded-full ${
                   service.latest_deployment?.status === 'ACTIVE' || service.latest_deployment?.status === 'LIVE' ? 'bg-emerald-500 animate-pulse' :
                   service.latest_deployment?.status === 'FAILED' ? 'bg-red-500' :
@@ -239,6 +257,27 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
               )}
               {!service.isAddon && <span className="text-[10px] text-muted-foreground ml-auto font-mono">{service.branch || 'main'}</span>}
             </div>
+            {!service.isAddon && addonsByService[service.id]?.length > 0 && (
+              <div className="flex items-center gap-1 flex-wrap">
+                {addonsByService[service.id].map((addon) => {
+                  const meta = getAddonMetadata(addon.addon_type);
+                  return (
+                    <span
+                      key={addon.id}
+                      className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted/80 border border-border/50"
+                      title={meta?.name || addon.addon_type}
+                    >
+                      {meta?.logo ? (
+                        <Image src={meta.logo} alt={meta.name} width={12} height={12} className="shrink-0" />
+                      ) : (
+                        <Database size={10} className="text-muted-foreground shrink-0" />
+                      )}
+                      <span className="text-muted-foreground">{meta?.name?.split(' ')[0] || addon.addon_type}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
             {(service.public_domain || service.node_url || service.connection_url) && (
               <p className="text-[11px] text-muted-foreground truncate">
                 {service.public_domain || service.connection_url}

@@ -435,6 +435,19 @@ class Service(TimeStampedModel):
         help_text="Last time the autoscaler scaled this service (used for cooldown).",
     )
 
+    # Environment variable scan depth for AI analysis
+    SCAN_DEPTH_CHOICES = [
+        ('shallow', 'Shallow (.env files only)'),
+        ('standard', 'Standard (.env + config files)'),
+        ('deep', 'Deep (full codebase scan)'),
+    ]
+    env_scan_depth = models.CharField(  # type: ignore[var-annotated]
+        max_length=20,
+        choices=SCAN_DEPTH_CHOICES,
+        default='standard',
+        help_text="How deeply to scan the repository for environment variables during deployment analysis",
+    )
+
     # ── Resource-level ACLs ──
     locked = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
