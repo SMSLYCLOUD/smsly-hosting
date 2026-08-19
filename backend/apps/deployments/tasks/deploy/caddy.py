@@ -96,8 +96,8 @@ def push_caddy_to_node(server_id: str) -> dict:
         return {"ok": True, "message": "Empty Caddyfile — nothing to push"}
 
     try:
-        from apps.deployments.services.remote_orchestrator.client import RemoteClient
-        client = RemoteClient(server)
+        from apps.deployments.services.remote_orchestrator.manager import RemoteOrchestrator
+        client = RemoteOrchestrator(server)
 
         import base64
         script = (
