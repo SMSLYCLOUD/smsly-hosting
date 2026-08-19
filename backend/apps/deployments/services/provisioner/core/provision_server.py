@@ -248,7 +248,6 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                         .first()
                     ) or 0
                     server.node_number = last_num + 1
-                    update_fields.append("node_number")
 
                 node_number = server.node_number or 1
                 parts = root_domain.split(".")
@@ -258,7 +257,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     node_domain = f"grid{node_number}.{root_domain}"
 
                 server.node_domain = node_domain
-                update_fields.append("node_domain")
+                server.save(update_fields=["node_number", "node_domain", "updated_at"])
 
                 _append_log(server, f"🌐 Automated TLS: Generating DNS record for node ({node_domain})...")
                 try:
