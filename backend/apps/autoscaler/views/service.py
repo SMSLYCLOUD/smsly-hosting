@@ -88,8 +88,10 @@ class ScalingViewSet(viewsets.GenericViewSet):
     def spawn(self, request, pk=None):
         """Manually spawn a replica.
 
-        Horizontal scaling: tries local (same server) first.
-        Vertical scaling: falls back to remote nodes.
+        Query params:
+            mode=horizontal  — local only (same server, no SSH needed)
+            mode=vertical    — remote only (different server, requires SSH)
+            (default)        — local first, then remote fallback
         """
         if request.user.is_superuser:
             service = get_object_or_404(Service, id=pk)
@@ -97,6 +99,8 @@ class ScalingViewSet(viewsets.GenericViewSet):
             service = get_object_or_404(
                 Service, get_team_q_filter(request.user, request=request), id=pk
             )
+
+        mode = request.query_params.get('mode', '').lower() or request.data.get('mode', '').lower() or ''
 
         # Check max_replicas cap
         running = ServiceReplica.objects.filter(
@@ -109,24 +113,27 @@ class ScalingViewSet(viewsets.GenericViewSet):
 
         spawner = SpawningService()
 
-        # Priority 1: local spawn (horizontal = same server)
-        replica = ServiceReplica.objects.create(
-            service=service, node=None, status='SPAWNING',
-            spawn_reason='Manual spawn via API',
-        )
-        try:
-            spawner.spawn_local(service, replica)
-            return Response(ServiceReplicaSerializer(replica).data)
-        except Exception as exc:
-            logger.info("Local spawn failed for %s: %s — trying remote nodes", service.name, exc)
+        # --- Horizontal: local only ---
+        if mode != 'vertical':
+            replica = ServiceReplica.objects.create(
+                service=service, node=None, status='SPAWNING',
+                spawn_reason='Manual spawn via API (horizontal)',
+            )
             try:
-                spawner.destroy(replica)
-            except Exception:
-                pass
-            replica.status = 'DESTROYED'
-            replica.save(update_fields=['status'])
+                spawner.spawn_local(service, replica)
+                return Response(ServiceReplicaSerializer(replica).data)
+            except Exception as exc:
+                logger.warning("Local spawn failed for %s: %s", service.name, exc)
+                replica.status = 'DESTROYED'
+                replica.save(update_fields=['status'])
+                if mode == 'horizontal':
+                    return Response({
+                        'error': f'Local spawn failed: {exc}',
+                        'hint': 'Ensure Docker is running and the service has a docker_image set.',
+                    }, status=500)
+                # else: fall through to remote
 
-        # Priority 2: remote nodes (vertical = different servers)
+        # --- Vertical: remote nodes ---
         allow_control_plane = getattr(
             settings, 'GRID_ALLOW_CONTROL_PLANE_WORKLOADS',
             getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False),
@@ -139,22 +146,18 @@ class ScalingViewSet(viewsets.GenericViewSet):
             candidates = candidates.exclude(is_primary=True)
 
         if not candidates.exists():
-            return Response({'error': 'No available nodes — local spawn failed and no remote nodes configured.'}, status=400)
+            return Response({
+                'error': 'No available remote nodes.',
+                'hint': 'Horizontal scaling runs on the same server. Remote nodes require SSH keys configured on ManagedServer records.',
+            }, status=400)
 
         scorer = NodeScorer()
         best = scorer.best(candidates)
         if not best:
             min_score = _get_min_score()
             ranked = scorer.score(candidates)
-            for node, score, resources in ranked:
-                logger.warning(
-                    "Spawn rejected — node %s scored %.1f (min=%d): "
-                    "mem=%.0f%% cpu=%.0f%% disk=%.0f%%",
-                    node.name, score, min_score,
-                    resources['mem'], resources['cpu'], resources['disk'],
-                )
             return Response({
-                'error': 'All nodes too loaded',
+                'error': 'All remote nodes too loaded',
                 'min_score': min_score,
                 'node_scores': [
                     {'node': n.name, 'score': round(s, 1), **r}
@@ -164,7 +167,7 @@ class ScalingViewSet(viewsets.GenericViewSet):
 
         replica = ServiceReplica.objects.create(
             service=service, node=best, status='SPAWNING',
-            spawn_reason='Manual spawn via API',
+            spawn_reason='Manual spawn via API (vertical)',
         )
         try:
             spawner.spawn(service, best, replica)
@@ -226,3 +229,86 @@ class ScalingViewSet(viewsets.GenericViewSet):
             return Response({'status': 'destroyed'})
         finally:
             spawner.cleanup()
+
+    @action(detail=True, methods=['post'])
+    def apply_vpa(self, request, pk=None):
+        """Apply VPA resource limits to a service's running container(s).
+
+        Works for both local containers and remote nodes (via SSH).
+        Auth method depends on the ManagedServer's stored credentials.
+        """
+        if request.user.is_superuser:
+            service = get_object_or_404(Service, id=pk)
+        else:
+            service = get_object_or_404(
+                Service, get_team_q_filter(request.user, request=request), id=pk
+            )
+
+        from apps.autoscaler.services.tasks_autoscale import apply_vpa_limits_task
+
+        # Apply VPA limits for this specific service
+        import docker as docker_lib
+        from apps.deployments.services.ssh_client import SSHClient
+
+        ceiling = 1.5
+        memory = service.memory_mb
+        cpu = int(service.cpu_cores * 1024) if service.cpu_cores else 0
+
+        update_parts = []
+        if memory and memory > 0:
+            update_parts.append(f"--memory={memory}m")
+            update_parts.append(f"--memory-reservation={memory}m")
+        if cpu and cpu > 0:
+            update_parts.append(f"--cpu-shares={max(2, int((cpu / 1000) * 1024))}")
+            update_parts.append("--cpu-period=100000")
+            update_parts.append(f"--cpu-quota={int((cpu / 1000) * 100000 * ceiling)}")
+        if not update_parts:
+            return Response({'error': 'No memory/cpu settings to apply'}, status=400)
+
+        update_cmd = " ".join(update_parts)
+        container_name = service.name
+
+        if service.server_id:
+            node = service.server
+            if not node.ssh_key and not node.ssh_password:
+                return Response({
+                    'error': f'Node {node.name} has no SSH credentials.',
+                    'hint': 'Add SSH key or password to the ManagedServer record to enable remote scaling.',
+                }, status=400)
+            ssh = SSHClient(
+                ip=node.host,
+                key_content=node.ssh_key,
+                password=node.ssh_password,
+                user=getattr(node, 'ssh_user', 'root') or 'root',
+                port=getattr(node, 'ssh_port', 22) or 22,
+                key_passphrase=getattr(node, 'ssh_key_passphrase', '') or '',
+                wg_address=getattr(node, 'wg_address', '') or '',
+            )
+            try:
+                cmd = f"docker update {update_cmd} {container_name}"
+                stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
+                if exit_code == 0:
+                    return Response({'status': 'applied', 'node': node.name, 'container': container_name})
+                return Response({'error': f'docker update failed: {stderr}'}, status=500)
+            except Exception as exc:
+                return Response({'error': f'SSH failed: {exc}'}, status=500)
+            finally:
+                ssh.close()
+        else:
+            try:
+                client = docker_lib.from_env()
+                container = client.containers.get(container_name)
+                update_kwargs = {}
+                if memory and memory > 0:
+                    update_kwargs['mem_reservation'] = f"{memory}m"
+                    update_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
+                if cpu and cpu > 0:
+                    update_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
+                    update_kwargs['cpu_period'] = 100000
+                    update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
+                container.update(**update_kwargs)
+                return Response({'status': 'applied', 'container': container_name})
+            except docker_lib.errors.NotFound:
+                return Response({'error': f'Container {container_name} not found locally'}, status=404)
+            except Exception as exc:
+                return Response({'error': str(exc)}, status=500)

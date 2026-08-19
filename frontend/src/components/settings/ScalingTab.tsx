@@ -47,7 +47,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
   const handleSpawn = async () => {
     setSpawning(true);
     try {
-      await scalingApi.spawnReplica(service.id);
+      await scalingApi.spawnReplica(service.id, 'horizontal');
       toast({ title: 'Replica spawned', description: 'A new replica is being created.' });
       fetchReplicas();
     } catch (err) {
@@ -99,6 +99,26 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const [applyingVpa, setApplyingVpa] = useState(false);
+
+  const handleApplyVpa = async () => {
+    setApplyingVpa(true);
+    try {
+      const result = await scalingApi.applyVpa(service.id);
+      toast({
+        title: "Vertical scaling applied",
+        description: result.node
+          ? `Updated container on ${result.node}`
+          : `Updated container ${result.container}`,
+      });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.hint || err.message || 'Apply failed';
+      toast({ title: 'Vertical scaling failed', description: String(msg), variant: 'destructive' });
+    } finally {
+      setApplyingVpa(false);
     }
   };
 
@@ -238,17 +258,28 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         <CardHeader>
           <CardTitle>Vertical Auto-Scaling (VPA)</CardTitle>
           <CardDescription>
-            Spawns replicas across different servers/nodes when the local server is at capacity. Disabled = HPA only (same server).
+            Adjusts CPU/memory limits on running containers. Works on both local and remote nodes (requires SSH credentials on the node).
           </CardDescription>
         </CardHeader>
         <CardContent className="flex items-center justify-between">
           <div className="space-y-0.5">
             <Label className="text-base">Enable VPA</Label>
             <p className="text-sm text-muted-foreground">
-              When enabled, the autoscaler will also replicate to remote nodes for fault isolation and geographic distribution.
+              When enabled, the autoscaler will periodically apply resource limits.
             </p>
           </div>
-          <Switch checked={vpaEnabled} onCheckedChange={setVpaEnabled} />
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={applyingVpa}
+              onClick={handleApplyVpa}
+            >
+              {applyingVpa ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Apply Now
+            </Button>
+            <Switch checked={vpaEnabled} onCheckedChange={setVpaEnabled} />
+          </div>
         </CardContent>
       </Card>
 

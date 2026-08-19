@@ -2118,8 +2118,8 @@ export const scalingApi = {
     const response = await api.get('/scaling/replicas/', { params: { service: serviceId } });
     return extractDataList(response);
   },
-  spawnReplica: async (serviceId: string): Promise<Replica> => {
-    const response = await api.post(`/scaling/${serviceId}/spawn/`);
+  spawnReplica: async (serviceId: string, mode: 'horizontal' | 'vertical' = 'horizontal'): Promise<Replica> => {
+    const response = await api.post(`/scaling/${serviceId}/spawn/`, null, { params: { mode } });
     return response.data;
   },
   destroyReplica: async (replicaId: string): Promise<{ status: string; message?: string }> => {
@@ -2132,6 +2132,10 @@ export const scalingApi = {
   },
   getAlertConfig: async (serviceId: string): Promise<Record<string, unknown>> => {
     const response = await api.get(`/scaling/${serviceId}/alert_config/`);
+    return response.data;
+  },
+  applyVpa: async (serviceId: string): Promise<{ status: string; node?: string; container?: string }> => {
+    const response = await api.post(`/scaling/${serviceId}/apply_vpa/`);
     return response.data;
   },
 };

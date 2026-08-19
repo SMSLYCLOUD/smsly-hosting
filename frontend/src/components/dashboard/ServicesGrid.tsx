@@ -145,7 +145,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
     if (!await confirm({ title: 'Scale up?', message: `Spawning an extra replica for "${serviceName}" now.`, confirmText: 'Scale up' })) return;
     setActionLoading(serviceId);
     try {
-      await scalingApi.spawnReplica(serviceId);
+      await scalingApi.spawnReplica(serviceId, 'horizontal');
       toast({ title: 'Replica spawned', description: `A new replica of ${serviceName} is starting.` });
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.response?.data?.detail || err.message || 'Scale-up failed';
@@ -231,10 +231,13 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
             </div>
 
             <div className="flex items-center gap-2">
-              {!service.isAddon && (service.autoscale_enabled || (service.min_replicas ?? 0) > 1 || (service.max_replicas ?? 0) > 1) && (
-                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-purple-500/15 text-purple-400" title={`Replicas: ${service.min_replicas ?? 1}-${service.max_replicas ?? 1}${service.autoscale_enabled ? ' (auto)' : ''}`}>
+              {!service.isAddon && (
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-purple-500/15 text-purple-400" title={service.autoscale_enabled ? `Auto-scaling: ${service.min_replicas ?? 1}-${service.max_replicas ?? 1} replicas` : `${service.min_replicas ?? 1} replica`}>
                   <Scaling size={10} />
-                  {service.min_replicas ?? 1}-{service.max_replicas ?? 1}
+                  {service.min_replicas ?? 1}
+                  {service.autoscale_enabled && service.max_replicas && service.max_replicas > (service.min_replicas ?? 1) && (
+                    <span className="text-purple-300/60">-{service.max_replicas}</span>
+                  )}
                 </span>
               )}
               <div className={`w-2 h-2 rounded-full ${
@@ -383,7 +386,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                     <DropdownMenuItem onClick={() => handleManualScale(service.id, service.name)}>
                       <Scaling size={14} className="mr-2" /> New Replica (Horizontal)
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => router.push(`/services/${service.id}?tab=general`)}>
+                    <DropdownMenuItem onClick={() => router.push(`/services/${service.id}?tab=scaling`)}>
                       <Activity size={14} className="mr-2" /> More Resources (Vertical)
                     </DropdownMenuItem>
                   </DropdownMenuContent>

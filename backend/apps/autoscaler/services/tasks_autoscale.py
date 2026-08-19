@@ -137,15 +137,13 @@ def apply_vpa_limits_task(self) -> dict[str, int]:
     ceiling (``mem_limit`` / ``cpu_quota``) so the service can burst within a
     safe bound without starving neighbors.
 
-    The ceiling multiplier is controlled by the ``VPA_CEILING_MULTIPLIER``
-    env var (default 1.5).
+    Handles both local containers (master) and remote nodes (via SSH).
+    Auth method is determined by the ManagedServer's stored credentials:
+    - SSH key (preferred, stored encrypted)
+    - SSH password (fallback, may be cleared after provisioning)
     """
     import docker as docker_lib
-    try:
-        client = docker_lib.from_env()
-    except Exception as exc:
-        logger.error("apply_vpa_limits: cannot connect to Docker: %s", exc)
-        return {'updated': 0}
+    from apps.deployments.services.ssh_client import SSHClient
 
     try:
         ceiling = float(os.environ.get("VPA_CEILING_MULTIPLIER", "1.5"))
@@ -153,29 +151,86 @@ def apply_vpa_limits_task(self) -> dict[str, int]:
         ceiling = 1.5
     ceiling = max(1.0, ceiling)
 
-    services = Service.objects.filter(vpa_enabled=True)
+    services = Service.objects.select_related('server').filter(vpa_enabled=True)
     updated = 0
+    skipped = 0
+
     for service in services:
         try:
-            container = client.containers.get(service.name)
-
             memory = service.memory_mb
-            cpu = int(service.cpu_cores * 1024)
+            cpu = int(service.cpu_cores * 1024) if service.cpu_cores else 0
 
-            update_kwargs = {}
+            # Build the docker update command
+            update_parts = []
             if memory and memory > 0:
-                update_kwargs['mem_reservation'] = f"{memory}m"
-                update_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
+                update_parts.append(f"--memory={memory}m")
+                update_parts.append(f"--memory-reservation={memory}m")
             if cpu and cpu > 0:
-                update_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
-                update_kwargs['cpu_period'] = 100000
-                update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
+                cpu_shares = max(2, int((cpu / 1000) * 1024))
+                cpu_quota = int((cpu / 1000) * 100000 * ceiling)
+                update_parts.append(f"--cpu-shares={cpu_shares}")
+                update_parts.append("--cpu-period=100000")
+                update_parts.append(f"--cpu-quota={cpu_quota}")
+            if not update_parts:
+                continue
 
-            container.update(**update_kwargs)
-            updated += 1
-        except docker_lib.errors.NotFound:
-            pass
+            update_cmd = " ".join(update_parts)
+            container_name = service.name
+
+            if service.server_id:
+                # Remote node: SSH in and run docker update
+                node = service.server
+                if not node.ssh_key and not node.ssh_password:
+                    logger.warning(
+                        "VPA: skipping %s — node %s has no SSH credentials "
+                        "(add SSH key or password to ManagedServer record)",
+                        service.name, node.name,
+                    )
+                    skipped += 1
+                    continue
+
+                ssh = SSHClient(
+                    ip=node.host,
+                    key_content=node.ssh_key,
+                    password=node.ssh_password,
+                    user=getattr(node, 'ssh_user', 'root') or 'root',
+                    port=getattr(node, 'ssh_port', 22) or 22,
+                    key_passphrase=getattr(node, 'ssh_key_passphrase', '') or '',
+                    wg_address=getattr(node, 'wg_address', '') or '',
+                )
+                try:
+                    cmd = f"docker update {update_cmd} {container_name}"
+                    stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
+                    if exit_code == 0:
+                        updated += 1
+                    else:
+                        logger.warning(
+                            "VPA: docker update failed for %s on %s: %s",
+                            service.name, node.name, stderr,
+                        )
+                except Exception as exc:
+                    logger.warning("VPA: SSH failed for %s on %s: %s", service.name, node.name, exc)
+                finally:
+                    ssh.close()
+            else:
+                # Local container: use Docker SDK directly
+                try:
+                    client = docker_lib.from_env()
+                    container = client.containers.get(container_name)
+                    update_kwargs = {}
+                    if memory and memory > 0:
+                        update_kwargs['mem_reservation'] = f"{memory}m"
+                        update_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
+                    if cpu and cpu > 0:
+                        update_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
+                        update_kwargs['cpu_period'] = 100000
+                        update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
+                    container.update(**update_kwargs)
+                    updated += 1
+                except docker_lib.errors.NotFound:
+                    pass
+
         except Exception as exc:
             logger.warning("apply_vpa_limits: failed for %s: %s", service.name, exc)
 
-    return {'updated': updated}
+    return {'updated': updated, 'skipped': skipped}
