@@ -53,7 +53,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
 
         user_services = qs.distinct().prefetch_related(
             'addons', 'volumes', 'env_vars',
-            'cron_jobs',
+            'cron_jobs', 'replicas',
         )
 
         service_ids = [s.id for s in user_services]
@@ -132,9 +132,74 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     'metadata': {
                         'replicas': running_replicas,
                         'port': service.internal_port,
+                        'buildpack': getattr(service, 'buildpack', 'NIXPACKS'),
                     },
                 }
             })
+
+            # ── Public domain traffic entry node ──────────────────────
+            public_domain = getattr(service, 'public_domain', None)
+            if public_domain:
+                pd_id = f"traffic-{svc_id}"
+                nodes.append({
+                    'id': pd_id,
+                    'type': 'domain',
+                    'data': {
+                        'name': public_domain,
+                        'label': public_domain,
+                        'kind': 'EXTERNAL',
+                        'subtype': 'DOMAIN',
+                        'status': 'ACTIVE',
+                        'region': '',
+                    }
+                })
+                edges.append({
+                    'id': _edge_id(),
+                    'source': pd_id,
+                    'target': svc_id,
+                    'type': 'DOMAIN',
+                    'label': 'traffic entry',
+                })
+
+            # ── Replica nodes ─────────────────────────────────────────
+            from apps.autoscaler.models.replica import ServiceReplica
+            replicas = list(
+                ServiceReplica.objects.filter(
+                    service=service,
+                    status__in=['RUNNING', 'SPAWNING', 'DRAINING'],
+                )
+            )
+            for replica in replicas:
+                replica_id = f"replica-{replica.id}"
+                replica_status = {
+                    'RUNNING': 'ACTIVE',
+                    'SPAWNING': 'BUILDING',
+                    'DRAINING': 'STOPPED',
+                }.get(replica.status, 'UNKNOWN')
+                node_name = replica.node.name if replica.node else 'local'
+                nodes.append({
+                    'id': replica_id,
+                    'type': 'replica',
+                    'data': {
+                        'name': replica.container_name,
+                        'label': f"{service.name}-replica",
+                        'status': replica_status,
+                        'kind': 'COMPUTE',
+                        'subtype': 'REPLICA',
+                        'region': '',
+                        'node': node_name,
+                        'spawn_reason': replica.spawn_reason,
+                        'metrics': replica.metrics_snapshot,
+                        'created_at': replica.created_at.isoformat() if replica.created_at else None,
+                    }
+                })
+                edges.append({
+                    'id': _edge_id(),
+                    'source': svc_id,
+                    'target': replica_id,
+                    'type': 'REPLICA',
+                    'label': f"→ {node_name}",
+                })
 
             # ── Addon nodes + edges ──────────────────────────────────
             for addon in service.addons.all():

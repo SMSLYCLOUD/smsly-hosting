@@ -27,6 +27,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 const CustomNode = ({ data }: { data: any }) => {
   // Safe destructuring
   const { label = 'Unknown', kind = 'UNKNOWN', status = 'UNKNOWN', subtype = 'generic', url = '' } = data || {};
+  const nodeType = (data as any)?.nodeType || '';
 
   const statusColor = useMemo(() => {
     switch (status) {
@@ -48,6 +49,20 @@ const CustomNode = ({ data }: { data: any }) => {
       default: return Box;
     }
   }, [kind]);
+
+  // Replica nodes: compact, smaller style
+  if (nodeType === 'replica') {
+    return (
+      <div className="min-w-[140px] rounded-md border border-zinc-700/60 bg-zinc-900/80 shadow-sm transition-all hover:border-zinc-500 hover:shadow-md cursor-pointer opacity-80">
+        <Handle type="target" position={Position.Left} className="!bg-zinc-500" />
+        <div className="flex items-center gap-2 px-3 py-2">
+          <div className={`h-2 w-2 rounded-full ${statusColor}`} title={status} />
+          <span className="text-[10px] font-medium text-zinc-400 truncate max-w-[100px]">{label}</span>
+        </div>
+        <Handle type="source" position={Position.Right} className="!bg-zinc-500" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-w-[180px] rounded-md border border-zinc-700 bg-zinc-900 shadow-sm transition-all hover:border-zinc-500 hover:shadow-md cursor-pointer">

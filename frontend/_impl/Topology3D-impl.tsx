@@ -71,7 +71,21 @@ export function Topology3D({ data, loading, error, refresh }: { data: any, loadi
       opacity: 0.9,
     });
 
+    const nodeType = (node.type || '').toLowerCase();
     let mesh;
+
+    // Replica nodes: smaller, rounded cube
+    if (nodeType === 'replica') {
+      const replicaMaterial = new THREE.MeshLambertMaterial({
+        color,
+        transparent: true,
+        opacity: 0.75,
+      });
+      mesh = new THREE.Mesh(boxGeometry, replicaMaterial);
+      mesh.scale.set(0.5, 0.5, 0.5);
+      return mesh;
+    }
+
     switch (data.kind) {
       case 'COMPUTE':
         mesh = new THREE.Mesh(boxGeometry, material);
@@ -144,6 +158,7 @@ export function Topology3D({ data, loading, error, refresh }: { data: any, loadi
           <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 rounded-sm"></div> Active</div>
           <div className="flex items-center gap-2"><div className="w-3 h-3 bg-blue-500 rounded-sm"></div> Building</div>
           <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-500 rounded-sm"></div> Failed</div>
+          <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 rounded-sm opacity-60" style={{width: 8, height: 8}}></div> Replica</div>
           <div className="mt-2 pt-2 border-t border-zinc-800">
             <p>Left-click: Rotate</p>
             <p>Right-click: Pan</p>

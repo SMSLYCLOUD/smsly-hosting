@@ -23,6 +23,11 @@ export interface TopologyNodeData {
   size_gb?: number;
   // Addon-specific
   addon_type?: string;
+  // Replica-specific
+  node?: string;
+  spawn_reason?: string;
+  metrics?: Record<string, any>;
+  created_at?: string;
   // Deploy info
   deploy_status?: string;
   deploy_commit?: string;
@@ -43,7 +48,7 @@ export interface TopologyNodeData {
 
 export interface TopologyNode {
   id: string;
-  type: 'service' | 'addon' | 'volume' | 'domain' | 'cron' | 'tunnel' | 'proxy' | 'worker' | 'broker' | 'platform' | 'platform_db' | 'platform_cache' | 'registry' | 'external';
+  type: 'service' | 'addon' | 'volume' | 'domain' | 'cron' | 'tunnel' | 'proxy' | 'worker' | 'broker' | 'platform' | 'platform_db' | 'platform_cache' | 'registry' | 'external' | 'replica';
   data: TopologyNodeData;
   // Position fields populated by layout engine
   x?: number;
@@ -63,7 +68,7 @@ export interface TopologyEdge {
   id: string;
   source: string;
   target: string;
-  type: 'DATABASE' | 'CACHE' | 'QUEUE' | 'SEARCH' | 'STORAGE' | 'ADDON' | 'API' | 'DOMAIN' | 'CRON' | 'TUNNEL' | 'PROXY_CHAIN' | 'INTERNAL';
+  type: 'DATABASE' | 'CACHE' | 'QUEUE' | 'SEARCH' | 'STORAGE' | 'ADDON' | 'API' | 'DOMAIN' | 'CRON' | 'TUNNEL' | 'PROXY_CHAIN' | 'INTERNAL' | 'REPLICA';
   label?: string;
   data?: TopologyEdgeData;
 }
