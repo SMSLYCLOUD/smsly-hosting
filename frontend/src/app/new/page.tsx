@@ -80,6 +80,7 @@ export default function NewServicePage() {
   const [cpuCores, setCpuCores] = React.useState<number>(0.5)
   const [memoryMb, setMemoryMb] = React.useState<number>(512)
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
+  const [scanDepth, setScanDepth] = React.useState<"shallow" | "standard" | "deep">("standard")
   const [isDeploying, setIsDeploying] = React.useState(false)
 
   // AI analysis state
@@ -381,6 +382,7 @@ export default function NewServicePage() {
           branch: branch || "main",
           cpu_cores: cpuCores,
           memory_mb: memoryMb,
+          env_scan_depth: scanDepth,
           ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {}),
           ...(sourceType === "docker" && registryCredentialId !== "none" ? { registry_credential: registryCredentialId } : {})
       }, localOnlyRequest)
@@ -1213,6 +1215,41 @@ export default function NewServicePage() {
                     </div>
                   </div>
 
+                  {/* Env Scan Depth */}
+                  <div className="grid gap-2">
+                    <Label className="flex items-center gap-1.5">
+                      <Search className="h-3.5 w-3.5" /> Environment Scan Depth
+                    </Label>
+                    <Select value={scanDepth} onValueChange={(v) => setScanDepth(v as any)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="shallow">
+                          <div className="flex flex-col">
+                            <span>Shallow</span>
+                            <span className="text-xs text-muted-foreground">Dockerfiles, package manifests only</span>
+                          </div>
+                        </SelectItem>
+                        <SelectItem value="standard">
+                          <div className="flex flex-col">
+                            <span>Standard</span>
+                            <span className="text-xs text-muted-foreground">+ config files, env examples</span>
+                          </div>
+                        </SelectItem>
+                        <SelectItem value="deep">
+                          <div className="flex flex-col">
+                            <span>Deep</span>
+                            <span className="text-xs text-muted-foreground">+ source code analysis, dependency trees</span>
+                          </div>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Controls how thoroughly the AI analyzes your repo for environment variables, ports, and config.
+                    </p>
+                  </div>
+
                   {sourceType !== "docker" && (
                     <div className="pt-4">
                       <BuildpackSelector value={buildpack} onChange={setBuildpack} />
@@ -1290,6 +1327,8 @@ export default function NewServicePage() {
                       )}
                       <div className="text-muted-foreground">Env Vars</div>
                       <div className="font-medium">{envVars.length} variables defined</div>
+                      <div className="text-muted-foreground">Scan Depth</div>
+                      <div className="font-medium capitalize">{scanDepth}</div>
                       <div className="text-muted-foreground">Deploy Mode</div>
                       <div className="font-medium flex items-center gap-1.5">
                         {deployMode === "auto" ? (
