@@ -127,8 +127,20 @@ class SpawningService:
 
         name = self._safe_name(f"{service.name}-replica-{replica.id.hex[:8]}")
         image = service.docker_image or ''
+
+        # Fallback: try to get image from running container on the node
         if not image:
-            raise ValueError(f"Service {service.name} has no docker_image set")
+            try:
+                out, _, _ = ssh.exec_command(
+                    f"docker inspect --format='{{{{.Config.Image}}}}' {service.name}",
+                    raise_on_error=False, timeout=30,
+                )
+                if out.strip() and not out.strip().startswith('Error'):
+                    image = out.strip()
+            except Exception:
+                pass
+        if not image:
+            raise ValueError(f"Service {service.name} has no docker_image set — deploy once first or set docker_image manually")
 
         port = str(service.internal_port or 8000)
         domain = service.public_domain or f"{name}.localhost"
@@ -302,8 +314,16 @@ class SpawningService:
         client = docker_lib.from_env()
         name = self._safe_name(f"{service.name}-replica-{replica.id.hex[:8]}")
         image = service.docker_image or ''
+
+        # Fallback: try to get image from running container
         if not image:
-            raise ValueError(f"Service {service.name} has no docker_image set")
+            try:
+                running = client.containers.get(service.name)
+                image = running.image.tags[0] if running.image.tags else ''
+            except Exception:
+                pass
+        if not image:
+            raise ValueError(f"Service {service.name} has no docker_image set — deploy once first or set docker_image manually")
 
         # Check local capacity
         self._check_local_capacity(service)
