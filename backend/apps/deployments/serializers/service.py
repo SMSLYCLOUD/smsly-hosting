@@ -167,6 +167,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
     latest_deployment = serializers.SerializerMethodField()
     node_metadata = serializers.SerializerMethodField()
     node_url = serializers.SerializerMethodField()
+    running_replicas = serializers.SerializerMethodField()
 
     class Meta:
         model = Service
@@ -176,8 +177,11 @@ class ServiceListSerializer(serializers.ModelSerializer):
             'health_status', 'deploy_type', 'buildpack', 'created_at',
             'updated_at', 'latest_deployment', 'node_metadata', 'node_url',
             'wildcard_url_enabled', 'node_url_enabled',
-            'env_scan_depth',
+            'env_scan_depth', 'running_replicas',
         ]
+
+    def get_running_replicas(self, obj):
+        return getattr(obj, 'running_replicas_count', 0)
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
         return _get_latest_deployment(obj)

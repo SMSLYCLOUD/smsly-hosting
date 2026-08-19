@@ -58,6 +58,8 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
 
 
     def _optimize_queryset(self, qs):
+        from django.db.models import Count, Q
+        from apps.autoscaler.models.replica import ServiceReplica
         return qs.select_related('project', 'owner', 'server').prefetch_related(
             Prefetch(
                 'deployments',
@@ -72,6 +74,11 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                 to_attr='_prefetched_deployments',
             ),
             'domain_instances',
+        ).annotate(
+            running_replicas_count=Count(
+                'servicereplica',
+                filter=Q(servicereplica__status='RUNNING'),
+            )
         )
 
     def get_queryset(self):
