@@ -285,20 +285,67 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         return []
 
     try:
-        from apps.deployments.models import Service
+        from apps.deployments.models import Service, Deployment
         from apps.deployments.models.addons import Addon
 
         if not _table_exists(Service._meta.db_table):
             return []
 
         suffix = f".{wildcard_domain}"
-        for service in Service.objects.only("id", "public_domain", "custom_domains", "public_domain_hidden", "is_preview").all():
-            svr = _resolve_effective_server(service)
-            # @known_hosts routes to traefik:80 (master control plane).
-            # Only local/primary services belong here — skip all remote targets.
-            if svr and not svr.is_primary:
-                continue
+
+        # Pre-fetch latest deployment target_is_local per service to avoid
+        # N+1 queries.  A service is considered LOCAL if:
+        #   1. It has no deployments (fresh service, server FK is authoritative)
+        #   2. Its latest deployment has target_is_local=True
+        #   3. Its latest deployment has no target_server_id and the service's
+        #      own server FK is primary (legacy deployments)
+        service_ids = [
+            s.id for s in Service.objects.only("id").all()
+        ]
+        latest_local_map: dict[str, bool] = {}
+        if service_ids:
+            from django.db.models import OuterRef, Subquery
+            latest_dep = (
+                Deployment.objects.filter(service_id=OuterRef('service_id'))
+                .order_by('-created_at')
+                .values('target_is_local', 'target_server_id')[:1]
+            )
+            for row in Service.objects.filter(id__in=service_ids).annotate(
+                _latest_target_is_local=Subquery(latest_dep.values('target_is_local')),
+                _latest_target_server_id=Subquery(latest_dep.values('target_server_id')),
+            ).values('id', '_latest_target_is_local', '_latest_target_server_id'):
+                sid = str(row['id'])
+                target_is_local = row['_latest_target_is_local']
+                target_server_id = row['_latest_target_server_id']
+                if target_is_local is True:
+                    latest_local_map[sid] = True
+                elif target_server_id is not None:
+                    latest_local_map[sid] = False
+                else:
+                    # No deployment or deployment has no target info —
+                    # fall through to service.server FK check below.
+                    latest_local_map.pop(sid, None)
+
+        for service in Service.objects.select_related('server').only(
+            "id", "public_domain", "custom_domains", "public_domain_hidden",
+            "is_preview", "server",
+        ).all():
             if getattr(service, "is_preview", False):
+                continue
+
+            # Determine if this service is local:
+            # 1. Check latest deployment target from pre-fetched map
+            # 2. Fall back to service.server FK
+            sid = str(service.id)
+            is_local = False
+            if sid in latest_local_map:
+                is_local = latest_local_map[sid]
+            else:
+                # No deployment data — use service.server FK
+                svr = getattr(service, 'server', None)
+                is_local = (svr is None) or (getattr(svr, 'is_primary', False) is True)
+
+            if not is_local:
                 continue
             public_domain = ""
             if getattr(service, "public_domain_hidden", False):
@@ -351,8 +398,14 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         for service in Service.objects.filter(
             staging_domain__isnull=False,
         ).exclude(staging_domain="").only("id", "staging_domain"):
-            svr = _resolve_effective_server(service)
-            if svr and not svr.is_primary:
+            sid = str(service.id)
+            is_local = False
+            if sid in latest_local_map:
+                is_local = latest_local_map[sid]
+            else:
+                svr = getattr(service, 'server', None)
+                is_local = (svr is None) or (getattr(svr, 'is_primary', False) is True)
+            if not is_local:
                 continue
             staging_domain = str(service.staging_domain).strip()
             if not staging_domain:
@@ -404,20 +457,56 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
         return {}
 
     try:
-        from apps.deployments.models import Service
+        from apps.deployments.models import Service, Deployment
 
         if not _table_exists(Service._meta.db_table):
             return {}
 
         suffix = f".{wildcard_domain}"
-        for service in Service.objects.only(
+
+        # Pre-fetch latest deployment target per service (same logic as _get_wildcard_known_hosts)
+        service_ids = [
+            s.id for s in Service.objects.only("id").all()
+        ]
+        latest_local_map: dict[str, bool] = {}
+        if service_ids:
+            from django.db.models import OuterRef, Subquery
+            latest_dep = (
+                Deployment.objects.filter(service_id=OuterRef('service_id'))
+                .order_by('-created_at')
+                .values('target_is_local', 'target_server_id')[:1]
+            )
+            for row in Service.objects.filter(id__in=service_ids).annotate(
+                _latest_target_is_local=Subquery(latest_dep.values('target_is_local')),
+                _latest_target_server_id=Subquery(latest_dep.values('target_server_id')),
+            ).values('id', '_latest_target_is_local', '_latest_target_server_id'):
+                sid = str(row['id'])
+                target_is_local = row['_latest_target_is_local']
+                target_server_id = row['_latest_target_server_id']
+                if target_is_local is True:
+                    latest_local_map[sid] = True
+                elif target_server_id is not None:
+                    latest_local_map[sid] = False
+                else:
+                    latest_local_map.pop(sid, None)
+
+        for service in Service.objects.select_related('server').only(
             "id", "public_domain", "custom_domains", "public_domain_hidden",
-            "wildcard_url_enabled",
+            "wildcard_url_enabled", "server",
         ).all():
             if not getattr(service, "wildcard_url_enabled", True):
                 continue
-            svr = _resolve_effective_server(service)
-            if not svr or svr.is_primary:
+
+            # Determine if this service is remote using same logic as _get_wildcard_known_hosts
+            sid = str(service.id)
+            is_local = False
+            if sid in latest_local_map:
+                is_local = latest_local_map[sid]
+            else:
+                svr = getattr(service, 'server', None)
+                is_local = (svr is None) or (getattr(svr, 'is_primary', False) is True)
+
+            if is_local:
                 continue
             upstream_url = _remote_upstream_url_for_service(service)
             if not upstream_url:
