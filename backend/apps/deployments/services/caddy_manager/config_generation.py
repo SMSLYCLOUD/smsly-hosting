@@ -306,7 +306,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         if service_ids:
             from django.db.models import OuterRef, Subquery
             latest_dep = (
-                Deployment.objects.filter(service_id=OuterRef('service_id'))
+                Deployment.objects.filter(service_id=OuterRef('id'))
                 .order_by('-created_at')
                 .values('target_is_local', 'target_server_id')[:1]
             )
@@ -472,7 +472,7 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
         if service_ids:
             from django.db.models import OuterRef, Subquery
             latest_dep = (
-                Deployment.objects.filter(service_id=OuterRef('service_id'))
+                Deployment.objects.filter(service_id=OuterRef('id'))
                 .order_by('-created_at')
                 .values('target_is_local', 'target_server_id')[:1]
             )
