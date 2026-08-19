@@ -137,12 +137,13 @@ def apply_vpa_limits_task(self) -> dict[str, int]:
     ceiling (``mem_limit`` / ``cpu_quota``) so the service can burst within a
     safe bound without starving neighbors.
 
-    Handles both local containers (master) and remote nodes (via SSH).
-    Auth method is determined by the ManagedServer's stored credentials:
-    - SSH key (preferred, stored encrypted)
-    - SSH password (fallback, may be cleared after provisioning)
+    Resolution order for remote nodes:
+    1. SSH (if node has ssh_key or ssh_password stored)
+    2. Node API call (for self-provisioned/bootstrap nodes with no SSH)
+    3. Local Docker SDK (if service runs on this server)
     """
     import docker as docker_lib
+    import requests as http_requests
     from apps.deployments.services.ssh_client import SSHClient
 
     try:
@@ -160,60 +161,82 @@ def apply_vpa_limits_task(self) -> dict[str, int]:
             memory = service.memory_mb
             cpu = int(service.cpu_cores * 1024) if service.cpu_cores else 0
 
-            # Build the docker update command
             update_parts = []
             if memory and memory > 0:
                 update_parts.append(f"--memory={memory}m")
                 update_parts.append(f"--memory-reservation={memory}m")
             if cpu and cpu > 0:
-                cpu_shares = max(2, int((cpu / 1000) * 1024))
-                cpu_quota = int((cpu / 1000) * 100000 * ceiling)
-                update_parts.append(f"--cpu-shares={cpu_shares}")
+                update_parts.append(f"--cpu-shares={max(2, int((cpu / 1000) * 1024))}")
                 update_parts.append("--cpu-period=100000")
-                update_parts.append(f"--cpu-quota={cpu_quota}")
+                update_parts.append(f"--cpu-quota={int((cpu / 1000) * 100000 * ceiling)}")
             if not update_parts:
                 continue
 
-            update_cmd = " ".join(update_parts)
             container_name = service.name
 
             if service.server_id:
-                # Remote node: SSH in and run docker update
                 node = service.server
-                if not node.ssh_key and not node.ssh_password:
-                    logger.warning(
-                        "VPA: skipping %s — node %s has no SSH credentials "
-                        "(add SSH key or password to ManagedServer record)",
-                        service.name, node.name,
+
+                # Path 1: SSH
+                if node.ssh_key or node.ssh_password:
+                    ssh = SSHClient(
+                        ip=node.host,
+                        key_content=node.ssh_key,
+                        password=node.ssh_password,
+                        user=getattr(node, 'ssh_user', 'root') or 'root',
+                        port=getattr(node, 'ssh_port', 22) or 22,
+                        key_passphrase=getattr(node, 'ssh_key_passphrase', '') or '',
+                        wg_address=getattr(node, 'wg_address', '') or '',
                     )
-                    skipped += 1
+                    try:
+                        cmd = f"docker update {' '.join(update_parts)} {container_name}"
+                        stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
+                        if exit_code == 0:
+                            updated += 1
+                        else:
+                            logger.warning("VPA: docker update failed for %s on %s: %s", service.name, node.name, stderr)
+                    except Exception as exc:
+                        logger.warning("VPA: SSH failed for %s on %s: %s", service.name, node.name, exc)
+                    finally:
+                        ssh.close()
                     continue
 
-                ssh = SSHClient(
-                    ip=node.host,
-                    key_content=node.ssh_key,
-                    password=node.ssh_password,
-                    user=getattr(node, 'ssh_user', 'root') or 'root',
-                    port=getattr(node, 'ssh_port', 22) or 22,
-                    key_passphrase=getattr(node, 'ssh_key_passphrase', '') or '',
-                    wg_address=getattr(node, 'wg_address', '') or '',
-                )
-                try:
-                    cmd = f"docker update {update_cmd} {container_name}"
-                    stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
-                    if exit_code == 0:
-                        updated += 1
-                    else:
-                        logger.warning(
-                            "VPA: docker update failed for %s on %s: %s",
-                            service.name, node.name, stderr,
+                # Path 2: Node API (bootstrap/self-provisioned nodes)
+                node_api_url = None
+                if getattr(node, 'wg_address', None) and node.api_token:
+                    node_api_url = f"http://{node.wg_address}:8000"
+                elif node.host and node.api_token:
+                    node_api_url = f"http://{node.host}:8000"
+
+                if node_api_url and node.api_token:
+                    try:
+                        from apps.deployments.views.server.helpers import _build_remote_headers
+                        headers = _build_remote_headers(
+                            node, method='POST',
+                            path=f'/api/v1/autoscaler/services/{service.id}/apply_vpa/',
+                            body=b'',
                         )
-                except Exception as exc:
-                    logger.warning("VPA: SSH failed for %s on %s: %s", service.name, node.name, exc)
-                finally:
-                    ssh.close()
+                        resp = http_requests.post(
+                            f"{node_api_url}/api/v1/autoscaler/services/{service.id}/apply_vpa/",
+                            headers=headers,
+                            timeout=30,
+                        )
+                        if resp.ok:
+                            updated += 1
+                        else:
+                            logger.warning("VPA: node API failed for %s on %s: %s", service.name, node.name, resp.text[:200])
+                    except Exception as exc:
+                        logger.warning("VPA: node API call failed for %s on %s: %s", service.name, node.name, exc)
+                    continue
+
+                # No way to reach the node
+                logger.warning(
+                    "VPA: skipping %s — node %s has no SSH credentials and no API token",
+                    service.name, node.name,
+                )
+                skipped += 1
             else:
-                # Local container: use Docker SDK directly
+                # Local container
                 try:
                     client = docker_lib.from_env()
                     container = client.containers.get(container_name)

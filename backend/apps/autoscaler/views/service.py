@@ -234,8 +234,10 @@ class ScalingViewSet(viewsets.GenericViewSet):
     def apply_vpa(self, request, pk=None):
         """Apply VPA resource limits to a service's running container(s).
 
-        Works for both local containers and remote nodes (via SSH).
-        Auth method depends on the ManagedServer's stored credentials.
+        Resolution order for remote nodes:
+        1. SSH (if node has ssh_key or ssh_password stored)
+        2. Node API call (for self-provisioned/bootstrap nodes with no SSH)
+        3. Local Docker SDK (if service runs on this server)
         """
         if request.user.is_superuser:
             service = get_object_or_404(Service, id=pk)
@@ -244,9 +246,6 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 Service, get_team_q_filter(request.user, request=request), id=pk
             )
 
-        from apps.autoscaler.services.tasks_autoscale import apply_vpa_limits_task
-
-        # Apply VPA limits for this specific service
         import docker as docker_lib
         from apps.deployments.services.ssh_client import SSHClient
 
@@ -270,31 +269,70 @@ class ScalingViewSet(viewsets.GenericViewSet):
 
         if service.server_id:
             node = service.server
-            if not node.ssh_key and not node.ssh_password:
-                return Response({
-                    'error': f'Node {node.name} has no SSH credentials.',
-                    'hint': 'Add SSH key or password to the ManagedServer record to enable remote scaling.',
-                }, status=400)
-            ssh = SSHClient(
-                ip=node.host,
-                key_content=node.ssh_key,
-                password=node.ssh_password,
-                user=getattr(node, 'ssh_user', 'root') or 'root',
-                port=getattr(node, 'ssh_port', 22) or 22,
-                key_passphrase=getattr(node, 'ssh_key_passphrase', '') or '',
-                wg_address=getattr(node, 'wg_address', '') or '',
-            )
-            try:
-                cmd = f"docker update {update_cmd} {container_name}"
-                stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
-                if exit_code == 0:
-                    return Response({'status': 'applied', 'node': node.name, 'container': container_name})
-                return Response({'error': f'docker update failed: {stderr}'}, status=500)
-            except Exception as exc:
-                return Response({'error': f'SSH failed: {exc}'}, status=500)
-            finally:
-                ssh.close()
+
+            # Path 1: SSH (if credentials available)
+            if node.ssh_key or node.ssh_password:
+                ssh = SSHClient(
+                    ip=node.host,
+                    key_content=node.ssh_key,
+                    password=node.ssh_password,
+                    user=getattr(node, 'ssh_user', 'root') or 'root',
+                    port=getattr(node, 'ssh_port', 22) or 22,
+                    key_passphrase=getattr(node, 'ssh_key_passphrase', '') or '',
+                    wg_address=getattr(node, 'wg_address', '') or '',
+                )
+                try:
+                    cmd = f"docker update {update_cmd} {container_name}"
+                    stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
+                    if exit_code == 0:
+                        return Response({'status': 'applied', 'method': 'ssh', 'node': node.name})
+                    return Response({'error': f'docker update failed: {stderr}'}, status=500)
+                except Exception as exc:
+                    return Response({'error': f'SSH failed: {exc}'}, status=500)
+                finally:
+                    ssh.close()
+
+            # Path 2: Node API (for bootstrap/self-provisioned nodes)
+            node_api_url = None
+            if getattr(node, 'wg_address', None) and node.api_token:
+                node_api_url = f"http://{node.wg_address}:8000"
+            elif node.host and node.api_token:
+                node_api_url = f"http://{node.host}:8000"
+
+            if node_api_url and node.api_token:
+                import requests
+                from apps.deployments.views.server.helpers import _build_remote_headers
+                try:
+                    headers = _build_remote_headers(
+                        node, method='POST',
+                        path=f'/api/v1/autoscaler/services/{service.id}/apply_vpa/',
+                        body=b'',
+                    )
+                    resp = requests.post(
+                        f"{node_api_url}/api/v1/autoscaler/services/{service.id}/apply_vpa/",
+                        headers=headers,
+                        timeout=30,
+                    )
+                    if resp.ok:
+                        return Response({**resp.json(), 'method': 'node_api', 'node': node.name})
+                    return Response({
+                        'error': f'Node API returned {resp.status_code}: {resp.text}',
+                        'hint': 'Ensure the node agent is running and reachable.',
+                    }, status=resp.status_code)
+                except requests.exceptions.ConnectionError:
+                    return Response({
+                        'error': f'Cannot reach node {node.name} API.',
+                        'hint': 'Node may be offline or firewall blocks port 8000.',
+                    }, status=502)
+                except Exception as exc:
+                    return Response({'error': f'Node API call failed: {exc}'}, status=500)
+
+            return Response({
+                'error': f'Node {node.name} has no SSH credentials and no API token.',
+                'hint': 'Add SSH key/password to ManagedServer, or ensure agent is registered with api_token.',
+            }, status=400)
         else:
+            # Local container
             try:
                 client = docker_lib.from_env()
                 container = client.containers.get(container_name)
@@ -307,7 +345,7 @@ class ScalingViewSet(viewsets.GenericViewSet):
                     update_kwargs['cpu_period'] = 100000
                     update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
                 container.update(**update_kwargs)
-                return Response({'status': 'applied', 'container': container_name})
+                return Response({'status': 'applied', 'method': 'local', 'container': container_name})
             except docker_lib.errors.NotFound:
                 return Response({'error': f'Container {container_name} not found locally'}, status=404)
             except Exception as exc:
