@@ -901,7 +901,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             continue
 
         try:
-            service = Service.objects.filter(owner=user, name=requested_name).first()
+            # Service.name is globally unique — check all owners, not just the current user.
+            service = Service.objects.filter(name=requested_name).first()
             if service is None:
                 final_name = _next_available_service_name(Service, requested_name)
                 service = Service.objects.create(
