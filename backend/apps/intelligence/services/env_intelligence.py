@@ -30,6 +30,29 @@ _PLATFORM_MANAGED_VARS = frozenset({
     "IDENTITY_SERVICE_URL", "PLATFORM_API_URL",
 })
 
+_DELIBERATION_RE = re.compile(
+    r'^(?:'
+    r'boolean\s*=>\s*(true|false)\b.*'   # "boolean => likely true (or false?)..."
+    r'|number\s*(?:\([^)]*\))?\s*=>\s*([0-9.e+-]+)\b.*'  # "number (seconds) => 5"
+    r'|URL\s*=>\s*(\S+).*'              # "URL => http://..."
+    r'|string\s*=>\s*(.+)'              # "string => /path/..."
+    r')$',
+    re.IGNORECASE,
+)
+
+
+def _sanitize_senate_value(val: str) -> str:
+    """Strip AI deliberation text from a value (e.g. 'boolean => likely true ...' → 'true')."""
+    v = str(val).strip()
+    m = _DELIBERATION_RE.match(v)
+    if m:
+        # Return the first non-None group (the actual value)
+        for g in m.groups():
+            if g is not None:
+                return g.strip().strip('"').strip("'")
+    return v
+
+
 class EnvironmentIntelligenceService:
     """
     Service that uses the AI Senate to intelligently fill environment variables
@@ -135,6 +158,7 @@ class EnvironmentIntelligenceService:
             }
             final_env = {}
             for var, val in suggestions.items():
+                val = _sanitize_senate_value(val)
                 var_upper = var.upper()
                 # Skip PORT entirely — platform manages it
                 if var_upper == "PORT" or var_upper.endswith("_PORT"):
@@ -242,6 +266,7 @@ class EnvironmentIntelligenceService:
                     _CONFIG_ECO = {"TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES", "MAX_", "MIN_", "LIMIT", "COUNT", "COOLDOWN", "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES"}
                     final_env = {}
                     for var, val in suggestions.items():
+                        val = _sanitize_senate_value(val)
                         var_u = var.upper()
                         if var_u == "PORT" or var_u.endswith("_PORT"):
                             continue
