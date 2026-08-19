@@ -52,7 +52,19 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
       if (!map[addon.service]) map[addon.service] = [];
       map[addon.service].push(addon);
     }
-    return map;
+    // Deduplicate by addon_type — show only one icon per type
+    const deduped: Record<string, Addon[]> = {};
+    for (const [serviceId, serviceAddons] of Object.entries(map)) {
+      const seen = new Set<string>();
+      deduped[serviceId] = [];
+      for (const a of serviceAddons) {
+        if (!seen.has(a.addon_type)) {
+          seen.add(a.addon_type);
+          deduped[serviceId].push(a);
+        }
+      }
+    }
+    return deduped;
   }, [addons]);
 
   const handleDeploy = async (serviceId: string) => {
@@ -258,21 +270,20 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
               {!service.isAddon && <span className="text-[10px] text-muted-foreground ml-auto font-mono">{service.branch || 'main'}</span>}
             </div>
             {!service.isAddon && addonsByService[service.id]?.length > 0 && (
-              <div className="flex items-center gap-1 flex-wrap">
+              <div className="flex items-center gap-1">
                 {addonsByService[service.id].map((addon) => {
                   const meta = getAddonMetadata(addon.addon_type);
                   return (
                     <span
                       key={addon.id}
-                      className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted/80 border border-border/50"
+                      className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-muted/80 border border-border/50"
                       title={meta?.name || addon.addon_type}
                     >
                       {meta?.logo ? (
-                        <Image src={meta.logo} alt={meta.name} width={12} height={12} className="shrink-0" />
+                        <Image src={meta.logo} alt={meta.name} width={14} height={14} className="shrink-0" />
                       ) : (
                         <Database size={10} className="text-muted-foreground shrink-0" />
                       )}
-                      <span className="text-muted-foreground">{meta?.name?.split(' ')[0] || addon.addon_type}</span>
                     </span>
                   );
                 })}

@@ -650,7 +650,7 @@ function ProjectDetailContent() {
               <Button
                 variant="destructive"
                 onClick={async () => {
-                  if (!await confirm({ title: 'Delete project?', message: `Delete "${project.name}"? All services will become ungrouped.`, variant: 'destructive', confirmText: 'Delete' })) return;
+                  if (!await confirm({ title: 'Delete project?', message: `Delete "${project.name}"? All services in this project will be deleted.`, variant: 'destructive', confirmText: 'Delete' })) return;
                   try {
                     await projectsApi.delete(projectId);
                     router.push('/projects');

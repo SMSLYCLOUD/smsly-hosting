@@ -81,6 +81,19 @@ class Project(models.Model):
                 counter += 1
         super().save(*args, **kwargs)
 
+    def delete(self, *args, **kwargs):
+        """Delete all services in this project before deleting the project itself."""
+        from .core import Service
+        from ..tasks import delete_service_task
+
+        services = Service.objects.filter(project=self)
+        for svc in services:
+            svc.status = Service.Status.DELETION_PENDING
+            svc.save(update_fields=['status'])
+            delete_service_task.delay(str(svc.id), force=True)
+
+        return super().delete(*args, **kwargs)
+
 
 class Service(TimeStampedModel):
     """

@@ -78,7 +78,7 @@ export default function ProjectsPage() {
 
   const handleDelete = async (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
-    if (!await confirm({ title: 'Delete project?', message: `Delete project "${project.name}"? Services will become ungrouped.`, variant: 'destructive', confirmText: 'Delete' })) return;
+    if (!await confirm({ title: 'Delete project?', message: `Delete project "${project.name}"? All services in this project will be deleted.`, variant: 'destructive', confirmText: 'Delete' })) return;
     try {
       await projectsApi.delete(project.id);
       setProjects(prev => prev.filter(p => p.id !== project.id));
