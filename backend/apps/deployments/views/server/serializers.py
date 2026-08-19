@@ -45,6 +45,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             # so operators can see whether a pin is configured
             # without leaking the pin value itself.
             "verify_tls", "tls_cert_sha256_set",
+            "node_number", "node_domain",
         ]
         read_only_fields = [
             "id", "status", "last_health_check", "server_version",
@@ -53,6 +54,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "node_type", "node_components",
             "agent_ready", "last_agent_heartbeat_at", "agent_runtime_info",
             "tls_cert_sha256_set",
+            "node_number", "node_domain",
         ]
 
     def get_tls_cert_sha256_set(self, obj):

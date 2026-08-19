@@ -686,6 +686,12 @@ function OverviewTab({ server }: { server: ManagedServer }) {
                             <p className="text-muted-foreground text-xs">SSH Port</p>
                             <p className="font-mono">{server.ssh_port}</p>
                         </div>
+                        {server.node_domain && (
+                            <div>
+                                <p className="text-muted-foreground text-xs">Node Domain</p>
+                                <p className="font-mono">{server.node_domain}</p>
+                            </div>
+                        )}
                     </div>
                 </div>
 

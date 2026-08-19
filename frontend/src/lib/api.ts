@@ -1288,6 +1288,9 @@ export interface ManagedServer {
   // TLS pinning
   verify_tls?: boolean;
   tls_cert_sha256_set?: boolean;
+  // Node domain
+  node_number?: number | null;
+  node_domain?: string | null;
 }
 
 const proxiedRequestConfig = (): AxiosRequestConfigProxy => ({ _isProxied: true });

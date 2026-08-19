@@ -239,8 +239,26 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 install_env["MASTER_URL"] = f"https://{root_domain}"
 
             if cf_token and root_domain:
-                node_slug = str(server.id).split('-')[0]
-                node_domain = f"node-{node_slug}.{root_domain}"
+                if not server.node_number:
+                    last_num = (
+                        ManagedServer.objects
+                        .filter(node_number__isnull=False)
+                        .order_by("-node_number")
+                        .values_list("node_number", flat=True)
+                        .first()
+                    ) or 0
+                    server.node_number = last_num + 1
+                    update_fields.append("node_number")
+
+                node_number = server.node_number or 1
+                parts = root_domain.split(".")
+                if len(parts) > 2:
+                    node_domain = f"grid{node_number}.{'.'.join(parts[1:])}"
+                else:
+                    node_domain = f"grid{node_number}.{root_domain}"
+
+                server.node_domain = node_domain
+                update_fields.append("node_domain")
 
                 _append_log(server, f"🌐 Automated TLS: Generating DNS record for node ({node_domain})...")
                 try:

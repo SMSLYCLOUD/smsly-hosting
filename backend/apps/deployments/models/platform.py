@@ -158,6 +158,10 @@ class ManagedServer(models.Model):
         null=True, blank=True,
         help_text="Sequential node number (1, 2, ...). Used for domain naming: grid{N}.domain.",
     )
+    node_domain = models.CharField(  # type: ignore[var-annotated]
+        max_length=255, blank=True, null=True,
+        help_text="Computed node domain (e.g. grid1.smsly.cloud). Set during provisioning.",
+    )
     provision_status = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=ProvisionStatus.choices, default=ProvisionStatus.NONE)
     provision_logs = models.TextField(blank=True, default="")  # type: ignore[var-annotated]

@@ -2004,6 +2004,37 @@ function ProvisioningLogPanel({
                 </div>
             )}
 
+            {/* Node DNS record info — shown on successful provisioning */}
+            {status === 'DONE' && server?.node_domain && (
+                <div className="px-4 py-3 border-b border-blue-500/30 bg-blue-500/10">
+                    <p className="text-[11px] font-semibold text-blue-400 flex items-center gap-1.5 mb-2">
+                        <Globe size={12} />
+                        DNS Record — Point your domain to this node
+                    </p>
+                    <div className="space-y-1.5 text-[11px] font-mono">
+                        <div className="flex gap-3">
+                            <span className="text-zinc-500 w-16 shrink-0">Type:</span>
+                            <span className="text-blue-300">A</span>
+                        </div>
+                        <div className="flex gap-3">
+                            <span className="text-zinc-500 w-16 shrink-0">Name:</span>
+                            <span className="text-blue-300">{server.node_domain}</span>
+                        </div>
+                        <div className="flex gap-3">
+                            <span className="text-zinc-500 w-16 shrink-0">Value:</span>
+                            <span className="text-blue-300">{server.host}</span>
+                        </div>
+                        <div className="flex gap-3">
+                            <span className="text-zinc-500 w-16 shrink-0">Proxy:</span>
+                            <span className="text-blue-300">DNS only (grey cloud)</span>
+                        </div>
+                    </div>
+                    <p className="text-[10px] text-blue-500/70 mt-2">
+                        This A record was auto-created via Cloudflare. Services deployed to this node will be accessible at <span className="font-semibold text-blue-400">myservice.{server.node_domain}</span>
+                    </p>
+                </div>
+            )}
+
             <pre
                 ref={logRef}
                 className="p-4 text-xs font-mono text-emerald-400 overflow-auto max-h-96 leading-relaxed whitespace-pre-wrap"
