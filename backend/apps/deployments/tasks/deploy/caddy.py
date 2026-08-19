@@ -116,7 +116,7 @@ def push_caddy_to_node(server_id: str) -> dict:
         resp = client._request(
             method='POST',
             path='/api/v1/transfers/incoming/exec/',
-            json={'script': script},
+            payload={'script': script},
             timeout=30,
         )
         if resp and resp.status_code == 200:
