@@ -48,10 +48,11 @@ interface Analysis {
 // ── Steps ──────────────────────────────────────────────────────────────────
 const STEPS = [
   { id: 1, label: "Select Source", icon: Github },
-  { id: 2, label: "AI Analysis", icon: Sparkles },
-  { id: 3, label: "Configure", icon: Settings2 },
-  { id: 4, label: "Review", icon: CheckCircle2 },
-  { id: 5, label: "Target Servers", icon: Server },
+  { id: 2, label: "Configure", icon: Settings2 },
+  { id: 3, label: "Deploy Mode", icon: Zap },
+  { id: 4, label: "Environment", icon: Database },
+  { id: 5, label: "Review", icon: CheckCircle2 },
+  { id: 6, label: "Target Servers", icon: Server },
 ]
 
 export default function NewServicePage() {
@@ -263,50 +264,61 @@ export default function NewServicePage() {
         }
       }
 
-      // For git repos, go to AI analysis step
+      // For git repos, start analysis in background while showing configure
       if (sourceType === "git") {
-        setStep(2)
         runAnalysis(repoUrl)
-        return
       }
-      // For templates/docker, skip analysis and go straight to config
-      setStep(3)
+      setStep(2)
       return
     }
 
-    if (step === 2) {
+    if (step === 3) {
+      // Deploy Mode step: check if auto + user-required vars
       if (deployMode === "auto") {
-        // Check if there are user-required vars (API keys, etc.)
         const hasUserRequired = Object.keys(userRequiredVars).length > 0
         if (hasUserRequired) {
-          setShowEnvPrompt(true)
+          // Has user-required vars → go to env vars step
+          setStep(4)
           return
         }
-        // No user-required vars, go straight to deploy
-        setStep(4)
-      } else {
-        // Manual — go to config (pre-filled)
-        setStep(3)
+        // No user-required vars → skip env vars, go to review
+        setStep(5)
+        return
       }
+      // Manual mode → always show env vars
+      setStep(4)
+      return
+    }
+
+    if (step === 6) {
+      // Target Servers → deploy
+      handleDeploy()
       return
     }
 
     setStep(step + 1)
-    // Fetch servers when entering Step 5
-    if (step + 1 === 5) fetchServers()
+    // Fetch servers when entering Step 6
+    if (step + 1 === 6) fetchServers()
   }
 
   const handleBack = () => {
-    if (step === 5) {
-      setStep(4) // Go back to Review from Target Servers
-    } else if (step === 4 && deployMode === "auto") {
-      setStep(2) // Skip config going back
-    } else if (step === 3 && sourceType !== "git") {
-      setStep(1) // Skip analysis for non-git
-    } else {
-      setStep(step - 1)
+    if (step === 6) {
+      setStep(5)
+    } else if (step === 5) {
+      // Review → back to Deploy Mode (always)
+      setStep(3)
+    } else if (step === 4) {
+      // Env Vars → back to Deploy Mode
+      setStep(3)
+    } else if (step === 3) {
+      setStep(2)
+    } else if (step === 2) {
+      setStep(1)
     }
   }
+
+  // Should we show the env vars step?
+  const showEnvStep = deployMode === "manual" || Object.keys(userRequiredVars).length > 0
 
   // ── Fetch servers when reaching step 5 ────────────────────────────
   const fetchServers = React.useCallback(async () => {
@@ -470,10 +482,8 @@ export default function NewServicePage() {
         {/* ── Step Sidebar ───────────────────────────────────── */}
         <nav className="flex flex-col gap-2 text-sm text-muted-foreground">
           {STEPS.map((s) => {
-            // Hide "Configure" step in auto mode
-            if (s.id === 3 && deployMode === "auto" && step !== 3) return null
-            // Hide "AI Analysis" for non-git sources
-            if (s.id === 2 && sourceType !== "git" && step !== 2) return null
+            // Hide "Environment" step when not needed (auto mode without user-required vars)
+            if (s.id === 4 && !showEnvStep && step !== 4) return null
 
             const Icon = s.icon
             const isActive = step === s.id
@@ -832,7 +842,7 @@ export default function NewServicePage() {
               </motion.div>
             )}
 
-            {/* ── STEP 2: AI ANALYSIS ── */}
+            {/* ── STEP 2: CONFIGURE ── */}
             {step === 2 && (
               <motion.div
                 key="step2"
@@ -841,257 +851,61 @@ export default function NewServicePage() {
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-6"
               >
-                {analyzing ? (
-                  <Card className="border-primary/20">
-                    <CardContent className="flex flex-col items-center justify-center py-16 gap-4">
-                      <div className="relative">
-                        <Sparkles className="h-12 w-12 text-primary animate-pulse" />
-                        <div className="absolute inset-0 h-12 w-12 rounded-full border-2 border-primary/30 animate-ping" />
-                      </div>
-                      <div className="text-center space-y-2">
-                        <h3 className="text-lg font-semibold">AI is analyzing your repository...</h3>
-                        <p className="text-sm text-muted-foreground">
-                          Detecting stack, frameworks, ports, dependencies, and optimal config.
-                        </p>
-                      </div>
-                      <div className="flex gap-2 mt-4">
-                        {["Cloning", "Scanning files", "Detecting stack", "Building config"].map((label, i) => (
-                          <span key={label} className="text-[10px] px-2 py-1 rounded-full bg-primary/10 text-primary animate-pulse" style={{ animationDelay: `${i * 0.3}s` }}>
-                            {label}
-                          </span>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ) : analysis ? (
-                  <>
-                    {/* Analysis Results */}
+                {/* Analysis results banner (git only) */}
+                {sourceType === "git" && (
+                  analyzing ? (
+                    <Card className="border-primary/20">
+                      <CardContent className="flex items-center gap-3 py-4">
+                        <div className="relative">
+                          <Sparkles className="h-5 w-5 text-primary animate-pulse" />
+                          <div className="absolute inset-0 h-5 w-5 rounded-full border border-primary/30 animate-ping" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">AI is analyzing your repository...</p>
+                          <p className="text-xs text-muted-foreground">Detecting stack, frameworks, ports, dependencies.</p>
+                        </div>
+                        <div className="flex gap-1.5">
+                          {["Stack", "Port", "Build", "Env"].map((label, i) => (
+                            <span key={label} className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary animate-pulse" style={{ animationDelay: `${i * 0.3}s` }}>
+                              {label}
+                            </span>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ) : analysis ? (
                     <Card className="border-emerald-500/30 bg-emerald-500/5">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                          <CardTitle className="text-lg">Analysis Complete</CardTitle>
+                      <CardContent className="flex items-center gap-3 py-4">
+                        <CheckCircle2 className="h-5 w-5 text-emerald-500 flex-shrink-0" />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">Analysis Complete</p>
+                          <p className="text-xs text-muted-foreground">
+                            Detected <span className="font-medium capitalize">{analysis.stack}</span>
+                            {analysis.port && <> on port <span className="font-medium">{analysis.port}</span></>}
+                            {analysis.build && <> · build: <span className="font-medium capitalize">{analysis.build}</span></>}
+                            {analysis.addons?.length > 0 && <> · {analysis.addons.length} addon{analysis.addons.length > 1 ? 's' : ''}</>}
+                          </p>
                         </div>
-                        <CardDescription>SMSLY AI has analyzed your repository and detected the following:</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          <div className="p-3 rounded-lg bg-background border space-y-1">
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <Code2 className="h-3 w-3" /> Stack
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-lg">{STACK_ICONS[analysis.stack] || "📦"}</span>
-                              <span className="font-semibold capitalize">{analysis.stack}</span>
-                            </div>
-                            {analysis.languages && analysis.languages.length > 1 && (
-                              <div className="flex gap-1 flex-wrap mt-1">
-                                {analysis.languages.map(l => (
-                                  <span key={l} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary capitalize">{l}</span>
-                                ))}
-                              </div>
-                            )}
+                        {analysis.languages && analysis.languages.length > 0 && (
+                          <div className="flex gap-1">
+                            {analysis.languages.map(l => (
+                              <span key={l} className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 capitalize">{l}</span>
+                            ))}
                           </div>
-                          <div className="p-3 rounded-lg bg-background border space-y-1">
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <Globe className="h-3 w-3" /> Port
-                            </div>
-                            <p className="font-semibold text-lg">{analysis.port}</p>
-                          </div>
-                          <div className="p-3 rounded-lg bg-background border space-y-1">
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <Box className="h-3 w-3" /> Build
-                            </div>
-                            <p className="font-semibold capitalize">{analysis.build}</p>
-                          </div>
-                          <div className="p-3 rounded-lg bg-background border space-y-1">
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <Database className="h-3 w-3" /> Addons
-                            </div>
-                            {analysis.addons.length > 0 ? (
-                              <div className="flex gap-1 flex-wrap">
-                                {analysis.addons.map(a => (
-                                  <span key={a} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">{a}</span>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="text-sm text-muted-foreground">None</p>
-                            )}
-                          </div>
-                        </div>
+                        )}
                       </CardContent>
                     </Card>
-
-                    {/* Auto vs Manual Choice */}
-                    <div className="space-y-3">
-                      <h3 className="font-semibold text-lg">How would you like to deploy?</h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        <Card
-                          className={cn(
-                            "cursor-pointer transition-all hover:shadow-lg",
-                            deployMode === "auto"
-                              ? "border-primary bg-primary/5 shadow-primary/10"
-                              : "hover:border-primary/50"
-                          )}
-                          onClick={() => setDeployMode("auto")}
-                        >
-                          <CardHeader className="text-center pb-2">
-                            <Zap className={cn("h-10 w-10 mx-auto mb-2", deployMode === "auto" ? "text-primary" : "text-muted-foreground")} />
-                            <CardTitle className="text-lg">🚀 Auto Deploy</CardTitle>
-                            <CardDescription className="text-xs">
-                              Zero-config — AI handles everything. One click and you&apos;re live.
-                            </CardDescription>
-                          </CardHeader>
-                          <CardContent className="text-center">
-                            <div className="space-y-1 text-xs text-muted-foreground">
-                              <p>✓ Auto-detect port, build, env</p>
-                              <p>✓ Provisions databases if needed</p>
-                              <p>✓ Deploys in ~60 seconds</p>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        <Card
-                          className={cn(
-                            "cursor-pointer transition-all hover:shadow-lg",
-                            deployMode === "manual"
-                              ? "border-primary bg-primary/5 shadow-primary/10"
-                              : "hover:border-primary/50"
-                          )}
-                          onClick={() => setDeployMode("manual")}
-                        >
-                          <CardHeader className="text-center pb-2">
-                            <Settings2 className={cn("h-10 w-10 mx-auto mb-2", deployMode === "manual" ? "text-primary" : "text-muted-foreground")} />
-                            <CardTitle className="text-lg">⚙️ Manual Config</CardTitle>
-                            <CardDescription className="text-xs">
-                              Review and customize before deploying. AI pre-fills everything.
-                            </CardDescription>
-                          </CardHeader>
-                          <CardContent className="text-center">
-                            <div className="space-y-1 text-xs text-muted-foreground">
-                              <p>✓ Edit name, region, env vars</p>
-                              <p>✓ AI suggestions pre-filled</p>
-                              <p>✓ Full control over config</p>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <Card>
-                    <CardContent className="flex flex-col items-center py-12 gap-3">
-                      <Sparkles className="h-10 w-10 text-muted-foreground" />
-                      <p className="text-muted-foreground">Analysis could not be completed. You can still configure manually.</p>
-                      <Button variant="outline" onClick={() => { setDeployMode("manual"); setStep(3) }}>
-                        Configure Manually
-                      </Button>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {/* ── USER-REQUIRED ENV VAR PROMPT ── */}
-                {showEnvPrompt && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="mt-6"
-                  >
+                  ) : (
                     <Card className="border-amber-500/30 bg-amber-500/5">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center gap-2">
-                          <Key className="h-5 w-5 text-amber-500" />
-                          <CardTitle className="text-lg">Configure Required Variables</CardTitle>
-                        </div>
-                        <CardDescription>
-                          AI detected variables that need your input. Fill them in or skip to use placeholders.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        {Object.entries(userRequiredVars).map(([key, val]) => {
-                          const envVar = Array.isArray(analysis?.env_vars)
-                            ? analysis.env_vars.find((ev: AnalysisEnvVar) => ev.key === key)
-                            : null
-                          return (
-                            <div key={key} className="space-y-1.5">
-                              <Label className="flex items-center gap-2 font-mono text-sm">
-                                <Key className="h-3 w-3 text-amber-500" />
-                                {key}
-                                {envVar?.required && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 font-medium">Required</span>}
-                              </Label>
-                              {envVar?.hint && (
-                                <p className="text-xs text-muted-foreground pl-5">{envVar.hint}</p>
-                              )}
-                              <Input
-                                type={envVar?.is_secret ? "password" : "text"}
-                                placeholder={envVar?.hint || `Enter ${key}`}
-                                value={val}
-                                onChange={(e) => setUserRequiredVars(prev => ({ ...prev, [key]: e.target.value }))}
-                                className="font-mono"
-                              />
-                            </div>
-                          )
-                        })}
-
-                        <div className="flex gap-3 pt-4 border-t">
-                          <Button
-                            onClick={() => {
-                              setEnvVars(prev => prev.map(v => {
-                                if (v.key in userRequiredVars && userRequiredVars[v.key]) {
-                                  return { ...v, value: userRequiredVars[v.key] }
-                                }
-                                return v
-                              }))
-                              setShowEnvPrompt(false)
-                              setStep(4)
-                            }}
-                            className="flex-1"
-                          >
-                            <Rocket className="h-4 w-4 mr-2" />
-                            Continue to Deploy
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              setEnvVars(prev => prev.map(v => {
-                                if (v.key in userRequiredVars && !userRequiredVars[v.key] && !v.value) {
-                                  return { ...v, value: `CHANGE_ME_${Math.random().toString(36).slice(2, 10)}` }
-                                }
-                                if (v.key in userRequiredVars && userRequiredVars[v.key]) {
-                                  return { ...v, value: userRequiredVars[v.key] }
-                                }
-                                return v
-                              }))
-                              setShowEnvPrompt(false)
-                              setStep(4)
-                            }}
-                          >
-                            <SkipForward className="h-4 w-4 mr-2" />
-                            Skip (use placeholders)
-                          </Button>
-                        </div>
+                      <CardContent className="flex items-center gap-3 py-4">
+                        <Sparkles className="h-5 w-5 text-amber-500 flex-shrink-0" />
+                        <p className="text-sm text-muted-foreground">Analysis could not be completed. You can still configure manually.</p>
                       </CardContent>
                     </Card>
-                  </motion.div>
+                  )
                 )}
-              </motion.div>
-            )}
 
-            {/* ── STEP 3: CONFIGURE (Manual mode or non-git) ── */}
-            {step === 3 && (
-              <motion.div
-                key="step3"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                {analysis && (
-                  <div className="flex items-center gap-2 p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm">
-                    <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
-                    <span>AI has pre-filled the config below based on your repo analysis. Edit anything you need.</span>
-                  </div>
-                )}
+                {/* Configure fields */}
                 <div className="space-y-4">
                   <div className="grid gap-2">
                     <Label>Service Name</Label>
@@ -1123,16 +937,16 @@ export default function NewServicePage() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="us-east-1">🇺🇸 US East (N. Virginia)</SelectItem>
-                        <SelectItem value="eu-west-1">🇪🇺 EU West (Ireland)</SelectItem>
-                        <SelectItem value="ap-southeast-1">🇸🇬 Asia Pacific (Singapore)</SelectItem>
+                        <SelectItem value="us-east-1">US East (N. Virginia)</SelectItem>
+                        <SelectItem value="eu-west-1">EU West (Ireland)</SelectItem>
+                        <SelectItem value="ap-southeast-1">Asia Pacific (Singapore)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
 
                   {/* Project assignment */}
                   <div className="grid gap-2">
-                    <Label className="flex items-center gap-1.5">📦 Project <span className="text-xs text-muted-foreground">(optional)</span></Label>
+                    <Label className="flex items-center gap-1.5">Project <span className="text-xs text-muted-foreground">(optional)</span></Label>
                     <Select value={selectedProject} onValueChange={setSelectedProject}>
                       <SelectTrigger>
                         <SelectValue placeholder="No project (ungrouped)" />
@@ -1255,21 +1069,139 @@ export default function NewServicePage() {
                       <BuildpackSelector value={buildpack} onChange={setBuildpack} />
                     </div>
                   )}
+                </div>
+              </motion.div>
+            )}
 
-                  <div className="pt-4">
-                    <EnvVarEditor
-                      initialVars={envVars}
-                      onSave={async (v) => setEnvVars(v)}
-                    />
+            {/* ── STEP 3: DEPLOY MODE ── */}
+            {step === 3 && (
+              <motion.div
+                key="step3"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                <div className="space-y-3">
+                  <h3 className="font-semibold text-lg">How would you like to deploy?</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Card
+                      className={cn(
+                        "cursor-pointer transition-all hover:shadow-lg",
+                        deployMode === "auto"
+                          ? "border-primary bg-primary/5 shadow-primary/10"
+                          : "hover:border-primary/50"
+                      )}
+                      onClick={() => setDeployMode("auto")}
+                    >
+                      <CardHeader className="text-center pb-2">
+                        <Zap className={cn("h-10 w-10 mx-auto mb-2", deployMode === "auto" ? "text-primary" : "text-muted-foreground")} />
+                        <CardTitle className="text-lg">Auto Deploy</CardTitle>
+                        <CardDescription className="text-xs">
+                          Zero-config — AI handles everything. One click and you&apos;re live.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="text-center">
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <p>Auto-detect port, build, env</p>
+                          <p>Provisions databases if needed</p>
+                          <p>Deploys in ~60 seconds</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card
+                      className={cn(
+                        "cursor-pointer transition-all hover:shadow-lg",
+                        deployMode === "manual"
+                          ? "border-primary bg-primary/5 shadow-primary/10"
+                          : "hover:border-primary/50"
+                      )}
+                      onClick={() => setDeployMode("manual")}
+                    >
+                      <CardHeader className="text-center pb-2">
+                        <Settings2 className={cn("h-10 w-10 mx-auto mb-2", deployMode === "manual" ? "text-primary" : "text-muted-foreground")} />
+                        <CardTitle className="text-lg">Manual Config</CardTitle>
+                        <CardDescription className="text-xs">
+                          Review and customize before deploying. AI pre-fills everything.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="text-center">
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <p>Edit name, region, env vars</p>
+                          <p>AI suggestions pre-filled</p>
+                          <p>Full control over config</p>
+                        </div>
+                      </CardContent>
+                    </Card>
                   </div>
                 </div>
               </motion.div>
             )}
 
-            {/* ── STEP 4: REVIEW & DEPLOY ── */}
-            {step === 4 && (
+            {/* ── STEP 4: ENVIRONMENT (conditional) ── */}
+            {step === 4 && showEnvStep && (
               <motion.div
                 key="step4"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                {deployMode === "auto" && Object.keys(userRequiredVars).length > 0 && (
+                  <Card className="border-amber-500/30 bg-amber-500/5">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center gap-2">
+                        <Key className="h-5 w-5 text-amber-500" />
+                        <CardTitle className="text-lg">Required Variables</CardTitle>
+                      </div>
+                      <CardDescription>
+                        AI detected variables that need your input. Fill them in below.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {Object.entries(userRequiredVars).map(([key, val]) => {
+                        const envVar = Array.isArray(analysis?.env_vars)
+                          ? analysis.env_vars.find((ev: AnalysisEnvVar) => ev.key === key)
+                          : null
+                        return (
+                          <div key={key} className="space-y-1.5">
+                            <Label className="flex items-center gap-2 font-mono text-sm">
+                              <Key className="h-3 w-3 text-amber-500" />
+                              {key}
+                              {envVar?.required && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 font-medium">Required</span>}
+                            </Label>
+                            {envVar?.hint && (
+                              <p className="text-xs text-muted-foreground pl-5">{envVar.hint}</p>
+                            )}
+                            <Input
+                              type={envVar?.is_secret ? "password" : "text"}
+                              placeholder={envVar?.hint || `Enter ${key}`}
+                              value={val}
+                              onChange={(e) => setUserRequiredVars(prev => ({ ...prev, [key]: e.target.value }))}
+                              className="font-mono"
+                            />
+                          </div>
+                        )
+                      })}
+                    </CardContent>
+                  </Card>
+                )}
+
+                <div>
+                  <h3 className="font-semibold text-lg mb-3">Environment Variables</h3>
+                  <EnvVarEditor
+                    initialVars={envVars}
+                    onSave={async (v) => setEnvVars(v)}
+                  />
+                </div>
+              </motion.div>
+            )}
+
+            {/* ── STEP 5: REVIEW & DEPLOY ── */}
+            {step === 5 && (
+              <motion.div
+                key="step5"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
@@ -1349,10 +1281,10 @@ export default function NewServicePage() {
               </motion.div>
             )}
 
-            {/* ── STEP 5: TARGET SERVERS ── */}
-            {step === 5 && (
+            {/* ── STEP 6: TARGET SERVERS ── */}
+            {step === 6 && (
               <motion.div
-                key="step5"
+                key="step6"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
@@ -1557,12 +1489,12 @@ export default function NewServicePage() {
                 Back
               </Button>
             )}
-            {step < 5 ? (
-              <Button onClick={handleNext} disabled={analyzing || (step === 2 && !deployMode && !analyzing && !!analysis)}>
+            {step < 6 ? (
+              <Button onClick={handleNext} disabled={analyzing || (step === 3 && !deployMode)}>
                 {analyzing ? (
                   <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Analyzing...</>
-                ) : step === 2 && deployMode === "auto" ? (
-                  <>Deploy Now <Rocket className="ml-2 h-4 w-4" /></>
+                ) : step === 5 ? (
+                  <>Next <ArrowRight className="ml-2 h-4 w-4" /></>
                 ) : (
                   <>Next <ArrowRight className="ml-2 h-4 w-4" /></>
                 )}
@@ -1573,8 +1505,8 @@ export default function NewServicePage() {
                 {isDeploying
                   ? "Deploying..."
                   : (selectedServers.length + (includeLocal ? 1 : 0)) > 1
-                    ? `🚀 Deploy to ${selectedServers.length + (includeLocal ? 1 : 0)} Servers`
-                    : "🚀 Deploy Service"
+                    ? `Deploy to ${selectedServers.length + (includeLocal ? 1 : 0)} Servers`
+                    : "Deploy Service"
                 }
               </Button>
             )}

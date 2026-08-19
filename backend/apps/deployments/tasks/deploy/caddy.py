@@ -2,7 +2,48 @@ from __future__ import annotations
 
 import logging
 
+from celery import shared_task
+
 logger = logging.getLogger(__name__)
+
+
+@shared_task(name="apps.deployments.tasks.deploy.caddy.sync_caddy_task")
+def sync_caddy_task():
+    """Regenerate and apply Caddyfile, then push to all full nodes.
+
+    Dispatched asynchronously from domain add/delete actions to avoid
+    blocking the HTTP response (the full cycle can take 30+ seconds).
+    """
+    try:
+        from apps.deployments.services.caddy_manager.utils import caddy_disabled_mode, caddy_node_mode
+        from apps.deployments.models import PlatformConfig
+
+        if caddy_disabled_mode():
+            logger.debug("sync_caddy_task: Caddy-disabled mode, skipping")
+            return {"ok": True, "message": "Skipped (Caddy-disabled)"}
+
+        config = PlatformConfig.load()
+
+        if caddy_node_mode():
+            _regenerate_node_caddyfile(config)
+            return {"ok": True, "message": "Node Caddyfile regenerated"}
+
+        from apps.deployments.services.caddy_manager import apply_caddyfile, generate_caddyfile
+
+        content = generate_caddyfile(config)
+        cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+        result = apply_caddyfile(content, cloudflare_token=cf_token)
+        if result.get('ok'):
+            logger.info("sync_caddy_task: Caddyfile regenerated")
+        else:
+            logger.warning("sync_caddy_task: regeneration failed: %s", result.get('message'))
+
+        _regenerate_node_caddyfile(config)
+
+        return {"ok": bool(result.get("ok")), "message": str(result.get("message", ""))}
+    except Exception as exc:
+        logger.warning("sync_caddy_task failed: %s", exc)
+        return {"ok": False, "message": str(exc)}
 
 
 def _regenerate_caddyfile():

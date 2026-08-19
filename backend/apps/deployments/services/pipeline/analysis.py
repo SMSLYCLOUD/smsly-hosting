@@ -22,7 +22,7 @@ class AnalysisMixin:
         """Step 1.5: AI Analysis → structured resource + exhaustive AI Senate env filling."""
         try:
             from apps.intelligence.scanner import RepoScanner
-            scan_depth = getattr(self.service, 'env_scan_depth', 'standard')
+            scan_depth = getattr(self.deployment, 'scan_depth', '') or getattr(self.service, 'env_scan_depth', 'standard')
             scanner = RepoScanner(self.source_dir, scan_depth=scan_depth)
 
             # Step A: Perform aggressive scan

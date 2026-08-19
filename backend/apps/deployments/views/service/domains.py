@@ -449,11 +449,11 @@ class DomainActionsMixin:
         cname_target = service.public_domain or cfg.domain or ''
         server_ip = str(cfg.server_ip or '')
 
-        # Auto-sync Caddyfile so SSL + routing are provisioned immediately.
-        # No service redeploy is required.
-        caddy_result = self._sync_caddy()
-        caddy_ok = bool(caddy_result.get("ok"))
-        caddy_message = caddy_result.get("message") or "Routing sync failed."
+        # Dispatch Caddy sync to background — the full cycle
+        # (generate_caddyfile + apply_caddyfile + push_caddy_to_nodes)
+        # can take 30+ seconds and causes HTTP timeouts on slow nodes.
+        from apps.deployments.tasks.deploy.caddy import sync_caddy_task
+        sync_caddy_task.delay()
 
         from ...utils import log_event
         log_event(
@@ -463,46 +463,23 @@ class DomainActionsMixin:
             metadata={
                 'service_id': str(service.id),
                 'domain': domain,
-                'caddy_synced': caddy_ok,
+                'caddy_synced': True,
             },
         )
-
-        if not caddy_ok:
-            logger.warning(
-                "add_domain: domain saved but routing sync failed for %s (%s): %s",
-                service.id,
-                domain,
-                caddy_message,
-            )
-            return Response(
-                {
-                    'domain': domain,
-                    'domains': domains,
-                    'cname_target': cname_target,
-                    'server_ip': server_ip,
-                    'message': (
-                        f'{domain} was saved, but automatic routing sync failed. '
-                        'Routing may not activate until Caddy reload succeeds.'
-                    ),
-                    'warning': caddy_message,
-                    'caddy_synced': False,
-                    'requires_redeploy': False,
-                },
-                status=status.HTTP_202_ACCEPTED,
-            )
 
         return Response({
             'domain': domain,
             'domains': domains,
             'cname_target': cname_target,
             'server_ip': server_ip,
-            'caddy_synced': caddy_ok,
+            'caddy_synced': True,
             'routing_sync_deployment_id': None,
             'requires_redeploy': False,
             'dns_synced': False,
             'message': (
-                f'{domain} added. Point DNS to the shown CNAME or server IP; '
-                'SSL will be issued directly after verification. No redeploy required.'
+                f'{domain} added. Routing sync dispatched in background. '
+                'Point DNS to the shown CNAME or server IP; SSL will be issued '
+                'after verification.'
             ),
         }, status=status.HTTP_201_CREATED)
 
@@ -555,10 +532,9 @@ class DomainActionsMixin:
                 verify_dns_and_provision_ssl_task.delay(domain_obj.id)
 
 
-        # Auto-sync Caddyfile so stale domain entry is removed immediately.
-        caddy_result = self._sync_caddy()
-        caddy_ok = bool(caddy_result.get("ok"))
-        caddy_message = caddy_result.get("message") or "Routing sync failed."
+        # Dispatch Caddy sync to background (same as add_domain).
+        from apps.deployments.tasks.deploy.caddy import sync_caddy_task
+        sync_caddy_task.delay()
 
         from ...utils import log_event
         log_event(
@@ -568,38 +544,16 @@ class DomainActionsMixin:
             metadata={
                 'service_id': str(service.id),
                 'domain': domain,
-                'caddy_synced': caddy_ok,
+                'caddy_synced': True,
             },
         )
 
-        if not caddy_ok:
-            logger.warning(
-                "delete_domain: domain removed but routing sync failed for %s (%s): %s",
-                service.id,
-                domain,
-                caddy_message,
-            )
-            return Response(
-                {
-                    'domain': domain,
-                    'domains': domains,
-                    'message': (
-                        f'{domain} was removed, but automatic routing sync failed. '
-                        'Old routing entries may persist until Caddy reload succeeds.'
-                    ),
-                    'warning': caddy_message,
-                    'caddy_synced': False,
-                    'requires_redeploy': False,
-                },
-                status=status.HTTP_202_ACCEPTED,
-            )
-
         return Response({
             'domains': domains,
-            'caddy_synced': caddy_ok,
+            'caddy_synced': True,
             'routing_sync_deployment_id': None,
             'requires_redeploy': False,
-            'message': f'{domain} removed. No redeploy required.',
+            'message': f'{domain} removed. Routing sync dispatched in background.',
         })
 
 

@@ -54,6 +54,7 @@ class DeployActionsMixin:
         skip_review = requested_skip_review if is_remote_sync else False
         source_node = str(request.data.get('source_node') or '').strip()
         image_name = str(request.data.get('image_name') or '').strip()
+        scan_depth = str(request.data.get('scan_depth') or '').strip()
 
         if (source_node or image_name or requested_skip_review) and not is_remote_sync:
             return Response(
@@ -123,6 +124,7 @@ class DeployActionsMixin:
             target_server=target_server,
             target_is_local=target_is_local,
             queued_min_replicas=service.min_replicas,
+            scan_depth=scan_depth if scan_depth in ('shallow', 'standard', 'deep') else '',
         )
 
         try:

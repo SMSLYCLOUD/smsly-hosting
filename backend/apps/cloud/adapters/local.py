@@ -512,7 +512,10 @@ class LocalAdapter(BaseCloudAdapter):
             self._apply_router_special_labels(labels, f"{name}-staging", env)
             if platform_hc_enabled and hc_primary_path:
                 staging_router = f"{name}-staging"
-                labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.path'] = hc_primary_path
+                # Use same fallback paths as Docker health check
+                hc_paths = _health_paths(hc_primary_path)
+                hc_path_joined = " || ".join(hc_paths)
+                labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.path'] = hc_path_joined
                 labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
                 labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
             # Also store the staging domain metadata for promote-time cleanup
@@ -521,7 +524,10 @@ class LocalAdapter(BaseCloudAdapter):
             labels.update(self._get_traefik_labels(name, host_rule, port, is_public, network_name=network_name))
             self._apply_router_special_labels(labels, name, env)
             if platform_hc_enabled and hc_primary_path:
-                labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_primary_path
+                # Use same fallback paths as Docker health check
+                hc_paths = _health_paths(hc_primary_path)
+                hc_path_joined = " || ".join(hc_paths)
+                labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_path_joined
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
 
@@ -869,7 +875,10 @@ class LocalAdapter(BaseCloudAdapter):
         hc_timeout = green_labels.get('smsly.blue_green.hc_timeout')
         if hc_path:
             router_name = name.replace('.', '-').replace('_', '-')
-            live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_path
+            # Use same fallback paths as Docker health check
+            hc_paths = _health_paths(hc_path)
+            hc_path_joined = " || ".join(hc_paths)
+            live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_path_joined
             if hc_interval:
                 live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
             if hc_timeout:

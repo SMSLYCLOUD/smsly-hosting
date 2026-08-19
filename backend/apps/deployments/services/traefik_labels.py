@@ -8,6 +8,40 @@ Enables automatic service discovery, SSL termination, and custom domains.
 """
 
 
+import os
+import re
+
+
+def _normalize_health_path(path: str) -> str:
+    value = str(path or "/").strip()
+    if not value.startswith("/"):
+        value = f"/{value}"
+    value = re.sub(r'[^a-zA-Z0-9._/\-]', '', value)
+    if not value:
+        value = "/"
+    return value
+
+
+def _health_paths(primary_path: str | None) -> list[str]:
+    """Same fallback logic as Docker health check in cloud/adapters/local.py"""
+    values = []
+    if primary_path:
+        values.append(_normalize_health_path(primary_path))
+
+    raw = os.environ.get(
+        "DOCKER_HEALTHCHECK_FALLBACK_PATHS",
+        "/,/health,/healthz,/ready,/live,/status,/api/health",
+    )
+    for chunk in str(raw).split(","):
+        path = _normalize_health_path(chunk.strip())
+        if path and path not in values:
+            values.append(path)
+
+    if not values:
+        values = ["/"]
+    return values
+
+
 def generate_traefik_labels(
     service_name: str,
     domain: str | None = None,
@@ -15,6 +49,7 @@ def generate_traefik_labels(
     enable_tls: bool = True,
     rate_limit_avg: int = 100,
     rate_limit_burst: int = 200,
+    health_check_path: str | None = None,
 ) -> dict[str, str]:
     """
     Generate Traefik labels for a deployed service container.
@@ -27,9 +62,8 @@ def generate_traefik_labels(
         enable_tls: Whether to enable SSL via Let's Encrypt
         rate_limit_avg: Average requests per second allowed
         rate_limit_burst: Maximum burst requests allowed
-
-    Returns:
-        dict of Traefik label key-value pairs
+        health_check_path: Primary health check path (e.g., "/health").
+                           Falls back to common paths if not specified.
     """
     # Sanitize service name for use in router names
     router_name = service_name.replace("-", "_").replace(".", "_").lower()
@@ -37,6 +71,10 @@ def generate_traefik_labels(
     # Default to subdomain if no custom domain specified
     if not domain:
         domain = f"{service_name}.apps.smsly.cloud"
+
+    # Use same fallback logic as Docker health check
+    hc_paths = _health_paths(health_check_path)
+    hc_path_joined = " || ".join(hc_paths)
 
     labels = {
         # Enable Traefik for this container
@@ -53,8 +91,8 @@ def generate_traefik_labels(
         # Load balancer configuration
         f"traefik.http.services.{router_name}-service.loadbalancer.server.port": str(internal_port),
 
-        # Health check
-        f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.path": "/health",
+        # Health check — support multiple paths with OR logic (same as Docker)
+        f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.path": hc_path_joined,
         f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.interval": "20s",
         f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.timeout": "8s",
     }

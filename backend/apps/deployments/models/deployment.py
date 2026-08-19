@@ -129,6 +129,19 @@ class Deployment(TimeStampedModel):
         default=dict, blank=True,
         help_text="Scratch state for in-flight pipeline phases (e.g. pre-migration state for rollback).")
 
+    scan_depth = models.CharField(  # type: ignore[var-annotated]
+        max_length=20,
+        choices=[('shallow', 'Shallow'), ('standard', 'Standard'), ('deep', 'Deep')],
+        default='standard',
+        blank=True,
+        help_text="Scan depth override for this deployment (empty = use service default)",
+    )
+
+    ai_resources = models.JSONField(  # type: ignore[var-annotated]
+        default=dict, blank=True,
+        help_text="AI resource recommendations {cpu_cores, memory_mb} from analysis phase",
+    )
+
     # Per-deployment registry override: if set, the builder uses this
     # instead of the scoped chain (ScopedRegistry → PlatformConfig).
     registry_override = models.JSONField(  # type: ignore[var-annotated]
