@@ -115,7 +115,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 .values_list('project_id', 'cnt')
             )
 
-            latest_deps = dict(
+            latest_deps_qs = list(
                 Deployment.objects.filter(service__project_id__in=project_ids)
                 .values('service__project_id')
                 .annotate(latest_status=Max('status'), latest_at=Max('created_at'))
@@ -124,10 +124,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
             instance = cls()
             instance._service_counts = service_counts
-            instance._latest_statuses = {pid: status for pid, status, _ in latest_deps.items()}
+            instance._latest_statuses = {pid: status for pid, status, _ in latest_deps_qs}
             instance._latest_times = {
                 pid: at.isoformat() if at else None
-                for pid, _, at in latest_deps.items()
+                for pid, _, at in latest_deps_qs
             }
             return instance
 

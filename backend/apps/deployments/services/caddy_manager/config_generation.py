@@ -151,7 +151,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
         if not _table_exists(Service._meta.db_table):
             return []
 
-        for service in Service.objects.select_related("server").only(
+        for service in Service.objects.only(
             "id", "public_domain", "custom_domains", "public_domain_hidden", "staging_domain",
         ).order_by("id"):
             raw_public = (
@@ -292,7 +292,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
             return []
 
         suffix = f".{wildcard_domain}"
-        for service in Service.objects.select_related("server").only("id", "public_domain", "custom_domains", "public_domain_hidden", "is_preview").all():
+        for service in Service.objects.only("id", "public_domain", "custom_domains", "public_domain_hidden", "is_preview").all():
             svr = _resolve_effective_server(service)
             # @known_hosts routes to traefik:80 (master control plane).
             # Only local/primary services belong here — skip all remote targets.
@@ -350,7 +350,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         # using this custom staging domain
         for service in Service.objects.filter(
             staging_domain__isnull=False,
-        ).exclude(staging_domain="").select_related("server").only("id", "staging_domain"):
+        ).exclude(staging_domain="").only("id", "staging_domain"):
             svr = _resolve_effective_server(service)
             if svr and not svr.is_primary:
                 continue
@@ -410,7 +410,7 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
             return {}
 
         suffix = f".{wildcard_domain}"
-        for service in Service.objects.select_related("server").only(
+        for service in Service.objects.only(
             "id", "public_domain", "custom_domains", "public_domain_hidden",
             "wildcard_url_enabled",
         ).all():
@@ -800,7 +800,6 @@ def generate_caddyfile(config) -> str:
                     local_previews = list(
                         Service.objects.select_related("server")
                         .filter(is_preview=True, server__is_primary=True, status=Service.Status.ACTIVE)
-                        .only("name", "public_domain", "internal_port")
                     )
             except Exception as e:
                 logger.warning("Failed to fetch local previews for Caddy: %s", e)
