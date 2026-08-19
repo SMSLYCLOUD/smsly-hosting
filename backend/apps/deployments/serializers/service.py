@@ -166,6 +166,7 @@ class EnvVarSerializer(serializers.ModelSerializer):
 class ServiceListSerializer(serializers.ModelSerializer):
     latest_deployment = serializers.SerializerMethodField()
     node_metadata = serializers.SerializerMethodField()
+    node_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Service
@@ -173,7 +174,8 @@ class ServiceListSerializer(serializers.ModelSerializer):
             'id', 'name', 'status', 'owner', 'project',
             'server', 'public_domain', 'custom_domains', 'internal_port',
             'health_status', 'deploy_type', 'buildpack', 'created_at',
-            'updated_at', 'latest_deployment', 'node_metadata',
+            'updated_at', 'latest_deployment', 'node_metadata', 'node_url',
+            'wildcard_url_enabled', 'node_url_enabled',
         ]
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
@@ -181,6 +183,16 @@ class ServiceListSerializer(serializers.ModelSerializer):
 
     def get_node_metadata(self, obj: Service) -> dict:
         return _get_node_metadata(obj)
+
+    def get_node_url(self, obj: Service) -> str | None:
+        from apps.deployments.services.caddy_manager.config_generation import _resolve_effective_server
+        svr = _resolve_effective_server(obj)
+        if not svr or getattr(svr, 'is_primary', False):
+            return None
+        node_slug = str(svr.id).split("-")[0]
+        base_domain = Service.default_public_base_domain()
+        slug = obj.name.lower().replace(' ', '-')
+        return f"https://{slug}.grid-node{node_slug}.{base_domain}"
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -197,6 +209,7 @@ class ServiceSerializer(serializers.ModelSerializer):
     )
     latest_deployment = serializers.SerializerMethodField()
     service_url = serializers.SerializerMethodField()
+    node_url = serializers.SerializerMethodField()
     project_name = serializers.CharField(
         source='project.name', read_only=True, default=None)
     project_slug = serializers.CharField(
@@ -274,6 +287,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'restart_policy',
             'deploy_mode', 'compose_file', 'compose_main_service',
             'is_public',
+            'wildcard_url_enabled', 'node_url_enabled',
             'active_target_type', 'active_host_ip', 'active_runtime_id',
             'last_scale_at',
             'locked', 'locked_reason', 'restrict_to_creator',
@@ -281,7 +295,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
             # SerializerMethodField / nested fields
             'env_vars', 'server_id',
-            'latest_deployment', 'service_url',
+            'latest_deployment', 'service_url', 'node_url',
             'project_name', 'project_slug', 'project_emoji',
             'estimated_cost', 'node_metadata', 'domain_instances',
         ]
@@ -306,6 +320,17 @@ class ServiceSerializer(serializers.ModelSerializer):
         slug = obj.name.lower().replace(' ', '-')
         base_domain = Service.default_public_base_domain()
         return f"https://{slug}.{base_domain}"
+
+    def get_node_url(self, obj: Service) -> str | None:
+        """Return the direct node URL if the service is on a full node."""
+        from apps.deployments.services.caddy_manager.config_generation import _resolve_effective_server
+        svr = _resolve_effective_server(obj)
+        if not svr or getattr(svr, 'is_primary', False):
+            return None
+        node_slug = str(svr.id).split("-")[0]
+        base_domain = Service.default_public_base_domain()
+        slug = obj.name.lower().replace(' ', '-')
+        return f"https://{slug}.grid-node{node_slug}.{base_domain}"
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
         return _get_latest_deployment(obj)

@@ -284,10 +284,10 @@ export default function ServiceDetailPage() {
     useEffect(() => {
         if (!service) return;
         if (userPickedNodeRef.current) return;
-        // Prefer latest deployment target, then service assigned node, then 'local'
+        // Prefer latest deployment target, then active node metadata, then service assigned server
         const deployTarget = service.latest_deployment?.target_server
-            || service.server_id
             || service.node_metadata?.id
+            || service.server_id
             || LOCAL_DEPLOY_TARGET;
         setTargetServerId(deployTarget);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when specific fields change, not on every poll
@@ -300,10 +300,10 @@ export default function ServiceDetailPage() {
                 setService(s);
                 // Prefer the target server from the latest deployment (handles
                 // failed deploys where the user wants to retry on the same node).
-                // Fall back to the service's assigned node, then 'local'.
+                // Fall back to active node metadata, then service assigned server, then 'local'.
                 const deployTarget = s.latest_deployment?.target_server
-                    || s.server_id
                     || s.node_metadata?.id
+                    || s.server_id
                     || LOCAL_DEPLOY_TARGET;
                 setTargetServerId(deployTarget);
                 if (s.latest_deployment) {

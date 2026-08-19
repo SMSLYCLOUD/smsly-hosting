@@ -424,6 +424,13 @@ def _poll_remote_deployment(
 
                         _regenerate_caddyfile()
 
+                        if not getattr(orchestrator.server, 'is_lite_agent', False):
+                            try:
+                                from ..deploy.caddy import push_caddy_to_node
+                                push_caddy_to_node(str(orchestrator.server.id))
+                            except Exception as push_exc:
+                                logger.debug("Failed to push Caddyfile to node: %s", push_exc)
+
                         update_stage(deployment, 'Remote Deploy', 'success')
                         broadcast_status(deployment)
 

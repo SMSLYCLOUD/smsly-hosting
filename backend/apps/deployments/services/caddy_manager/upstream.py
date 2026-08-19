@@ -34,7 +34,8 @@ def _remote_server_mesh_ip(server) -> str:
 
 
 def _remote_upstream_url_for_service(service) -> str:
-    server = getattr(service, "server", None)
+    from apps.deployments.services.caddy_manager.config_generation import _resolve_effective_server
+    server = _resolve_effective_server(service)
     if not server or getattr(server, "is_primary", False):
         return ""
 

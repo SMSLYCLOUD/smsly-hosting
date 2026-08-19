@@ -48,7 +48,10 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
     setActionLoading(serviceId);
     try {
       const svc = services.find(s => s.id === serviceId);
-      const targetId = svc?.server_id || svc?.node_metadata?.id || undefined;
+      const targetId = svc?.latest_deployment?.target_server
+        || svc?.node_metadata?.id
+        || svc?.server_id
+        || undefined;
       await servicesApi.deploy(serviceId, 'HEAD', targetId);
       // Parent page polls every 5s — no reload needed
     } catch (err) {
@@ -236,9 +239,19 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
               )}
               {!service.isAddon && <span className="text-[10px] text-muted-foreground ml-auto font-mono">{service.branch || 'main'}</span>}
             </div>
-            {(service.public_domain || service.connection_url) && (
+            {(service.public_domain || service.node_url || service.connection_url) && (
               <p className="text-[11px] text-muted-foreground truncate">
                 {service.public_domain || service.connection_url}
+                {service.node_url && (
+                  <span className="ml-1 text-muted-foreground/60">
+                    {service.wildcard_url_enabled === false ? '(wildcard off)' : ''}
+                  </span>
+                )}
+              </p>
+            )}
+            {service.node_url && (
+              <p className="text-[11px] text-muted-foreground truncate font-mono" title={`Direct: ${service.node_url}`}>
+                <span className="text-muted-foreground/60">direct:</span> {service.node_url.replace('https://', '')}
               </p>
             )}
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
@@ -265,13 +278,24 @@ export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGri
               >
                 <Terminal size={14} />
               </Button>
-              {service.public_domain && (
+              {service.public_domain && service.wildcard_url_enabled !== false && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 hover:bg-blue-500/10 hover:text-blue-500"
-                  title="Open App"
+                  title="Open App (wildcard)"
                   onClick={() => window.open(`https://${service.public_domain}`, '_blank')}
+                >
+                  <ExternalLink size={14} />
+                </Button>
+              )}
+              {service.node_url && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 hover:bg-blue-500/10 hover:text-blue-500"
+                  title="Open App (direct node)"
+                  onClick={() => window.open(service.node_url!, '_blank')}
                 >
                   <ExternalLink size={14} />
                 </Button>

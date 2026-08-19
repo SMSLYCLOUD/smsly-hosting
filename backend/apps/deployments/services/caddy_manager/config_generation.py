@@ -14,6 +14,33 @@ logger = logging.getLogger(__name__)
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 
 
+def _resolve_effective_server(service):
+    """Resolve the effective server for a service.
+
+    Checks the latest deployment's ``target_server`` first (set explicitly
+    per-deploy), then falls back to the service's ``server`` FK.
+    Returns the ``ManagedServer`` instance or ``None``.
+    """
+    from apps.deployments.models import Deployment
+    from apps.deployments.models.core import ManagedServer
+    try:
+        latest = (
+            Deployment.objects
+            .filter(service=service)
+            .order_by('-created_at')
+            .only('target_server_id', 'target_is_local')
+            .first()
+        )
+        if latest:
+            if latest.target_is_local:
+                return ManagedServer.get_primary()
+            if latest.target_server_id:
+                return latest.target_server
+    except Exception:
+        pass
+    return getattr(service, 'server', None)
+
+
 def ensure_ip_cert():
     """Generate the self-signed IP cert if it does not already exist.
 
@@ -267,7 +294,9 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
 
         suffix = f".{wildcard_domain}"
         for service in Service.objects.select_related("server").only("id", "public_domain", "custom_domains", "public_domain_hidden", "server__is_primary", "is_preview").all():
-            svr = getattr(service, "server", None)
+            svr = _resolve_effective_server(service)
+            # @known_hosts routes to traefik:80 (master control plane).
+            # Only local/primary services belong here — skip all remote targets.
             if svr and not svr.is_primary:
                 continue
             if getattr(service, "is_preview", False):
@@ -323,7 +352,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         for service in Service.objects.filter(
             staging_domain__isnull=False,
         ).exclude(staging_domain="").select_related("server").only("id", "staging_domain", "server__is_primary"):
-            svr = getattr(service, "server", None)
+            svr = _resolve_effective_server(service)
             if svr and not svr.is_primary:
                 continue
             staging_domain = str(service.staging_domain).strip()
@@ -384,9 +413,12 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
         suffix = f".{wildcard_domain}"
         for service in Service.objects.select_related("server").only(
             "id", "public_domain", "custom_domains", "public_domain_hidden",
+            "wildcard_url_enabled",
             "server__id", "server__is_primary", "server__host", "server__wg_address",
         ).all():
-            svr = getattr(service, "server", None)
+            if not getattr(service, "wildcard_url_enabled", True):
+                continue
+            svr = _resolve_effective_server(service)
             if not svr or svr.is_primary:
                 continue
             upstream_url = _remote_upstream_url_for_service(service)
@@ -476,6 +508,104 @@ def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> l
     except Exception as exc:
         logger.warning("Could not load node subdomains for Caddy: %s", exc)
         return []
+
+
+def generate_node_caddyfile(node) -> str:
+    """Generate a Caddyfile for a specific node.
+
+    Creates blocks for each service on this node:
+      myservice.grid-node{slug}.{domain} → http://localhost:{port}
+
+    Also includes the node management block:
+      node-{slug}.{domain} → reverse_proxy backend:8000 (or frontend:3000)
+    """
+    from apps.deployments.models import Service
+    from apps.deployments.models.core import ManagedServer, PlatformConfig
+
+    if not _table_exists(Service._meta.db_table):
+        return ""
+
+    config = PlatformConfig.load()
+    base_domain = str(getattr(config, "domain", "") or "").strip()
+    if not base_domain:
+        return ""
+
+    cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+    node_slug = str(node.id).split("-")[0]
+    node_domain = f"node-{node_slug}.{base_domain}"
+
+    sections: list[str] = []
+
+    # Node management block
+    mgmt_block = [
+        f"{node_domain} {{",
+        "    tls {",
+    ]
+    if cloudflare_token:
+        mgmt_block.append(f"        dns cloudflare {cloudflare_token}")
+    else:
+        mgmt_block.append("        on_demand")
+    mgmt_block.extend([
+        "    }",
+        "    log {",
+        "        output file /var/log/caddy/access.log",
+        "    }",
+        "    handle /api/* {",
+        "        reverse_proxy backend:8000",
+        "    }",
+        "    handle /ws/* {",
+        "        reverse_proxy backend:8000",
+        "    }",
+        "    handle {",
+        "        reverse_proxy frontend:3000",
+        "    }",
+        "    encode gzip",
+        "}",
+    ])
+    sections.append("\n".join(mgmt_block))
+
+    # Service blocks
+    services = Service.objects.select_related("server").filter(
+        node_url_enabled=True,
+    ).only(
+        "id", "name", "slug", "internal_port", "public_domain",
+        "node_url_enabled",
+    ).order_by("id")
+
+    for service in services:
+        svr = _resolve_effective_server(service)
+        if not svr or svr.id != node.id:
+            continue
+
+        slug = (service.slug or service.name.lower().replace(" ", "-")).strip()
+        svc_domain = f"{slug}.grid-node{node_slug}.{base_domain}"
+        port = getattr(service, "internal_port", 8000) or 8000
+
+        svc_block = [
+            f"{svc_domain} {{",
+            "    tls {",
+        ]
+        if cloudflare_token:
+            svc_block.append(f"        dns cloudflare {cloudflare_token}")
+        else:
+            svc_block.append("        on_demand")
+        svc_block.extend([
+            "    }",
+            "    log {",
+            "        output file /var/log/caddy/access.log",
+            "    }",
+            f"    reverse_proxy http://localhost:{port} {{",
+            "        header_up Host {host}",
+            "    }",
+            "    encode gzip",
+            "}",
+        ])
+        sections.append("\n".join(svc_block))
+
+    header = "# Node Caddyfile - Auto-generated by Grid Controller\n"
+    header += f"# Node: {node.name} ({node_slug})\n"
+    header += "# Do not edit manually; changes will be overwritten.\n\n"
+    return header + "\n\n".join(sections) + "\n"
 
 
 def generate_caddyfile(config) -> str:

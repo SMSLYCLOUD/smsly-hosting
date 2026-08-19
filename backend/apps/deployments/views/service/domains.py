@@ -47,6 +47,28 @@ class DomainActionsMixin:
         _ = self._sync_caddy()
         return Response({"message": "Public domain unhidden", "public_domain_hidden": False})
 
+    @action(detail=True, methods=["post"], url_path="toggle-wildcard-url")
+    def toggle_wildcard_url(self, request, pk=None):
+        """Toggle the master-proxied wildcard URL for this service."""
+        service = self.get_object()
+        assert_can_write(self.request.user, service)
+        enabled = _parse_bool(request.data.get("enabled", not service.wildcard_url_enabled))
+        service.wildcard_url_enabled = enabled
+        service.save(update_fields=["wildcard_url_enabled", "updated_at"])
+        _ = self._sync_caddy()
+        return Response({"wildcard_url_enabled": service.wildcard_url_enabled})
+
+    @action(detail=True, methods=["post"], url_path="toggle-node-url")
+    def toggle_node_url(self, request, pk=None):
+        """Toggle the direct node URL for this service."""
+        service = self.get_object()
+        assert_can_write(self.request.user, service)
+        enabled = _parse_bool(request.data.get("enabled", not service.node_url_enabled))
+        service.node_url_enabled = enabled
+        service.save(update_fields=["node_url_enabled", "updated_at"])
+        _ = self._sync_caddy()
+        return Response({"node_url_enabled": service.node_url_enabled})
+
     # --- Nested Resources: Deployments ---
 
 
@@ -608,6 +630,9 @@ class DomainActionsMixin:
                     target='caddy',
                     metadata={'ok': False, 'message': str(result.get('message', ''))[:200]},
                 )
+
+            self._push_caddy_to_nodes()
+
             return {
                 "ok": bool(result.get("ok")),
                 "message": str(result.get("message", "")).strip(),
@@ -618,6 +643,22 @@ class DomainActionsMixin:
                 "ok": False,
                 "message": str(e),
             }
+
+    def _push_caddy_to_nodes(self):
+        """Push the node-specific Caddyfile to all full nodes."""
+        try:
+            from apps.deployments.models.core import ManagedServer
+            from apps.deployments.tasks.deploy.caddy import push_caddy_to_node
+            nodes = ManagedServer.objects.filter(
+                is_primary=False, is_lite_agent=False,
+            ).only("id", "name", "is_primary", "is_lite_agent")
+            for node in nodes:
+                try:
+                    push_caddy_to_node(str(node.id))
+                except Exception as exc:
+                    logger.warning("Failed to push Caddyfile to node %s: %s", node.name, exc)
+        except Exception as exc:
+            logger.warning("Failed to push Caddyfile to nodes: %s", exc)
 
 
     def _find_domain_conflict(self, service: Service, domain: str):

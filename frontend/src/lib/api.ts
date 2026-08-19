@@ -323,6 +323,9 @@ export interface Service {
   internal_port?: number;
   public_domain?: string;
   custom_domains?: string[];
+  wildcard_url_enabled?: boolean;
+  node_url_enabled?: boolean;
+  node_url?: string | null;
   domain_instances?: { domain: string; verified: boolean }[];
   domain_verified?: boolean;
   verification_token?: string;
@@ -711,6 +714,16 @@ export const servicesApi = {
   // Domain verification
   verifyDomain: async (serviceId: string, domain: string): Promise<{ domain: string; verified: boolean; cname_target: string; message: string }> => {
       const response = await api.post(`/services/${serviceId}/verify-domain/`, { domain });
+      return response.data;
+  },
+
+  toggleWildcardUrl: async (serviceId: string, enabled: boolean): Promise<{ wildcard_url_enabled: boolean }> => {
+      const response = await api.post(`/services/${serviceId}/toggle-wildcard-url/`, { enabled });
+      return response.data;
+  },
+
+  toggleNodeUrl: async (serviceId: string, enabled: boolean): Promise<{ node_url_enabled: boolean }> => {
+      const response = await api.post(`/services/${serviceId}/toggle-node-url/`, { enabled });
       return response.data;
   },
 

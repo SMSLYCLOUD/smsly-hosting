@@ -341,6 +341,86 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     )}
                 </div>
 
+                {/* Node URL Entry Points (full nodes only) */}
+                {service.node_url && (
+                    <div className="mb-8">
+                        <div className="mb-3">
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Node Entry Points</h4>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Control which URLs route traffic to this service. Both use the same backend.
+                            </p>
+                        </div>
+
+                        {/* Wildcard URL (master-proxied) */}
+                        <div className="mb-3">
+                            <div className="flex items-center justify-between p-3 bg-muted/30 border border-border rounded-lg">
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                    <div className={`h-2 w-2 rounded-full ${service.wildcard_url_enabled !== false ? 'bg-emerald-500' : 'bg-zinc-500'}`} />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-xs font-semibold text-muted-foreground mb-0.5">Wildcard URL (master-proxied)</p>
+                                        <span className={`font-mono text-sm ${service.wildcard_url_enabled === false ? 'line-through text-muted-foreground' : ''}`}>
+                                            {service.public_domain || `${service.name}.cloud.Trulay.co`}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 ml-3">
+                                    {service.wildcard_url_enabled !== false && (
+                                        <a href={`https://${service.public_domain || `${service.name}.cloud.Trulay.co`}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80">
+                                            <ExternalLink size={16} />
+                                        </a>
+                                    )}
+                                    <Switch
+                                        checked={service.wildcard_url_enabled !== false}
+                                        onCheckedChange={async (checked) => {
+                                            try {
+                                                const result = await servicesApi.toggleWildcardUrl(service.id, checked);
+                                                setService(prev => ({ ...prev, wildcard_url_enabled: result.wildcard_url_enabled }));
+                                                toast({ title: 'Success', description: `Wildcard URL ${checked ? 'enabled' : 'disabled'}. Redeploy to apply.` });
+                                            } catch (err) {
+                                                toast({ title: 'Error', description: 'Failed to toggle wildcard URL', variant: 'destructive' });
+                                            }
+                                        }}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Direct Node URL */}
+                        <div>
+                            <div className="flex items-center justify-between p-3 bg-muted/30 border border-border rounded-lg">
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                    <div className={`h-2 w-2 rounded-full ${service.node_url_enabled !== false ? 'bg-emerald-500' : 'bg-zinc-500'}`} />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-xs font-semibold text-muted-foreground mb-0.5">Direct Node URL</p>
+                                        <span className={`font-mono text-sm ${service.node_url_enabled === false ? 'line-through text-muted-foreground' : ''}`}>
+                                            {service.node_url.replace('https://', '')}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 ml-3">
+                                    {service.node_url_enabled !== false && (
+                                        <a href={service.node_url!} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80">
+                                            <ExternalLink size={16} />
+                                        </a>
+                                    )}
+                                    <Switch
+                                        checked={service.node_url_enabled !== false}
+                                        onCheckedChange={async (checked) => {
+                                            try {
+                                                const result = await servicesApi.toggleNodeUrl(service.id, checked);
+                                                setService(prev => ({ ...prev, node_url_enabled: result.node_url_enabled }));
+                                                toast({ title: 'Success', description: `Node URL ${checked ? 'enabled' : 'disabled'}. Redeploy to apply.` });
+                                            } catch (err) {
+                                                toast({ title: 'Error', description: 'Failed to toggle node URL', variant: 'destructive' });
+                                            }
+                                        }}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Staging Domain */}
                 <div className="mb-8">
                     <div className="flex items-center justify-between mb-3">
