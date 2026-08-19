@@ -32,43 +32,35 @@ def _regenerate_caddyfile():
 
 
 def _regenerate_node_caddyfile(config=None):
-    """Regenerate and apply the Caddyfile for a full-node deployment."""
+    """Regenerate and push the Caddyfile to all full nodes via SSH."""
     try:
-        from apps.deployments.services.caddy_manager import apply_caddyfile
-        from apps.deployments.services.caddy_manager.config_generation import generate_node_caddyfile
         from apps.deployments.models.core import ManagedServer
 
-        if config is None:
-            from apps.deployments.models import PlatformConfig
-            config = PlatformConfig.load()
-
-        node = ManagedServer.objects.filter(is_primary=False, is_lite_agent=False).first()
-        if not node:
-            logger.debug("No full node found; skipping node Caddyfile regeneration")
+        nodes = ManagedServer.objects.filter(is_primary=False, is_lite_agent=False)
+        if not nodes.exists():
+            logger.debug("No full nodes found; skipping node Caddyfile regeneration")
             return
 
-        content = generate_node_caddyfile(node)
-        if not content:
-            logger.debug("Empty node Caddyfile; skipping")
-            return
-
-        cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
-        result = apply_caddyfile(content, cloudflare_token=cf_token)
-        if result.get('ok'):
-            logger.info("Node Caddyfile regenerated")
-        else:
-            logger.warning("Node Caddyfile regeneration failed: %s", result.get('message'))
+        for node in nodes:
+            result = push_caddy_to_node(str(node.id))
+            if result.get('ok'):
+                logger.info("Node Caddyfile regenerated for %s", node.name)
+            else:
+                logger.warning(
+                    "Node Caddyfile regeneration failed for %s: %s",
+                    node.name, result.get('message'),
+                )
     except Exception as exc:
         logger.warning("Could not regenerate node Caddyfile: %s", exc)
 
 
 def push_caddy_to_node(server_id: str) -> dict:
-    """Generate the node-specific Caddyfile and push it to a remote full node via API.
+    """Generate the node-specific Caddyfile and push it to a remote full node via SSH.
 
     Used after toggle changes on master to update the node's own Caddy.
     """
-    import json as json_mod
-    from apps.deployments.models.core import ManagedServer, PlatformConfig
+    from apps.deployments.models.core import ManagedServer
+    from apps.deployments.services.ssh_client import SSHClient
 
     try:
         server = ManagedServer.objects.get(id=server_id)
@@ -84,6 +76,10 @@ def push_caddy_to_node(server_id: str) -> dict:
         logger.info("push_caddy_to_node: skipping primary server %s", server_id)
         return {"ok": True, "message": "Primary server — uses master Caddy"}
 
+    if not server.ssh_key and not server.ssh_password:
+        logger.warning("push_caddy_to_node: no SSH credentials for %s", server.name)
+        return {"ok": False, "message": "No SSH credentials for node"}
+
     try:
         from apps.deployments.services.caddy_manager.config_generation import generate_node_caddyfile
         content = generate_node_caddyfile(server)
@@ -95,38 +91,51 @@ def push_caddy_to_node(server_id: str) -> dict:
         logger.info("push_caddy_to_node: empty Caddyfile for %s — skipping", server_id)
         return {"ok": True, "message": "Empty Caddyfile — nothing to push"}
 
+    ssh = SSHClient(
+        ip=server.host,
+        key_content=server.ssh_key,
+        key_passphrase=server.ssh_key_passphrase,
+        password=server.ssh_password,
+        user=server.ssh_user,
+        port=server.ssh_port,
+        wg_address=server.wg_address,
+    )
     try:
-        from apps.deployments.services.remote_orchestrator.manager import RemoteOrchestrator
-        client = RemoteOrchestrator(server)
+        ssh.connect()
 
-        import base64
-        script = (
-            "import os, tempfile\n"
-            f"content = {content!r}\n"
-            "path = '/opt/smsly-hosting/caddy-config/Caddyfile'\n"
-            "os.makedirs(os.path.dirname(path), exist_ok=True)\n"
-            "tmp = path + '.tmp'\n"
-            "with open(tmp, 'w') as f:\n"
-            "    f.write(content)\n"
-            "os.replace(tmp, path)\n"
-            "os.chmod(path, 0o664)\n"
-            "print('Caddyfile written')\n"
-        )
+        caddy_path = "/opt/smsly-hosting/infrastructure/docker/Caddyfile.node"
 
-        resp = client._request(
-            method='POST',
-            path='/api/v1/transfers/incoming/exec/',
-            payload={'script': script},
+        import os
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix="Caddyfile", delete=False
+        ) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        try:
+            ssh.upload_file(tmp_path, caddy_path)
+        finally:
+            os.unlink(tmp_path)
+
+        ssh.exec_command(f"chmod 644 {caddy_path}", timeout=10)
+
+        reload_out, reload_err, reload_code = ssh.exec_command(
+            "cd /opt/smsly-hosting && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force",
             timeout=30,
+            raise_on_error=False,
         )
-        if resp and resp.status_code == 200:
-            logger.info("Caddyfile pushed to node %s", server.name)
-            return {"ok": True, "message": "Caddyfile pushed and written"}
-        else:
-            status_code = resp.status_code if resp else "no response"
-            body = resp.text[:300] if resp else ""
-            logger.warning("push_caddy_to_node: node returned %s: %s", status_code, body)
-            return {"ok": False, "message": f"Node returned {status_code}"}
+        if reload_code != 0:
+            logger.warning(
+                "push_caddy_to_node: caddy reload returned %s: %s",
+                reload_code, (reload_out or "") + (reload_err or ""),
+            )
+            return {"ok": False, "message": f"Caddy reload failed (exit {reload_code})"}
+
+        logger.info("Caddyfile pushed to node %s and Caddy reloaded", server.name)
+        return {"ok": True, "message": "Caddyfile pushed, written, and Caddy reloaded"}
     except Exception as exc:
         logger.warning("push_caddy_to_node: failed to push to node: %s", exc)
         return {"ok": False, "message": f"Push failed: {exc}"}
+    finally:
+        ssh.close()
