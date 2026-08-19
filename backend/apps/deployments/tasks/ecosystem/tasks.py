@@ -903,7 +903,38 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         try:
             # Service.name is globally unique — check all owners, not just the current user.
             service = Service.objects.filter(name=requested_name).first()
-            if service is None:
+            # If the service already exists but was NOT created by ecosystem,
+            # create a new service with a unique name instead of overwriting
+            # the user's manually-deployed service.
+            if service is not None and not Deployment.objects.filter(
+                service=service, commit_hash="ecosystem-deploy",
+            ).exists():
+                final_name = _next_available_service_name(Service, requested_name)
+                service = Service.objects.create(
+                    name=final_name,
+                    owner=user,
+                    project=project,
+                    repository_url=_repository_url(repo),
+                    branch=str(
+                        svc_plan.get("branch")
+                        or svc_plan.get("default_branch")
+                        or "main"
+                    ).strip() or "main",
+                    internal_port=port,
+                    provider=provider,
+                    server=server,
+                )
+                if mtls_config.get("enabled"):
+                    try:
+                        from apps.mtls.models import MtlsConfig
+                        eco_td = mtls_config.get("trust_domain", "ecosystem.local")
+                        MtlsConfig.objects.filter(service=service).update(
+                            trust_domain=eco_td,
+                        )
+                    except Exception:
+                        pass
+                _rollback_services.append(str(service.id))
+            elif service is None:
                 final_name = _next_available_service_name(Service, requested_name)
                 service = Service.objects.create(
                     name=final_name,
