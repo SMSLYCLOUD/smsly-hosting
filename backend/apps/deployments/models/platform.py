@@ -154,6 +154,10 @@ class ManagedServer(models.Model):
         default=False,
         help_text="If true, this server is a lightweight node connecting to the Master's DB/Redis.",
     )
+    node_number = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        null=True, blank=True,
+        help_text="Sequential node number (1, 2, ...). Used for domain naming: grid{N}.domain.",
+    )
     provision_status = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=ProvisionStatus.choices, default=ProvisionStatus.NONE)
     provision_logs = models.TextField(blank=True, default="")  # type: ignore[var-annotated]
