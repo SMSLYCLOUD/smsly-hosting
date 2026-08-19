@@ -748,6 +748,24 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
             existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
             if not existing_addon:
+                # Search across ALL user services for an existing ACTIVE addon of this type
+                # to avoid creating duplicate volumes on re-deploys (SEC-VOL-001).
+                existing_addon = Addon.objects.filter(
+                    service__owner=user,
+                    addon_type=addon_type,
+                    status=Addon.Status.ACTIVE,
+                ).exclude(
+                    service=addon_anchor_service,
+                ).select_related('service').first()
+                if existing_addon:
+                    logger.info(
+                        "Reusing existing %s addon %s from service %s",
+                        addon_type, existing_addon.id, existing_addon.service.name,
+                    )
+                    # Re-attach to the current anchor service
+                    existing_addon.service = addon_anchor_service
+                    existing_addon.save(update_fields=['service', 'updated_at'])
+            if not existing_addon:
                 existing_addon = Addon.objects.create(
                     service=addon_anchor_service,
                     name=f"{addon_type.lower()}-shared"[:255],
@@ -1006,13 +1024,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     if _addon_is_shared(addon_type):
                         continue
                     try:
-                        svc_addon = Addon.objects.create(
-                            service=service,
-                            name=f"{service.name}-{addon_type.lower()}"[:255],
-                            addon_type=addon_type,
-                            status=Addon.Status.PROVISIONING,
-                        )
-                        _rollback_addons.append(str(svc_addon.id))
+                        # Check if this service already has an addon of this type
+                        svc_addon = Addon.objects.filter(
+                            service=service, addon_type=addon_type,
+                        ).exclude(status=Addon.Status.DELETED).first()
+                        if not svc_addon:
+                            svc_addon = Addon.objects.create(
+                                service=service,
+                                name=f"{service.name}-{addon_type.lower()}"[:255],
+                                addon_type=addon_type,
+                                status=Addon.Status.PROVISIONING,
+                            )
+                            _rollback_addons.append(str(svc_addon.id))
                         _cid, url = addon_provisioner.provision(svc_addon)
                         svc_addon.connection_url = url
                         svc_addon.status = Addon.Status.ACTIVE
