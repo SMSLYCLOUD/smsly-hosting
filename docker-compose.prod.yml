@@ -520,7 +520,7 @@ services:
     # specific feature requires it and document why.
     env_file: .env
     environment:
-      REDIS_HOST: redis-primary
+      REDIS_HOST: ${REDIS_HOST:-redis-primary}
       UVICORN_WS_PING_INTERVAL: 20
       UVICORN_WS_PING_TIMEOUT: 20
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
@@ -629,7 +629,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      REDIS_HOST: redis-primary
+      REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -699,7 +699,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      REDIS_HOST: redis-primary
+      REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -765,7 +765,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      REDIS_HOST: redis-primary
+      REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -829,12 +829,12 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      REDIS_HOST: redis-primary
+      REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       # CELERY_ prefix is required for celery-redbeat to pick it up
       # (see backend/config/settings.py: CELERY_REDBEAT_REDIS_URL)
-      CELERY_REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis-primary:6379/3
+      CELERY_REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@${REDIS_HOST:-redis-primary}:6379/3
     depends_on:
       pgcat:
         condition: service_healthy
@@ -923,7 +923,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      REDIS_HOST: redis-primary
+      REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -982,7 +982,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      REDIS_HOST: redis-primary
+      REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
