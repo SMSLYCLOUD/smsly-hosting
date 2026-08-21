@@ -2294,6 +2294,7 @@ export const ecosystemApi = {
     shared_addon_config: Record<string, unknown>;
     mtls_config?: unknown;
     communication_rules?: unknown;
+    env_scan_depth?: string;
   }) => api.post('/cloud/ecosystem/deploy/', data).then(r => r.data),
 
   downloadEnv: () =>
