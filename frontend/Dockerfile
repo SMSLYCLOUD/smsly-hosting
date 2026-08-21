@@ -31,6 +31,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 
 # Copy static assets (not included in standalone output)
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+RUN mkdir -p .next/cache && chown nextjs:nodejs .next/cache
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 USER nextjs
