@@ -1327,7 +1327,7 @@ if IS_TESTING:
 else:
     CACHES = {
         "default": {
-            "BACKEND": "config.sentinel_redis_cache.SentinelRedisCache",
+            "BACKEND": "config.fallback_redis_cache.FallbackRedisCache",
             "LOCATION": REDIS_CACHE_URL,
             "OPTIONS": {
                 "socket_connect_timeout": REDIS_SOCKET_TIMEOUT,

@@ -35,15 +35,21 @@ def health_check(request):
         db_status = 'unhealthy'
         checks_passed = False
 
-    # Check cache (Redis)
+    # Check cache (Redis) — report degraded when LocMemCache fallback is active
     try:
-        @redis_breaker
-        def check_cache():
-            cache.set('_health_check', '1', 10)
-            val = cache.get('_health_check')
-            if val != '1':
-                raise ValueError('Cache read mismatch')
-        check_cache()
+        _cache_backend = getattr(cache, '_cache', None)
+        from config.fallback_redis_cache import FallbackRedisCache
+        if isinstance(_cache_backend, FallbackRedisCache) and _cache_backend.is_degraded:
+            cache_status = 'degraded'
+            # App is functional in degraded mode — don't fail the health check
+        else:
+            @redis_breaker
+            def check_cache():
+                cache.set('_health_check', '1', 10)
+                val = cache.get('_health_check')
+                if val != '1':
+                    raise ValueError('Cache read mismatch')
+            check_cache()
     except Exception:
         cache_status = 'unhealthy'
         checks_passed = False
