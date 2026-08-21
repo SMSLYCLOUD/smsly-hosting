@@ -43,13 +43,13 @@ class FallbackRedisCache(RedisCache):
         return self._degraded
 
     def _maybe_use_sentinel(self):
-        """Replace the default RedisCacheClient with a Sentinel-backed
-        Redis client when SENTINEL_HOSTS is configured.
+        """Swap the underlying Redis connection pool for a Sentinel-managed
+        one when SENTINEL_HOSTS is configured.
 
-        Django 5.0's RedisCache uses RedisCacheClient (URL-based) which
-        cannot follow Sentinel failover.  We swap it for a
-        sentinel.master_for() client that tracks the current master
-        automatically.
+        Django 5.0's RedisCache uses a RedisCacheClient which wraps a
+        redis.Redis instance.  We replace that inner client's connection
+        pool with a SentinelConnectionPool so writes route to the
+        current master automatically.
         """
         from config.redis_sentinel import SENTINEL_ENABLED, get_master_connection
         if not SENTINEL_ENABLED:
@@ -63,9 +63,14 @@ class FallbackRedisCache(RedisCache):
             parsed = urlparse(url)
             db = int(parsed.path.lstrip('/') or 0) if parsed.path else 0
         try:
-            conn = get_master_connection(password=password, db=db)
-            if conn is not None:
-                self._cache = conn
+            sentinel_client = get_master_connection(password=password, db=db)
+            if sentinel_client is None:
+                return
+            # Replace the connection pool on the RedisCacheClient's inner
+            # redis.Redis instance so the cache API (set/get/delete) works.
+            inner = getattr(self._cache, '_client', None) or self._cache
+            if hasattr(inner, 'connection_pool'):
+                inner.connection_pool = sentinel_client.connection_pool
                 logger.info(
                     "Cache backend using Sentinel master for db=%d", db,
                 )
