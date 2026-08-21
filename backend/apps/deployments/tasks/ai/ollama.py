@@ -112,6 +112,7 @@ def _ensure_shared_ollama_cpp(service, provider) -> str | None:
             memory_mb=ram_mb,
             cpu_cores=cpu,
             deploy_mode='SINGLE',
+            env_scan_depth='shallow',
         )
         EnvironmentVariable.objects.update_or_create(
             service=shared, key='OLLAMA_HOST',

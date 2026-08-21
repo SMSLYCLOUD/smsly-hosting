@@ -457,7 +457,7 @@ class Service(TimeStampedModel):
     env_scan_depth = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=SCAN_DEPTH_CHOICES,
-        default='standard',
+        default='shallow',
         help_text="How deeply to scan the repository for environment variables during deployment analysis",
     )
 

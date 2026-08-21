@@ -13,6 +13,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='service',
             name='env_scan_depth',
-            field=models.CharField(choices=[('shallow', 'Shallow (.env files only)'), ('standard', 'Standard (.env + config files)'), ('deep', 'Deep (full codebase scan)')], default='standard', help_text='How deeply to scan the repository for environment variables during deployment analysis', max_length=20),
+            field=models.CharField(choices=[('shallow', 'Shallow (.env files only)'), ('standard', 'Standard (.env + config files)'), ('deep', 'Deep (full codebase scan)')], default='shallow', help_text='How deeply to scan the repository for environment variables during deployment analysis', max_length=20),
         ),
     ]

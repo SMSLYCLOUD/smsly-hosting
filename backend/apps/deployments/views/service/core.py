@@ -154,6 +154,8 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         from ...models.core import ManagedServer
 
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
+        routing_fields = {'public_domain_hidden', 'wildcard_url_enabled', 'node_url_enabled', 'public_domain', 'custom_domains'}
+        routing_changed = routing_fields.intersection(serializer.validated_data)
 
         if 'server' in serializer.validated_data:
             server = serializer.validated_data.get('server')
@@ -183,6 +185,10 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                 args=(self.request.user, new_repo_url),
                 daemon=True
             ).start()
+
+        # Reload Caddy when routing-related fields change
+        if routing_changed and not self._is_remote_sync_request():
+            self._sync_caddy()
 
 
     def destroy(self, request, *args, **kwargs):

@@ -498,7 +498,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                     provider=provider,
                     project=service.project,
                     memory_mb=int(c_template.get('min_ram_gb') or 1) * 1024,
-                    cpu_cores=float(c_template.get('min_cpu_cores') or 1.0)
+                    cpu_cores=float(c_template.get('min_cpu_cores') or 1.0),
+                    env_scan_depth='shallow',
                 )
                 companion_service_ids.append(str(c_service.id))
 

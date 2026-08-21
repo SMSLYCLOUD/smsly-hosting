@@ -195,6 +195,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 owner=request.user,
                 provider=provider,
                 public_domain_hidden=(not supports_public_url),
+                env_scan_depth='shallow',
             )
 
             getattr(settings, 'DOMAIN', 'localhost') or 'localhost'

@@ -487,6 +487,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         except Exception as exc:
             logger.debug("Failed to link ecosystem plan to project: %s", exc)
 
+    # Read platform default scan depth (plan override takes precedence)
+    _env_scan_depth = plan.get('env_scan_depth')
+    if _env_scan_depth not in ('shallow', 'standard', 'deep'):
+        try:
+            from apps.deployments.models.platform import PlatformConfig
+            _env_scan_depth = PlatformConfig.load().default_env_scan_depth or 'shallow'
+        except Exception:
+            _env_scan_depth = 'shallow'
+
     # Ensure the ecosystem project always has its own ScopedRegistry.
     # Use .env credentials (which match the registry container's htpasswd) and
     # verify with docker login before saving. PlatformConfig DB values may be
@@ -693,6 +702,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     branch=anchor_branch,
                     internal_port=anchor_port,
                     provider=provider,
+                    env_scan_depth=_env_scan_depth,
                 )
                 # Ecosystem services use ecosystem.local trust domain
                 if mtls_config.get("enabled"):
@@ -910,6 +920,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     provider=provider,
                     server=None,
                     status=Service.Status.UNKNOWN,
+                    env_scan_depth=_env_scan_depth,
                 )
             except Exception:
                 # If creation fails (e.g., model does not have a status field),
@@ -941,6 +952,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     internal_port=port,
                     provider=provider,
                     server=server,
+                    env_scan_depth=_env_scan_depth,
                 )
                 if mtls_config.get("enabled"):
                     try:
@@ -967,6 +979,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     internal_port=port,
                     provider=provider,
                     server=server,
+                    env_scan_depth=_env_scan_depth,
                 )
                 # Ecosystem services use ecosystem.local trust domain
                 if mtls_config.get("enabled"):

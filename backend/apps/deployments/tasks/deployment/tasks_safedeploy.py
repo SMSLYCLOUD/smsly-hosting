@@ -549,6 +549,7 @@ def provision_preview_service_job(preview_id: str):
                 'deploy_mode': parent.deploy_mode,
                 'compose_file': parent.compose_file,
                 'compose_main_service': parent.compose_main_service,
+                'env_scan_depth': 'shallow',
             }
         )
 

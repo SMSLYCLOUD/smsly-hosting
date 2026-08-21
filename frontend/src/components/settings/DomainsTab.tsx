@@ -316,7 +316,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                             const newVal = !checked;
                                             const updated = await servicesApi.update(service.id, { public_domain_hidden: newVal });
                                             setService(updated);
-                                            toast({ title: 'Success', description: `Default domain is now ${newVal ? 'hidden' : 'visible'}. Redeploy to apply.` });
+                                            toast({ title: 'Success', description: `Default domain is now ${newVal ? 'hidden' : 'visible'}. Routing updated.` });
                                         } catch (err) {
                                             toast({ title: 'Error', description: 'Failed to update visibility', variant: 'destructive' });
                                         }
@@ -375,7 +375,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                             try {
                                                 const result = await servicesApi.toggleWildcardUrl(service.id, checked);
                                                 setService(prev => ({ ...prev, wildcard_url_enabled: result.wildcard_url_enabled }));
-                                                toast({ title: 'Success', description: `Wildcard URL ${checked ? 'enabled' : 'disabled'}. Redeploy to apply.` });
+                                                toast({ title: 'Success', description: `Wildcard URL ${checked ? 'enabled' : 'disabled'}. Routing updated.` });
                                             } catch (err) {
                                                 toast({ title: 'Error', description: 'Failed to toggle wildcard URL', variant: 'destructive' });
                                             }
@@ -409,7 +409,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                             try {
                                                 const result = await servicesApi.toggleNodeUrl(service.id, checked);
                                                 setService(prev => ({ ...prev, node_url_enabled: result.node_url_enabled }));
-                                                toast({ title: 'Success', description: `Node URL ${checked ? 'enabled' : 'disabled'}. Redeploy to apply.` });
+                                                toast({ title: 'Success', description: `Node URL ${checked ? 'enabled' : 'disabled'}. Routing updated.` });
                                             } catch (err) {
                                                 toast({ title: 'Error', description: 'Failed to toggle node URL', variant: 'destructive' });
                                             }

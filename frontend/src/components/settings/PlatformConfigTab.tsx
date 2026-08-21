@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
-import { Cloud } from "lucide-react";
+import { Cloud, Search } from "lucide-react";
 import { systemApi } from "@/lib/api";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 
@@ -141,6 +141,47 @@ export function PlatformConfigTab() {
                     toast({ title: "Saved", description: "Rollback config updated." });
                   } catch { toast({ title: "Failed", variant: "destructive" }); }
                 }}>Save Rollback</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </ScrollReveal>
+
+      {/* Environment Scan Depth */}
+      <ScrollReveal variant="slideRight" delay={0.19}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Search className="h-5 w-5 text-emerald-500" /> Environment Scan Depth</CardTitle>
+            <CardDescription>Default scan depth for new services and ecosystem deploys. Controls how deeply the platform scans repositories for environment variables.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Default Scan Depth</Label>
+                <select
+                  value={config.DEFAULT_ENV_SCAN_DEPTH ?? 'shallow'}
+                  onChange={(e) => setConfig({ ...config, DEFAULT_ENV_SCAN_DEPTH: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg bg-background border border-border"
+                >
+                  <option value="shallow">Shallow — .env files only (fastest)</option>
+                  <option value="standard">Standard — .env + config files + manifests</option>
+                  <option value="deep">Deep — full codebase scan (slowest)</option>
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  {config.DEFAULT_ENV_SCAN_DEPTH === 'shallow' && 'Only scans .env files. Fast, may miss some variables.'}
+                  {config.DEFAULT_ENV_SCAN_DEPTH === 'standard' && 'Scans .env files + config files + package manifests. Balanced.'}
+                  {config.DEFAULT_ENV_SCAN_DEPTH === 'deep' && 'Scans entire codebase. Most thorough but slowest.'}
+                  {!config.DEFAULT_ENV_SCAN_DEPTH && 'Only scans .env files. Fast, may miss some variables.'}
+                </p>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={async () => {
+                  try {
+                    const result = await systemApi.updateConfig({ DEFAULT_ENV_SCAN_DEPTH: config.DEFAULT_ENV_SCAN_DEPTH });
+                    setConfig(result);
+                    toast({ title: "Saved", description: "Scan depth default updated." });
+                  } catch { toast({ title: "Failed", description: "Could not save config.", variant: "destructive" }); }
+                }}>Save Scan Depth</Button>
               </div>
             </div>
           </CardContent>

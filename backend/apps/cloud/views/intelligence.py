@@ -639,11 +639,16 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         use_shared_addons = request.data.get('use_shared_addons', True)
         cancel_others_on_failure = request.data.get('cancel_others_on_failure', False)
         shared_addon_config = request.data.get('shared_addon_config', {})
+        env_scan_depth = request.data.get('env_scan_depth')
         if not isinstance(plan, dict):
             return Response(
                 {'error': 'plan (object) is required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Inject scan depth override into plan for the task
+        if env_scan_depth in ('shallow', 'standard', 'deep'):
+            plan['env_scan_depth'] = env_scan_depth
 
         # Resolve project — from explicit param, or from existing plan
         project = None

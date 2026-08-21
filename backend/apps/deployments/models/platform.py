@@ -297,6 +297,10 @@ class PlatformConfig(models.Model):
     ecosystem_wave_recheck_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=15,
         help_text="Seconds between wave completion rechecks")
+    default_env_scan_depth = models.CharField(  # type: ignore[var-annotated]
+        max_length=20, default='shallow',
+        choices=[('shallow', 'Shallow'), ('standard', 'Standard'), ('deep', 'Deep')],
+        help_text="Default environment scan depth for new services and ecosystem deploys")
     caddy_ask_secret = EncryptedCharField(
         max_length=512, blank=True, default='',
         help_text="Caddy on_demand_tls ask shared secret. Set via UI — if empty, "

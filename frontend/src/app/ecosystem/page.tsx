@@ -13,6 +13,7 @@ import {
     Code, CheckCircle, AlertTriangle, Variable, Terminal, Download, Lock, Shield, FolderOpen
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ecosystemApi } from '@/lib/api';
 import Link from 'next/link';
 import { TopologyCanvas } from './components/TopologyCanvas';
@@ -115,7 +116,7 @@ function loadState<T>(key: string, fallback: T): T {
 }
 
 function clearState() {
-    ['step', 'plan', 'planId', 'scanTaskId', 'deployTaskId', 'selectedRepos', 'aiProvider', 'useSharedAddons', 'cancelOthersOnFailure', 'sharedAddonConfig', 'mtlsConfig', 'communicationRules'].forEach(
+    ['step', 'plan', 'planId', 'scanTaskId', 'deployTaskId', 'selectedRepos', 'aiProvider', 'useSharedAddons', 'cancelOthersOnFailure', 'sharedAddonConfig', 'mtlsConfig', 'communicationRules', 'envScanDepth'].forEach(
         key => sessionStorage.removeItem(`ecosystem:${key}`)
     );
 }
@@ -242,6 +243,8 @@ export default function EcosystemPage() {
     const [communicationRules, setCommunicationRules] = useState<CommunicationRules>(() => loadState('communicationRules', {}));
     const [rulesExpanded, setRulesExpanded] = useState(false);
 
+    const [envScanDepth, setEnvScanDepth] = useState<'shallow' | 'standard' | 'deep'>(() => loadState('envScanDepth', 'shallow'));
+
     const [aiProviders, setAiProviders] = useState<any[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<string>(() => loadState('aiProvider', 'auto'));
 
@@ -280,6 +283,7 @@ export default function EcosystemPage() {
     useEffect(() => { saveState('sharedAddonConfig', sharedAddonConfig); }, [sharedAddonConfig]);
     useEffect(() => { saveState('mtlsConfig', mtlsConfig); }, [mtlsConfig]);
     useEffect(() => { saveState('communicationRules', communicationRules); }, [communicationRules]);
+    useEffect(() => { saveState('envScanDepth', envScanDepth); }, [envScanDepth]);
     useEffect(() => { saveState('scanTaskId', scanTaskId); }, [scanTaskId]);
     useEffect(() => { saveState('deployTaskId', deployTaskId); }, [deployTaskId]);
     useEffect(() => { saveState('selectedRepos', selectedRepos); }, [selectedRepos]);
@@ -559,6 +563,7 @@ export default function EcosystemPage() {
                 shared_addon_config: sharedAddonConfig,
                 mtls_config: mtlsConfig,
                 communication_rules: communicationRules,
+                env_scan_depth: envScanDepth,
             });
             setDeployTaskId(data.task_id);
             if (data.plan_id) setPlanId(data.plan_id);
@@ -906,6 +911,27 @@ export default function EcosystemPage() {
                                             </div>
                                         </label>
                                     ))}
+                                </div>
+                            </div>
+
+                            <div className="bg-card border border-border rounded-xl p-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Environment Scan Depth</label>
+                                    <Select value={envScanDepth} onValueChange={(v) => setEnvScanDepth(v as 'shallow' | 'standard' | 'deep')}>
+                                        <SelectTrigger className="w-full sm:w-[300px]">
+                                            <SelectValue placeholder="Select scan depth" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="shallow">Shallow — .env files only (fastest)</SelectItem>
+                                            <SelectItem value="standard">Standard — .env + config files + manifests</SelectItem>
+                                            <SelectItem value="deep">Deep — full codebase scan (slowest)</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-xs text-muted-foreground">
+                                        {envScanDepth === 'shallow' && 'Scans only .env files. Fast, may miss some variables.'}
+                                        {envScanDepth === 'standard' && 'Scans .env files + config files + package manifests. Balanced.'}
+                                        {envScanDepth === 'deep' && 'Scans entire codebase. Most thorough but slowest.'}
+                                    </p>
                                 </div>
                             </div>
 

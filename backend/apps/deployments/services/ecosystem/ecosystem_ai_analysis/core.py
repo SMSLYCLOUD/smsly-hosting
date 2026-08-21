@@ -51,7 +51,7 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
             clone_dir = rd.get('clone_dir')
             if clone_dir:
                 from apps.intelligence.scanner import RepoScanner
-                scan_depth = rd.get('scan_depth', 'standard')
+                scan_depth = rd.get('scan_depth', 'shallow')
                 scanner = RepoScanner(clone_dir, scan_depth=scan_depth)
                 scan = scanner.scan()
                 rd['env_vars_context'] = scan.get('env_vars_context', {})

@@ -68,7 +68,8 @@ class BlueprintManager:
                 docker_image=service_def['image'],
                 internal_port=service_def['port'],
                 provider=self.provider,
-                owner=self.user
+                owner=self.user,
+                env_scan_depth='shallow',
             )
 
             # Env Vars

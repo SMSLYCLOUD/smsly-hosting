@@ -81,7 +81,7 @@ export default function NewServicePage() {
   const [cpuCores, setCpuCores] = React.useState<number>(0.5)
   const [memoryMb, setMemoryMb] = React.useState<number>(512)
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
-  const [scanDepth, setScanDepth] = React.useState<"shallow" | "standard" | "deep">("standard")
+  const [scanDepth, setScanDepth] = React.useState<"shallow" | "standard" | "deep">("shallow")
   const [isDeploying, setIsDeploying] = React.useState(false)
 
   // AI analysis state

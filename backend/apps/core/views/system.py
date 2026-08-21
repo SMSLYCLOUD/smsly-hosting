@@ -198,6 +198,8 @@ class SystemConfigView(GenericAPIView):
         'ENFORCE_DEVICE_TRUST': ('enforce_device_trust', bool),
         # Blue-green rollback
         'ROLLBACK_GRACE_MINUTES': ('rollback_grace_minutes', int),
+        # Ecosystem
+        'DEFAULT_ENV_SCAN_DEPTH': ('default_env_scan_depth', str),
     }
 
     _PC_SECRET_FIELDS = {'SMTP_PASSWORD', 'SMSLY_INTERNAL_API_KEY', 'REGISTRY_PASSWORD'}

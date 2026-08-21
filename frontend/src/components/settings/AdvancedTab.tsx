@@ -19,7 +19,7 @@ export function AdvancedTab({ service }: { service: Service }) {
         start_command: service.start_command || '',
         restart_policy: service.restart_policy || 'unless-stopped',
     });
-    const [scanDepth, setScanDepth] = useState<'shallow' | 'standard' | 'deep'>(service.env_scan_depth || 'standard');
+    const [scanDepth, setScanDepth] = useState<'shallow' | 'standard' | 'deep'>(service.env_scan_depth || 'shallow');
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [error, setError] = useState('');

@@ -99,6 +99,7 @@ class PreviewActionsMixin:
                     is_preview=True,
                     parent_service=parent,
                     pr_number=pr_number,
+                    env_scan_depth='shallow',
                 )
 
                 # Option A enterprise preview: clean start, do not copy parent env vars to prevent leaks and blast radius
