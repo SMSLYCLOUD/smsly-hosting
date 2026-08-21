@@ -1236,7 +1236,7 @@ class AddonProvisioner:
             '--restart', 'unless-stopped',
             *self.SECURITY_OPTS,
             '--env-file', env_file,
-            '-v', f'{container_name}-data:/var/lib/rabbitmq',
+            '-v', f'{container_name}-data:/data',
         ]
         if host_port:
             cmd.extend(['-p', f'{host_port}:{port}'])
@@ -1605,8 +1605,11 @@ class AddonProvisioner:
             # Password comes from the container env (--env-file above), never
             # from the command line: keeps it out of `ps` output and survives
             # container restarts (env is baked into the container config).
+            # chown ensures the data directory is writable after volume
+            # restore or permission corruption (e.g. host-level chown).
             'sh', '-c',
-            'redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes',
+            'chown -R redis:redis /data 2>/dev/null; '
+            'exec redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes',
         ])
 
         try:

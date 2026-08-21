@@ -211,6 +211,30 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "GRAFANA_PASSWORD" "$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))"  || openssl rand -base64 30 | tr -d '+/=')" "Grafana admin password (used by the standalone observability stack)"
     env_ensure_var "$env_file" "REPLICATION_PASSWORD" "$(gen_hex_secret 32)" "PostgreSQL streaming replication password"
     env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
+    env_ensure_var "$env_file" "SENTINEL_SERVICE_NAME" "mymaster" "Redis Sentinel service name"
+    # Auto-detect sentinel containers and populate SENTINEL_HOSTS if empty.
+    # Sentinel containers are named smsly-redis-sentinel-{1,2,3} and listen
+    # on port 26379.  Without this, the backend falls back to direct
+    # redis-primary connection which breaks after sentinel failover.
+    local current_sentinel_hosts
+    current_sentinel_hosts="$(env_get_value "$env_file" "SENTINEL_HOSTS")"
+    if [ -z "$current_sentinel_hosts" ]; then
+        local detected_sentinels=""
+        local _si
+        for _si in 1 2 3; do
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
+                if [ -n "$detected_sentinels" ]; then
+                    detected_sentinels="${detected_sentinels},"
+                fi
+                detected_sentinels="${detected_sentinels}smsly-redis-sentinel-${_si}:26379"
+            fi
+        done
+        if [ -n "$detected_sentinels" ]; then
+            echo -e "${BLUE}  -> Auto-detected Redis Sentinels: ${detected_sentinels}${NC}"
+            env_set_value "$env_file" "SENTINEL_HOSTS" "$detected_sentinels"
+            echo -e "${GREEN}  OK SENTINEL_HOSTS set${NC}"
+        fi
+    fi
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
     env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
     sync_install_mode_env_file "$env_file"

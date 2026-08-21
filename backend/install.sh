@@ -12724,6 +12724,19 @@ except Exception:
         ENV_TRAEFIK_HTTPS_BIND="0.0.0.0:443"
         ENV_STARTUP_CADDY_SYNC="false"
     fi
+    # Auto-detect Redis Sentinel containers before writing .env.
+    # Without this, SENTINEL_HOSTS is always empty and the backend
+    # falls back to direct redis-primary connection (breaks after failover).
+    if [ -z "${SENTINEL_HOSTS:-}" ]; then
+        _detected_sentinels=""
+        for _si in 1 2 3; do
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
+                [ -n "$_detected_sentinels" ] && _detected_sentinels="${_detected_sentinels},"
+                _detected_sentinels="${_detected_sentinels}smsly-redis-sentinel-${_si}:26379"
+            fi
+        done
+        [ -n "$_detected_sentinels" ] && SENTINEL_HOSTS="$_detected_sentinels"
+    fi
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
