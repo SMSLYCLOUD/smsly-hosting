@@ -194,10 +194,20 @@ class SpawningService:
 
         label_args = " ".join(f"-l {shlex.quote(label)}" for label in labels)
 
-        # Env vars from the service
+        # Env vars from the service. On a REMOTE node the addon DNS names
+        # (postgres-smsly-*, redis-smsly-*) do not resolve — rewrite any
+        # addon-hosted URL to the master's WireGuard mesh endpoint so the
+        # replica reaches its databases over the VPN (see addon_mesh.py).
+        from .addon_mesh import rewrite_env_for_mesh
+        mesh_overrides = {}
+        try:
+            mesh_overrides = rewrite_env_for_mesh(service)
+        except Exception as e:
+            logger.warning("Addon mesh rewrite failed for %s: %s", service.name, e)
         env_args = ""
         for ev in service.env_vars.all():
-            env_args += f" -e {shlex.quote(ev.key)}={shlex.quote(ev.value)}"
+            value = mesh_overrides.get(ev.key, ev.value)
+            env_args += f" -e {shlex.quote(ev.key)}={shlex.quote(value)}"
 
         # --- mTLS: Add SPIFFE env vars ---
         try:

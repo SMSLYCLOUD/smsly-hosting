@@ -287,6 +287,20 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     <Globe className="w-10 h-10 text-muted-foreground/20" />
                 </div>
 
+                {/* How routing works */}
+                <div className="mb-8 p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-lg">
+                    <p className="text-sm font-medium text-emerald-400 mb-2">How traffic reaches this service</p>
+                    <ul className="text-xs text-muted-foreground space-y-1.5 list-disc pl-4">
+                        <li><span className="font-semibold text-foreground">Default domain</span> — auto-generated and always ready. Toggle it off to stop public traffic; visitors then see an unavailable (503) page instead of your app.</li>
+                        <li><span className="font-semibold text-foreground">Custom domains</span> — add yours below and point DNS at Grid. SSL certificates are issued automatically once DNS resolves.</li>
+                        <li><span className="font-semibold text-foreground">Host aliases</span> — extra hostnames that serve this app directly (the accounts.google.com pattern). Great for account.example.com showing your login page.</li>
+                        <li><span className="font-semibold text-foreground">Path redirects</span> — permanently forward paths like /account on your domains to another host.</li>
+                    </ul>
+                    <p className="text-xs text-emerald-400/80 mt-2">
+                        Every change applies instantly — routing sync runs automatically in the background. No redeploy required.
+                    </p>
+                </div>
+
                 {/* DNS Setup Instructions — at the top */}
                 <div className="mb-8 p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg">
                     <p className="text-sm font-medium text-blue-400 mb-3">DNS Setup</p>
@@ -395,7 +409,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     </div>
                     {service.public_domain_hidden && (
                         <p className="text-xs text-muted-foreground mt-2">
-                            The default domain will not serve traffic. Only custom domains are active.
+                            The default domain now serves an unavailable (503) page instead of your app. Custom domains and host aliases stay active.
                         </p>
                     )}
 
@@ -427,6 +441,108 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                             />
                         </div>
                     )}
+                </div>
+
+                {/* Host Aliases (accounts.google.com pattern) */}
+                <div className="mb-8">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Host Aliases</h4>
+                    <p className="text-xs text-muted-foreground mb-3">
+                        Extra hostnames that serve this app directly — like accounts.google.com.
+                        Visiting the alias shows the rewrite target page (e.g. /login); all other paths load unchanged.
+                    </p>
+                    <ol className="text-xs text-muted-foreground space-y-1 list-decimal pl-4 mb-3">
+                        <li>Add the alias hostname below.</li>
+                        <li>Point its DNS at Grid — CNAME to your default domain, or an A record to your server IP.</li>
+                        <li>SSL is issued automatically once DNS resolves. That's it — no config, no redeploy.</li>
+                    </ol>
+
+                    {(service.host_aliases ?? []).map(({ host, rewrite_root }) => (
+                        <div key={host} className="flex items-center gap-3 p-3 bg-card border border-border rounded-lg mb-2">
+                            <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                            <span className="font-mono text-sm flex-1 truncate">{host}</span>
+                            {rewrite_root && (
+                                <span className="text-[10px] font-mono text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">/ → {rewrite_root}</span>
+                            )}
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => updateHostAliases((service.host_aliases ?? []).filter(a => a.host !== host))}
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </Button>
+                        </div>
+                    ))}
+
+                    <div className="flex gap-2 mt-3">
+                        <Input
+                            placeholder="account.example.com"
+                            value={newAliasHost}
+                            onChange={(e) => setNewAliasHost(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleAddAlias()}
+                            className="flex-1"
+                        />
+                        <Input
+                            placeholder="/login (root rewrites to)"
+                            value={newAliasRoot}
+                            onChange={(e) => setNewAliasRoot(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleAddAlias()}
+                            className="w-44"
+                        />
+                        <Button onClick={handleAddAlias}>
+                            <Plus className="w-4 h-4 mr-2" /> Add
+                        </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                        Sessions are host-scoped — to keep users logged in across your main domain and the alias, set a shared cookie domain (e.g. <code className="font-mono">.example.com</code>) in your app.
+                    </p>
+                </div>
+
+                {/* Path Redirects */}
+                <div className="mb-8">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Path Redirects</h4>
+                    <p className="text-xs text-muted-foreground mb-3">
+                        Permanently forward paths on this service's domains to another host, e.g. /account → account.example.com.
+                    </p>
+
+                    {(service.path_redirects ?? []).map(({ path, target }) => (
+                        <div key={path} className="flex items-center gap-3 p-3 bg-card border border-border rounded-lg mb-2">
+                            <span className="font-mono text-sm">{path}</span>
+                            <ArrowRight size={14} className="text-muted-foreground shrink-0" />
+                            <span className="font-mono text-sm flex-1 truncate">{target}</span>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => updatePathRedirects((service.path_redirects ?? []).filter(r => r.path !== path))}
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </Button>
+                        </div>
+                    ))}
+
+                    <div className="flex gap-2 mt-3">
+                        <Input
+                            placeholder="/account"
+                            value={newPath}
+                            onChange={(e) => setNewPath(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleAddPathRedirect()}
+                            className="w-40"
+                        />
+                        <Input
+                            placeholder="account.example.com"
+                            value={newTarget}
+                            onChange={(e) => setNewTarget(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleAddPathRedirect()}
+                            className="flex-1"
+                        />
+                        <Button onClick={handleAddPathRedirect}>
+                            <Plus className="w-4 h-4 mr-2" /> Add
+                        </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                        Redirects are permanent (301). The rest of the path and query string are preserved — /account/settings?q=1 lands on account.example.com/settings?q=1.
+                    </p>
                 </div>
 
                 {/* Node URL Entry Points (full nodes only) */}
