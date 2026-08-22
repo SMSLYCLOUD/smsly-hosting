@@ -298,6 +298,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'is_public',
             'wildcard_url_enabled', 'node_url_enabled',
             'wildcard_redirect_custom_domain',
+            'path_redirects',
             'active_target_type', 'active_host_ip', 'active_runtime_id',
             'last_scale_at',
             'locked', 'locked_reason', 'restrict_to_creator',

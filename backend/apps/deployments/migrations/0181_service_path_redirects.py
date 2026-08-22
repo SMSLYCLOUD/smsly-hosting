@@ -9,17 +9,16 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
-            model_name='platformconfig',
-            name='domain_path_redirects',
+            model_name='service',
+            name='path_redirects',
             field=models.JSONField(
                 blank=True,
                 default=list,
                 help_text=(
-                    'Path-to-subdomain redirects on the primary domain. '
+                    'Path-to-host redirects served on THIS service\'s domains. '
                     'Each entry is {"path": "/account", "target": "account.example.com"}. '
                     'Requests to /account/* are 301-redirected to https://target/... '
-                    '(prefix stripped, query preserved). Reserved platform paths '
-                    '(/api, /admin, ...) are rejected.'
+                    '(prefix stripped, query preserved). Fully user-configurable.'
                 ),
             ),
         ),

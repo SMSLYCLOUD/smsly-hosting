@@ -390,6 +390,16 @@ class Service(TimeStampedModel):
         default=list, blank=True,
         help_text="List of custom domains attached to this service")
 
+    # Path redirects on this service's own domains
+    path_redirects = models.JSONField(  # type: ignore[var-annotated]
+        default=list, blank=True,
+        help_text=(
+            "Path-to-host redirects served on THIS service's domains. "
+            'Each entry is {"path": "/account", "target": "account.example.com"}. '
+            "Requests to /account/* are 301-redirected to https://target/... "
+            "(prefix stripped, query preserved). Fully user-configurable."
+        ))
+
     # URL entry toggles (for node-deployed services)
     wildcard_url_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=True, null=True, blank=True,

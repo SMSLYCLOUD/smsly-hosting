@@ -1,6 +1,7 @@
 import ipaddress
 import logging
 import os
+import re
 
 from apps.domains.utils import normalize_domain
 from django.conf import settings
@@ -12,6 +13,10 @@ from .utils import _is_ip, _table_exists, is_agent_lite
 logger = logging.getLogger(__name__)
 
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
+
+# User-configurable per-service path redirects: /segment -> https://target/...
+_PATH_REDIRECT_SEGMENT_RE = re.compile(r"^/[a-z0-9_-]{1,63}$")
+_MAX_PATH_REDIRECTS_PER_SERVICE = 50
 
 
 def _resolve_effective_server(service):
