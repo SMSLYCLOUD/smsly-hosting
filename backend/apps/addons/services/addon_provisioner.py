@@ -283,6 +283,53 @@ class AddonProvisioner:
                 f"Scoped network connection failed for {container_name}: {exc}"
             )
 
+    def _connect_addon_networks(self, container_name: str, addon,
+                                public_domain=None, host_port=None) -> None:
+        """Tenant-isolation-aware network wiring for an addon container.
+
+        Policy:
+          * ALWAYS attach to the service/project scoped bridge (with the
+            URL-hostname alias) — this is the tenant's private domain.
+          * Attach to the shared ``smsly-net`` ONLY when the addon is
+            publicly routed (public_domain / Traefik labels need it).
+          * Otherwise DISCONNECT from the shared net: dual-homing meant
+            cross-tenant reachability guarded by password alone.
+
+        Mesh forwarders (addon_mesh.py) dial the addon inside its scoped
+        bridge, so platform-side access keeps working without smsly-net.
+        """
+        try:
+            self._connect_to_service_scoped_network(container_name, addon)
+        except Exception as exc:
+            logger.warning("Scoped attach failed for %s: %s", container_name, exc)
+        exposed = bool(public_domain or getattr(addon, 'public_domain', None))
+        if exposed:
+            self._connect_to_proxy_network(container_name)
+            return
+        # Best-effort detach from the shared bridge (no-op when absent).
+        try:
+            subprocess.run(
+                ['docker', 'network', 'disconnect', self.network_name, container_name],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception as exc:
+            logger.debug("shared-net disconnect skipped for %s: %s", container_name, exc)
+
+    def _publish_args(self, host_port: int, container_port: int) -> list[str]:
+        """Host port binding args — bound to the master MESH IP only.
+
+        Publishing on 0.0.0.0 made customer databases reachable from the
+        public internet with password as the sole barrier. Lite-Agent nodes
+        reach the master over the WireGuard mesh, so mesh-IP binding is
+        sufficient and closes the public exposure.
+        """
+        try:
+            from apps.deployments.services.addon_mesh import _get_master_mesh_ip
+            bind_ip = _get_master_mesh_ip()
+        except Exception:
+            bind_ip = '127.0.0.1'
+        return ['-p', f'{bind_ip}:{host_port}:{container_port}']
+
     def connect_service_addons_to_scoped_network(self, service) -> int:
         """Idempotently attach every ACTIVE addon of ``service`` to its
         scoped network so the app container (which runs on that isolated
@@ -620,9 +667,8 @@ class AddonProvisioner:
                             f"{connect_result.stderr.strip()}"
                         )
 
-                # Ensure proxy network connection as well
-                self._connect_to_proxy_network(container_name)
-                self._connect_to_service_scoped_network(container_name, addon)
+                # Tenant-aware wiring (scoped always; shared only if exposed)
+                self._connect_addon_networks(container_name, addon, public_domain=public_domain)
             except RuntimeError:
                 raise
             except Exception as e:
@@ -775,7 +821,7 @@ class AddonProvisioner:
             else:
                 raise ValueError(f"Unsupported addon type: {addon_type}")
 
-            self._connect_to_proxy_network(container_name)
+            self._connect_addon_networks(container_name, addon, public_domain=public_domain, host_port=host_port_for_recreate)
             return container_id, existing_url
 
         # First-time provisioning: generate fresh credentials for passworded addons.
@@ -813,8 +859,7 @@ class AddonProvisioner:
         logger.info(f"Addon {addon_type} provisioned: {container_name} (alias: {alias_name})")
 
         # Final bridge connection for new/missing containers
-        self._connect_to_proxy_network(container_name)
-        self._connect_to_service_scoped_network(container_name, addon)
+        self._connect_addon_networks(container_name, addon, public_domain=public_domain)
 
         # ── LITE AGENT ROUTING ──
         # If we are provisioning on the Master but the service is on a Remote Node (Lite Agent),
@@ -1284,7 +1329,7 @@ class AddonProvisioner:
             '-v', f'{container_name}-data:/data',
         ]
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace('.', '-').replace('_', '-'), public_domain, 15672) # Expose Management port, not AMQP
 
@@ -1324,7 +1369,7 @@ class AddonProvisioner:
             '-v', f'{container_name}-data:/data',
         ]
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, 9001)
 
@@ -1405,7 +1450,7 @@ class AddonProvisioner:
         ]
 
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
 
         if public_domain:
             target_port = cast(int, config.get('dashboard_port', port))
@@ -1575,7 +1620,7 @@ class AddonProvisioner:
         ]
 
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
 
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
@@ -1639,7 +1684,7 @@ class AddonProvisioner:
             '-v', f'{container_name}-data:/data',
         ]
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
@@ -1729,8 +1774,7 @@ class AddonProvisioner:
             host_port=host_port, public_domain=public_domain,
         )
         with contextlib.suppress(Exception):
-            self._connect_to_proxy_network(container_name)
-            self._connect_to_service_scoped_network(container_name, addon)
+            self._connect_addon_networks(container_name, addon, public_domain=public_domain, host_port=host_port)
         return container_id
 
     def _provision_mysql(self, container_name: str,
@@ -1757,7 +1801,7 @@ class AddonProvisioner:
             '-v', f'{container_name}-data:/var/lib/mysql',
         ]
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
@@ -1808,7 +1852,7 @@ class AddonProvisioner:
             '-v', f'{container_name}-data:/data/db',
         ]
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
@@ -1849,7 +1893,7 @@ class AddonProvisioner:
             '-v', f'{container_name}-data:/qdrant/storage',
         ]
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
@@ -1889,7 +1933,7 @@ class AddonProvisioner:
             '-v', f'{container_name}-data:/usr/share/elasticsearch/data',
         ]
         if host_port:
-            cmd.extend(['-p', f'{host_port}:{port}'])
+            cmd.extend(self._publish_args(host_port, port))
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 

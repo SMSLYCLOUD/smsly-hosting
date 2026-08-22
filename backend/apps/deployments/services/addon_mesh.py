@@ -55,6 +55,27 @@ def _alloc_port(addon) -> int:
     return base
 
 
+def _forwarder_network(addon) -> str:
+    """Network the forwarder should sit on to reach its target.
+
+    Addons are now attached ONLY to their tenant scoped bridge (unless
+    publicly routed). Dialing by URL hostname must therefore happen on that
+    same bridge. Falls back to smsly-net for legacy/unscoped addons.
+    """
+    try:
+        from apps.deployments.models.network_scope import ScopedNetwork as _SN
+        from apps.deployments.services.network_scope import ensure_scoped_network
+        project = getattr(getattr(addon, 'service', None), 'project', None)
+        if project:
+            cfg = _SN.resolve_network_config(project)
+            name = ensure_scoped_network(cfg)
+            if name:
+                return name
+    except Exception:
+        pass
+    return 'smsly-net'
+
+
 def ensure_addon_mesh_forward(addon) -> tuple[str, int] | None:
     """Ensure a mesh-bound forwarder exists for this addon.
 
@@ -87,7 +108,7 @@ def ensure_addon_mesh_forward(addon) -> tuple[str, int] | None:
         'docker', 'run', '-d',
         '--name', fwd_name,
         '--restart', 'unless-stopped',
-        '--network', 'smsly-net',
+        '--network', _forwarder_network(addon),
         '-p', f"{_get_master_mesh_ip()}:{fwd_port}:{target_port}",
         FORWARDER_IMAGE,
         f"tcp-listen:{target_port},fork,reuseaddr",
