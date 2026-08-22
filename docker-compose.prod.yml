@@ -2,7 +2,9 @@ services:
   # ── PostgreSQL HA (primary + replica) ──────────────────────────────────
   # Service is named `db` for backwards compat with scripts; container name
   # and network alias keep `postgres-primary` resolvable for HA configs.
+  # Profile: "local-ha" — only started with --profile local-ha
   db:
+    profiles: ["local-ha"]
     security_opt:
       - apparmor:docker-default
     image: postgres:16-alpine
@@ -57,6 +59,7 @@ services:
           memory: ${DB_PRIMARY_LIMIT:-8G}
 
   postgres-replica:
+    profiles: ["local-ha"]
     security_opt:
       - apparmor:docker-default
     image: postgres:16-alpine
@@ -109,15 +112,13 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      POSTGRES_HOST: postgres-primary
+      POSTGRES_HOST: ${PGCAT_DB_HOST:-postgres-primary}
+      POSTGRES_PORT: ${PGCAT_DB_PORT:-5432}
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       PGCAT_ADMIN_PASSWORD: ${PGCAT_ADMIN_PASSWORD:?PGCAT_ADMIN_PASSWORD must be set in .env}
       DB_REPLICA_HOSTS: ${DB_REPLICA_HOSTS:-postgres-replica:5432}
-    depends_on:
-      db:
-        condition: service_healthy
     healthcheck:
       test:
       - CMD-SHELL
@@ -137,6 +138,216 @@ services:
         limits:
           memory: ${PGCAT_MEMORY_LIMIT:-256M}
           cpus: "0.50"
+  # ── Patroni HA (auto-failover via etcd DCS) ──────────────────────────────
+  # Profile: "patroni" — only started with --profile patroni
+  # Replaces db + postgres-replica for automatic failover.
+  etcd:
+    profiles: ["patroni"]
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: smsly-etcd
+    command: etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://etcd:2379 --listen-peer-urls http://0.0.0.0:2380
+    restart: unless-stopped
+    volumes:
+      - etcd-data:/var/lib/etcd
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+    - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${ETCD_MEMORY_LIMIT:-256M}
+
+  patroni1:
+    profiles: ["patroni"]
+    image: ghcr.io/zalando/spilo-16:3.0-p1
+    container_name: smsly-patroni-1
+    hostname: patroni1
+    restart: unless-stopped
+    environment:
+      SCOPE: smsly-cluster
+      ETCD3_HOST: "etcd:2379"
+      PATRONI_NAME: patroni1
+      PGUSER_SUPERUSER: postgres
+      PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:?PATRONI_SUPERUSER_PASSWORD must be set in .env}
+      PGUSER_ADMIN: ${POSTGRES_USER:-smsly_admin}
+      PGPASSWORD_ADMIN: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD must be set in .env}
+      # POD_IP intentionally unset — Spilo auto-detects the container IP for
+      # Patroni connect_address. A hardcoded value breaks after re-creation.
+    volumes:
+      - patroni1-data:/var/lib/postgresql/data
+      - patroni-wal:/var/lib/postgresql/wal
+    networks:
+      - smsly-net
+    depends_on:
+      etcd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    labels:
+    - managed_by=smsly-hosting
+    deploy:
+      resources:
+        reservations:
+          memory: ${PATRONI_PRIMARY_RESERVATION:-2G}
+        limits:
+          memory: ${PATRONI_PRIMARY_LIMIT:-8G}
+
+  patroni2:
+    profiles: ["patroni"]
+    image: ghcr.io/zalando/spilo-16:3.0-p1
+    container_name: smsly-patroni-2
+    hostname: patroni2
+    restart: unless-stopped
+    environment:
+      SCOPE: smsly-cluster
+      ETCD3_HOST: "etcd:2379"
+      PATRONI_NAME: patroni2
+      PGUSER_SUPERUSER: postgres
+      PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD}
+      PGUSER_ADMIN: ${POSTGRES_USER:-smsly_admin}
+      PGPASSWORD_ADMIN: ${POSTGRES_PASSWORD}
+      PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD}
+    volumes:
+      - patroni2-data:/var/lib/postgresql/data
+      - patroni-wal:/var/lib/postgresql/wal
+    networks:
+      - smsly-net
+    depends_on:
+      etcd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    labels:
+    - managed_by=smsly-hosting
+    deploy:
+      resources:
+        reservations:
+          memory: ${PATRONI_REPLICA_RESERVATION:-1G}
+        limits:
+          memory: ${PATRONI_REPLICA_LIMIT:-4G}
+
+  patroni3:
+    profiles: ["patroni"]
+    image: ghcr.io/zalando/spilo-16:3.0-p1
+    container_name: smsly-patroni-3
+    hostname: patroni3
+    restart: unless-stopped
+    environment:
+      SCOPE: smsly-cluster
+      ETCD3_HOST: "etcd:2379"
+      PATRONI_NAME: patroni3
+      PGUSER_SUPERUSER: postgres
+      PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD}
+      PGUSER_ADMIN: ${POSTGRES_USER:-smsly_admin}
+      PGPASSWORD_ADMIN: ${POSTGRES_PASSWORD}
+      PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD}
+    volumes:
+      - patroni3-data:/var/lib/postgresql/data
+      - patroni-wal:/var/lib/postgresql/wal
+    networks:
+      - smsly-net
+    depends_on:
+      etcd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    labels:
+    - managed_by=smsly-hosting
+    deploy:
+      resources:
+        reservations:
+          memory: ${PATRONI_REPLICA_RESERVATION:-1G}
+        limits:
+          memory: ${PATRONI_REPLICA_LIMIT:-4G}
+
+  haproxy:
+    profiles: ["patroni"]
+    image: haproxy:2.8
+    container_name: smsly-haproxy
+    restart: unless-stopped
+    volumes:
+      - ./infrastructure/docker/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "${HAPROXY_WRITE_BIND:-127.0.0.1}:5000:5000"
+      - "${HAPROXY_READ_BIND:-127.0.0.1}:5001:5001"
+      - "127.0.0.1:7000:7000"
+    networks:
+      - smsly-net
+    depends_on:
+      patroni1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7000/ | grep -q postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+    - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${HAPROXY_MEMORY_LIMIT:-128M}
+
+  # One-shot bootstrap: creates the app database owned by the app user.
+  # Spilo creates the smsly_admin role (PGUSER_ADMIN) but NOT the database.
+  # Idempotent — safe on every `compose up`.
+  patroni-db-init:
+    profiles: ["patroni"]
+    image: postgres:16-alpine
+    container_name: smsly-patroni-db-init
+    restart: "no"
+    environment:
+      PGHOST: haproxy
+      PGPORT: "5000"
+      PGDATABASE: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${PATRONI_SUPERUSER_PASSWORD:?PATRONI_SUPERUSER_PASSWORD must be set in .env}
+      APP_DB: ${POSTGRES_DB:-smsly_hosting}
+      APP_USER: ${POSTGRES_USER:-smsly_admin}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Patroni leader via HAProxy..."
+        i=0
+        until psql -tAc "SELECT 1" >/dev/null 2>&1; do
+          i=$$((i+1))
+          if [ $$i -gt 60 ]; then echo "Leader not reachable after 300s"; exit 1; fi
+          sleep 5
+        done
+        echo "Creating database $$APP_DB owned by $$APP_USER (idempotent)..."
+        psql -v ON_ERROR_STOP=0 <<SQL
+        SELECT 'CREATE DATABASE "$$APP_DB" OWNER "$$APP_USER"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$$APP_DB')\gexec
+        SQL
+        echo "Granting schema privileges..."
+        psql -d "$$APP_DB" -c "GRANT ALL ON SCHEMA public TO \"$$APP_USER\";" || true
+        echo "patroni-db-init complete."
+    networks:
+      - smsly-net
+    depends_on:
+      haproxy:
+        condition: service_healthy
+    labels:
+    - managed_by=smsly-hosting
+
   # ── Redis HA (primary + replica + 3 sentinels) ─────────────────────────
   redis-primary:
     security_opt:
@@ -1845,6 +2056,11 @@ volumes:
   postgres-primary-data:
   postgres-replica-data:
   postgres-archive:
+  etcd-data:
+  patroni1-data:
+  patroni2-data:
+  patroni3-data:
+  patroni-wal:
   redis-primary-data:
   redis-replica-data:
   registry_data: null

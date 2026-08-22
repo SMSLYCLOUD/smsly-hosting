@@ -143,10 +143,13 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         try:
             with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as f:
                 f.write(str(int(__import__("time").time())))
-            os.chmod(CADDY_RELOAD_FLAG, 0o664)
+            try:
+                os.chmod(CADDY_RELOAD_FLAG, 0o664)
+            except (OSError, PermissionError):
+                pass
             logger.info("Wrote .reload flag to %s", CADDY_RELOAD_FLAG)
         except Exception as flag_exc:
-            logger.warning("Failed to write .reload flag: %s", flag_exc)
+            logger.debug("Failed to write .reload flag (non-fatal): %s", flag_exc)
 
         _last_caddy_reload_ts = time.time()
         _last_caddy_content_hash = hashlib.md5(content.encode()).hexdigest()

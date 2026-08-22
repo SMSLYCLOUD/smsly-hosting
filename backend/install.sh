@@ -12759,6 +12759,16 @@ POSTGRES_HOST=postgres-primary
 DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@pgcat:5432/smsly_hosting
 DATABASE_CONNECT_TIMEOUT=5
 
+# ── Database HA mode ─────────────────────────────────────────────────
+# local-ha | patroni | external (see .env.example for semantics).
+# Docker Compose natively honors COMPOSE_PROFILES from this file, so
+# every `docker compose` call picks the right DB stack with no flags.
+DB_HA_ENABLED=${DB_HA_ENABLED:-local-ha}
+COMPOSE_PROFILES=$DB_HA_ENABLED
+# PgCat upstream. patroni mode routes through HAProxy write/read ports.
+PGCAT_DB_HOST=${PGCAT_DB_HOST:-postgres-primary}
+PGCAT_DB_PORT=${PGCAT_DB_PORT:-5432}
+
 REDIS_PASSWORD=$REDIS_PASSWORD
 RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
 RABBITMQ_DEFAULT_USER=smsly_user
