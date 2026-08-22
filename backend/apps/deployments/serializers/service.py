@@ -298,7 +298,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'deploy_mode', 'compose_file', 'compose_main_service',
             'is_public',
             'wildcard_url_enabled', 'node_url_enabled',
-            'wildcard_redirect_custom_domain',
+            'wildcard_redirect_custom_domain', 'wildcard_internal_only',
             'path_redirects', 'host_aliases',
             'active_target_type', 'active_host_ip', 'active_runtime_id',
             'last_scale_at',

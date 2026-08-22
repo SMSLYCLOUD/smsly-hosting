@@ -291,7 +291,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 <div className="mb-8 p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-lg">
                     <p className="text-sm font-medium text-emerald-400 mb-2">How traffic reaches this service</p>
                     <ul className="text-xs text-muted-foreground space-y-1.5 list-disc pl-4">
-                        <li><span className="font-semibold text-foreground">Default domain</span> — auto-generated and always ready. Toggle it off to stop public traffic; visitors then see an unavailable (503) page instead of your app.</li>
+                        <li><span className="font-semibold text-foreground">Default domain</span> — auto-generated and always ready. Set it to Public, Internal-only (hidden from the internet, mesh traffic still routes), or Hidden. Custom domains are never affected.</li>
                         <li><span className="font-semibold text-foreground">Custom domains</span> — add yours below and point DNS at Grid. SSL certificates are issued automatically once DNS resolves.</li>
                         <li><span className="font-semibold text-foreground">Host aliases</span> — extra hostnames that serve this app directly (the accounts.google.com pattern). Great for account.example.com showing your login page.</li>
                         <li><span className="font-semibold text-foreground">Path redirects</span> — permanently forward paths like /account on your domains to another host.</li>
@@ -381,26 +381,62 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Default Domain</h4>
                         {domains.length > 0 && (
                             <div className="flex items-center gap-2">
-                                <span className="text-xs text-muted-foreground">Public Default Domain</span>
-                                <Switch
-                                    checked={!service.public_domain_hidden}
-                                    onCheckedChange={async (checked) => {
-                                        try {
-                                            const newVal = !checked;
-                                            const updated = await servicesApi.update(service.id, { public_domain_hidden: newVal });
-                                            setService(updated);
-                                            toast({ title: 'Success', description: `Default domain is now ${newVal ? 'hidden' : 'visible'}. Routing updated.` });
-                                        } catch (err) {
-                                            toast({ title: 'Error', description: 'Failed to update visibility', variant: 'destructive' });
-                                        }
-                                    }}
-                                />
+                                <span className="text-xs text-muted-foreground">Access</span>
+                                <div className="flex items-center rounded-lg border border-border overflow-hidden">
+                                    {([
+                                        { key: 'public', label: 'Public', cls: 'bg-emerald-500/15 text-emerald-500' },
+                                        { key: 'internal', label: 'Internal', cls: 'bg-blue-500/15 text-blue-500' },
+                                        { key: 'hidden', label: 'Hidden', cls: 'bg-amber-500/15 text-amber-500' },
+                                    ] as const).map(({ key, label, cls }) => {
+                                        const active =
+                                            (key === 'public' && !service.public_domain_hidden && !service.wildcard_internal_only) ||
+                                            (key === 'internal' && !service.public_domain_hidden && service.wildcard_internal_only === true) ||
+                                            (key === 'hidden' && service.public_domain_hidden);
+                                        return (
+                                            <button
+                                                key={key}
+                                                onClick={async () => {
+                                                    const payload = {
+                                                        public_domain_hidden: key === 'hidden',
+                                                        wildcard_internal_only: key === 'internal',
+                                                    };
+                                                    try {
+                                                        const updated = await servicesApi.update(service.id, payload);
+                                                        setService(updated);
+                                                        toast({
+                                                            title:
+                                                                key === 'public'
+                                                                    ? 'Default domain is Public'
+                                                                    : key === 'internal'
+                                                                      ? 'Default domain is Internal-only'
+                                                                      : 'Default domain is Hidden',
+                                                            description:
+                                                                key === 'public'
+                                                                    ? 'Anyone can reach it. Applied instantly.'
+                                                                    : key === 'internal'
+                                                                      ? 'Hidden from the public internet; internal/mesh traffic still routes. Custom domains unaffected.'
+                                                                      : 'Visitors see an unavailable page. Custom domains stay active.',
+                                                        });
+                                                    } catch (err) {
+                                                        toast({ title: 'Error', description: 'Failed to update default domain access.', variant: 'destructive' });
+                                                    }
+                                                }}
+                                                className={`px-3 py-1.5 text-xs font-bold transition-colors ${active ? cls : 'text-muted-foreground hover:bg-muted/50'}`}
+                                            >
+                                                {label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
                         )}
                     </div>
                     <div className={`flex items-center gap-3 p-3 border rounded-lg transition-colors ${service.public_domain_hidden ? 'bg-muted/10 border-border/50 opacity-60' : 'bg-muted/30 border-border'}`}>
-                        <div className={`h-2 w-2 rounded-full ${service.public_domain_hidden ? 'bg-zinc-500' : 'bg-emerald-500 animate-pulse'}`} />
+                        <div className={`h-2 w-2 rounded-full ${service.public_domain_hidden ? 'bg-zinc-500' : service.wildcard_internal_only ? 'bg-blue-500' : 'bg-emerald-500 animate-pulse'}`} />
                         <span className={`font-mono text-sm flex-1 ${service.public_domain_hidden ? 'line-through text-muted-foreground' : ''}`}>{defaultDomain}</span>
+                        {service.wildcard_internal_only === true && !service.public_domain_hidden && (
+                            <span className="text-[10px] font-bold text-blue-500 bg-blue-500/10 px-1.5 py-0.5 rounded">INTERNAL ONLY</span>
+                        )}
                         {!service.public_domain_hidden && (
                             <a href={`https://${defaultDomain}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80">
                                 <ExternalLink size={16} />
@@ -410,6 +446,11 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     {service.public_domain_hidden && (
                         <p className="text-xs text-muted-foreground mt-2">
                             The default domain now serves an unavailable (503) page instead of your app. Custom domains and host aliases stay active.
+                        </p>
+                    )}
+                    {!service.public_domain_hidden && service.wildcard_internal_only === true && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                            Hidden from the public internet — public visitors see an unavailable (503) page. Internal/mesh traffic still routes, and custom domains work normally.
                         </p>
                     )}
 

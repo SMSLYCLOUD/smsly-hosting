@@ -35,10 +35,7 @@ def unassign(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        # NOTE: two 0183_* files exist in history (duplicate numbering from
-        # parallel work). Depending on ours; the duplicate-numbering conflict
-        # itself is owned by the networking/wildcard agent's cleanup.
-        ('deployments', '0183_add_service_wildcard_internal_only'),
+        ('deployments', '0183_service_wildcard_internal_only'),
     ]
 
     operations = [

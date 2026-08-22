@@ -326,6 +326,7 @@ export interface Service {
   wildcard_url_enabled?: boolean;
   node_url_enabled?: boolean;
   wildcard_redirect_custom_domain?: boolean;
+  wildcard_internal_only?: boolean;
   path_redirects?: { path: string; target: string }[];
   host_aliases?: { host: string; rewrite_root: string }[];
   node_url?: string | null;
