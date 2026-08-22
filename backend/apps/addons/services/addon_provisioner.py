@@ -245,7 +245,16 @@ class AddonProvisioner:
                     network_name, container_name, alias,
                 )
                 return
-            alias = getattr(addon, 'name', None) or f"{addon.addon_type.lower()}-{addon.service.name}"
+            # Alias MUST match the hostname apps actually dial — the
+            # connection_url host is authoritative (addon.name may diverge,
+            # e.g. after re-anchoring). Fall back to name, then convention.
+            from urllib.parse import urlparse as _urlparse
+            _url_host = _urlparse(str(getattr(addon, 'connection_url', '') or '')).hostname
+            alias = (
+                _url_host
+                or getattr(addon, 'name', None)
+                or f"{addon.addon_type.lower()}-{addon.service.name}"
+            )
             # Check if already connected
             ct_inspect = subprocess.run(
                 ['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}', container_name],

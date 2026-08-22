@@ -307,6 +307,15 @@ class DomainActionsMixin:
         if Service.objects.filter(public_domain=domain).exists():
             return Response(status=status.HTTP_200_OK)
 
+        # 3b. Check against service host aliases (accounts.google.com pattern)
+        try:
+            if Service.objects.filter(
+                host_aliases__contains=[{"host": domain}],
+            ).exists():
+                return Response(status=status.HTTP_200_OK)
+        except Exception as exc:
+            logger.debug("check_domain: alias lookup failed: %s", exc)
+
         # 3. Check verified custom domains. Pending JSONField entries are
         # intentionally not authorized, otherwise Caddy may attempt ACME before
         # the customer has pointed DNS at this server.

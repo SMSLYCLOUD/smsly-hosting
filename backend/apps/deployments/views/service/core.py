@@ -157,7 +157,7 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         routing_fields = {
             'public_domain_hidden', 'wildcard_url_enabled', 'node_url_enabled',
             'wildcard_redirect_custom_domain', 'is_public',
-            'public_domain', 'custom_domains', 'path_redirects',
+            'public_domain', 'custom_domains', 'path_redirects', 'host_aliases',
         }
         routing_changed = routing_fields.intersection(serializer.validated_data)
 

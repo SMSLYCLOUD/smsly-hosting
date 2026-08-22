@@ -18,6 +18,10 @@ CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 _PATH_REDIRECT_SEGMENT_RE = re.compile(r"^/[a-z0-9_-]{1,63}$")
 _MAX_PATH_REDIRECTS_PER_SERVICE = 50
 
+# Host aliases (accounts.google.com pattern): extra hostnames that serve the app
+_ALIAS_REWRITE_ROOT_RE = re.compile(r"^/[A-Za-z0-9/_.-]{0,100}$")
+_MAX_HOST_ALIASES_PER_SERVICE = 10
+
 
 def _resolve_effective_server(service):
     """Resolve the effective server for a service.
@@ -124,8 +128,136 @@ def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: st
         lines.append(f"    reverse_proxy {upstream_url}")
 
 
-def _build_service_domain_block(domain: str, upstream_host: str, upstream_url: str = "") -> str:
+def _service_path_redirect_rules(service) -> list[tuple[str, str]]:
+    """Sanitized (path_segment, target_host) pairs from service.path_redirects.
+
+    Fully user-configurable — invalid entries are skipped defensively at
+    generation time.  Each rule 301-redirects ``/segment`` and ``/segment/*``
+    on the service's own domains to ``https://target`` (prefix stripped,
+    query preserved).
+    """
+    rules: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    raw_entries = getattr(service, "path_redirects", None)
+    if not isinstance(raw_entries, list):
+        return []
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            continue
+        path = str(entry.get("path") or "").strip().lower()
+        target = str(entry.get("target") or "").strip().lower()
+        if not path or not target:
+            continue
+        if not _PATH_REDIRECT_SEGMENT_RE.match(path):
+            continue
+        try:
+            target = normalize_domain(target)
+        except ValueError:
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        rules.append((path, target))
+        if len(rules) >= _MAX_PATH_REDIRECTS_PER_SERVICE:
+            break
+    return rules
+
+
+def _path_redirect_site_lines(rules: list[tuple[str, str]], indent: str = "    ") -> list[str]:
+    """Caddyfile lines implementing 301 path redirects inside a site block.
+
+    Exact match (/seg) goes to the target root; /seg/* keeps the remainder of
+    the path and query string.
+    """
+    lines: list[str] = []
+    for index, (segment, target) in enumerate(rules):
+        lines.extend([
+            f"{indent}@path_redir_{index}_exact path {segment}",
+            f"{indent}handle @path_redir_{index}_exact {{",
+            f"{indent}    redir https://{target}/ 301",
+            f"{indent}}}",
+            f"{indent}handle_path {segment}/* {{",
+            f"{indent}    redir https://{target}{{uri}} 301",
+            f"{indent}}}",
+        ])
+    return lines
+
+
+def _service_host_alias_rules(service) -> list[tuple[str, str]]:
+    """Sanitized (host, rewrite_root) pairs from service.host_aliases.
+
+    Each alias serves the app directly; ``/`` is rewritten to ``rewrite_root``
+    (e.g. ``/login``) so account.example.com shows the login page.  Empty
+    rewrite_root means a pure alias with no path rewriting.  Aliases that
+    duplicate the public domain or custom domains are skipped — those are
+    already routed.
+    """
+    rules: list[tuple[str, str]] = []
+    seen_hosts: set[str] = set()
+    raw_entries = getattr(service, "host_aliases", None)
+    if not isinstance(raw_entries, list):
+        return []
+
+    already_routed = {str(getattr(service, "public_domain", "") or "").strip().lower()}
+    for item in (service.custom_domains or []):
+        if isinstance(item, str) and item.strip():
+            already_routed.add(item.strip().lower())
+
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            continue
+        host = str(entry.get("host") or "").strip().lower()
+        if not host or host in seen_hosts or host in already_routed:
+            continue
+        try:
+            host = normalize_domain(host)
+        except ValueError:
+            continue
+        rewrite_root = str(entry.get("rewrite_root") or "").strip()
+        if rewrite_root and not _ALIAS_REWRITE_ROOT_RE.match(rewrite_root):
+            continue
+        seen_hosts.add(host)
+        rules.append((host, rewrite_root))
+        if len(rules) >= _MAX_HOST_ALIASES_PER_SERVICE:
+            break
+    return rules
+
+
+def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: str, host_header: str) -> str:
+    """Caddyfile site block for a host alias (accounts.google.com pattern)."""
+    lines = [f"{alias_host} {{"]
+    lines.extend([
+        "    tls {",
+        "        on_demand",
+        "    }",
+        "    log {",
+        "        output file /var/log/caddy/access.log",
+        "    }",
+    ])
+    if rewrite_root:
+        lines.extend([
+            "    @alias_root path /",
+            "    handle @alias_root {",
+            f"        rewrite * {rewrite_root}",
+        ])
+        _append_reverse_proxy(lines, upstream_url, host_header)
+        lines.append("    }")
+    lines.append("    handle {")
+    _append_reverse_proxy(lines, upstream_url, host_header)
+    lines.append("    }")
+    lines.extend(["    encode gzip", "}"])
+    return "\n".join(lines)
+
+
+def _build_service_domain_block(
+    domain: str,
+    upstream_host: str,
+    upstream_url: str = "",
+    path_redirect_rules: list[tuple[str, str]] | None = None,
+) -> str:
     lines = [f"{domain} {{"]
+
+    lines.extend(_path_redirect_site_lines(path_redirect_rules or []))
 
     if upstream_url:
         _append_reverse_proxy(lines, upstream_url, upstream_host or domain)
@@ -158,6 +290,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
 
         for service in Service.objects.only(
             "id", "public_domain", "custom_domains", "public_domain_hidden", "staging_domain",
+            "host_aliases",
         ).order_by("id"):
             raw_public = (
                 str(service.public_domain or "").strip().lower()
@@ -194,6 +327,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                             public_domain,
                             public_domain,
                             upstream_url=_remote_upstream_url_for_service(service),
+                            path_redirect_rules=_service_path_redirect_rules(service),
                         )
                     )
 
@@ -211,6 +345,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 target_host = public_domain if (public_domain and not isHidden) else value
 
                 lines = [f"{value} {{"]
+                lines.extend(_path_redirect_site_lines(_service_path_redirect_rules(service)))
                 lines.append("    tls {")
                 lines.append("        on_demand")
                 lines.append("    }")
@@ -225,6 +360,21 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 lines.append("    encode gzip")
                 lines.append("}")
                 blocks.append("\n".join(lines))
+
+            # Host aliases (accounts.google.com pattern): dedicated site
+            # blocks that serve this app under extra hostnames. Exact host
+            # matches take precedence over the platform wildcard block.
+            upstream_url = _remote_upstream_url_for_service(service)
+            for alias_host, rewrite_root in _service_host_alias_rules(service):
+                if alias_host in seen:
+                    continue
+                seen.add(alias_host)
+                blocks.append(_build_host_alias_block(
+                    alias_host,
+                    rewrite_root,
+                    upstream_url,
+                    public_domain or alias_host,
+                ))
 
             # Custom staging domain: only route if this service has an active
             # STAGED deployment using the domain.

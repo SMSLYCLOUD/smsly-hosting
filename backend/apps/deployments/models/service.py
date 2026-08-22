@@ -400,6 +400,17 @@ class Service(TimeStampedModel):
             "(prefix stripped, query preserved). Fully user-configurable."
         ))
 
+    # Host aliases that serve this same app (accounts.google.com pattern)
+    host_aliases = models.JSONField(  # type: ignore[var-annotated]
+        default=list, blank=True,
+        help_text=(
+            "Extra hostnames that serve THIS service directly. "
+            'Each entry is {"host": "account.example.com", "rewrite_root": "/login"}. '
+            "Visiting the alias serves the app; the root path is rewritten to "
+            "rewrite_root (e.g. /login) so account.example.com shows the login "
+            "page. Other paths pass through unchanged."
+        ))
+
     # URL entry toggles (for node-deployed services)
     wildcard_url_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=True, null=True, blank=True,

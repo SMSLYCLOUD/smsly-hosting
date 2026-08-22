@@ -168,20 +168,22 @@ class SpawningService:
         router = name.replace('.', '-').replace('_', '-')
 
         # Traefik labels — point Traefik at the scoped bridge for routing
+        # LB POOLING: the replica carries the CANONICAL service label (same
+        # traefik.http.services.<service> key as the primary) so Traefik's
+        # Docker provider pools both containers behind ONE service and
+        # round-robins with per-server health checks. A replica-specific
+        # router/service previously created a competing router with the same
+        # Host rule but lower priority — it never received traffic.
+        # No router labels here: the primary's router already matches the
+        # host and references the shared service name.
         labels = [
             "traefik.enable=true",
             f"traefik.docker.network={net}",
-            f"traefik.http.routers.{router}.rule=Host(`{domain}`)",
-            f"traefik.http.routers.{router}.entrypoints=web",
-            f"traefik.http.services.{router}.loadbalancer.server.port={port}",
+            f"traefik.http.services.{service.name}.loadbalancer.server.port={port}",
             "managed_by=smsly-hosting",
             f"smsly.blue_green.canonical_name={shlex.quote(service.name)}",
             "smsly.replica=true",
         ]
-
-        if config.use_ssl:
-            labels.append(f"traefik.http.routers.{router}.entrypoints=websecure")
-            labels.append("traefik.http.routers.{router}.tls=true")
 
         # --- mTLS: Add SPIRE workload attestation labels ---
         try:
@@ -354,19 +356,19 @@ class SpawningService:
         _attach_service_addons_to_scoped_net(service)
         router = name.replace('.', '-').replace('_', '-')
 
+        # LB POOLING (see remote twin above): carry the CANONICAL service
+        # label so Traefik pools this replica with the primary behind one
+        # service and round-robins with per-server health checks. Router
+        # labels intentionally omitted — the primary's router already
+        # matches the host; a competing replica router never won traffic.
         labels = {
             "traefik.enable": "true",
             "traefik.docker.network": net,
-            f"traefik.http.routers.{router}.rule": f"Host(`{domain}`)",
-            f"traefik.http.routers.{router}.entrypoints": "web",
-            f"traefik.http.services.{router}.loadbalancer.server.port": port,
+            f"traefik.http.services.{service.name}.loadbalancer.server.port": port,
             "managed_by": "smsly-hosting",
             "smsly.blue_green.canonical_name": service.name,
             "smsly.replica": "true",
         }
-        if config.use_ssl:
-            labels[f"traefik.http.routers.{router}.entrypoints"] = "websecure,web"
-            labels[f"traefik.http.routers.{router}.tls"] = "true"
 
         # --- mTLS: Add SPIRE workload attestation labels ---
         try:

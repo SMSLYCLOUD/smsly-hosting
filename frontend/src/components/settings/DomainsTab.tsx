@@ -36,6 +36,10 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const [stagingChecking, setStagingChecking] = useState(false);
     const [stagedDeployment, setStagedDeployment] = useState<Deployment | null>(null);
     const [platformDomain, setPlatformDomain] = useState('');
+    const [newAliasHost, setNewAliasHost] = useState('');
+    const [newAliasRoot, setNewAliasRoot] = useState('/login');
+    const [newPath, setNewPath] = useState('');
+    const [newTarget, setNewTarget] = useState('');
 
     const defaultDomain = service.public_domain || `${service.name}.cloud.Trulay.co`;
 
@@ -173,6 +177,61 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const copyToClipboard = (text: string) => {
         navigator.clipboard.writeText(text);
         toast({ title: "Copied!", description: text });
+    };
+
+    const updateHostAliases = async (next: { host: string; rewrite_root: string }[]) => {
+        try {
+            const updated = await servicesApi.update(service.id, { host_aliases: next });
+            setService(updated);
+            toast({ title: 'Host alias saved', description: 'Routing sync dispatched. SSL is issued automatically once DNS resolves.' });
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to save host alias.', variant: 'destructive' });
+        }
+    };
+
+    const handleAddAlias = () => {
+        const host = newAliasHost.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        if (!host || !host.includes('.') || host.includes(' ')) {
+            toast({ title: 'Invalid hostname', description: 'Enter a host like account.example.com', variant: 'destructive' });
+            return;
+        }
+        if ((service.host_aliases ?? []).some(a => a.host === host)) {
+            toast({ title: 'Alias already added', variant: 'destructive' });
+            return;
+        }
+        const rewriteRoot = newAliasRoot.trim() || '';
+        void updateHostAliases([...(service.host_aliases ?? []), { host, rewrite_root: rewriteRoot }]);
+        setNewAliasHost('');
+    };
+
+    const updatePathRedirects = async (next: { path: string; target: string }[]) => {
+        try {
+            const updated = await servicesApi.update(service.id, { path_redirects: next });
+            setService(updated);
+            toast({ title: 'Path redirects saved', description: 'Routing sync dispatched.' });
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to save path redirect.', variant: 'destructive' });
+        }
+    };
+
+    const handleAddPathRedirect = () => {
+        const path = newPath.trim().toLowerCase();
+        const target = newTarget.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        if (!/^\/[a-z0-9_-]{1,63}$/.test(path)) {
+            toast({ title: 'Invalid path', description: 'Use a single segment like /account', variant: 'destructive' });
+            return;
+        }
+        if (!target || !target.includes('.') || target.includes(' ')) {
+            toast({ title: 'Invalid target', description: 'Enter a host like account.example.com', variant: 'destructive' });
+            return;
+        }
+        if ((service.path_redirects ?? []).some(r => r.path === path)) {
+            toast({ title: 'Path already redirected', variant: 'destructive' });
+            return;
+        }
+        void updatePathRedirects([...(service.path_redirects ?? []), { path, target }]);
+        setNewPath('');
+        setNewTarget('');
     };
 
     const handleSaveStagingDomain = async () => {
