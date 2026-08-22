@@ -362,8 +362,18 @@ class ComposeNetworkingMixin:
         Creates the scoped network (with configured driver, subnet, etc.)
         if it does not already exist.  Uses ``ensure_scoped_network`` to
         honour ScopedNetwork model config (internal, enable_ipv6, subnet).
+
+        ISOLATION INVARIANT: services WITHOUT a project get the same
+        per-service scoped bridge + egress firewall as project members —
+        a bare unisolated bridge is never acceptable. Also attaches the
+        edge router and this service's addons to the bridge so DNS names
+        resolve for the app container.
         """
-        from ..network_scope import ensure_scoped_network, apply_egress_restrictions
+        from ..network_scope import (
+            ensure_scoped_network,
+            apply_egress_restrictions,
+            ensure_router_on_network,
+        )
         from apps.deployments.models.network_scope import ScopedNetwork
 
         network_name = self._resolve_service_network_name()
@@ -373,18 +383,27 @@ class ComposeNetworkingMixin:
                 cfg = ScopedNetwork.resolve_network_config(project)
                 ensure_scoped_network(cfg)
                 egress = list(cfg.get("allowed_egress_networks", []))
-                if egress:
-                    apply_egress_restrictions(cfg["name"], egress)
+                apply_egress_restrictions(cfg["name"], egress or ["0.0.0.0/0"])
             else:
-                result = subprocess.run(
-                    ['docker', 'network', 'inspect', network_name],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode != 0:
-                    subprocess.run(
-                        ['docker', 'network', 'create', network_name],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    append_log(self.deployment, f"Docker network '{network_name}' created.\n")
+                # No project (legacy path) — still isolate. Same shape as
+                # spawning_service._scoped_network_for's fallback branch.
+                ensure_scoped_network({
+                    "name": network_name,
+                    "driver": "bridge",
+                    "internal": False,
+                    "enable_ipv6": False,
+                })
+                apply_egress_restrictions(network_name, ["0.0.0.0/0"])
+            ensure_router_on_network(network_name)
+            self._attach_service_addons(network_name)
         except Exception as e:
             append_log(self.deployment, f"Warning: could not ensure Docker network '{network_name}': {e}\n")
+
+    def _attach_service_addons(self, network_name: str) -> None:
+        """Attach this service's ACTIVE addons to its scoped bridge so the
+        primary container resolves addon hostnames there."""
+        try:
+            from apps.addons.services.addon_provisioner import AddonProvisioner
+            AddonProvisioner().connect_service_addons_to_scoped_network(self.service)
+        except Exception as e:
+            append_log(self.deployment, f"Warning: addon network attach failed: {e}\n")

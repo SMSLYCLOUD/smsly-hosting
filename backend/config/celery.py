@@ -69,6 +69,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.ai.tasks_ai  # noqa: F401  # analyze_failure_task
     import apps.deployments.tasks.ai.tasks_code_intelligence  # noqa: F401  # deep_scan_and_verify_task
     import apps.deployments.tasks.infra.tasks_health  # noqa: F401  # check_agent_heartbeats_task
+    import apps.deployments.tasks.infra.tasks_maintenance  # noqa: F401  # run_maintenance, registry_gc, reconcile_network_isolation_task
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
     import apps.mtls.tasks  # noqa: F401  # inject_mtls_task
@@ -225,6 +226,13 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.services.provisioner.cleanup_stale_server_provisioning',
         'schedule': 300.0,
         'options': {'expires': 300.0},
+    },
+    # Self-heal scoped-network isolation (stale iptables rules, recreated
+    # bridges missing egress, Traefik bridge membership) every 10 minutes
+    'reconcile-network-isolation-every-10m': {
+        'task': 'apps.deployments.tasks.reconcile_network_isolation_task',
+        'schedule': 600.0,
+        'options': {'expires': 600.0},
     },
     # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
     'recover-stalled-deletions-every-5m': {

@@ -530,6 +530,27 @@ class Service(TimeStampedModel):
         ]
 
     def save(self, *args, **kwargs):
+        # ISOLATION INVARIANT: every service belongs to a project. Project
+        # membership is what drives the per-project scoped docker network,
+        # egress firewall and addon attachment — an orphaned (project=None)
+        # service silently escapes all of it. Auto-assign a per-owner
+        # "Default" project instead so single-service deploys get the same
+        # isolation guarantees as ecosystem deploys.
+        if not self.project_id and self.owner_id:
+            from django.db import IntegrityError
+            try:
+                project = Project.objects.get(owner_id=self.owner_id, slug='default')
+            except Project.DoesNotExist:
+                try:
+                    project = Project.objects.create(
+                        owner_id=self.owner_id,
+                        name='Default',
+                        slug='default',
+                    )
+                except IntegrityError:
+                    project = Project.objects.get(owner_id=self.owner_id, slug='default')
+            self.project = project
+
         if not self.slug:
             self.slug = re.sub(r'[^a-z0-9]+', '-', self.name.lower()).strip('-')
             if not self.slug:

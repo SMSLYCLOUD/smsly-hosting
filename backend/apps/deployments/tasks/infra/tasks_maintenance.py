@@ -164,3 +164,24 @@ def registry_garbage_collection_task():
         logger.error("registry_gc: timed out")
     except Exception as e:
         logger.error("registry_gc: error: %s", e)
+
+
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.reconcile_network_isolation_task")
+def reconcile_network_isolation_task():
+    """Self-healing pass over scoped-network isolation.
+
+    * Purges DOCKER-USER rules whose bridge interface no longer exists
+    * Reapplies egress isolation to live paas-svc-* bridges missing their tag
+      (closes the recreate-gap: a freshly recreated bridge starts unrestricted)
+    * Ensures Traefik is attached to every scoped bridge
+
+    Registered in celery.py beat_schedule every 10 minutes.
+    """
+    try:
+        from apps.deployments.services.network_scope import reconcile_network_isolation
+        stats = reconcile_network_isolation()
+        logger.info("network isolation reconcile: %s", stats)
+        return {"status": "ok", **stats}
+    except Exception as e:
+        logger.error("network isolation reconcile failed: %s", e)
+        return {"status": "error", "reason": str(e)}
