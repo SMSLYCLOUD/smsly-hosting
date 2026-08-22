@@ -168,7 +168,7 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the Grid AI Senate
        - ELASTICSEARCH_URL, ELASTICSEARCH_HOST, ELASTIC_URL present → declare "ELASTICSEARCH", set to {{ELASTICSEARCH_URL}}
        - MINIO_ENDPOINT, MINIO_HOST, S3_ENDPOINT_URL present → declare "MINIO", set to {{MINIO_URL}}
        - MEMCACHED_URL, MEMCACHED_HOST present → declare "MEMCACHED", set to {{MEMCACHED_URL}}
-    6. EXTERNAL API KEYS: For service-specific external API keys (RESEND_API_KEY, STRIPE_SECRET_KEY, PAYSTACK_SECRET_KEY, COINBASE_API_KEY, etc.), set them to {{GENERATE}} — a random placeholder will be provided at deploy time. Do NOT use {{SHARED_SECRET:...}} for these.
+    6. EXTERNAL API KEYS: For service-specific external API keys (RESEND_API_KEY, STRIPE_SECRET_KEY, PAYSTACK_SECRET_KEY, COINBASE_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.), set them to "" (empty string) — the USER must supply these; they can NEVER be randomly generated. Do NOT use {{GENERATE}} or {{SHARED_SECRET:...}} for these.
     7. PLATFORM_TO_*_SECRET: These are inter-service auth secrets (PLATFORM_TO_AI_SECRET, PLATFORM_TO_CRM_SECRET, etc.) — set them to {{SHARED_SECRET:platform_to_TARGET_secret}}. NEVER use {{GENERATE}} for these.
     8. ZERO EMPTY VARS POLICY: You are a DEEP CODE ANALYST. For EVERY env var:
        - Read the service's actual config files, Dockerfile, docker-compose.yml, package.json, settings.py, .env.example to determine the REAL value.
@@ -177,7 +177,7 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the Grid AI Senate
        - URL values MUST use the correct service name and port (e.g., http://smsly-core-api:8000) — NOT placeholders.
        - DATABASE names MUST be specific to the service (e.g., smsly_core_db, smsly_policy_db) — NOT generic "default".
        - LOG_LEVEL, NODE_ENV, DEBUG etc. MUST match what the config files show (e.g., if settings.py has DEBUG=False, use "false").
-       - ONLY use {{GENERATE}} for EXTERNAL API keys where you truly have no source code to read. NEVER use {{GENERATE}} for internal infra values.
+       - ONLY use {{GENERATE}} for INTERNAL app secrets you have no source for (JWT_SECRET, internal passwords). NEVER use {{GENERATE}} for external provider keys or internal infra values.
        - If a var has a default in the code (e.g., `port: int = 3000`), use that default value as a string.
 
     ### STRICT TYPE RULES — VIOLATIONS WILL CRASH THE SYSTEM:

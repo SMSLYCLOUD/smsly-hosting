@@ -279,6 +279,7 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
         var_keys.extend(['NEXT_PUBLIC_API_URL', 'NEXTAUTH_URL', 'NEXTAUTH_SECRET'])
 
     # 2. Scan .env.example / .env.sample / .env.template from cloned files
+    file_defaults: dict[str, str] = {}
     if clone_dir:
         env_example_files = [f for f in files
                              if os.path.basename(f) in (
@@ -295,9 +296,13 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
                         if not line or line.startswith('#'):
                             continue
                         if '=' in line:
-                            key = line.split('=', 1)[0].strip()
+                            key, _, val = line.partition('=')
+                            key = key.strip()
                             if key and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
                                 var_keys.append(key)
+                                clean_val = val.split('#', 1)[0].strip().strip('"').strip("'")
+                                if clean_val and clean_val != 'CHANGE_ME':
+                                    file_defaults.setdefault(key.upper(), clean_val)
             except Exception as exc:
                 logger.debug("Failed to scan file %s for env vars: %s", full_path, exc)
 
@@ -370,7 +375,11 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
         }
 
         # Auto-generate secrets
-        if hints.get('generate'):
+        if key in file_defaults:
+            # Prefer the actual value from the source file over a random
+            # generation or hint default — the repo author intended it.
+            obj['default'] = file_defaults[key]
+        elif hints.get('generate'):
             obj['default'] = secrets.token_urlsafe(48)
             obj['user_required'] = False
         elif 'default' in hints:
@@ -408,19 +417,65 @@ def _is_well_known_env_var(name: str) -> bool:
     return False
 
 
-def _merge_deep_env(env_map: dict[str, str], deep_env: dict[str, list[str]]) -> dict[str, str]:
-    """Merge deep-scanned env vars into env_map, filtering to only well-known vars."""
+# Third-party provider prefixes.  Credentials for these providers can NEVER be
+# randomly generated — a random string would silently break the integration at
+# runtime.  They must be supplied by the user, so they are left empty.
+_EXTERNAL_PROVIDER_PREFIXES = frozenset({
+    "OPENAI", "ANTHROPIC", "GEMINI", "GOOGLE", "STRIPE", "PAYSTACK", "FLUTTERWAVE",
+    "COINBASE", "RESEND", "SENDGRID", "MAILGUN", "POSTMARK", "TWILIO", "MSG91",
+    "TERMII", "INFOBIP", "VONAGE", "SLACK", "TELEGRAM", "DISCORD", "GITHUB",
+    "GITLAB", "NPM", "PYPI", "DOCKER", "CLOUDFLARE", "SUPABASE", "FIREBASE",
+    "MAPBOX", "IPINFO", "MAXMIND", "IPSTACK", "SENTRY", "DATADOG", "NEW_RELIC",
+})
+
+
+def _is_external_api_key(name: str) -> bool:
+    """Return True for third-party provider credentials (user-supplied only)."""
+    upper = str(name or "").upper().strip()
+    if not upper:
+        return False
+    return any(upper.startswith(f"{prefix}_") for prefix in _EXTERNAL_PROVIDER_PREFIXES)
+
+
+def _secretish_fill_value(upper_key: str) -> str:
+    """Fill value for a secret-looking var with no known source value.
+
+    Internal app secrets get ``{{GENERATE}}``; third-party provider keys are
+    left empty for the user to fill (never randomly generated).
+    """
+    if _is_external_api_key(upper_key):
+        return ""
+    if any(w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")):
+        return "{{GENERATE}}"
+    return ""
+
+
+def _merge_deep_env(
+    env_map: dict[str, str],
+    deep_env: dict[str, list[str]],
+    deep_values: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Merge deep-scanned env vars into env_map.
+
+    Vars with a concrete value found in the repo's own files (.env.example,
+    Dockerfile, compose) are added WITH that value — an empty placeholder must
+    never override the codebase's default.  Vars without a file value fall back
+    to the well-known filter and secret heuristics.
+    """
+    values = deep_values or {}
     added = 0
     for var_name in deep_env:
         upper_key = var_name.upper()
         if upper_key in env_map:
             continue
+        file_value = str(values.get(var_name) or values.get(upper_key) or "").strip()
+        if file_value:
+            env_map[upper_key] = file_value
+            added += 1
+            continue
         if not _is_well_known_env_var(upper_key):
             continue
-        fill = "{{GENERATE}}" if any(
-            w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
-        ) else ""
-        env_map[upper_key] = fill
+        env_map[upper_key] = _secretish_fill_value(upper_key)
         added += 1
     if added:
         logger.debug("Merged %d deep-scanned env vars into heuristic env", added)
@@ -450,7 +505,11 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
                     value = raw_val
                 if str(value or "").strip() in ("{{FILL_ME}}") or str(value or "").startswith("REPLACE_WITH_"):
                     value = ""
-                if not value and (entry.get("generate") or entry.get("is_secret")):
+                if (
+                    not value
+                    and (entry.get("generate") or entry.get("is_secret"))
+                    and not _is_external_api_key(key_text)
+                ):
                     value = "{{GENERATE}}"
             else:
                 # Plain string value — preserve {{GENERATE}} sentinel
@@ -475,7 +534,7 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
             env_map[key] = str(default_val)
             continue
 
-        if entry.get("generate") or entry.get("is_secret"):
+        if (entry.get("generate") or entry.get("is_secret")) and not _is_external_api_key(key):
             env_map[key] = "{{GENERATE}}"
             continue
 

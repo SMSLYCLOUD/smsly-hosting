@@ -55,6 +55,7 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
                 scanner = RepoScanner(clone_dir, scan_depth=scan_depth)
                 scan = scanner.scan()
                 rd['env_vars_context'] = scan.get('env_vars_context', {})
+                rd['env_var_defaults'] = scan.get('env_var_defaults', {})
                 rd['env_prefixes'] = scan.get('env_prefixes', [])
                 rd['stack'] = scan.get('stack', rd.get('stack', 'unknown'))
 

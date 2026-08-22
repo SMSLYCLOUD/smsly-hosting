@@ -108,12 +108,14 @@ class RepoScanner:
         - issues: potential deployment problems detected
         """
         self._detected_prefixes: set[str] = set()
+        self.env_var_values: dict[str, str] = {}
         env_context = self._detect_env_vars_with_context()
         result = {
             'stack': self._detect_stack(),
             'configs': self._read_config_files(),
             'env_vars': list(env_context.keys()),
             'env_vars_context': env_context,
+            'env_var_defaults': dict(self.env_var_values),
             'env_prefixes': list(self._detected_prefixes),
             'structure': self._directory_summary(),
             'issues': [],
@@ -123,6 +125,20 @@ class RepoScanner:
         result['issues'] = self._detect_issues(result)
 
         return result
+
+    @staticmethod
+    def _redact_env_file_content(content: str) -> str:
+        """Mask values in .env-style content, keeping keys visible for the AI."""
+        redacted_lines = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#') and '=' in stripped and not stripped.startswith('{{'):
+                key = stripped.split('=', 1)[0]
+                indent = line[:len(line) - len(line.lstrip())]
+                redacted_lines.append(f"{indent}{key}=[REDACTED]")
+            else:
+                redacted_lines.append(line)
+        return "\n".join(redacted_lines)
 
     def build_ai_context(self) -> str:
         """
@@ -143,6 +159,9 @@ class RepoScanner:
         if scan['configs']:
             config_text = []
             for path, content in scan['configs'].items():
+                basename = os.path.basename(path)
+                if basename.startswith('.env') or basename in ('env.example', 'env.sample'):
+                    content = self._redact_env_file_content(content)
                 config_text.append(f"### {path}\n```\n{content}\n```")
             sections.append("## Configuration Files\n" + "\n\n".join(config_text))
 
@@ -244,7 +263,9 @@ class RepoScanner:
             # No depth limit for config scanning
 
             for f in files:
-                if f in all_targets or f.endswith(('.env', '.toml', '.yaml', '.yml')):
+                if f in all_targets or (
+                    self.scan_depth != 'shallow' and f.endswith(('.env', '.toml', '.yaml', '.yml'))
+                ):
                     filepath = os.path.join(root, f)
                     rel_path = os.path.relpath(filepath, self.source_dir)
 
@@ -282,10 +303,26 @@ class RepoScanner:
             if context and context not in env_vars[name]:
                 env_vars[name].append(context)
 
-        # 1. Parse .env files for variable names (always scanned)
-        for root, dirs, files in os.walk(self.source_dir):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        def record_value(name: str, value: str):
+            """Remember a concrete default value found for an env var in source files.
 
+            These values flow into the deploy plan so vars are filled with the
+            value from the file they were detected in instead of an empty string
+            (which would override the app's own default).
+            """
+            name = name.strip()
+            if not name or not re.match(r'^[A-Z_][A-Z0-9_]*$', name):
+                return
+            value = (value or "").strip().strip('"').strip("'")
+            if not value:
+                return
+            if value.startswith("${") or value == "CHANGE_ME":
+                return
+            self.env_var_values.setdefault(name, value)
+
+        # 1. Parse .env files for variable names AND their default values (always scanned)
+        for root, dirs, files in os.walk(self.source_dir):
+            dirs[:] = [d for d in SKIP_DIRS]
 
             for f in files:
                 if f in ENV_FILES or f.startswith('.env'):
@@ -295,9 +332,11 @@ class RepoScanner:
                         for line in content.splitlines():
                             line = line.strip()
                             if line and not line.startswith('#') and '=' in line:
-                                key = line.split('=', 1)[0].strip()
+                                key, _, val = line.partition('=')
+                                key = key.strip()
                                 key = re.sub(r'^export\s+', '', key)
                                 add_var(key, f"Found in {f}")
+                                record_value(key, val)
                     except Exception as exc:  # pylint: disable=broad-exception-caught
                         logger.debug("Failed to scan env file %s: %s", f, exc)
 
@@ -455,9 +494,13 @@ class RepoScanner:
                         for match in docker_env_pattern.finditer(content):
                             val = match.group(2).strip()
                             add_var(match.group(1), f"Found in {f} (ENV: {val})")
+                            record_value(match.group(1), val)
                         for match in docker_arg_pattern.finditer(content):
                             val = match.group(2).strip()
                             add_var(match.group(1), f"Found in {f} (ARG: {val})")
+                            arg_default = re.sub(r'^\s*=\s*', '', val)
+                            if arg_default != val:
+                                record_value(match.group(1), arg_default)
 
                         # Scan for environment blocks in docker-compose YAML files
                         if f.startswith('docker-compose') or f in ('compose.yml', 'compose.yaml'):
@@ -471,13 +514,15 @@ class RepoScanner:
                                             if isinstance(svc_def, dict):
                                                 env = svc_def.get('environment')
                                                 if isinstance(env, dict):
-                                                    for k in env:
+                                                    for k, v in env.items():
                                                         add_var(str(k), f"Found in {f} ({svc_name} environment block)")
+                                                        record_value(str(k), "" if v is None else str(v))
                                                 elif isinstance(env, list):
                                                     for item in env:
                                                         if isinstance(item, str) and '=' in item:
-                                                            k = item.split('=', 1)[0].strip()
-                                                            add_var(k, f"Found in {f} ({svc_name} environment block)")
+                                                            k, _, v = item.partition('=')
+                                                            add_var(k.strip(), f"Found in {f} ({svc_name} environment block)")
+                                                            record_value(k.strip(), v)
                                                         elif isinstance(item, str):
                                                             add_var(item, f"Found in {f} ({svc_name} environment block pass-through)")
                             except Exception as exc:

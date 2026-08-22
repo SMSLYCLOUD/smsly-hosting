@@ -76,3 +76,34 @@ class EcosystemPlan(models.Model):
     def __str__(self):
         proj = f" project={self.project_id}" if self.project_id else ""
         return f"EcosystemPlan {self.id} - {self.user.username}{proj} - {self.status}"
+
+
+class EcosystemSharedSecret(models.Model):
+    """Persistent inter-service secrets for an ecosystem deploy.
+
+    ``{{SHARED_SECRET:name}}`` placeholders resolve to values stored here so
+    that retries and partial re-deploys reuse the SAME value instead of
+    rotating every secret and breaking auth between already-running services.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    user = models.ForeignKey(  # type: ignore[var-annotated]
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='ecosystem_shared_secrets',
+    )
+    name = models.CharField(max_length=255, db_index=True)
+    value = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'name'],
+                name='uniq_ecosystem_shared_secret_per_user',
+            ),
+        ]
+
+    def __str__(self):
+        return f"EcosystemSharedSecret {self.name} (user={self.user_id})"

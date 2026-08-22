@@ -11,7 +11,12 @@ from datetime import UTC
 
 from .ecosystem_ai_prompts import ECOSYSTEM_PROMPT
 from .ecosystem_github import fetch_all_repos, fetch_repo_tree
-from .ecosystem_heuristics import _env_plan_map, _merge_deep_env, heuristic_analysis
+from .ecosystem_heuristics import (
+    _env_plan_map,
+    _merge_deep_env,
+    _secretish_fill_value,
+    heuristic_analysis,
+)
 from .ecosystem_intelligence import (
     _apply_generic_ecosystem_intelligence,
     _build_deploy_sequence,
@@ -35,20 +40,24 @@ def _force_merge_scanner_env_vars(services: list[dict], repos_data: list[dict]):
     so that cross-service secret mapping (e.g. GATEWAY_SECRET ->
     {{SHARED_SECRET:gateway_secret}}) fires for vars the AI omitted.
 
-    Unlike _merge_deep_env, this function does NOT filter by _is_well_known_env_var.
-    EVERY variable the RepoScanner found in .env files, Dockerfiles, docker-compose,
-    or code analysis survives into the deploy plan.  No exceptions.
-
-    Missing vars get a ``{{GENERATE}}`` placeholder so the user can fill them
-    in the dashboard, unless they look like secrets in which case a shared
-    secret placeholder is preferred.
+    Vars are filled with the concrete value found in the repo's own files
+    (.env.example, Dockerfile ENV, compose environment) whenever one exists —
+    an empty value must never override the codebase's default.  Missing vars
+    get ``{{GENERATE}}`` only for internal secrets; third-party provider keys
+    (OPENAI_API_KEY, STRIPE_SECRET_KEY, ...) stay empty for the user to fill.
     """
     repo_to_deep: dict[str, dict[str, list[str]]] = {}
+    repo_to_values: dict[str, dict[str, str]] = {}
     for rd in repos_data:
         repo = str(rd.get("repo") or "").strip().lower()
         deep = rd.get("env_vars_context")
         if repo and isinstance(deep, dict):
             repo_to_deep[repo] = deep
+        defaults = rd.get("env_var_defaults")
+        if repo and isinstance(defaults, dict):
+            repo_to_values[repo] = {
+                str(k).strip().upper(): str(v) for k, v in defaults.items()
+            }
 
     for svc in services:
         if not isinstance(svc, dict):
@@ -57,6 +66,7 @@ def _force_merge_scanner_env_vars(services: list[dict], repos_data: list[dict]):
         deep_env = repo_to_deep.get(repo)
         if not deep_env:
             continue
+        file_values = repo_to_values.get(repo, {})
 
         env_map = svc.get("env_vars")
         if not isinstance(env_map, dict):
@@ -70,10 +80,11 @@ def _force_merge_scanner_env_vars(services: list[dict], repos_data: list[dict]):
                 continue
             if upper_key in env_map:
                 continue
-            fill = "{{GENERATE}}" if any(
-                w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
-            ) else ""
-            env_map[upper_key] = fill
+            file_value = file_values.get(upper_key, "").strip()
+            if file_value:
+                env_map[upper_key] = file_value
+            else:
+                env_map[upper_key] = _secretish_fill_value(upper_key)
             added += 1
 
         if added:
@@ -113,7 +124,7 @@ def _build_heuristic_plan(repos_data: list[dict], error: str = "") -> dict:
         env_map = _env_plan_map(env_vars_raw)
         deep_env = rd.get("env_vars_context", {})
         if deep_env:
-            env_map = _merge_deep_env(env_map, deep_env)
+            env_map = _merge_deep_env(env_map, deep_env, rd.get("env_var_defaults"))
 
         svc = {
             "repo": rd["repo"],

@@ -230,7 +230,7 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
         env_map = _env_plan_map(h.get("env_vars", []))
         deep_env = rd.get("env_vars_context", {})
         if deep_env:
-            env_map = _merge_deep_env(env_map, deep_env)
+            env_map = _merge_deep_env(env_map, deep_env, rd.get("env_var_defaults"))
         recon_svc = {
             "repo": repo_full,
             "name": name,

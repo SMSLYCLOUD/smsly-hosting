@@ -1605,11 +1605,16 @@ class AddonProvisioner:
             # Password comes from the container env (--env-file above), never
             # from the command line: keeps it out of `ps` output and survives
             # container restarts (env is baked into the container config).
-            # chown ensures the data directory is writable after volume
-            # restore or permission corruption (e.g. host-level chown).
+            # chown (as root) normalizes volume ownership after restore or
+            # host-level chown. setpriv then drops to the redis user BEFORE
+            # exec'ing the server: SECURITY_OPTS drops ALL caps including
+            # CAP_DAC_OVERRIDE, so root-without-caps cannot write into a
+            # data dir owned by uid 999 ("appendonlydir: Permission denied").
+            # Running AS redis matches ownership and needs no capabilities.
             'sh', '-c',
             'chown -R redis:redis /data 2>/dev/null; '
-            'exec redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes',
+            'exec setpriv --reuid redis --regid redis --clear-groups -- '
+            'redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes',
         ])
 
         try:

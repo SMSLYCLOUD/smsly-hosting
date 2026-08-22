@@ -12,6 +12,10 @@ from apps.deployments.tasks.ecosystem.constants import (
     _EXTERNAL_SECRETS,
 )
 
+from apps.deployments.services.ecosystem.ecosystem_heuristics import (
+    _is_external_api_key,
+)
+
 from .addons import (
     _addon_env_keys,
     _addon_type_from_placeholder,
@@ -24,6 +28,18 @@ from .repo import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel values that mean "no real value provided" — never persist them.
+_PLACEHOLDER_SENTINELS = ("{{FILL_ME}}", "CHANGEME", "TODO")
+
+
+def _is_sentinel_value(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if text in _PLACEHOLDER_SENTINELS or text == "{{GENERATE}}":
+        return True
+    return text.startswith("REPLACE_WITH_")
 
 
 def _generate_secret(length: int = 50) -> str:
@@ -59,7 +75,7 @@ def _normalize_env_vars(raw_env: Any) -> dict[str, str]:
                 continue
 
             default_val = entry.get("default")
-            if default_val not in (None, ""):
+            if default_val not in (None, "") and not _is_sentinel_value(default_val):
                 normalized[key_text] = str(default_val)
                 continue
 
@@ -168,7 +184,17 @@ def _service_placeholder_target(
     if not ref_service:
         try:
             from apps.deployments.models import Service
-            ref_service = Service.objects.filter(name__iexact=ref_name).first()
+            # SEC: scope the fallback lookup to the deploy's own services —
+            # never leak another user's service name/port.
+            owner_ids = {
+                getattr(s, "owner_id", None)
+                for s in created_services.values()
+                if getattr(s, "owner_id", None)
+            }
+            qs = Service.objects.filter(name__iexact=ref_name)
+            if owner_ids:
+                qs = qs.filter(owner_id__in=owner_ids)
+            ref_service = qs.first()
         except Exception as e:
             logger.warning(f"Failed to lookup service {ref_name} in database: {e}")
 
@@ -365,9 +391,19 @@ def _resolve_from_manifest_or_fallback(
                         _needs_senate.add(k)
 
             if _needs_senate:
-                # Send ALL env vars as context so AI can make informed decisions
+                # Send ALL env vars as context so AI can make informed decisions,
+                # but redact values of secret-named vars — they must never leave
+                # the platform boundary.
+                try:
+                    from apps.cloud.services.build_constants import is_secret_env_var
+                    _senate_context = {
+                        k: ("[REDACTED]" if is_secret_env_var(k) and str(v or "").strip() else v)
+                        for k, v in resolved_env.items()
+                    }
+                except Exception:
+                    _senate_context = dict(resolved_env)
                 senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
-                    resolved_env, stack, service_name, fill_keys=_needs_senate,
+                    _senate_context, stack, service_name, fill_keys=_needs_senate,
                 )
                 for k, v in senate_suggestions.items():
                     if k in resolved_env and (not resolved_env[k] or resolved_env[k] in ("", "{{GENERATE}}", "{{FILL_ME}}")):
@@ -467,7 +503,12 @@ def _resolve_env_placeholders(
 
         # Fast-path: full-string special tokens
         if value_text == "{{GENERATE}}":
-            resolved[key] = _generate_secret()
+            if _is_external_api_key(key):
+                # Third-party provider keys can never be randomly generated —
+                # leave empty so the user supplies the real credential.
+                resolved[key] = ""
+            else:
+                resolved[key] = _generate_secret()
             continue
 
         if value_text.startswith("{{SHARED_SECRET:") and value_text.endswith("}}"):

@@ -649,7 +649,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     ordered_keys = [key for wave in waves_repo_keys for key in wave]
     results = []
     created_services: dict[str, Any] = {}
-    shared_secrets: dict[str, str] = {}
+    # Load previously persisted shared secrets so retries and partial
+    # re-deploys REUSE the same values. Regenerating them would rotate every
+    # {{SHARED_SECRET:*}} and break auth between already-running services.
+    try:
+        from apps.deployments.models.ecosystem import EcosystemSharedSecret
+        shared_secrets: dict[str, str] = dict(
+            EcosystemSharedSecret.objects.filter(user=user)
+            .values_list('name', 'value')
+        )
+    except Exception as exc:
+        logger.debug("Failed to load ecosystem shared secrets: %s", exc)
+        shared_secrets: dict[str, str] = {}
     deployment_by_repo_key: dict[str, str] = {}
 
     # Bug 4 Fix: Provision required addons synchronously before wave 1.
@@ -758,10 +769,16 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
             existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
             if not existing_addon:
-                # Search across ALL user services for an existing ACTIVE addon of this type
-                # to avoid creating duplicate volumes on re-deploys (SEC-VOL-001).
+                # Search for an existing ACTIVE addon of this type WITHIN THIS
+                # ECOSYSTEM (same project) to avoid creating duplicate volumes
+                # on re-deploys (SEC-VOL-001).
+                # SECURITY/SCOPE: never reuse addons from other projects — a
+                # stale addon from an unrelated ecosystem previously leaked its
+                # connection_url into every service of a new deploy (its
+                # container alias doesn't even resolve on this network).
                 existing_addon = Addon.objects.filter(
                     service__owner=user,
+                    service__project=addon_anchor_service.project,
                     addon_type=addon_type,
                     status=Addon.Status.ACTIVE,
                 ).exclude(
@@ -1128,12 +1145,19 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 key_upper = str(key or "").strip().upper()
                 if not key_upper:
                     continue
+                value_text = str(value or "").strip()
+                if not value_text:
+                    # Never persist an empty override: an empty env var masks the
+                    # app's own default (os.getenv("X", default) returns "").
+                    # Leave it unset so the codebase default applies; the user
+                    # can fill it from the dashboard.
+                    continue
                 from apps.cloud.services.build_constants import is_secret_env_var
                 is_secret = is_secret_env_var(key_upper)
                 EnvironmentVariable.objects.update_or_create(
                     service=service,
                     key=key_upper,
-                    defaults={"value": str(value or ""), "is_secret": is_secret},
+                    defaults={"value": value_text, "is_secret": is_secret},
                 )
 
             deployment = Deployment.objects.create(
@@ -1173,6 +1197,17 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 "status": "failed",
                 "error": str(exc),
             })
+
+    # Persist any shared secrets generated during this run so future re-deploys
+    # and retries reuse them instead of rotating every {{SHARED_SECRET:*}}.
+    try:
+        from apps.deployments.models.ecosystem import EcosystemSharedSecret
+        for secret_name, secret_value in shared_secrets.items():
+            EcosystemSharedSecret.objects.update_or_create(
+                user=user, name=secret_name, defaults={"value": secret_value},
+            )
+    except Exception as exc:
+        logger.warning("Failed to persist ecosystem shared secrets: %s", exc)
 
     # Bulk persist env if using a manifest
     if manifest_content:

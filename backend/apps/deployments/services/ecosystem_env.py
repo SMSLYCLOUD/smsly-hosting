@@ -60,10 +60,13 @@ class EcosystemEnvResolver:
 
                 if source == "generated":
                     value = generate_strong_secret(config.get("min_length", 48))
-                elif source == "addon":
-                    value = f"addon_placeholder_for_{config.get('addon')}"
-                elif source == "service_public_url":
-                    value = f"https://{config.get('service')}.placeholder.domain"
+                elif source in ("addon", "service_public_url"):
+                    # These are wired up later by the deploy flow's addon
+                    # provisioning and service-linking steps.  Emitting a
+                    # literal like "addon_placeholder_for_postgres" here would
+                    # persist junk into the environment (reconcile only
+                    # overwrites unresolved {{...}} placeholders).
+                    value = None
                 elif source == "external_required":
                     errors.append(f"Service '{service_key}' missing external required env '{env_key}'")
                 elif source == "shared_group":
@@ -71,7 +74,7 @@ class EcosystemEnvResolver:
                     if group in self.shared_secrets and env_key in self.shared_secrets[group]:
                         value = self.shared_secrets[group][env_key]
 
-                if required and not value and source != "external_required":
+                if required and not value and source not in ("external_required", "addon", "service_public_url"):
                     errors.append(f"Service '{service_key}' failed to resolve required env '{env_key}'")
 
                 if value is not None:
