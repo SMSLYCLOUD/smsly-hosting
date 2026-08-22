@@ -329,9 +329,15 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         for service in Service.objects.select_related('server').only(
             "id", "public_domain", "custom_domains", "public_domain_hidden",
             "is_preview", "server",
+            "wildcard_url_enabled", "is_public",
+            "wildcard_redirect_custom_domain",
         ).all():
             if getattr(service, "is_preview", False):
                 continue
+
+            routing_off = getattr(service, "wildcard_url_enabled", True) is False
+            private = getattr(service, "is_public", True) is False
+            redirect_flag = getattr(service, "wildcard_redirect_custom_domain", False)
 
             # Determine if this service is local:
             # 1. Check latest deployment target from pre-fetched map
@@ -359,7 +365,12 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
                         service.public_domain,
                         service.id,
                     )
-            if public_domain.endswith(suffix):
+            if (
+                public_domain.endswith(suffix)
+                and not routing_off
+                and not private
+                and not redirect_flag
+            ):
                 hosts.add(public_domain)
 
             for item in (service.custom_domains or []):
@@ -541,6 +552,100 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
         return {}
 
     return {upstream: sorted(hosts) for upstream, hosts in remote_hosts.items()}
+
+
+def _get_wildcard_disabled_hosts(wildcard_domain: str) -> list[str]:
+    """Public wildcard domains that must serve the 503 fallback page.
+
+    A host lands here when Public Domain Routing is off
+    (``wildcard_url_enabled=False``), domain visibility is private
+    (``is_public=False``), or the domain is hidden
+    (``public_domain_hidden=True``).  Applies to local AND remote services —
+    master Caddy answers these itself so traffic never falls through to the
+    platform landing page.
+    """
+    hosts: set[str] = set()
+    if not wildcard_domain:
+        return []
+
+    try:
+        from apps.deployments.models import Service
+
+        if not _table_exists(Service._meta.db_table):
+            return []
+
+        suffix = f".{wildcard_domain}"
+        for service in Service.objects.only(
+            "id", "public_domain", "public_domain_hidden",
+            "wildcard_url_enabled", "is_public",
+        ).all():
+            raw_public = str(service.public_domain or "").strip()
+            if not raw_public:
+                continue
+            try:
+                public_domain = normalize_domain(raw_public)
+            except ValueError:
+                continue
+            if not public_domain.endswith(suffix):
+                continue
+            hidden = bool(getattr(service, "public_domain_hidden", False))
+            routing_off = getattr(service, "wildcard_url_enabled", True) is False
+            private = getattr(service, "is_public", True) is False
+            if hidden or routing_off or private:
+                hosts.add(public_domain)
+    except Exception as exc:
+        logger.warning("Could not load disabled wildcard hosts: %s", exc)
+        return []
+
+    return sorted(hosts)
+
+
+def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
+    """Map wildcard public domains to their first custom domain (301 target).
+
+    Services with ``wildcard_redirect_custom_domain=True`` and at least one
+    custom domain get their auto-generated wildcard domain permanently
+    redirected instead of proxied.
+    """
+    redirects: dict[str, str] = {}
+    if not wildcard_domain:
+        return {}
+
+    try:
+        from apps.deployments.models import Service
+
+        if not _table_exists(Service._meta.db_table):
+            return {}
+
+        suffix = f".{wildcard_domain}"
+        for service in Service.objects.only(
+            "id", "public_domain", "custom_domains",
+            "wildcard_redirect_custom_domain",
+        ).all():
+            if not getattr(service, "wildcard_redirect_custom_domain", False):
+                continue
+            target = ""
+            for item in (service.custom_domains or []):
+                value = item.strip() if isinstance(item, str) else ""
+                if value:
+                    target = value
+                    break
+            if not target:
+                continue
+            raw_public = str(service.public_domain or "").strip()
+            if not raw_public:
+                continue
+            try:
+                public_domain = normalize_domain(raw_public)
+            except ValueError:
+                continue
+            if public_domain.endswith(suffix):
+                redirects[public_domain] = target
+    except Exception as exc:
+        logger.warning("Could not load wildcard redirect map: %s", exc)
+        return {}
+
+    return dict(sorted(redirects.items()))
 
 
 def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> list[str]:
@@ -911,6 +1016,36 @@ def generate_caddyfile(config) -> str:
                             "    }",
                         ]
                     )
+
+            # Wildcard -> custom domain 301 redirects (opt-in per service).
+            # Defined BEFORE the proxy handlers so redirected hosts never hit
+            # @known_hosts or the landing catch-all.
+            wildcard_redirects = _get_wildcard_redirect_map(domain)
+            for index, (redirect_host, redirect_target) in enumerate(wildcard_redirects.items()):
+                matcher = f"@wildcard_redirect_{index}"
+                wildcard_lines.extend(
+                    [
+                        f"    {matcher} host {redirect_host}",
+                        f"    handle {matcher} {{",
+                        f"        redir https://{redirect_target}{{uri}} 301",
+                        "    }",
+                    ]
+                )
+
+            # Disabled/private/hidden wildcard domains serve the 503 fallback
+            # page from route-fallback — NEVER the platform landing page.
+            disabled_hosts = _get_wildcard_disabled_hosts(domain)
+            if disabled_hosts:
+                wildcard_lines.extend(
+                    [
+                        f"    @disabled_wildcard_hosts host {' '.join(disabled_hosts)}",
+                        "    handle @disabled_wildcard_hosts {",
+                        "        reverse_proxy route-fallback:80 {",
+                        "            header_up X-SMSLY-Fallback-Reason disabled",
+                        "        }",
+                        "    }",
+                    ]
+                )
 
             for index, (upstream_url, hosts) in enumerate(sorted(wildcard_remote_hosts.items())):
                 if not hosts:

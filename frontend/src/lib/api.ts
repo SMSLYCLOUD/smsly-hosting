@@ -325,6 +325,7 @@ export interface Service {
   custom_domains?: string[];
   wildcard_url_enabled?: boolean;
   node_url_enabled?: boolean;
+  wildcard_redirect_custom_domain?: boolean;
   node_url?: string | null;
   domain_instances?: { domain: string; verified: boolean }[];
   domain_verified?: boolean;

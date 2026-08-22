@@ -586,8 +586,8 @@ export default function ServiceDetailPage() {
                                             toast({
                                                 title: newVal ? 'Domain set to Public' : 'Domain set to Private',
                                                 description: newVal
-                                                    ? 'Service is now publicly accessible. Redeploy to apply.'
-                                                    : 'Service is now internal-only. Redeploy to apply.',
+                                                    ? 'Service is now publicly accessible. Applied instantly.'
+                                                    : 'Service is now internal-only. Applied instantly.',
                                             });
                                         } catch (err) {
                                             console.error(err);
@@ -610,7 +610,7 @@ export default function ServiceDetailPage() {
                             <div className="flex justify-between items-center border-b border-border pb-3">
                                 <div>
                                     <span className="text-muted-foreground font-medium">Public Domain Routing</span>
-                                    <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">When hidden, the default cloud.trulay.co domain will return 404.</p>
+                                    <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">When hidden, the default public domain serves an unavailable (503) page instead of routing traffic.</p>
                                 </div>
                                 <button
                                     onClick={async () => {
@@ -621,8 +621,8 @@ export default function ServiceDetailPage() {
                                             toast({
                                                 title: newVal ? 'Public Domain Hidden' : 'Public Domain Visible',
                                                 description: newVal
-                                                    ? 'Traffic is now only routed via custom domains.'
-                                                    : 'The default public domain is now active.',
+                                                    ? 'Traffic is now only routed via custom domains. Applied instantly.'
+                                                    : 'The default public domain is now active. Applied instantly.',
                                             });
                                         } catch (err) {
                                             console.error(err);
@@ -642,6 +642,45 @@ export default function ServiceDetailPage() {
                                     )}
                                 </button>
                             </div>
+                            {(service.custom_domains?.length ?? 0) > 0 && (
+                                <div className="flex justify-between items-center border-b border-border pb-3">
+                                    <div>
+                                        <span className="text-muted-foreground font-medium">Wildcard to Custom Domain</span>
+                                        <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">
+                                            Redirect visitors from the auto-generated domain to {(service.custom_domains ?? [])[0]}
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={async () => {
+                                            const newVal = !(service.wildcard_redirect_custom_domain === true);
+                                            try {
+                                                const updated = await servicesApi.update(service.id, { wildcard_redirect_custom_domain: newVal });
+                                                setService(updated);
+                                                toast({
+                                                    title: newVal ? 'Redirect enabled' : 'Redirect disabled',
+                                                    description: newVal
+                                                        ? `Auto-generated domain now redirects to ${(service.custom_domains ?? [])[0]}. Applied instantly.`
+                                                        : 'Auto-generated domain routes to the service directly again.',
+                                                });
+                                            } catch (err) {
+                                                console.error(err);
+                                                toast({ title: 'Failed to update redirect setting', variant: 'destructive' });
+                                            }
+                                        }}
+                                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+                                            service.wildcard_redirect_custom_domain === true
+                                                ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                                                : 'bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20'
+                                        }`}
+                                    >
+                                        {service.wildcard_redirect_custom_domain === true ? (
+                                            <><Globe className="w-3.5 h-3.5" /> Redirecting</>
+                                        ) : (
+                                            <>Direct</>
+                                        )}
+                                    </button>
+                                </div>
+                            )}
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Deploy Mode</span>
                                 <div className="flex items-center gap-2">

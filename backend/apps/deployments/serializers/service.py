@@ -177,6 +177,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             'health_status', 'deploy_type', 'buildpack', 'created_at',
             'updated_at', 'latest_deployment', 'node_metadata', 'node_url',
             'wildcard_url_enabled', 'node_url_enabled',
+            'wildcard_redirect_custom_domain',
             'env_scan_depth', 'running_replicas',
         ]
 
@@ -296,6 +297,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'deploy_mode', 'compose_file', 'compose_main_service',
             'is_public',
             'wildcard_url_enabled', 'node_url_enabled',
+            'wildcard_redirect_custom_domain',
             'active_target_type', 'active_host_ip', 'active_runtime_id',
             'last_scale_at',
             'locked', 'locked_reason', 'restrict_to_creator',

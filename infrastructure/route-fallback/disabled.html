@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>503 | Route Unavailable</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080c18;
+      --panel: #0d1322;
+      --border: #1a2438;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --dim: #6b7280;
+      --amber: #f59e0b;
+      --amber-dim: rgba(245, 158, 11, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(ellipse 60% 40% at 50% -10%, rgba(245, 158, 11, 0.05), transparent),
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 100% 100%, 32px 32px, 32px 32px;
+      display: grid;
+      place-items: center;
+      padding: 22px;
+    }
+    .panel {
+      width: min(560px, 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    .bar { height: 2px; background: linear-gradient(90deg, transparent, var(--amber), transparent); }
+    .content { padding: 36px 34px 30px; text-align: center; }
+    .code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: clamp(88px, 20vw, 128px);
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.04em;
+      background: linear-gradient(180deg, #fbbf24 0%, #b45309 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      user-select: none;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 18px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      color: var(--amber);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--amber-dim);
+      padding: 6px 14px;
+      font-weight: 700;
+    }
+    h1 {
+      margin: 16px 0 8px;
+      font-size: clamp(20px, 4vw, 26px);
+      line-height: 1.25;
+      letter-spacing: -0.02em;
+      color: #fff;
+      font-weight: 800;
+    }
+    p.desc {
+      margin: 0 auto;
+      max-width: 420px;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 14px;
+    }
+    .host {
+      margin-top: 20px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      color: #3b82f6;
+      background: #0b1120;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      word-break: break-all;
+      font-size: 13px;
+    }
+    .hint { margin-top: 18px; font-size: 12px; color: var(--dim); }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <div class="bar"></div>
+    <section class="content">
+      <div class="code">503</div>
+      <div class="badge">Route Disabled</div>
+      <h1>This route is not available</h1>
+      <p class="desc">
+        Public routing for this domain has been turned off by the service owner.
+        The application itself may still be running &mdash; only its public
+        entry point is disabled.
+      </p>
+      <div class="host" id="host">loading...</div>
+      <div class="hint">If you own this service, re-enable public domain routing from the dashboard.</div>
+    </section>
+  </main>
+
+  <script>
+    document.getElementById("host").textContent = window.location.host || "unknown-host";
+  </script>
+</body>
+</html>

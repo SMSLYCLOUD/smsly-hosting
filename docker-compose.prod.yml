@@ -1321,6 +1321,7 @@ services:
     volumes:
     - ./infrastructure/route-fallback/Caddyfile:/etc/caddy/Caddyfile:ro,z
     - ./infrastructure/route-fallback/index.html:/srv/index.html:ro,z
+    - ./infrastructure/route-fallback/disabled.html:/srv/disabled.html:ro,z
     - caddy_data:/data
     labels:
     - traefik.enable=true

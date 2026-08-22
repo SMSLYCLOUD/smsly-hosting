@@ -65,6 +65,24 @@ def _scoped_network_for(service) -> str:
     return net_name
 
 
+def _attach_service_addons_to_scoped_net(service) -> None:
+    """Attach the service's ACTIVE addons to its scoped network.
+
+    Closes the provisioning/spawn ordering race: addons provisioned before
+    the scoped bridge existed silently skipped the alias attach, so apps on
+    the isolated bridge could not resolve their own database hostnames
+    (gaierror crash loop at startup). Idempotent; failures are logged and
+    non-fatal so a broken addon never blocks the app from starting.
+    """
+    try:
+        from apps.addons.services.addon_provisioner import AddonProvisioner
+        n = AddonProvisioner().connect_service_addons_to_scoped_network(service)
+        if n:
+            logger.info("Attached %d addon(s) of %s to scoped network", n, service.name)
+    except Exception as e:
+        logger.warning("Addon scoped-network attach failed for %s: %s", service.name, e)
+
+
 
 def _detect_remote_runtime(ssh) -> str | None:
     """Detect sandboxed container runtime on a remote node via SSH.
@@ -146,6 +164,7 @@ class SpawningService:
         domain = service.public_domain or f"{name}.localhost"
         scoped_net = _scoped_network_for(service)
         net = scoped_net  # primary network — isolate from other services
+        _attach_service_addons_to_scoped_net(service)
         router = name.replace('.', '-').replace('_', '-')
 
         # Traefik labels — point Traefik at the scoped bridge for routing
@@ -332,6 +351,7 @@ class SpawningService:
         domain = service.public_domain or f"{name}.localhost"
         scoped_net = _scoped_network_for(service)
         net = scoped_net
+        _attach_service_addons_to_scoped_net(service)
         router = name.replace('.', '-').replace('_', '-')
 
         labels = {

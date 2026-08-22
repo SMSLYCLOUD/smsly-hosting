@@ -31,8 +31,21 @@
 		header Expires "0"
 		header Retry-After "15"
 		header X-SMSLY-Route-Fallback "true"
-		root * /srv
-		rewrite * /index.html
-		file_server
+
+		# Master Caddy marks routing-disabled hosts with
+		# X-SMSLY-Fallback-Reason: disabled — serve the dedicated page.
+		@route_disabled header X-SMSLY-Fallback-Reason disabled
+		handle @route_disabled {
+			root * /srv
+			rewrite * /disabled.html
+			file_server
+		}
+
+		# Default: service waking up page
+		handle {
+			root * /srv
+			rewrite * /index.html
+			file_server
+		}
 	}
 }

@@ -154,7 +154,11 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         from ...models.core import ManagedServer
 
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
-        routing_fields = {'public_domain_hidden', 'wildcard_url_enabled', 'node_url_enabled', 'public_domain', 'custom_domains'}
+        routing_fields = {
+            'public_domain_hidden', 'wildcard_url_enabled', 'node_url_enabled',
+            'wildcard_redirect_custom_domain', 'is_public',
+            'public_domain', 'custom_domains',
+        }
         routing_changed = routing_fields.intersection(serializer.validated_data)
 
         if 'server' in serializer.validated_data:

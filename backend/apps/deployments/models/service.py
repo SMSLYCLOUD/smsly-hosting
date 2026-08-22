@@ -397,6 +397,13 @@ class Service(TimeStampedModel):
     node_url_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=True, null=True, blank=True,
         help_text="Enable the direct node URL (e.g. service.grid-node1.smsly.cloud)")
+    wildcard_redirect_custom_domain = models.BooleanField(  # type: ignore[var-annotated]
+        default=False, null=True, blank=True,
+        help_text=(
+            "When enabled, requests to the auto-generated wildcard domain "
+            "permanently redirect (301) to this service's first custom domain "
+            "instead of proxying."
+        ))
 
     # Deploy Mode (single container vs docker-compose)
     DEPLOY_MODE_CHOICES = [

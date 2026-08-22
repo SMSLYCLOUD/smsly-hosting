@@ -273,6 +273,15 @@ class PlatformConfig(models.Model):
     wildcard_subdomains = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="Enable wildcard SSL for *.domain deployed services")
+    domain_path_redirects = models.JSONField(  # type: ignore[var-annotated]
+        default=list, blank=True,
+        help_text=(
+            "Path-to-subdomain redirects on the primary domain. "
+            'Each entry is {"path": "/account", "target": "account.example.com"}. '
+            "Requests to /account/* are 301-redirected to https://target/... "
+            "(prefix stripped, query preserved). Reserved platform paths "
+            "(/api, /admin, ...) are rejected."
+        ))
     server_ip = models.GenericIPAddressField(  # type: ignore[var-annotated]
         blank=True, null=True,
         help_text="Server public IP (auto-detected or manual)")

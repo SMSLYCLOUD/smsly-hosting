@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Grid | Service Waking Up</title>
+  <title>503 | Service Waking Up</title>
   <style>
     :root {
       color-scheme: dark;
@@ -15,8 +15,7 @@
       --muted: #9ca3af;
       --dim: #6b7280;
       --primary: #10b981;
-      --primary-hover: #059669;
-      --primary-text: #05060d;
+      --primary-dim: rgba(16, 185, 129, 0.12);
       --warn: #f59e0b;
       --err: #ef4444;
     }
@@ -28,147 +27,145 @@
       color: var(--text);
       background-color: var(--bg);
       background-image:
-        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-        linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-      background-size: 24px 24px, 24px 24px, 96px 96px, 96px 96px;
+        radial-gradient(ellipse 60% 40% at 50% -10%, rgba(16, 185, 129, 0.07), transparent),
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 100% 100%, 32px 32px, 32px 32px;
       display: grid;
       place-items: center;
       padding: 22px;
     }
     .panel {
-      width: min(760px, 100%);
+      width: min(560px, 100%);
       border: 1px solid var(--border);
-      border-radius: 12px;
+      border-radius: 14px;
       background: var(--panel);
       overflow: hidden;
     }
     .bar {
-      height: 3px;
+      height: 2px;
       width: 100%;
       background: linear-gradient(90deg, transparent, var(--primary), transparent);
       background-size: 200% 100%;
-      animation: flow 2.8s linear infinite;
+      animation: flow 2.4s linear infinite;
     }
     @keyframes flow {
       0% { background-position: -100% 0; }
       100% { background-position: 200% 0; }
     }
-    .content {
-      padding: 26px;
+    .content { padding: 36px 34px 30px; text-align: center; }
+
+    .code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: clamp(88px, 20vw, 128px);
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.04em;
+      background: linear-gradient(180deg, #34d399 0%, #059669 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      user-select: none;
     }
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 8px;
+      margin-top: 18px;
       font-size: 10px;
       text-transform: uppercase;
-      letter-spacing: 0.18em;
+      letter-spacing: 0.22em;
       color: var(--primary);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #111827;
-      padding: 6px 12px;
-      margin-bottom: 10px;
+      border-radius: 999px;
+      background: var(--primary-dim);
+      padding: 6px 14px;
       font-weight: 700;
     }
     h1 {
-      margin: 0 0 10px;
-      font-size: clamp(24px, 4vw, 35px);
-      line-height: 1.2;
+      margin: 16px 0 8px;
+      font-size: clamp(20px, 4vw, 26px);
+      line-height: 1.25;
       letter-spacing: -0.02em;
       color: #fff;
       font-weight: 800;
     }
-    p {
-      margin: 0 0 12px;
+    p.desc {
+      margin: 0 auto;
+      max-width: 400px;
       color: var(--muted);
-      line-height: 1.5;
-      font-size: 15px;
+      line-height: 1.55;
+      font-size: 14px;
     }
     .host {
-      margin-top: 14px;
+      margin-top: 20px;
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 10px 12px;
+      padding: 9px 12px;
       color: #3b82f6;
-      background: #111827;
+      background: #0b1120;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       word-break: break-all;
-      font-size: 14px;
+      font-size: 13px;
     }
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 16px;
+    .spinner {
+      width: 16px;
+      height: 16px;
+      margin: 22px auto 0;
+      border: 2px solid var(--border-hover);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
     }
-    button, a.btn {
-      appearance: none;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 11px 14px;
-      font-size: 14px;
-      font-weight: 700;
-      cursor: pointer;
-      text-decoration: none;
-      transition: border-color 0.2s ease, background 0.2s ease;
-    }
-    button:hover, a.btn:hover {
-      border-color: var(--border-hover);
-      background: #162032;
-    }
-    .primary {
-      background: var(--primary);
-      border: 1px solid var(--primary);
-      color: var(--primary-text);
-    }
-    .primary:hover {
-      background: var(--primary-hover);
-      border-color: var(--primary-hover);
-    }
-    .ghost {
-      background: #111827;
-      color: var(--text);
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .status {
-      margin-top: 14px;
-      min-height: 20px;
+      margin-top: 10px;
+      min-height: 18px;
       font-size: 13px;
       color: var(--muted);
     }
     .status[data-tone="ok"] { color: var(--primary); }
     .status[data-tone="warn"] { color: var(--warn); }
     .status[data-tone="err"] { color: var(--err); }
-    .hint {
-      margin-top: 14px;
-      font-size: 12px;
-      color: var(--dim);
+    .actions { margin-top: 18px; display: flex; justify-content: center; }
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px 18px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      background: #111827;
+      color: var(--text);
+      transition: border-color 0.2s ease, background 0.2s ease;
     }
+    button:hover:not(:disabled) { border-color: var(--border-hover); background: #162032; }
+    button:disabled { opacity: 0.55; cursor: default; }
+    .hint { margin-top: 16px; font-size: 12px; color: var(--dim); }
   </style>
 </head>
 <body>
   <main class="panel">
     <div class="bar"></div>
     <section class="content">
-      <div class="badge">Grid Routing</div>
-      <h1>Service is waking up</h1>
-      <p>
-        This route is currently unavailable while health checks are retried.
-        Grid will automatically reconnect traffic when the service returns healthy.
+      <div class="code">503</div>
+      <div class="badge">Service Waking Up</div>
+      <h1>This service is starting up</h1>
+      <p class="desc">
+        The container is booting or recovering. Traffic will be routed
+        automatically as soon as health checks pass.
       </p>
       <div class="host" id="host">loading...</div>
 
-      <div class="actions">
-        <button class="primary" id="recheck-btn" type="button">Recheck Now</button>
-        <a class="btn ghost" id="dashboard-link" href="#" rel="noopener noreferrer">Open Dashboard</a>
-      </div>
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="status" id="status">Retrying automatically...</div>
 
-      <div class="status" id="status"></div>
-      <div class="hint">
-        If this page persists, inspect the service Health tab and latest deployment runtime logs.
+      <div class="actions">
+        <button id="recheck-btn" type="button">Recheck Now</button>
       </div>
+      <div class="hint">This page retries on its own until the service is healthy.</div>
     </section>
   </main>
 
@@ -177,7 +174,6 @@
     const hostEl = document.getElementById("host");
     const statusEl = document.getElementById("status");
     const btnEl = document.getElementById("recheck-btn");
-    const dashboardLink = document.getElementById("dashboard-link");
 
     hostEl.textContent = host;
 
@@ -186,16 +182,21 @@
       statusEl.dataset.tone = tone || "";
     }
 
-    function guessControlPlaneUrl() {
-      const labels = (window.location.hostname || "").split(".").filter(Boolean);
-      if (labels.length >= 3) {
-        return "https://" + labels.slice(-3).join(".");
-      }
-      return "https://" + (window.location.hostname || "");
+    let autoTimer = null;
+    function scheduleReload(seconds) {
+      if (autoTimer) return;
+      let left = seconds;
+      setStatus(`Rechecking in ${left}s...`, "");
+      autoTimer = setInterval(() => {
+        left -= 1;
+        if (left <= 0) {
+          clearInterval(autoTimer);
+          window.location.reload();
+          return;
+        }
+        setStatus(`Rechecking in ${left}s...`, "");
+      }, 1000);
     }
-
-    const guessedControlPlane = guessControlPlaneUrl();
-    dashboardLink.href = guessedControlPlane + "/services";
 
     async function triggerRecheck() {
       btnEl.disabled = true;
@@ -210,29 +211,29 @@
         try { payload = await response.json(); } catch (_) { payload = {}; }
 
         if (response.ok) {
-          setStatus("Recheck queued. Retrying this page in 5 seconds...", "ok");
-          window.setTimeout(() => window.location.reload(), 5000);
+          setStatus("Recheck queued. Reloading...", "ok");
+          setTimeout(() => window.location.reload(), 3000);
           return;
         }
 
         if (response.status === 429) {
-          setStatus(
-            payload.error || "Recheck already requested. Retrying in 10 seconds...",
-            "warn"
-          );
-          window.setTimeout(() => window.location.reload(), 10000);
+          setStatus(payload.error || "Recheck already requested.", "warn");
+          scheduleReload(15);
           return;
         }
 
-        setStatus(payload.error || "Recheck failed. Open dashboard for diagnostics.", "err");
+        setStatus(payload.error || "Recheck failed. Retrying automatically...", "err");
+        scheduleReload(20);
       } catch (_) {
-        setStatus("Unable to contact control plane API from fallback route.", "err");
+        setStatus("Waiting for the service to come back online...");
+        scheduleReload(15);
       } finally {
-        window.setTimeout(() => { btnEl.disabled = false; }, 2000);
+        setTimeout(() => { btnEl.disabled = false; }, 2000);
       }
     }
 
     btnEl.addEventListener("click", triggerRecheck);
+    scheduleReload(15);
   </script>
 </body>
 </html>

@@ -339,6 +339,35 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                             The default domain will not serve traffic. Only custom domains are active.
                         </p>
                     )}
+
+                    {/* Wildcard -> Custom Domain redirect */}
+                    {(service.custom_domains?.length ?? 0) > 0 && !service.public_domain_hidden && (
+                        <div className="flex items-center justify-between gap-3 p-3 bg-muted/30 border border-border rounded-lg mt-2">
+                            <div className="min-w-0">
+                                <p className="text-xs font-semibold text-muted-foreground mb-0.5">Redirect to Custom Domain</p>
+                                <p className="text-xs text-muted-foreground truncate">
+                                    Visitors of the default domain go straight to <span className="font-mono">{(service.custom_domains ?? [])[0]}</span> (301, path preserved)
+                                </p>
+                            </div>
+                            <Switch
+                                checked={service.wildcard_redirect_custom_domain === true}
+                                onCheckedChange={async (checked) => {
+                                    try {
+                                        const updated = await servicesApi.update(service.id, { wildcard_redirect_custom_domain: checked });
+                                        setService(updated);
+                                        toast({
+                                            title: checked ? 'Redirect enabled' : 'Redirect disabled',
+                                            description: checked
+                                                ? `Default domain now redirects to ${(service.custom_domains ?? [])[0]}. Routing updated.`
+                                                : 'Default domain serves the service directly again.',
+                                        });
+                                    } catch (err) {
+                                        toast({ title: 'Error', description: 'Failed to update redirect setting', variant: 'destructive' });
+                                    }
+                                }}
+                            />
+                        </div>
+                    )}
                 </div>
 
                 {/* Node URL Entry Points (full nodes only) */}

@@ -228,12 +228,22 @@ class AddonProvisioner:
             network_name = _Net.resolve_network_name(project)
             if not network_name or network_name == self.network_name:
                 return
-            # Verify the network actually exists on this Docker daemon
+            # Verify the network actually exists on this Docker daemon.
+            # NOTE: a missing network here is EXPECTED during first deploys —
+            # the scoped bridge is created later by _scoped_network_for() at
+            # app-spawn time. We log (not raise) and rely on
+            # connect_service_addons_to_scoped_network() being called from the
+            # spawn path to complete the attach once the network exists.
             inspect = subprocess.run(
                 ['docker', 'network', 'inspect', network_name],
                 capture_output=True, text=True, timeout=30,
             )
             if inspect.returncode != 0:
+                logger.warning(
+                    "Scoped network %s does not exist yet for %s — alias %s "
+                    "not attached (will be attached at app spawn)",
+                    network_name, container_name, alias,
+                )
                 return
             alias = getattr(addon, 'name', None) or f"{addon.addon_type.lower()}-{addon.service.name}"
             # Check if already connected
@@ -263,6 +273,32 @@ class AddonProvisioner:
             raise RuntimeError(
                 f"Scoped network connection failed for {container_name}: {exc}"
             )
+
+    def connect_service_addons_to_scoped_network(self, service) -> int:
+        """Idempotently attach every ACTIVE addon of ``service`` to its
+        scoped network so the app container (which runs on that isolated
+        bridge) can resolve addon hostnames via Docker DNS.
+
+        MUST be called AFTER the scoped network exists — i.e. after
+        ``_scoped_network_for(service)`` and BEFORE the app container starts.
+        Closes the provisioning/spawn ordering race where addons provisioned
+        before the scoped bridge existed silently skipped the alias attach,
+        leaving apps unable to resolve their own databases (gaierror crash
+        loop on startup).
+        """
+        attached = 0
+        for addon in service.addons.exclude(status='DELETED'):
+            if str(getattr(addon, 'status', '')) != 'ACTIVE':
+                continue
+            cname = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+            try:
+                self._connect_to_service_scoped_network(cname, addon)
+                attached += 1
+            except Exception as exc:
+                logger.warning(
+                    "Scoped attach failed for %s (%s): %s", cname, addon.name, exc,
+                )
+        return attached
 
     def _container_status(self, container_name: str) -> tuple[str | None, bool]:
         """
