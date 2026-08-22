@@ -425,6 +425,13 @@ class Service(TimeStampedModel):
             "permanently redirect (301) to this service's first custom domain "
             "instead of proxying."
         ))
+    wildcard_internal_only = models.BooleanField(  # type: ignore[var-annotated]
+        default=False, null=True, blank=True,
+        help_text=(
+            "When enabled, the auto-generated wildcard domain is hidden from the "
+            "public internet (visitors get the 503 page) but still routes for "
+            "internal/mesh traffic. Custom domains keep working normally."
+        ))
 
     # Deploy Mode (single container vs docker-compose)
     DEPLOY_MODE_CHOICES = [

@@ -177,7 +177,8 @@ class ServiceListSerializer(serializers.ModelSerializer):
             'health_status', 'deploy_type', 'buildpack', 'created_at',
             'updated_at', 'latest_deployment', 'node_metadata', 'node_url',
             'wildcard_url_enabled', 'node_url_enabled',
-            'wildcard_redirect_custom_domain',
+            'wildcard_redirect_custom_domain', 'wildcard_internal_only',
+            'path_redirects', 'host_aliases',
             'env_scan_depth', 'running_replicas',
         ]
 

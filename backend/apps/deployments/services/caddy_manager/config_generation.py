@@ -485,7 +485,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
             "id", "public_domain", "custom_domains", "public_domain_hidden",
             "is_preview", "server",
             "wildcard_url_enabled", "is_public",
-            "wildcard_redirect_custom_domain",
+            "wildcard_redirect_custom_domain", "wildcard_internal_only",
         ).all():
             if getattr(service, "is_preview", False):
                 continue
@@ -493,6 +493,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
             routing_off = getattr(service, "wildcard_url_enabled", True) is False
             private = getattr(service, "is_public", True) is False
             redirect_flag = getattr(service, "wildcard_redirect_custom_domain", False)
+            internal_only = bool(getattr(service, "wildcard_internal_only", False))
 
             # Determine if this service is local:
             # 1. Check latest deployment target from pre-fetched map
@@ -525,6 +526,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
                 and not routing_off
                 and not private
                 and not redirect_flag
+                and not internal_only
             ):
                 hosts.add(public_domain)
 
@@ -658,9 +660,12 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
 
         for service in Service.objects.select_related('server').only(
             "id", "public_domain", "custom_domains", "public_domain_hidden",
-            "wildcard_url_enabled", "server",
+            "wildcard_url_enabled", "server", "wildcard_internal_only",
         ).all():
             if not getattr(service, "wildcard_url_enabled", True):
+                continue
+            if bool(getattr(service, "wildcard_internal_only", False)):
+                # Handled by the dedicated internal-only section instead.
                 continue
 
             # Determine if this service is remote using same logic as _get_wildcard_known_hosts
@@ -753,6 +758,93 @@ def _get_wildcard_disabled_hosts(wildcard_domain: str) -> list[str]:
         return []
 
     return sorted(hosts)
+
+
+def _get_wildcard_internal_only_upstreams(wildcard_domain: str) -> dict[str, list[str]]:
+    """Wildcard public domains that are INTERNAL-ONLY, grouped by upstream.
+
+    Public visitors get the 503 fallback page; requests originating from
+    private/mesh networks (RFC1918, CGNAT) are routed normally.  Custom
+    domains are unaffected.
+    """
+    grouped: dict[str, set[str]] = {}
+    if not wildcard_domain:
+        return {}
+
+    try:
+        from apps.deployments.models import Service, Deployment
+
+        if not _table_exists(Service._meta.db_table):
+            return {}
+
+        suffix = f".{wildcard_domain}"
+
+        service_ids = [s.id for s in Service.objects.only("id").all()]
+        latest_local_map: dict[str, bool] = {}
+        if service_ids:
+            from django.db.models import OuterRef, Subquery
+            latest_dep = (
+                Deployment.objects.filter(service_id=OuterRef('id'))
+                .order_by('-created_at')
+                .values('target_is_local', 'target_server_id')[:1]
+            )
+            for row in Service.objects.filter(id__in=service_ids).annotate(
+                _latest_target_is_local=Subquery(latest_dep.values('target_is_local')),
+                _latest_target_server_id=Subquery(latest_dep.values('target_server_id')),
+            ).values('id', '_latest_target_is_local', '_latest_target_server_id'):
+                sid = str(row['id'])
+                if row['_latest_target_is_local'] is True:
+                    latest_local_map[sid] = True
+                elif row['_latest_target_server_id'] is not None:
+                    latest_local_map[sid] = False
+                else:
+                    latest_local_map.pop(sid, None)
+
+        for service in Service.objects.select_related('server').only(
+            "id", "public_domain", "public_domain_hidden",
+            "wildcard_url_enabled", "wildcard_internal_only",
+            "is_public", "server",
+        ).all():
+            if not getattr(service, "wildcard_internal_only", False):
+                continue
+            if getattr(service, "is_preview", False):
+                continue
+            if getattr(service, "public_domain_hidden", False):
+                continue
+            if getattr(service, "wildcard_url_enabled", True) is False:
+                continue
+            if getattr(service, "is_public", True) is False:
+                continue
+
+            raw_public = str(service.public_domain or "").strip()
+            if not raw_public:
+                continue
+            try:
+                public_domain = normalize_domain(raw_public)
+            except ValueError:
+                continue
+            if not public_domain.endswith(suffix):
+                continue
+
+            sid = str(service.id)
+            if sid in latest_local_map:
+                is_local = latest_local_map[sid]
+            else:
+                svr = getattr(service, 'server', None)
+                is_local = (svr is None) or (getattr(svr, 'is_primary', False) is True)
+
+            if is_local:
+                upstream = _service_proxy_upstream()
+            else:
+                upstream = _remote_upstream_url_for_service(service)
+                if not upstream:
+                    continue
+            grouped.setdefault(upstream, set()).add(public_domain)
+    except Exception as exc:
+        logger.warning("Could not load internal-only wildcard hosts: %s", exc)
+        return {}
+
+    return {upstream: sorted(hosts) for upstream, hosts in grouped.items()}
 
 
 def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
@@ -1171,6 +1263,55 @@ def generate_caddyfile(config) -> str:
                             "    }",
                         ]
                     )
+
+            # Internal-only wildcard domains: public visitors get the 503
+            # fallback page, internal/mesh clients are routed normally.
+            # Defined BEFORE redirects/disabled/known handlers.
+            internal_only_upstreams = _get_wildcard_internal_only_upstreams(domain)
+            if internal_only_upstreams:
+                wildcard_lines.extend(
+                    [
+                        f"    @internal_only_hosts host {' '.join(sorted(h for hosts in internal_only_upstreams.values() for h in hosts))}",
+                        "    @internal_src client_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10",
+                        "    handle @internal_only_hosts {",
+                        "        handle @internal_src {",
+                    ]
+                )
+                for index, (upstream_url, hosts) in enumerate(internal_only_upstreams.items()):
+                    matcher = f"@internal_upstream_{index}"
+                    upstream_has_fallbacks = len(str(upstream_url).split()) > 1
+                    wildcard_lines.extend(
+                        [
+                            f"        {matcher} host {' '.join(hosts)}",
+                            f"        handle {matcher} {{",
+                            f"            reverse_proxy {upstream_url} {{",
+                        ]
+                    )
+                    if upstream_has_fallbacks:
+                        wildcard_lines.extend(
+                            [
+                                "                lb_try_duration 5s",
+                                "                lb_try_interval 250ms",
+                            ]
+                        )
+                    wildcard_lines.extend(
+                        [
+                            "                header_up Host {host}",
+                            "            }",
+                            "        }",
+                        ]
+                    )
+                wildcard_lines.extend(
+                    [
+                        "            handle {",
+                        "                reverse_proxy route-fallback:80 {",
+                        "                    header_up X-SMSLY-Fallback-Reason disabled",
+                        "                }",
+                        "            }",
+                        "        }",
+                        "    }",
+                    ]
+                )
 
             # Wildcard -> custom domain 301 redirects (opt-in per service).
             # Defined BEFORE the proxy handlers so redirected hosts never hit
