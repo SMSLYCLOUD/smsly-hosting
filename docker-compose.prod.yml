@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_INITDB_ARGS: "--data-checksums"
-      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD must be set in .env}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-}
     volumes:
       - postgres-primary-data:/var/lib/postgresql/data
       - postgres-archive:/var/lib/postgresql/archive
@@ -174,10 +174,10 @@ services:
       ETCD3_HOST: "etcd:2379"
       PATRONI_NAME: patroni1
       PGUSER_SUPERUSER: postgres
-      PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:?PATRONI_SUPERUSER_PASSWORD must be set in .env}
+      PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:-}
       PGUSER_ADMIN: ${POSTGRES_USER:-smsly_admin}
       PGPASSWORD_ADMIN: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
-      PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD must be set in .env}
+      PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD:-}
       # POD_IP intentionally unset — Spilo auto-detects the container IP for
       # Patroni connect_address. A hardcoded value breaks after re-creation.
     volumes:
@@ -320,7 +320,7 @@ services:
       PGPORT: "5000"
       PGDATABASE: postgres
       PGUSER: postgres
-      PGPASSWORD: ${PATRONI_SUPERUSER_PASSWORD:?PATRONI_SUPERUSER_PASSWORD must be set in .env}
+      PGPASSWORD: ${PATRONI_SUPERUSER_PASSWORD:-}
       APP_DB: ${POSTGRES_DB:-smsly_hosting}
       APP_USER: ${POSTGRES_USER:-smsly_admin}
     entrypoint: ["/bin/sh", "-c"]
