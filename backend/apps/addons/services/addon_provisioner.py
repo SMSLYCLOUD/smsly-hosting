@@ -541,6 +541,13 @@ class AddonProvisioner:
         service_name = addon.service.name
         self._ensure_network()
 
+        # Reprovisioning replaces the primary container, which would silently
+        # break an active HA topology (standby replicating a dead container).
+        if getattr(addon, 'ha_enabled', False):
+            raise RuntimeError(
+                "HA is enabled on this addon. Disable HA before reprovisioning."
+            )
+
         # Stable container name; do not change across retries.
         container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"
 
@@ -565,6 +572,20 @@ class AddonProvisioner:
             raise ValueError(f"Unknown addon type: {addon_type}")
 
 
+        # Duplicate-alias guard: two ACTIVE addons sharing one network alias
+        # makes Docker DNS round-robin between them (live + dead = intermittent
+        # auth/DNS failures). Refuse instead of silently shadowing.
+        try:
+            from apps.deployments.models.addons import Addon as _AM
+            _dup = _AM.objects.exclude(pk=addon.pk).exclude(status='DELETED').filter(
+                connection_url__icontains=alias_name).exists()
+            if _dup:
+                raise ValueError(
+                    f"Network alias '{alias_name}' is already used by another ACTIVE addon")
+        except ValueError:
+            raise
+        except Exception:
+            pass
         logger.info(f"Provisioning {addon_type} addon for service {service_name}")
 
         public_domain = getattr(addon, 'public_domain', None)
@@ -1760,6 +1781,10 @@ class AddonProvisioner:
         published host port (if any) is preserved so existing connection URLs
         stay valid.
         """
+        if getattr(addon, 'ha_enabled', False):
+            raise RuntimeError(
+                "HA is enabled on this addon. Disable HA before rotating credentials."
+            )
         host_port = self._get_published_host_port(container_name)
 
         subprocess.run(

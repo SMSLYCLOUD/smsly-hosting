@@ -44,6 +44,7 @@ export function AddReplicaCard({ onAdded, defaultOpen = false }: { onAdded: (r: 
     const { toast } = useToast();
     const [open, setOpen] = useState(defaultOpen);
     const [submitting, setSubmitting] = useState(false);
+    const [urlValue, setUrlValue] = useState('');
     const [form, setForm] = useState({
         name: '',
         kind: 'remote' as DatabaseReplicaKind,
@@ -58,6 +59,58 @@ export function AddReplicaCard({ onAdded, defaultOpen = false }: { onAdded: (r: 
 
     const set = (k: keyof typeof form, v: string | number) =>
         setForm((f) => ({ ...f, [k]: v }));
+
+    const applyUrl = () => {
+        const raw = urlValue.trim();
+        if (!raw) return;
+        let u: URL;
+        try {
+            u = new URL(raw);
+        } catch {
+            toast({
+                title: 'Invalid connection URL',
+                description: 'Expected format: postgresql://user:password@host:5432/dbname',
+                variant: 'destructive',
+            });
+            return;
+        }
+        if (!/^postgres(ql)?:$/.test(u.protocol)) {
+            toast({
+                title: 'Unsupported scheme',
+                description: `"${u.protocol.replace(/:$/, '')}" is not a PostgreSQL URL — expected postgres:// or postgresql://`,
+                variant: 'destructive',
+            });
+            return;
+        }
+        if (!u.hostname) {
+            toast({ title: 'Missing host', description: 'The URL must include a host.', variant: 'destructive' });
+            return;
+        }
+        let username = u.username;
+        let password = u.password;
+        try {
+            if (username) username = decodeURIComponent(username);
+            if (password) password = decodeURIComponent(password);
+        } catch { /* keep raw values if malformed escapes */ }
+        const portNum = u.port ? Number(u.port) : NaN;
+        const dbname = u.pathname.replace(/^\//, '');
+        const validSsl: string[] = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'];
+        const sslParam = u.searchParams.get('sslmode');
+        const resolvedPort = Number.isFinite(portNum) && portNum >= 1 && portNum <= 65535 ? portNum : form.port;
+        setForm((f) => ({
+            ...f,
+            host: u.hostname,
+            port: resolvedPort,
+            database: dbname || f.database,
+            username,
+            password,
+            ssl_mode: sslParam && validSsl.includes(sslParam) ? (sslParam as DatabaseReplicaSslMode) : f.ssl_mode,
+        }));
+        toast({
+            title: 'Connection details applied',
+            description: `${username || '(no user)'}@${u.hostname}:${resolvedPort}/${dbname || form.database}`,
+        });
+    };
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -78,6 +131,7 @@ export function AddReplicaCard({ onAdded, defaultOpen = false }: { onAdded: (r: 
             onAdded(created);
             setOpen(false);
             setForm({ name: '', kind: 'remote', host: '', port: 5432, database: 'smsly_hosting', username: '', password: '', ssl_mode: 'prefer', notes: '' });
+            setUrlValue('');
         } catch (err: any) {
             const detail = err?.response?.data || err?.message || 'Unknown error';
             toast({ title: 'Failed to add replica', description: JSON.stringify(detail), variant: 'destructive' });
@@ -105,6 +159,27 @@ export function AddReplicaCard({ onAdded, defaultOpen = false }: { onAdded: (r: 
             </CardHeader>
             <CardContent>
                 <form onSubmit={submit} className="space-y-4">
+                    <div className="space-y-2 rounded-md border border-dashed p-3">
+                        <Label htmlFor="rurl">Quick fill — connection string</Label>
+                        <div className="flex gap-2">
+                            <Input
+                                id="rurl"
+                                placeholder="postgresql://user:password@host:5432/dbname"
+                                value={urlValue}
+                                onChange={(e) => setUrlValue(e.target.value)}
+                                className="font-mono text-xs"
+                                autoComplete="off"
+                                spellCheck={false}
+                            />
+                            <Button type="button" variant="secondary" onClick={applyUrl} disabled={!urlValue.trim()}>
+                                Parse
+                            </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Paste a full postgres:// URL and hit Parse to fill the fields below. SSL mode is
+                            picked up from ?sslmode= when present. The URL is never stored.
+                        </p>
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label htmlFor="rname">Name</Label>

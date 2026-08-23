@@ -177,6 +177,101 @@ class AddonViewSet(viewsets.ModelViewSet):
                 "Deletion could not be queued. Retry using 'retry-delete'."
             )
 
+    @action(detail=True, methods=['post'], url_path='enable-ha')
+    def enable_ha(self, request, pk=None):
+        """Enable automatic-failover HA for a Redis addon (Phase 1 scope)."""
+        instance = self.get_object()
+        assert_can_write(request.user, instance.service, action='enable addon HA')
+
+        if instance.ha_enabled:
+            return Response(
+                {'error': 'HA is already enabled for this addon.'},
+                status=status.HTTP_409_CONFLICT)
+        if instance.addon_type != Addon.Type.REDIS:
+            return Response(
+                {'error': 'HA is currently supported for REDIS addons only.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        if instance.status != Addon.Status.ACTIVE:
+            return Response(
+                {'error': f"Addon must be ACTIVE to enable HA (current: {instance.status})."},
+                status=status.HTTP_409_CONFLICT)
+
+        creds = instance.parsed_credentials
+        password = creds.get('REDIS_PASSWORD') or ''
+        if not password:
+            return Response(
+                {'error': 'Could not resolve addon password from connection_url.'},
+                status=status.HTTP_409_CONFLICT)
+
+        from ..services.addon_ha import AddonHaError, AddonHaManager
+        from apps.addons.services.addon_provisioner import addon_provisioner
+
+        manager = AddonHaManager(network_name=addon_provisioner.network_name)
+        instance.ha_status = Addon.HaStatus.ENABLING
+        instance.save(update_fields=['ha_status'])
+        try:
+            topology = manager.enable_redis_ha(instance, password)
+        except AddonHaError as exc:
+            instance.ha_status = Addon.HaStatus.FAILED
+            instance.save(update_fields=['ha_status'])
+            return Response({'error': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        instance.ha_enabled = True
+        instance.ha_status = Addon.HaStatus.HEALTHY
+        instance.replica_container_name = topology['replica']
+        instance.ha_topology = topology
+        instance.save(update_fields=[
+            'ha_enabled', 'ha_status', 'replica_container_name', 'ha_topology',
+        ])
+        return Response({
+            'status': 'healthy',
+            'mode': topology['mode'],
+            'topology': topology,
+            'note': 'Failover is automatic (Sentinel quorum=2). The connection URL is unchanged.',
+        })
+
+    @action(detail=True, methods=['post'], url_path='disable-ha')
+    def disable_ha(self, request, pk=None):
+        """Remove HA components and restore the alias onto the live master."""
+        instance = self.get_object()
+        assert_can_write(request.user, instance.service, action='disable addon HA')
+
+        if not instance.ha_enabled:
+            return Response(
+                {'error': 'HA is not enabled for this addon.'},
+                status=status.HTTP_409_CONFLICT)
+
+        from ..services.addon_ha import AddonHaManager
+        from apps.addons.services.addon_provisioner import addon_provisioner
+
+        manager = AddonHaManager(network_name=addon_provisioner.network_name)
+        removed = manager.teardown(instance)
+        instance.ha_enabled = False
+        instance.ha_status = Addon.HaStatus.DISABLED
+        instance.replica_container_name = ''
+        instance.ha_topology = {}
+        instance.save(update_fields=[
+            'ha_enabled', 'ha_status', 'replica_container_name', 'ha_topology',
+        ])
+        return Response({'status': 'disabled', 'removed': removed})
+
+    @action(detail=True, methods=['get'], url_path='ha-status')
+    def ha_status(self, request, pk=None):
+        """Report the HA topology and which container currently owns the master role."""
+        instance = self.get_object()
+        payload = {
+            'ha_enabled': instance.ha_enabled,
+            'ha_status': instance.ha_status,
+            'mode': instance.ha_mode,
+            'topology': instance.ha_topology,
+            'master_container': None,
+        }
+        if instance.ha_enabled and instance.addon_type == Addon.Type.REDIS:
+            from ..services.addon_ha import AddonHaManager
+            manager = AddonHaManager(network_name='')
+            payload['master_container'] = manager._current_master_container(instance)
+        return Response(payload)
+
     @action(detail=True, methods=['post'], url_path='retry-delete')
     def retry_delete(self, request, pk=None):
         instance = self.get_object()

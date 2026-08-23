@@ -68,7 +68,7 @@ SECRETS=(
     echo "# Upstream actions required after applying this file:"
     echo "#   FIELD_ENCRYPTION_KEY   -> re-encrypt all EncryptedField values (see runbook sec. 8)"
     echo "#   GITHUB_WEBHOOK_SECRET  -> update GitHub repo/org webhook settings"
-    echo "#   POSTGRES_PASSWORD      -> align postgres/init-primary.sh, restart db+pgcat+backend"
+    echo "#   POSTGRES_PASSWORD      -> align infrastructure/docker/postgres/init-primary.sh, restart db+pgcat+backend"
     echo "#   RABBITMQ_PASSWORD      -> align all broker URLs in compose, restart rabbitmq+celery"
     echo "#   REDIS_PASSWORD         -> align all cache URLs, restart redis+backend+celery"
     echo "#   REGISTRY_PASSWORD      -> regenerate .htpasswd, restart registry, re-login agents"

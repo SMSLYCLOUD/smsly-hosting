@@ -87,3 +87,74 @@ groups:
         annotations:
           summary: "Security tool {{ $labels.job }} is down"
           description: "A security component is not responding — investigate immediately"
+
+      # ── PostgreSQL / PgCat HA ────────────────────────────────────────────
+      # Container liveness via cAdvisor (container_last_seen freezes when a
+      # container stops). Patroni/HAProxy alerts are inert on profiles where
+      # those containers don't run (absent series never fire).
+      - alert: PgcatDown
+        expr: time() - max(container_last_seen{name=~".*pgcat.*"}) > 60
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "PgCat connection pooler is down"
+          description: "pgcat container not seen for over 60s — all pooled DB traffic fails"
+
+      - alert: PgcatScrapeFailed
+        expr: up{job="pgcat"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "PgCat Prometheus endpoint unreachable"
+          description: "Prometheus cannot scrape pgcat:9930 — pooler process may be hung"
+
+      - alert: PostgresPrimaryDown
+        expr: time() - max(container_last_seen{name=~".*postgres-primary.*"}) > 60
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "PostgreSQL primary container is down"
+          description: "Writes fail unless Patroni/HAProxy has already promoted a replica"
+
+      - alert: PostgresReplicaDown
+        expr: time() - max(container_last_seen{name=~".*postgres-replica.*"}) > 120
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "PostgreSQL replica container is down"
+          description: "No failover target — HA safety net degraded. Reads fall back to primary."
+
+      - alert: PatroniDcsDown
+        expr: time() - max(container_last_seen{name=~"smsly-etcd"}) > 60
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "etcd DCS container is down"
+          description: "Patroni leader election is impaired without quorum — check etcd cluster"
+
+      - alert: HaproxyDown
+        expr: time() - max(container_last_seen{name=~"smsly-haproxy"}) > 60
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "HAProxy (Patroni routing) is down"
+          description: "DB traffic routed via HAProxy :5000/:5001 has no healthy target"
+
+      # Pool-level signals from PgCat's exporter. __name__ regex covers both
+      # metric naming generations (levkk/pgcat unprefixed vs postgresml fork
+      # pools_/servers_ prefixes).
+      - alert: PgcatBackendBanned
+        expr: max({__name__=~"pgcat_(servers_)?is_banned"}) == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "PgCat has banned a database backend for 5+ minutes"
+          description: "Backend {{ $labels.host }} (role={{ $labels.role }}) failing health checks — verify Postgres is reachable from pgcat"
+
+      - alert: PgcatPoolSaturation
+        expr: min_over_time({__name__=~"pgcat_(pools_)?cl_waiting"}[5m]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Clients queuing on PgCat pool for 5+ minutes"
+          description: "Pool {{ $labels.pool }} has continuously waiting clients — consider PGCAT_APP_POOL_SIZE or check for slow queries"

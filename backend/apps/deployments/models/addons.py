@@ -112,6 +112,40 @@ class Addon(TimeStampedModel):
     connection_url = EncryptedCharField(
         max_length=512, blank=True)  # H-1 fix: encrypted at rest
 
+    # ── High Availability ────────────────────────────────────────────────
+    # Opt-in replication for POSTGRES (pg_auto_failover) and REDIS
+    # (Sentinel). A per-addon HAProxy sidecar holds the friendly network
+    # alias so the stored connection URL keeps working across failovers.
+    class HaStatus(models.TextChoices):
+        DISABLED = 'DISABLED', 'HA Disabled'
+        ENABLING = 'ENABLING', 'Enabling HA'
+        HEALTHY = 'HEALTHY', 'HA Healthy'
+        DEGRADED = 'DEGRADED', 'HA Degraded'
+        FAILED_OVER = 'FAILED_OVER', 'Failed Over'
+        FAILED = 'FAILED', 'HA Failed'
+        DISABLING = 'DISABLING', 'Disabling HA'
+
+    ha_enabled = models.BooleanField(
+        default=False,
+        help_text="Whether automatic-failover replication is enabled for this addon.")
+    ha_status = models.CharField(
+        max_length=20,
+        choices=HaStatus.choices,
+        default=HaStatus.DISABLED)
+    replica_container_name = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="Container name of the standby/replica (empty when HA is off).")
+    ha_topology = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text="HA component inventory: sentinel hosts, sidecar, monitor, mode.")
+
+    @property
+    def ha_mode(self) -> str:
+        if not self.ha_enabled:
+            return ''
+        return str(self.ha_topology.get('mode', ''))
+
     # Coolify Integration
     coolify_uuid = models.CharField(max_length=64, blank=True, null=True,  # type: ignore[var-annotated]
                                     help_text="UUID of the database in Coolify")

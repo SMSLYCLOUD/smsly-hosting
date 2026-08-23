@@ -185,6 +185,20 @@ def delete_addon_task(self, addon_id: str) -> None:
     except Addon.DoesNotExist:
         return
 
+    # Remove HA components (standby/sentinels/proxy) before deleting the
+    # primary so nothing orphans on the network.
+    if getattr(addon, 'ha_enabled', False):
+        try:
+            from apps.addons.services.addon_ha import AddonHaManager
+            from apps.addons.services.addon_provisioner import addon_provisioner
+            manager = AddonHaManager(network_name=addon_provisioner.network_name)
+            manager.teardown(addon)
+        except Exception:
+            logger.warning(
+                "HA teardown failed for addon %s; continuing with deletion",
+                addon_id, exc_info=True,
+            )
+
     # Remote full-stack node addons: deprovision via SSH
     server = getattr(addon.service, 'server', None)
     if (server and not server.is_primary

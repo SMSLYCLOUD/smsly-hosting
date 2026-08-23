@@ -37,6 +37,14 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 30s
 
+  # PgCat connection pooler (built-in Prometheus exporter, see
+  # render_pgcat_config.py — enable_prometheus_exporter).
+  - job_name: 'pgcat'
+    static_configs:
+      - targets: ['pgcat:9930']
+    metrics_path: /metrics
+    scrape_interval: 15s
+
   # System container metrics via cAdvisor (local + remote nodes)
   - job_name: 'cadvisor'
     static_configs:

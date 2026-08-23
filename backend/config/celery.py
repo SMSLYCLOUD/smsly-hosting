@@ -70,6 +70,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.ai.tasks_code_intelligence  # noqa: F401  # deep_scan_and_verify_task
     import apps.deployments.tasks.infra.tasks_health  # noqa: F401  # check_agent_heartbeats_task
     import apps.deployments.tasks.infra.tasks_maintenance  # noqa: F401  # run_maintenance, registry_gc, reconcile_network_isolation_task
+    import apps.deployments.tasks.infra.tasks_container_hygiene  # noqa: F401  # restart-loop watchdog, orphan addon GC
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
     import apps.mtls.tasks  # noqa: F401  # inject_mtls_task
@@ -233,6 +234,19 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.reconcile_network_isolation_task',
         'schedule': 600.0,
         'options': {'expires': 600.0},
+    },
+    # Crash-loop detector: pages on containers stuck restarting (the 2026-08
+    # redis-addon outage looped 1875x unnoticed)
+    'container-restart-watchdog-every-5m': {
+        'task': 'apps.deployments.tasks.container_restart_loop_watchdog_task',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Alias-aware sweep of addon containers without DB records
+    'orphan-addon-gc-hourly': {
+        'task': 'apps.deployments.tasks.orphan_addon_gc_task',
+        'schedule': 3600.0,
+        'options': {'expires': 3600.0},
     },
     # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
     'recover-stalled-deletions-every-5m': {

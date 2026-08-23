@@ -17,7 +17,7 @@
 | `FIELD_ENCRYPTION_KEY` | 32-byte Fernet key (url-safe base64, 44 chars) | YES — re-encrypt all encrypted model fields |
 | `GATEWAY_SECRET` | 32-byte hex | No |
 | `GITHUB_WEBHOOK_SECRET` | 32-byte hex | YES — update GitHub webhook secret |
-| `POSTGRES_PASSWORD` | 32-byte hex | YES — re-issue in postgres/init-primary.sh, restart |
+| `POSTGRES_PASSWORD` | 32-byte hex | YES — re-issue in infrastructure/docker/postgres/init-primary.sh, restart |
 | `RABBITMQ_PASSWORD` | 32-byte hex | YES — update all broker URLs |
 | `REDIS_PASSWORD` | 32-byte hex | YES — update all cache URLs |
 | `REGISTRY_PASSWORD` | 32-byte hex | YES — restart registry, re-login all agents |
