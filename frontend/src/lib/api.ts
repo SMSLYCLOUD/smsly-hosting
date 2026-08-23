@@ -1835,6 +1835,10 @@ export interface Addon {
     public_domain?: string | null;
     is_bucket_public?: boolean;
     config: Record<string, any>;
+    ha_enabled?: boolean;
+    ha_status?: string;
+    replica_container_name?: string;
+    ha_topology?: Record<string, any>;
 }
 
 export const backupsApi = {
@@ -1864,6 +1868,21 @@ export const backupsApi = {
     return res.data;
   },
 };
+
+export interface AddonHaStatus {
+    ha_enabled: boolean;
+    ha_status: string;
+    mode: string;
+    topology: Record<string, any>;
+    master_container: string | null;
+}
+
+export interface AddonHaEnableResponse {
+    status: string;
+    mode: string;
+    topology: Record<string, any>;
+    warning?: string;
+}
 
 export const addonsApi = {
   togglePublicBucket: async (id: string) => { const response = await api.post(`/addons/${id}/toggle_bucket_public/`); return response.data; },
@@ -1896,6 +1915,22 @@ export const addonsApi = {
     },
     deprovision: async (id: string): Promise<{ status: string; message?: string }> => {
         const res = await api.post(`/addons/${id}/deprovision/`);
+        return res.data;
+    },
+    enableHa: async (id: string, opts?: { placement?: 'local' | 'remote'; server_id?: string }): Promise<AddonHaEnableResponse> => {
+        const res = await api.post(`/addons/${id}/enable-ha/`, opts ?? {});
+        return res.data;
+    },
+    promoteHa: async (id: string): Promise<Record<string, any>> => {
+        const res = await api.post(`/addons/${id}/promote-ha/`);
+        return res.data;
+    },
+    disableHa: async (id: string): Promise<{ status: string; removed: string[] }> => {
+        const res = await api.post(`/addons/${id}/disable-ha/`);
+        return res.data;
+    },
+    haStatus: async (id: string): Promise<AddonHaStatus> => {
+        const res = await api.get(`/addons/${id}/ha-status/`);
         return res.data;
     },
     retryDelete: async (id: string): Promise<{ status: string; message?: string }> => {

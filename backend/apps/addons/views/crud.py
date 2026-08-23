@@ -179,7 +179,7 @@ class AddonViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='enable-ha')
     def enable_ha(self, request, pk=None):
-        """Enable automatic-failover HA for a Redis addon (Phase 1 scope)."""
+        """Enable automatic-failover HA for a Redis or Postgres addon."""
         instance = self.get_object()
         assert_can_write(request.user, instance.service, action='enable addon HA')
 
@@ -187,9 +187,9 @@ class AddonViewSet(viewsets.ModelViewSet):
             return Response(
                 {'error': 'HA is already enabled for this addon.'},
                 status=status.HTTP_409_CONFLICT)
-        if instance.addon_type != Addon.Type.REDIS:
+        if instance.addon_type not in (Addon.Type.REDIS, Addon.Type.POSTGRES):
             return Response(
-                {'error': 'HA is currently supported for REDIS addons only.'},
+                {'error': 'HA is currently supported for REDIS and POSTGRES addons only.'},
                 status=status.HTTP_400_BAD_REQUEST)
         if instance.status != Addon.Status.ACTIVE:
             return Response(
@@ -197,7 +197,9 @@ class AddonViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_409_CONFLICT)
 
         creds = instance.parsed_credentials
-        password = creds.get('REDIS_PASSWORD') or ''
+        password_key = 'POSTGRES_PASSWORD' \
+            if instance.addon_type == Addon.Type.POSTGRES else 'REDIS_PASSWORD'
+        password = creds.get(password_key) or ''
         if not password:
             return Response(
                 {'error': 'Could not resolve addon password from connection_url.'},
@@ -206,11 +208,57 @@ class AddonViewSet(viewsets.ModelViewSet):
         from ..services.addon_ha import AddonHaError, AddonHaManager
         from apps.addons.services.addon_provisioner import addon_provisioner
 
+        placement = str(request.data.get('placement') or 'local').lower()
+        if placement not in ('local', 'remote'):
+            return Response(
+                {'error': "placement must be 'local' or 'remote'."},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        remote_server = None
+        if placement == 'remote':
+            if instance.addon_type != Addon.Type.POSTGRES:
+                return Response(
+                    {'error': 'Remote placement is currently POSTGRES-only.'},
+                    status=status.HTTP_400_BAD_REQUEST)
+            from apps.deployments.models.core import ManagedServer
+            server_id = request.data.get('server_id')
+            remote_server = ManagedServer.objects.filter(id=server_id).first() \
+                if server_id else None
+            if (not remote_server or getattr(remote_server, 'is_lite_agent', False)
+                    or not getattr(remote_server, 'wg_address', None)):
+                return Response(
+                    {'error': 'server_id must reference a full-stack mesh node '
+                              'with a WireGuard address.'},
+                    status=status.HTTP_400_BAD_REQUEST)
+
         manager = AddonHaManager(network_name=addon_provisioner.network_name)
         instance.ha_status = Addon.HaStatus.ENABLING
         instance.save(update_fields=['ha_status'])
+
+        warning = None
         try:
-            topology = manager.enable_redis_ha(instance, password)
+            if instance.addon_type == Addon.Type.POSTGRES:
+                topology = manager.enable_postgres_ha(
+                    instance, password,
+                    placement=placement, remote_server=remote_server)
+                standby = topology['standby']
+                mode = topology['mode']
+                warning = (
+                    'The primary container was recreated with replication '
+                    'settings (brief downtime).'
+                )
+                if placement == 'remote':
+                    warning += (
+                        ' Remote warm-DR standby: cutover is manual via '
+                        'promote-ha and rewrites the connection URL.'
+                    )
+                else:
+                    warning += ' Failover is automatic; URL stays unchanged.'
+            else:
+                topology = manager.enable_redis_ha(instance, password)
+                standby = topology['replica']
+                mode = topology['mode']
+                warning = None
         except AddonHaError as exc:
             instance.ha_status = Addon.HaStatus.FAILED
             instance.save(update_fields=['ha_status'])
@@ -218,17 +266,94 @@ class AddonViewSet(viewsets.ModelViewSet):
 
         instance.ha_enabled = True
         instance.ha_status = Addon.HaStatus.HEALTHY
-        instance.replica_container_name = topology['replica']
-        instance.ha_topology = topology
+        instance.replica_container_name = standby
+        instance.ha_topology = {**topology}
         instance.save(update_fields=[
             'ha_enabled', 'ha_status', 'replica_container_name', 'ha_topology',
         ])
-        return Response({
+        payload = {
             'status': 'healthy',
-            'mode': topology['mode'],
+            'mode': mode,
             'topology': topology,
-            'note': 'Failover is automatic (Sentinel quorum=2). The connection URL is unchanged.',
-        })
+        }
+        if warning:
+            payload['warning'] = warning
+        return Response(payload)
+
+    @action(detail=True, methods=['post'], url_path='promote-ha')
+    def promote_ha(self, request, pk=None):
+        """Manual cutover to the standby (required for remote placement)."""
+        instance = self.get_object()
+        assert_can_write(request.user, instance.service, action='promote addon HA')
+
+        if not instance.ha_enabled:
+            return Response(
+                {'error': 'HA is not enabled for this addon.'},
+                status=status.HTTP_409_CONFLICT)
+        if instance.addon_type != Addon.Type.POSTGRES:
+            return Response(
+                {'error': 'Manual promotion applies to POSTGRES addons '
+                          '(Redis fails over via Sentinel automatically).'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        from ..services.addon_ha import AddonHaError, AddonHaManager
+
+        topology = instance.ha_topology or {}
+        manager = AddonHaManager(network_name='')
+        try:
+            if topology.get('placement') == 'remote':
+                result = manager.promote_remote_standby(instance)
+                old_url = instance.connection_url
+                instance.connection_url = result['connection_url']
+                instance.ha_status = Addon.HaStatus.FAILED_OVER
+                instance.replica_container_name = ''
+                marked = manager.mark_cutover_done(instance)
+                instance.ha_topology = {**topology, **marked}
+                instance.save(update_fields=[
+                    'connection_url', 'ha_status', 'replica_container_name',
+                    'ha_topology',
+                ])
+
+                from apps.addons.tasks.ha_watchdog import _queue_service_redeploys
+                redeployed = _queue_service_redeploys(instance)
+
+                return Response({
+                    'status': 'failed_over',
+                    'master_container': result['standby'],
+                    'previous_url_host_changed': old_url != result['connection_url'],
+                    'redeploys_queued': redeployed,
+                    'note': 'Connection URL rewritten to the WireGuard endpoint. '
+                            + ('Dependent services queued for redeploy.'
+                               if redeployed else
+                               'No services were auto-redeployed — redeploy manually.'),
+                })
+
+            promoted = manager.promote_postgres_standby(instance)
+            # Record the swap BEFORE fencing so status/probes track the
+            # new master immediately.
+            swapped = manager.swap_pg_roles(instance, promoted)
+            instance.ha_topology = {**topology, **swapped}
+            type(instance).objects.filter(pk=instance.pk).update(
+                ha_topology=instance.ha_topology)
+            manager.fence_primary_container(
+                instance, old_name=swapped.get('standby', ''))
+            instance.ha_status = Addon.HaStatus.FAILED_OVER
+            instance.save(update_fields=['ha_status', 'ha_topology'])
+
+            from apps.addons.tasks.ha_watchdog import reseed_postgres_standby_task
+            ok, _ = _guard_delay(reseed_postgres_standby_task, str(instance.id))
+            note = None if ok else (
+                'Promoted, but the reseed task could not be queued '
+                '(broker unavailable). Old primary remains fenced.'
+            )
+            payload = {
+                'status': 'failed_over',
+                'master_container': promoted,
+                'note': note,
+            }
+            return Response(payload)
+        except AddonHaError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
     @action(detail=True, methods=['post'], url_path='disable-ha')
     def disable_ha(self, request, pk=None):
@@ -266,10 +391,30 @@ class AddonViewSet(viewsets.ModelViewSet):
             'topology': instance.ha_topology,
             'master_container': None,
         }
-        if instance.ha_enabled and instance.addon_type == Addon.Type.REDIS:
-            from ..services.addon_ha import AddonHaManager
-            manager = AddonHaManager(network_name='')
+        if not instance.ha_enabled:
+            return Response(payload)
+
+        from ..services.addon_ha import AddonHaManager
+        manager = AddonHaManager(network_name='')
+        if instance.addon_type == Addon.Type.REDIS:
             payload['master_container'] = manager._current_master_container(instance)
+        elif instance.addon_type == Addon.Type.POSTGRES:
+            try:
+                current_master, _standby = manager.pg_role_containers(instance)
+                alive = manager.is_postgres_primary_alive_container(
+                    current_master, instance)
+                if alive is True:
+                    payload['master_container'] = current_master
+                elif (instance.ha_topology or {}).get('cutover_done') and \
+                        manager.remote_standby_healthy(instance):
+                    payload['master_container'] = current_master
+                elif alive is False:
+                    payload['master_container'] = None
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "ha-status probe failed for addon %s", instance.id,
+                    exc_info=True,
+                )
         return Response(payload)
 
     @action(detail=True, methods=['post'], url_path='retry-delete')

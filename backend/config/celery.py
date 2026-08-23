@@ -65,6 +65,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.autoscaler.services.tasks_autoscale  # noqa: F401
     import apps.deployments.tasks.deploy.promote  # noqa: F401  # auto_promote_staged_deployments
     import apps.deployments.services.redis_failover_recovery  # noqa: F401
+    import apps.addons.tasks.ha_watchdog  # noqa: F401  # check_addon_ha_task
     # -- Tasks in subpackages not auto-discovered (not {app}.tasks) --
     import apps.deployments.tasks.ai.tasks_ai  # noqa: F401  # analyze_failure_task
     import apps.deployments.tasks.ai.tasks_code_intelligence  # noqa: F401  # deep_scan_and_verify_task
@@ -271,6 +272,12 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.recover_redis_failover',
         'schedule': 300.0,
         'options': {'expires': 300.0},
+    },
+    # Addon HA watchdog: replica health + Postgres auto-failover
+    'addon-ha-watchdog-every-30s': {
+        'task': 'apps.addons.tasks.ha_watchdog.check_addon_ha_task',
+        'schedule': 30.0,
+        'options': {'expires': 30.0},
     },
     # Auto-promote deployments stuck in STAGED for > configured hours
     'auto-promote-staged-every-15m': {

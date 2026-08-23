@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { addonsApi, Addon } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
 import { MaintenanceTabs } from '@/components/addons/MaintenanceTabs';
+import { AddonHaCard } from '@/components/addons/AddonHaCard';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
@@ -134,7 +135,8 @@ export default function AddonDetailPage() {
         </div>
       </div>
 
-      <div className="flex-1 container mx-auto py-8">
+      <div className="flex-1 container mx-auto py-8 space-y-6">
+        <AddonHaCard addon={addon} onChanged={setAddon} />
         {addon.status === 'ACTIVE' ? (
           <MaintenanceTabs addonId={addon.id} />
         ) : (
