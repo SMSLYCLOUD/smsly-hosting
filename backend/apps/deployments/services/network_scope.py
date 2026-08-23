@@ -31,10 +31,24 @@ RULE_TAG_PREFIX = "smsly-egress-"
 
 
 def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run a command — iptables/* via a privileged host-network shim.
+
+    The backend container is unprivileged and without host netns, so plain
+    iptables here ALWAYS failed (rc=4 'you must be root') and every scoped
+    bridge silently shipped WITHOUT its egress firewall. All iptables
+    invocations are now executed through a one-shot alpine container with
+    --net=host --cap-add=NET_ADMIN (docker CLI is available in backend).
+    """
     try:
+        if args and args[0] == "iptables":
+            script = " ".join(args)
+            return subprocess.run(
+                ["docker", "run", "--rm", "--net=host", "--cap-add=NET_ADMIN",
+                 "alpine:3.20", "sh", "-c", script],
+                capture_output=True, text=True, timeout=timeout, check=False)
         return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
     except FileNotFoundError:
-        logger.error("iptables binary not found; cannot manage egress restrictions")
+        logger.error("docker/iptables unavailable; cannot manage egress restrictions")
         raise
 
 
@@ -281,7 +295,7 @@ def ensure_router_on_network(network_name: str) -> bool:
             except docker.errors.NotFound:
                 logger.warning("Router container not found; cannot attach to %s", network_name)
                 return False
-        container.networks.connect(network_name)
+        net.connect(container)
         logger.info("Attached %s to network %s", router, network_name)
         return True
     except docker.errors.NotFound:
