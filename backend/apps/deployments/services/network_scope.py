@@ -1,5 +1,5 @@
 """
-Scoped Docker network management — ensure/create networks and egress rules.
+Scoped Docker network management â ensure/create networks and egress rules.
 
 Provides the bridge between ``ScopedNetwork`` model configuration and
 actual Docker network operations.
@@ -7,14 +7,14 @@ actual Docker network operations.
 Egress lifecycle (v2): every iptables rule we create is tagged with a
 per-network comment (``smsly-egress-{net_id12}``) so rules are:
 
-* **Idempotent** — applying twice never duplicates (tag presence = done)
-* **Cleanable** — ``clear_scoped_rules()`` removes exactly our rules
-* **Self-healing** — ``reconcile_network_isolation()`` reapplies rules for
+* **Idempotent** â applying twice never duplicates (tag presence = done)
+* **Cleanable** â ``clear_scoped_rules()`` removes exactly our rules
+* **Self-healing** â ``reconcile_network_isolation()`` reapplies rules for
   live scoped bridges and purges rules whose bridge interface no longer
   exists (networks get recreated with new IDs; old DOCKER-USER rules would
   otherwise accumulate forever and reference dead interfaces).
 
-Run ``reconcile_network_isolation`` periodically (celery beat) — it closes
+Run ``reconcile_network_isolation`` periodically (celery beat) â it closes
 the recreate-gap where a fresh bridge starts unrestricted until its next
 spawn-time apply.
 """
@@ -31,7 +31,7 @@ RULE_TAG_PREFIX = "smsly-egress-"
 
 
 def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
-    """Run a command � iptables/* via a privileged host-network shim.
+    """Run a command - iptables/* via a privileged host-network shim.
 
     The backend container is unprivileged and without host netns, so plain
     iptables here ALWAYS failed (rc=4 'you must be root') and every scoped
@@ -98,7 +98,7 @@ def _get_bridge_interface_name(network_name: str) -> str | None:
 
     Docker generates the bridge name as ``br-<network_id[:12]>`` where
     ``network_id`` is the network's full UUID. We must resolve it via
-    the Docker API — deriving it from the user-supplied network_name caused
+    the Docker API â deriving it from the user-supplied network_name caused
     iptables rules to collide for any two networks whose first 12 characters
     matched (e.g. two services whose short IDs share a prefix).
     """
@@ -183,7 +183,7 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
 
     Final evaluation order:
 
-      1. ESTABLISHED,RELATED → RETURN   (response traffic)
+      1. ESTABLISHED,RELATED â RETURN   (response traffic)
       2. Outbound via eth/enp/wl+        (internet access)
       3. Same-bridge (addon)             (local addon traffic)
       4. DNS                             (name resolution)
@@ -240,14 +240,14 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
     # 2. RETURN each CIDR (or 0.0.0.0/0 with cross-bridge isolation).
     if is_unrestricted:
         logger.info(
-            "apply_egress_restrictions: %s unrestricted — isolating from other bridges, "
+            "apply_egress_restrictions: %s unrestricted â isolating from other bridges, "
             "allowing internet + same-bridge addon traffic",
             network_name,
         )
-        # Cross-bridge traffic DROP — containers on different bridges cannot
+        # Cross-bridge traffic DROP â containers on different bridges cannot
         # communicate via host routing (this is the primary isolation mechanism).
         _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", "br-+", "-j", "DROP"])
-        # Same-bridge RETURN — addon containers on this bridge are reachable.
+        # Same-bridge RETURN â addon containers on this bridge are reachable.
         _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", bridge_iface, "-j", "RETURN"])
         # Internet outbound via physical interfaces.
         for phys in ("wl+", "enp+", "eth+"):
@@ -265,7 +265,7 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
     # 3. Always DROP cloud metadata service (169.254.169.254/32) to prevent IAM theft.
     _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-d", "169.254.169.254/32", "-j", "DROP"])
 
-    # 4. RETURN DNS last so it sits at the top of the chain — never shadowed.
+    # 4. RETURN DNS last so it sits at the top of the chain â never shadowed.
     _run([
         "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
         "-p", "udp", "--dport", "53", "-j", "RETURN",
