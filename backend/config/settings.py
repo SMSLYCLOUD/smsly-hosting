@@ -769,6 +769,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    'apps.core.middleware.db_resilience.DatabaseResilienceMiddleware', # Transient DB failover retries
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -916,6 +917,11 @@ WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
 DATABASE_CONNECT_TIMEOUT = config('DATABASE_CONNECT_TIMEOUT', default=5, cast=int)
+# Transient DB failure resilience (failover windows): bounded replay of
+# idempotent requests after OperationalError/InterfaceError.
+DB_RESILIENCE_ENABLED = config('DB_RESILIENCE_ENABLED', default=True, cast=bool)
+DB_RESILIENCE_MAX_RETRIES = config('DB_RESILIENCE_MAX_RETRIES', default=1, cast=int)
+DB_RESILIENCE_RETRY_DELAY = config('DB_RESILIENCE_RETRY_DELAY', default=0.5, cast=float)
 REDIS_SOCKET_TIMEOUT = config('REDIS_SOCKET_TIMEOUT', default=5, cast=int)
 # channels_redis pubsub connections are intentionally idle while waiting
 # for messages — a short read timeout would kill every WebSocket after 5s

@@ -25,8 +25,12 @@ AUTO_APPROVE_COMMIT_MARKERS = (
 
 
 def should_skip_review_for_commit_message(message: str) -> bool:
-    normalized = str(message or "").strip().lower()
-    return any(marker in normalized for marker in AUTO_APPROVE_COMMIT_MARKERS)
+    # SECURITY: commit messages are attacker-controlled (webhook pushes).
+    # Marker matching allowed any user to bypass the review gate by wording
+    # a commit e.g. 'fix service restart bug'. Trusted internal flows
+    # (auto-rollback, self-healing) already pass skip_review=True explicitly,
+    # so message-based skipping is redundant AND dangerous. Always review.
+    return False
 
 
 def _current_agent_node_queue() -> str:

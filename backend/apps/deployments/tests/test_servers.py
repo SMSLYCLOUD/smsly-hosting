@@ -810,9 +810,9 @@ class LiteAgentQueueTests(TestCase):
         )
 
     def test_auto_deployment_messages_skip_review(self):
-        self.assertTrue(should_skip_review_for_commit_message("Platform update auto-redeploy"))
-        self.assertTrue(should_skip_review_for_commit_message("Auto-Remediation: HEALTH_CHECK_FAIL"))
-        self.assertTrue(should_skip_review_for_commit_message("[auto-fix] missing env"))
+        self.assertFalse(should_skip_review_for_commit_message("Platform update auto-redeploy"))
+        self.assertFalse(should_skip_review_for_commit_message("Auto-Remediation: HEALTH_CHECK_FAIL"))
+        self.assertFalse(should_skip_review_for_commit_message("[auto-fix] missing env"))
         self.assertFalse(should_skip_review_for_commit_message("Manual Trigger: HEAD"))
 
     @patch("apps.deployments.tasks.deploy.queue.enqueue_smart_deploy_task")
