@@ -221,9 +221,15 @@ class BuildManager:
         try:
             from apps.deployments.utils import find_binary
             trivy_bin = find_binary("trivy")
+            # FAIL-CLOSED: scanning is enabled but unavailable -> block the
+            # deploy instead of shipping an unscanned image. (Previously this
+            # logged a WARNING and proceeded, so a missing binary silently
+            # disabled CVE enforcement platform-wide.)
             if not trivy_bin:
-                self._log("WARNING: Trivy not installed — image built WITHOUT security scan. Install Trivy for vulnerability scanning.")
-                return
+                raise BuildError(
+                    "Security scan REQUIRED but Trivy is not installed on this node. "
+                    "Install Trivy or explicitly disable scanning in Platform Settings."
+                )
             result = subprocess.run(
                 [trivy_bin, "--version"],
                 capture_output=True,
@@ -231,11 +237,9 @@ class BuildManager:
                 timeout=10
             )
             if result.returncode != 0:
-                self._log("WARNING: Trivy not available — image built WITHOUT security scan.")
-                return
-        except (FileNotFoundError, subprocess.TimeoutExpired, ImportError):
-            self._log("WARNING: Trivy not installed — image built WITHOUT security scan. Install Trivy for vulnerability scanning.")
-            return
+                raise BuildError("Trivy is installed but not executable (`trivy --version` failed). Deploy blocked.")
+        except (FileNotFoundError, subprocess.TimeoutExpired, ImportError) as exc:
+            raise BuildError(f"Security scan REQUIRED but Trivy is unavailable: {exc}")
 
         try:
             self._log(f"Running Trivy security scan (severity >= {fail_on})...")
@@ -283,9 +287,14 @@ class BuildManager:
                     if fail_count > 0:
                         self.deployment.vulnerability_report["passed"] = False
                         self.deployment.save(update_fields=['vulnerability_report'])
+                        # Link AI remediation: Senate verdict + Jules fix PR,
+                        # dispatched BEFORE failing closed so remediation is
+                        # already in flight when the gate rejects this build.
+                        self._dispatch_security_remediation(image_tag, vulns, fail_on)
                         raise BuildError(
                             f"Security scan FAILED: {fail_count} vulnerabilities at or above "
                             f"{fail_on} severity. Image: {image_tag}. "
+                            f"AI Senate verdict + Jules auto-fix PR have been requested. "
                             f"Fix the vulnerabilities or adjust TRIVY_FAIL_ON_SEVERITY in Platform Settings."
                         )
 
@@ -294,20 +303,79 @@ class BuildManager:
                     self._log(f"Security scan passed (no {fail_on}+ issues found).")
 
                 except json.JSONDecodeError:
-                    self._log("Failed to parse Trivy output. Raw output saved.")
+                    # FAIL-CLOSED: unreadable scan output = unknown result.
                     self.deployment.vulnerability_report = {
                         "error": "Parse failed", "raw": result.stdout[:1000]}
                     self.deployment.save(
                         update_fields=['vulnerability_report'])
+                    raise BuildError(
+                        "Security scan output could not be parsed — deploy blocked. "
+                        "Raw Trivy output saved to the vulnerability report."
+                    )
             else:
-                self._log(f"Trivy scan failed to execute: {result.stderr[:500]}")
+                raise BuildError(f"Trivy scan failed to execute: {result.stderr[:500]}")
 
         except BuildError:
             raise
-        except subprocess.TimeoutExpired:
-            self._log("Security scan timed out after 10 minutes.")
+        except subprocess.TimeoutExpired as exc:
+            raise BuildError("Security scan timed out after 10 minutes — deploy blocked.")
         except Exception as e:
-            self._log(f"Security scan error: {e!s}")
+            raise BuildError(f"Security scan error: {e!s} — deploy blocked (fail-closed).")
+
+    def _dispatch_security_remediation(self, image_tag: str, vulns: dict, fail_on: str) -> None:
+        """Ask the AI Senate for a security verdict and hand the CVE report
+        to Jules for an automatic remediation PR.
+
+        Best-effort and non-blocking: every failure is logged to the build
+        log only. The current deploy still fails closed.
+        """
+        summary = ", ".join(f"{k}={v}" for k, v in vulns.items() if v)
+        svc_name = getattr(getattr(self, 'service', None), 'name', '') or 'unknown'
+
+        # 1) AI Senate — security committee verdict + remediation guidance
+        try:
+            from apps.intelligence.providers.queries import ask_collaborative
+            prompt = (
+                "You are the security committee of the AI Senate.\n"
+                f"A deploy was BLOCKED by the Trivy gate (fail_on={fail_on}).\n"
+                f"Service: {svc_name}\nImage: {image_tag}\nCVE counts: {summary}\n\n"
+                "Deliver tersely:\n"
+                "1. Severity/exploitability assessment\n"
+                "2. Top 3 concrete remediations (dependency bumps / base-image "
+                "change / config hardening)\n"
+                "3. Whether auto-fix via Jules is advisable (YES/NO + why)"
+            )
+            verdict, who = ask_collaborative(prompt)
+            self._log(f"[Senate:{who}] {str(verdict)[:800]}")
+        except Exception as e:
+            self._log(f"(non-fatal) Senate consultation failed: {e}")
+
+        # 2) Jules — automatic remediation PR from the CVE report
+        try:
+            from apps.intelligence.jules_fix.jules_fix import jules_fix_deployment_failure
+            svc = getattr(self, 'service', None)
+            repo_url = str(getattr(svc, 'repository_url', '') or '')
+            full_name = ''
+            if 'github.com/' in repo_url:
+                full_name = repo_url.split('github.com/')[-1].strip('/').removesuffix('.git')
+            repo_path = ''
+            for attr in ('repo_path', 'source_dir', 'build_dir', 'context_dir'):
+                repo_path = str(getattr(self, attr, '') or '')
+                if repo_path:
+                    break
+            jules_fix_deployment_failure.delay(
+                deployment_id=str(self.deployment.id),
+                logs=(
+                    f"[TRIVY SECURITY GATE] Deploy blocked by vulnerability scan.\n"
+                    f"image={image_tag} fail_on={fail_on} cves=({summary})\n"
+                    f"Produce a minimal dependency/base-image fix PR."
+                ),
+                repo_path=repo_path,
+                repo_url=full_name,
+            )
+            self._log("Jules auto-fix dispatched for the CVE report (PR will follow).")
+        except Exception as e:
+            self._log(f"(non-fatal) Jules security auto-fix dispatch failed: {e}")
 
     def _run_command(self, cmd, cwd=None, env=None, timeout=None):
         """Run command and stream output to logs.
