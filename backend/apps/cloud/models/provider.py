@@ -13,6 +13,7 @@ class CloudProvider(models.Model):
         HETZNER = 'HETZNER', 'Hetzner Cloud'
         UPCLOUD = 'UPCLOUD', 'UpCloud'
         DIGITALOCEAN = 'DIGITALOCEAN', 'DigitalOcean'
+        NETCUP = 'NETCUP', 'Netcup'
         RAILWAY = 'RAILWAY', 'Railway'
         VERCEL = 'VERCEL', 'Vercel'
         LOCAL = 'LOCAL', 'Local / K3s'

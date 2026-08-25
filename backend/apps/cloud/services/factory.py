@@ -8,6 +8,7 @@ from ..adapters.digitalocean import DigitalOceanAdapter
 from ..adapters.gcp import GCPAdapter
 from ..adapters.hetzner import HetznerAdapter
 from ..adapters.local import LocalAdapter
+from ..adapters.netcup import NetcupAdapter
 from ..adapters.upcloud import UpCloudAdapter
 from ..models import CloudProvider
 
@@ -50,6 +51,13 @@ def get_cloud_adapter(provider: CloudProvider) -> BaseCloudAdapter:
 
     elif provider.provider_type == CloudProvider.ProviderType.DIGITALOCEAN:
         return DigitalOceanAdapter(api_token=provider.api_secret or provider.api_key or "")
+
+    elif provider.provider_type == CloudProvider.ProviderType.NETCUP:
+        return NetcupAdapter(
+            api_key=provider.api_key or "",
+            api_password=provider.api_secret or "",
+            customer_number=provider.project_id or "",
+        )
 
     elif provider.provider_type in (CloudProvider.ProviderType.RAILWAY, CloudProvider.ProviderType.VERCEL):
         raise NotImplementedError(

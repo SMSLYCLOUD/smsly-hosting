@@ -169,6 +169,12 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
                 {'id': 'nyc3', 'name': 'New York 3'},
                 {'id': 'sgp1', 'name': 'Singapore 1'},
             ],
+            CloudProvider.ProviderType.NETCUP: [
+                {'id': 'de-nue', 'name': 'Nuremberg'},
+                {'id': 'de-ber', 'name': 'Berlin'},
+                {'id': 'at-vie', 'name': 'Vienna'},
+                {'id': 'us-man', 'name': 'Manassas, VA'},
+            ],
             CloudProvider.ProviderType.RAILWAY: [
                 {'id': 'us-west', 'name': 'US West'},
                 {'id': 'eu-west', 'name': 'EU West'},
