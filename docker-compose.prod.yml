@@ -172,7 +172,7 @@ services:
 
   patroni1:
     profiles: ["patroni"]
-    image: 
+    image: registry:5000/smsly/spilo:16
     build:
       context: ./infrastructure/spilo
       dockerfile: Dockerfile
@@ -215,7 +215,7 @@ services:
 
   patroni2:
     profiles: ["patroni"]
-    image: 
+    image: registry:5000/smsly/spilo:16
     build:
       context: ./infrastructure/spilo
       dockerfile: Dockerfile
@@ -256,7 +256,7 @@ services:
 
   patroni3:
     profiles: ["patroni"]
-    image: 
+    image: registry:5000/smsly/spilo:16
     build:
       context: ./infrastructure/spilo
       dockerfile: Dockerfile
