@@ -148,6 +148,27 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
             CloudProvider.ProviderType.LOCAL: [
                 {'id': 'local', 'name': 'Local Cluster'},
             ],
+            CloudProvider.ProviderType.HETZNER: [
+                {'id': 'fsn1', 'name': 'Falkenstein'},
+                {'id': 'nbg1', 'name': 'Nuremberg'},
+                {'id': 'hel1', 'name': 'Helsinki'},
+                {'id': 'ash', 'name': 'Ashburn, VA'},
+                {'id': 'hil', 'name': 'Hillsboro, OR'},
+            ],
+            CloudProvider.ProviderType.UPCLOUD: [
+                {'id': 'fi-hel1', 'name': 'Helsinki #1'},
+                {'id': 'de-fra1', 'name': 'Frankfurt'},
+                {'id': 'uk-lon1', 'name': 'London'},
+                {'id': 'us-chi1', 'name': 'Chicago'},
+                {'id': 'sg-sin1', 'name': 'Singapore'},
+            ],
+            CloudProvider.ProviderType.DIGITALOCEAN: [
+                {'id': 'ams3', 'name': 'Amsterdam 3'},
+                {'id': 'fra1', 'name': 'Frankfurt 1'},
+                {'id': 'lon1', 'name': 'London 1'},
+                {'id': 'nyc3', 'name': 'New York 3'},
+                {'id': 'sgp1', 'name': 'Singapore 1'},
+            ],
             CloudProvider.ProviderType.RAILWAY: [
                 {'id': 'us-west', 'name': 'US West'},
                 {'id': 'eu-west', 'name': 'EU West'},

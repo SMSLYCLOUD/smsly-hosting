@@ -4,8 +4,11 @@ import json
 from ..adapters.aws import AWSAdapter
 from ..adapters.azure import AzureAdapter
 from ..adapters.base import BaseCloudAdapter
+from ..adapters.digitalocean import DigitalOceanAdapter
 from ..adapters.gcp import GCPAdapter
+from ..adapters.hetzner import HetznerAdapter
 from ..adapters.local import LocalAdapter
+from ..adapters.upcloud import UpCloudAdapter
 from ..models import CloudProvider
 
 
@@ -37,6 +40,22 @@ def get_cloud_adapter(provider: CloudProvider) -> BaseCloudAdapter:
         )
 
     elif provider.provider_type == CloudProvider.ProviderType.LOCAL:
+        return LocalAdapter()
+
+    elif provider.provider_type == CloudProvider.ProviderType.HETZNER:
+        return HetznerAdapter(api_token=provider.api_secret or provider.api_key)
+
+    elif provider.provider_type == CloudProvider.ProviderType.UPCLOUD:
+        return UpCloudAdapter(username=provider.api_key or "", password=provider.api_secret or "")
+
+    elif provider.provider_type == CloudProvider.ProviderType.DIGITALOCEAN:
+        return DigitalOceanAdapter(api_token=provider.api_secret or provider.api_key or "")
+
+    elif provider.provider_type in (CloudProvider.ProviderType.RAILWAY, CloudProvider.ProviderType.VERCEL):
+        raise NotImplementedError(
+            f"Provider {provider.provider_type} is managed externally — no adapter needed.")
+
+    elif provider.provider_type == CloudProvider.ProviderType.REMOTE:
         return LocalAdapter()
 
     raise NotImplementedError(
