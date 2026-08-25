@@ -75,6 +75,8 @@ def get_effective_role(user, service_or_project) -> str | None:
                 project=project, user=user,
             ).first()
             if pm:
+                if not getattr(pm, 'is_active', True):
+                    return None
                 if pm.expires_at and pm.expires_at < timezone.now():
                     return None
                 return pm.role
@@ -118,6 +120,8 @@ def _get_project_member_permissions(user, project) -> list[str] | None:
     try:
         from apps.organizations.models.project import ProjectMember
         pm = ProjectMember.objects.filter(project=project, user=user).first()
+        if pm and not getattr(pm, 'is_active', True):
+            return None
         if pm and pm.expires_at and pm.expires_at < timezone.now():
             return None
         if pm and pm.permissions:
@@ -331,7 +335,7 @@ def get_accessible_q(user) -> Q:
     try:
         from apps.organizations.models.project import ProjectMember
         project_ids = list(
-            ProjectMember.objects.filter(user=user).exclude(
+            ProjectMember.objects.filter(user=user, is_active=True).exclude(
                 expires_at__isnull=False, expires_at__lt=timezone.now(),
             ).values_list('project_id', flat=True)
         )

@@ -568,6 +568,7 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         Useful when a route was temporarily unavailable and needs unpark.
         """
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         reset_backoff = _parse_bool(request.data.get('reset_backoff', True))
 
         try:

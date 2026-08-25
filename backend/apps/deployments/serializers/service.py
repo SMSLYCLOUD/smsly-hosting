@@ -267,6 +267,40 @@ class ServiceSerializer(serializers.ModelSerializer):
             )
         return slug
 
+    def validate_host_aliases(self, value):
+        if not value:
+            return value
+        if not isinstance(value, list):
+            raise serializers.ValidationError("host_aliases must be a list.")
+        # Prevent subdomain squatting via host_aliases — same check as custom_domains
+        from apps.domains.utils import normalize_domain
+        seen = set()
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise serializers.ValidationError("Each host_alias must be an object with 'host'.")
+            host = str(entry.get('host') or '').strip().lower()
+            if not host:
+                continue
+            try:
+                host = normalize_domain(host)
+            except ValueError as e:
+                raise serializers.ValidationError(f"Invalid host_alias '{host}': {e}")
+            if host in seen:
+                raise serializers.ValidationError(f"Duplicate host_alias '{host}'.")
+            seen.add(host)
+            # Check global conflict (public_domain, custom_domains, other host_aliases)
+            qs = Service.objects.exclude(id=getattr(self.instance, 'id', None) or 0)
+            if qs.filter(public_domain=host).exists():
+                raise serializers.ValidationError(f"Host '{host}' is already assigned as a public domain.")
+            if qs.filter(custom_domains__contains=[host]).exists():
+                raise serializers.ValidationError(f"Host '{host}' is already assigned as a custom domain.")
+            # Check other services' host_aliases (JSONField contains)
+            if Service.objects.exclude(id=getattr(self.instance, 'id', None) or 0).filter(
+                host_aliases__contains=[{"host": host}]
+            ).exists():
+                raise serializers.ValidationError(f"Host '{host}' is already assigned to another service.")
+        return value
+
     class Meta:
         model = Service
         fields = [

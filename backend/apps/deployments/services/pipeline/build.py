@@ -612,9 +612,42 @@ class BuildMixin:
         for attempt in range(1, max_attempts + 1):
             # Build a fresh tar of the build context on each attempt;
             # the buffer is consumed by the SDK and can't be re-read.
+            # Enforce .dockerignore to prevent .git poisoning of shared cache
+            try:
+                di = os.path.join(context_dir, ".dockerignore")
+                if not os.path.isfile(di):
+                    with open(di, "w", encoding="utf-8") as f:
+                        f.write(".git\n.gitignore\n.env\n*.log\n")
+                else:
+                    with open(di, encoding="utf-8") as f:
+                        txt = f.read()
+                    if ".git" not in txt:
+                        with open(di, "a", encoding="utf-8") as f:
+                            f.write("\n.git\n")
+            except Exception:
+                pass
             tar_buffer = io.BytesIO()
             with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
-                tar.add(context_dir, arcname=".")
+                # Respect .dockerignore via filtering (docker-py tar.add ignores it)
+                try:
+                    import fnmatch
+                    di_path = os.path.join(context_dir, ".dockerignore")
+                    patterns = []
+                    if os.path.isfile(di_path):
+                        with open(di_path, encoding="utf-8") as f:
+                            for line in f:
+                                line = line.strip()
+                                if line and not line.startswith("#"):
+                                    patterns.append(line)
+                    def _exclude(tarinfo):
+                        rel = os.path.relpath(tarinfo.name, context_dir) if tarinfo.name != context_dir else "."
+                        for pat in patterns:
+                            if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(os.path.basename(rel), pat):
+                                return None
+                        return tarinfo
+                    tar.add(context_dir, arcname=".", filter=_exclude)
+                except Exception:
+                    tar.add(context_dir, arcname=".")
             tar_buffer.seek(0)
 
             try:

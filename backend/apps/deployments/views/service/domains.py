@@ -28,6 +28,7 @@ class DomainActionsMixin:
     @action(detail=True, methods=["post"], url_path="hide-public-domain")
     def hide_public_domain(self, request, pk=None):
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         if not service.public_domain:
             return Response({"error": "No public domain assigned."}, status=status.HTTP_400_BAD_REQUEST)
         service.public_domain_hidden = True
@@ -40,6 +41,7 @@ class DomainActionsMixin:
     @action(detail=True, methods=["post"], url_path="unhide-public-domain")
     def unhide_public_domain(self, request, pk=None):
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         if not service.public_domain:
             return Response({"error": "No public domain assigned."}, status=status.HTTP_400_BAD_REQUEST)
         service.public_domain_hidden = False
@@ -352,14 +354,13 @@ class DomainActionsMixin:
         ).exists():
             return Response(status=status.HTTP_200_OK)
 
-        # 6. Check against auto-generated staging domains (staging-{slug}-{hash}.{base})
-        # Match pattern: staging-*.{base_domain}
+        # 6. Check against auto-generated staging domains.
+        # Previously this authorized ANY "staging-*.<base_domain>" by prefix
+        # match, allowing subdomain squatting without ownership proof.
+        # Now we verify the domain actually belongs to a real service record.
         try:
-            base_domain = Service.default_public_base_domain()
-            if domain.endswith(f".{base_domain}"):
-                prefix = domain.rsplit(f".{base_domain}", 1)[0]
-                if prefix.startswith("staging-"):
-                    return Response(status=status.HTTP_200_OK)
+            if Service.objects.filter(staging_domain=domain, staging_domain_verified=True).exists():
+                return Response(status=status.HTTP_200_OK)
         except Exception:
             pass
 

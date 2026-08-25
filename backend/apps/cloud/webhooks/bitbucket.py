@@ -78,7 +78,8 @@ class BitbucketWebhookHandler:
             )
             provider_id = str(service.provider.id) if service.provider else None
             if provider_id:
-                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id, skip_review=True)
+                skip = bool(getattr(service, 'can_auto_deploy', False))
+                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id, skip_review=skip)
             else:
                 logger.warning("No provider for service %s — webhook deploy not queued.", service.name)
             count += 1

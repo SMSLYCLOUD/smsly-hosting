@@ -29,7 +29,23 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         return super().get_throttles()
 
     def get_queryset(self):
-        qs = self.queryset.filter(owner=self.request.user)
+        from django.db.models import Q
+        from django.utils import timezone
+        user = self.request.user
+        if user.is_superuser:
+            qs = self.queryset.all()
+        else:
+            qs = self.queryset.filter(
+                Q(owner=user) |
+                Q(project__team__members__user=user,
+                  project__team__members__is_active=True)
+            ).distinct()
+            # Exclude expired memberships
+            qs = qs.exclude(
+                project__team__members__user=user,
+                project__team__members__expires_at__isnull=False,
+                project__team__members__expires_at__lt=timezone.now(),
+            )
         status_filter = self.request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)

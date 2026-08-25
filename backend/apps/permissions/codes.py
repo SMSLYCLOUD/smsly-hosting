@@ -82,7 +82,6 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         AUDIT_VIEW, ANALYTICS_VIEW,
     ],
     "VIEWER": [
-        SERVICE_DEPLOY, SERVICE_STOP,
         DEPLOYMENT_VIEW,
         BILLING_VIEW,
         AUDIT_VIEW, ANALYTICS_VIEW,

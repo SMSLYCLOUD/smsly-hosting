@@ -29,20 +29,21 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             qs = AuditLog.objects.all()
         else:
             username = user.get_username()
-            # Base filter: user is the actor OR the log targets one of
-            # the user's services (so they can see admin interventions
-            # on their own resources).
+            # Include team/project services via get_accessible_q so members
+            # can audit team resources — previously only owner services were
+            # visible, hiding admin interventions on team services.
             from apps.deployments.models import Service
-            owned_service_names = list(
-                Service.objects.filter(owner=user).values_list("name", flat=True)
+            from apps.permissions.utils import get_accessible_q
+            accessible_names = list(
+                Service.objects.filter(get_accessible_q(user)).values_list("name", flat=True)
             )
-            owned_service_ids = list(
-                Service.objects.filter(owner=user).values_list("id", flat=True)
+            accessible_ids = list(
+                Service.objects.filter(get_accessible_q(user)).values_list("id", flat=True)
             )
             qs = AuditLog.objects.filter(
                 Q(actor=username) |
-                Q(target__in=owned_service_names) |
-                Q(target__in=[str(uid) for uid in owned_service_ids])
+                Q(target__in=accessible_names) |
+                Q(target__in=[str(uid) for uid in accessible_ids])
             )
 
         # Search filter

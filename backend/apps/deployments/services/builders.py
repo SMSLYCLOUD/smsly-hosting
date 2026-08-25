@@ -160,10 +160,46 @@ class BuildManager:
                 self._log(
                     f"NOTE: build_command '{self.service.build_command}' is ignored in Dockerfile mode. Only applicable for Buildpacks.")
 
-            self._run_command(
-                ["docker", "build", "-t", image_tag, "."],
-                cwd=str(dockerfile_path)
-            )
+            # Enforce .dockerignore to prevent .git poisoning of shared daemon cache
+            # (audit: build contexts shipped .git/ to a shared cache across tenants).
+            # Docker respects .dockerignore only if present in the build context root.
+            # For sub-directory builds (root_directory != "."), the repo-root
+            # .dockerignore is not in context — inject a minimal one.
+            try:
+                di = dockerfile_path / ".dockerignore"
+                if not di.exists():
+                    di.write_text(".git\n.gitignore\n.env\n*.log\n", encoding="utf-8")
+                    self._log("Injected .dockerignore to isolate build cache from .git")
+                else:
+                    txt = di.read_text(encoding="utf-8")
+                    if ".git" not in txt:
+                        di.write_text(txt.rstrip() + "\n.git\n", encoding="utf-8")
+            except Exception as e:
+                logger.debug("Could not enforce .dockerignore: %s", e)
+
+            # Per-build resource caps: wrap build in systemd-run scope when
+            # available so one tenant's build cannot starve the host (audit:
+            # no per-build CPU/mem caps; gVisor only covers runtime).
+            # Falls back to uncapped `docker build` when systemd-run is absent.
+            build_cmd = ["docker", "build", "-t", image_tag, "."]
+            try:
+                # 2G mem / 2 CPU per build — tune via PlatformConfig if needed
+                build_cmd = [
+                    "systemd-run", "--scope",
+                    "-p", "MemoryMax=2G", "-p", "CPUQuota=200%",
+                    "--", "docker", "build", "-t", image_tag, ".",
+                ]
+                # Probe quickly; if systemd-run missing, fall back
+                probe = subprocess.run(
+                    ["systemd-run", "--version"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if probe.returncode != 0:
+                    raise FileNotFoundError
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                build_cmd = ["docker", "build", "-t", image_tag, "."]
+
+            self._run_command(build_cmd, cwd=str(dockerfile_path))
 
             # 3. Push
             self._log(f"Pushing image to {image_tag}...")
