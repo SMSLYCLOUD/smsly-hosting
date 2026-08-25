@@ -172,7 +172,10 @@ services:
 
   patroni1:
     profiles: ["patroni"]
-    image: ghcr.io/zalando/spilo-16:3.0-p1
+    image: 
+    build:
+      context: ./infrastructure/spilo
+      dockerfile: Dockerfile
     container_name: smsly-patroni-1
     hostname: patroni1
     restart: unless-stopped
@@ -212,7 +215,10 @@ services:
 
   patroni2:
     profiles: ["patroni"]
-    image: ghcr.io/zalando/spilo-16:3.0-p1
+    image: 
+    build:
+      context: ./infrastructure/spilo
+      dockerfile: Dockerfile
     container_name: smsly-patroni-2
     hostname: patroni2
     restart: unless-stopped
@@ -250,7 +256,10 @@ services:
 
   patroni3:
     profiles: ["patroni"]
-    image: ghcr.io/zalando/spilo-16:3.0-p1
+    image: 
+    build:
+      context: ./infrastructure/spilo
+      dockerfile: Dockerfile
     container_name: smsly-patroni-3
     hostname: patroni3
     restart: unless-stopped

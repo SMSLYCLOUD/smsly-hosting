@@ -41,7 +41,7 @@ groups:
           summary: "Container {{ $labels.name }} is restarting frequently"
 
       - alert: NodeOffline
-        expr: node_health_status == 0
+        expr: smsly_node_health_status == 0
         for: 5m
         labels: { severity: critical }
         annotations:
@@ -57,12 +57,19 @@ groups:
           description: "High rate of IP bans indicates potential ongoing attack"
 
       - alert: DeploymentFailureRate
-        expr: rate(smsly_deployment_total{status="failed"}[30m]) / rate(smsly_deployment_total[30m]) > 0.3
+        # The counter increments on EVERY Deployment.status transition, so
+        # both sides filter to terminal outcomes — this measures the failure
+        # share of FINISHED deployments. Label values mirror the Django
+        # enum (uppercase).
+        expr: |
+          rate(smsly_deployments_total{status=~"FAILED|BUILD_FAILED|MIGRATION_FAILED|BACKUP_FAILED|HEALTH_CHECK_FAILED"}[30m])
+          /
+          rate(smsly_deployments_total{status=~"ACTIVE|FAILED|BUILD_FAILED|MIGRATION_FAILED|BACKUP_FAILED|HEALTH_CHECK_FAILED"}[30m]) > 0.3
         for: 10m
         labels: { severity: warning }
         annotations:
           summary: "Deployment failure rate > 30% in 30 minutes"
-          description: "{{ $value | humanizePercentage }} of deployments are failing — check backend logs"
+          description: "{{ $value | humanizePercentage }} of finished deployments are failing — check backend logs"
 
       - alert: FalcoThreatDetected
         expr: increase(falco_events_total{priority="Critical"}[5m]) > 0

@@ -69,3 +69,31 @@ SMSLY_RESTORE_TOTAL = Counter(
     'Total restores triggered',
     ['status', 'type'],
 )
+
+# ── Node Liveness ─────────────────────────────────────────────────────
+# Mirrors ManagedServer.status so Prometheus can alert on offline nodes
+# (NodeOffline rule). Exported from the periodic health/heartbeat tasks.
+
+NODE_HEALTH_STATUS = Gauge(
+    'smsly_node_health_status',
+    'Managed node liveness (1 = ONLINE, 0 = OFFLINE)',
+    ['node'],
+)
+
+
+def export_node_health() -> int:
+    """Push current ManagedServer statuses into the node health gauge.
+
+    Called from the heartbeat and server-health beat tasks. Model import
+    is deferred to avoid circular imports at settings load time.
+    Returns the number of nodes currently ONLINE.
+    """
+    from apps.deployments.models.core import ManagedServer
+
+    online = 0
+    for server in ManagedServer.objects.all().only('name', 'status'):
+        is_online = server.status == ManagedServer.Status.ONLINE
+        NODE_HEALTH_STATUS.labels(node=server.name).set(1 if is_online else 0)
+        if is_online:
+            online += 1
+    return online

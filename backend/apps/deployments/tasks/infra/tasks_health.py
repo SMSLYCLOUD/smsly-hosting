@@ -117,6 +117,13 @@ def check_agent_heartbeats_task():
             flipped += 1
     if flipped:
         logger.info("check_agent_heartbeats_task: flipped %d node(s) to OFFLINE", flipped)
+
+    try:
+        from config.metrics import export_node_health
+        export_node_health()
+    except Exception as exc:
+        logger.debug("node health export skipped: %s", exc)
+
     return flipped
 
 
@@ -151,6 +158,12 @@ def check_managed_servers_health_task():
         write_docker_labels_targets()
     except Exception as exc:
         logger.debug("Prometheus target update skipped: %s", exc)
+
+    try:
+        from config.metrics import export_node_health
+        export_node_health()
+    except Exception as exc:
+        logger.debug("node health export skipped: %s", exc)
 
     if checked:
         logger.info("Health check task: refreshed %d/%d servers", checked, servers.count())
