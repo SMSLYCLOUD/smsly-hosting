@@ -9712,7 +9712,7 @@ fi
              echo -e "${BLUE}  → HA stack already has data — ensuring services are up...${NC}"
              docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                  up -d --wait --wait-timeout 120 \
-                 db postgres-replica pgcat redis-primary redis-replica \
+                 $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
                   || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
              echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
              env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
@@ -9733,7 +9733,7 @@ fi
                      echo -e "${BLUE}  → Starting HA stack (postgres-primary, pgcat, redis-primary)...${NC}"
                      docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                          up -d --wait --wait-timeout 120 \
-                         db postgres-replica pgcat redis-primary redis-replica \
+                         $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
                           || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
 
                      echo -e "${BLUE}  → Running data migration from old @db to postgres-primary...${NC}"
@@ -9757,7 +9757,7 @@ fi
                  echo -e "${BLUE}  → Starting HA stack (fresh install)...${NC}"
                  docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                      up -d --wait --wait-timeout 120 \
-                     db postgres-replica pgcat redis-primary redis-replica \
+                     $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
                       || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
                  echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
                  env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"

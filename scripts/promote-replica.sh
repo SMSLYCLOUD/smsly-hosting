@@ -28,6 +28,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+
+# PATRONI GUARD: never manual-promote when auto-failover owns topology
+if ["${DB_HA_ENABLED:-local-ha}" != "local-ha"]; then
+    echo "REFUSING: DB_HA_ENABLED=${DB_HA_ENABLED} — Patroni manages failover; manual promote would split-brain."
+    exit 1
+fi
+
 COMPOSE_FILE="docker-compose.prod.yml"
 PRIMARY_CONTAINER="smsly-postgres-primary"
 REPLICA_CONTAINER="smsly-postgres-replica"
