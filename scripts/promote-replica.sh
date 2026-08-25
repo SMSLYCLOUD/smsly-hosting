@@ -30,7 +30,7 @@ NC='\033[0m'
 
 
 # PATRONI GUARD: never manual-promote when auto-failover owns topology
-if ["${DB_HA_ENABLED:-local-ha}" != "local-ha"]; then
+if [ "${DB_HA_ENABLED:-local-ha}" != "local-ha" ]; then
     echo "REFUSING: DB_HA_ENABLED=${DB_HA_ENABLED} — Patroni manages failover; manual promote would split-brain."
     exit 1
 fi
