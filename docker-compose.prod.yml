@@ -675,6 +675,7 @@ services:
         limits:
           memory: ${DOCKER_MIRROR_MEMORY_LIMIT:-512M}
   apt-cacher:
+    profiles: ["full"]
     security_opt:
       - apparmor:docker-default
     image: sameersbn/apt-cacher-ng:latest
@@ -698,6 +699,7 @@ services:
           memory: ${APT_CACHE_MEMORY_LIMIT:-256M}
 
   verdaccio:
+    profiles: ["full"]
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
@@ -1607,6 +1609,7 @@ services:
   # Inlined here so a single `docker compose up -d` starts everything.
 
   loki:
+    profiles: ["medium", "full"]
     image: grafana/loki:2.9.3
     container_name: smsly-loki
     restart: unless-stopped
@@ -1632,6 +1635,7 @@ services:
       - managed_by=smsly-hosting
 
   promtail:
+    profiles: ["medium", "full"]
     image: grafana/promtail:2.9.3
     container_name: smsly-promtail
     restart: unless-stopped
@@ -1663,6 +1667,7 @@ services:
   # Queries Loki for node Caddy access logs and writes them to
   # /var/log/crowdsec/nodes/ for CrowdSec to watch.
   loki-log-bridge:
+    profiles: ["medium", "full"]
     build:
       context: ./infrastructure/monitoring
       dockerfile: Dockerfile.log-bridge
@@ -1720,6 +1725,7 @@ services:
       - managed_by=smsly-hosting
 
   alertmanager:
+    profiles: ["medium", "full"]
     image: prom/alertmanager:v0.26.0
     container_name: smsly-alertmanager
     restart: unless-stopped
@@ -1754,6 +1760,7 @@ services:
       - managed_by=smsly-hosting
 
   cadvisor:
+    profiles: ["medium", "full"]
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: smsly-cadvisor
     restart: unless-stopped
@@ -1812,6 +1819,7 @@ services:
       - managed_by=smsly-hosting
 
   docker-labels:
+    profiles: ["medium", "full"]
     image: python:3.12-alpine
     container_name: smsly-docker-labels
     restart: unless-stopped
@@ -1841,6 +1849,7 @@ services:
       - managed_by=smsly-hosting
 
   grafana:
+    profiles: ["medium", "full"]
     image: grafana/grafana:11.0.0
     container_name: smsly-grafana
     restart: unless-stopped
@@ -1886,6 +1895,7 @@ services:
 
   # ── Falco Runtime Security ──────────────────────────────────────────
   falco:
+    profiles: ["full"]
     image: falcosecurity/falco:0.39.2
     container_name: smsly-falco
     restart: unless-stopped
@@ -1924,6 +1934,7 @@ services:
   # Agents are started by spire-init after servers generate join tokens.
 
   spire-server:
+    profiles: ["full"]
     image: ghcr.io/spiffe/spire-server:1.9.6
     container_name: smsly-spire-server
     hostname: spire-server
@@ -1958,6 +1969,7 @@ services:
       - managed_by=smsly-hosting
 
   spire-server-ecosystem:
+    profiles: ["full"]
     image: ghcr.io/spiffe/spire-server:1.9.6
     container_name: smsly-spire-server-ecosystem
     hostname: spire-server-ecosystem
@@ -1992,6 +2004,7 @@ services:
       - managed_by=smsly-hosting
 
   spire-agent:
+    profiles: ["full"]
     image: ghcr.io/spiffe/spire-agent:1.9.6
     container_name: smsly-spire-agent
     hostname: spire-agent
@@ -2025,6 +2038,7 @@ services:
       - managed_by=smsly-hosting
 
   spire-agent-ecosystem:
+    profiles: ["full"]
     image: ghcr.io/spiffe/spire-agent:1.9.6
     container_name: smsly-spire-agent-ecosystem
     hostname: spire-agent-ecosystem
