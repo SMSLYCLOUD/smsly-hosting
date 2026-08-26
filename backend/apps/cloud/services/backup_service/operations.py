@@ -66,7 +66,8 @@ def _dump_container_database(container_name, image_tag, temp_dir):
             password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
             result = ctr.exec_run(
                 ['mysqldump', '--all-databases', '-u', 'root'],
-                environment={'MYSQL_PWD': password}
+                environment={'MYSQL_PWD': password},
+                timeout=600,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -188,6 +189,7 @@ def backup_addon(addon_id: str) -> str | None:
             result = ctr.exec_run(
                 ['pg_dump', '-U', pg_user, '-d', pg_db, '--lock-wait-timeout=5000', '-c'],
                 environment={'PGPASSWORD': pg_password},
+                timeout=600,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -200,6 +202,7 @@ def backup_addon(addon_id: str) -> str | None:
             result = ctr.exec_run(
                 ['pg_dumpall', '-U', pg_user, '-c', '--lock-wait-timeout=5000'],
                 environment={'PGPASSWORD': pg_password},
+                timeout=600,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -214,7 +217,8 @@ def backup_addon(addon_id: str) -> str | None:
             password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
             result = ctr.exec_run(
                 ['mysqldump', '--all-databases', '-u', 'root'],
-                environment={'MYSQL_PWD': password}
+                environment={'MYSQL_PWD': password},
+                timeout=600,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -223,7 +227,7 @@ def backup_addon(addon_id: str) -> str | None:
             raise RuntimeError(f"Addon mysqldump failed with exit {result.exit_code}: {result.output}")
         elif 'redis' in atype:
             dump_file = os.path.join(backup_dir, 'redis_dump.rdb')
-            ctr.exec_run(['redis-cli', 'SAVE'])
+            ctr.exec_run(['redis-cli', 'SAVE'], timeout=120)
             time.sleep(1)
             bits, _ = ctr.get_archive('/data/dump.rdb')
             if bits:
@@ -233,7 +237,7 @@ def backup_addon(addon_id: str) -> str | None:
                 return dump_file
         elif 'mongo' in atype:
             dump_file = os.path.join(backup_dir, 'mongo_dump.archive')
-            result = ctr.exec_run(['mongodump', '--archive=/tmp/mongo.archive', '--gzip'])
+            result = ctr.exec_run(['mongodump', '--archive=/tmp/mongo.archive', '--gzip'], timeout=600)
             if result.exit_code == 0:
                 bits, _ = ctr.get_archive('/tmp/mongo.archive')
                 if bits:

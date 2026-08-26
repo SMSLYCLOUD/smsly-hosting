@@ -391,9 +391,13 @@ def cleanup_old_backups_task():
         try:
             cutoff = timezone.now() - timedelta(days=sched.retention_days)
             if sched.service:
+                all_completed = list(ServiceBackup.objects.filter(
+                    service=sched.service, status='COMPLETED'
+                ).order_by('-created_at'))
+                keep_id = all_completed[0].id if all_completed else None
                 old = ServiceBackup.objects.filter(
                     service=sched.service, created_at__lt=cutoff
-                ).exclude(backup_type='TRANSFER')
+                ).exclude(backup_type='TRANSFER').exclude(id=keep_id) if keep_id else ServiceBackup.objects.none()
                 for b in old:
                     try:
                         bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)
@@ -410,7 +414,11 @@ def cleanup_old_backups_task():
                     except Exception as item_exc:
                         logger.warning("Failed to delete backup %s: %s", b.id, item_exc)
             elif sched.is_server_wide:
+                all_srv = list(ServerBackup.objects.filter(status='COMPLETED').order_by('-created_at'))
+                keep_srv_id = all_srv[0].id if all_srv else None
                 old = ServerBackup.objects.filter(created_at__lt=cutoff)
+                if keep_srv_id:
+                    old = old.exclude(id=keep_srv_id)
                 for b in old:
                     try:
                         bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)

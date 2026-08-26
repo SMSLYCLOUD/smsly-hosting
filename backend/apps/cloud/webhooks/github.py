@@ -92,6 +92,9 @@ class GitHubWebhookHandler:
         return hmac.compare_digest(signature, expected)
 
     def handle_event(self, event_type: str, payload: dict, delivery_id: str = ''):
+        _, should_process = _check_duplicate_delivery(delivery_id, event_type)
+        if not should_process:
+            return False
         if event_type == 'push':
             return self._handle_push(payload, delivery_id)
         if event_type == 'pull_request':

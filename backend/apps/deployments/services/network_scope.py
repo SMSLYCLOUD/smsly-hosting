@@ -215,15 +215,12 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
 
     def _run(args: list[str]) -> None:
         args = args + ["-m", "comment", "--comment", tag]
-        try:
-            result = subprocess.run(args, capture_output=True, text=True, check=False)
-            if result.returncode != 0 and "already exists" not in (result.stderr or ""):
-                logger.error(
-                    "iptables command failed (rc=%d): %s | stderr=%s",
-                    result.returncode, " ".join(args), result.stderr.strip(),
-                )
-        except FileNotFoundError:
-            logger.error("iptables binary not found; cannot apply egress restrictions")
+        result = _sh(args)
+        if result.returncode != 0 and "already exists" not in (result.stderr or ""):
+            logger.error(
+                "iptables command failed (rc=%d): %s | stderr=%s",
+                result.returncode, " ".join(args), result.stderr.strip(),
+            )
 
     # IDEMPOTENCY GATE: if ANY rule carrying our tag exists, assume this
     # bridge is fully configured and bail. Rules are written as one atomic

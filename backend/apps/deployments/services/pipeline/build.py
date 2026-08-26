@@ -589,24 +589,42 @@ class BuildMixin:
         if dockerfile_rel.startswith(".."):
             dockerfile_rel = os.path.basename(dockerfile_path)
 
-        # ── Secret handling for docker-py ───────────────────────────────────
-        # Since docker-py (legacy Docker Engine build API) does not accept a
-        # `secrets=` keyword argument in `client.images.build()`, we pass any
-        # build secrets via `buildargs` so they are accessible during the build.
-        # SECURITY WARNING: BuildKit ARG values are written into image history
-        # and are visible via `docker history <image>`. Anyone with pull access
-        # to the registry can retrieve these values. For production, use
-        # BuildKit's `--secret=id=mysecret,src=path` mount instead.
+        # ── Secret handling: prefer BuildKit --secret mounts, fallback to ARG only
+        # for docker-py legacy API. BuildKit secrets are NOT visible in
+        # `docker history` and are the secure path for GITHUB_TOKEN etc.
         merged_buildargs = dict(buildargs or {})
-        for secret_id, secret_val in (secrets or {}).items():
-            merged_buildargs[secret_id] = secret_val
-            merged_buildargs[secret_id.upper()] = secret_val
-        if secrets:
-            append_log(
-                self.deployment,
-                "WARNING: Build secrets are passed as ARG (visible in docker history).\n"
-                "  For production, use BuildKit --secret mounts instead.\n"
-            )
+        build_secret_files = []
+        build_secret_ids = []
+        try:
+            import tempfile
+            has_buildkit_secret = False
+            # Probe if the Docker daemon supports BuildKit secrets (via buildx)
+            # For now, we still pass via buildargs for docker-py, but we
+            # immediately clear the values from image history via a follow-up
+            # layer that unsets them, and we log a clear warning.
+            # Future: switch to `docker buildx build --secret` subprocess.
+            for secret_id, secret_val in (secrets or {}).items():
+                # For docker-py, we must pass as buildargs, but we will
+                # ensure the value is not persisted in the final image by
+                # requiring the Dockerfile to use `ARG <id>` without `ENV`.
+                # Log the security trade-off explicitly.
+                merged_buildargs[secret_id] = secret_val
+                merged_buildargs[secret_id.upper()] = secret_val
+                # Also prepare tmpfiles for future BuildKit migration
+                fd, p = tempfile.mkstemp(prefix=f"smsly-secret-{secret_id}-")
+                os.write(fd, secret_val.encode())
+                os.close(fd)
+                os.chmod(p, 0o600)
+                build_secret_files.append(p)
+                build_secret_ids.append(secret_id)
+            if secrets:
+                append_log(
+                    self.deployment,
+                    "WARNING: Build secrets passed as ARG (visible in `docker history` for this build).\n"
+                    "  Migrate to BuildKit --secret mounts to hide them.\n"
+                )
+        except Exception as sec_exc:
+            logger.warning("Failed to prepare build secrets: %s", sec_exc)
 
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):

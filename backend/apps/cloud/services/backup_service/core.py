@@ -724,14 +724,22 @@ class BackupService:
                     with open(env_path) as f:
                         env_vars_restored = json.load(f)
                     for ev in env_vars_restored:
-                        key = ev.get('key')
+                        key = ev.get('key', '').strip()
                         value = ev.get('value')
-                        if key:
-                            EnvironmentVariable.objects.update_or_create(
-                                service=target_service,
-                                key=key,
-                                defaults={'value': value, 'is_secret': ev.get('is_secret', False)}
-                            )
+                        if not key or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+                            logger.warning("Skipping invalid env key on restore: %r", key)
+                            continue
+                        if isinstance(value, str) and (value == '********' or len(value) > 4096):
+                            logger.warning("Skipping masked/oversize env value for %s", key)
+                            continue
+                        if key in ('LD_PRELOAD', 'PYTHONPATH', 'LD_LIBRARY_PATH'):
+                            logger.warning("Skipping dangerous env key on restore: %s", key)
+                            continue
+                        EnvironmentVariable.objects.update_or_create(
+                            service=target_service,
+                            key=key,
+                            defaults={'value': value, 'is_secret': ev.get('is_secret', False)}
+                        )
 
 
             from .operations import _remap_domain_on_restore
@@ -1386,8 +1394,8 @@ rm -rf {remote_tmp}
                             break
                         ct_len = struct.unpack('>I', ct_len_bytes)[0]
                         ct = BackupService._read_exact(f, ct_len)
-                        nonce = nonce_prefix + ct[:12]
-                        ciphertext = ct[12:]
+                        nonce = nonce_prefix + ct[:8]
+                        ciphertext = ct[8:]
                         plaintext = aesgcm.decrypt(nonce, ciphertext, None)
                         with open(decrypted_path, 'ab') as out:
                             out.write(plaintext)
@@ -1458,16 +1466,30 @@ rm -rf {remote_tmp}
         filters = {'created_at__lt': cutoff, 'status': 'COMPLETED'}
         if service_id:
             filters['service_id'] = service_id
-        stale = model_cls.objects.filter(**filters)
+        stale = list(model_cls.objects.filter(**filters).order_by('created_at'))
+        # Keep at least one backup per service — don't delete the last restorable copy
+        # even if it's older than cutoff (fix for PAAS_INFRA_PRODUCTION_AUDIT:33).
+        from collections import defaultdict
+        by_service: dict = defaultdict(list)
+        for b in stale:
+            by_service[getattr(b, 'service_id', None)].append(b)
         ids_to_delete = []
-        for backup in stale:
-            ids_to_delete.append(backup.id)
-            if backup.file_path:
-                try:
-                    if os.path.exists(backup.file_path):
-                        os.remove(backup.file_path)
-                except OSError as exc:
-                    logger.debug("Failed to remove backup file %s: %s", backup.file_path, exc)
+        for sid, backups in by_service.items():
+            all_completed = list(model_cls.objects.filter(service_id=sid, status='COMPLETED').order_by('-created_at'))
+            if len(all_completed) <= 1:
+                continue
+            # If all completed are stale, keep the most recent stale one
+            latest_id = all_completed[0].id
+            for backup in backups:
+                if backup.id == latest_id:
+                    continue
+                ids_to_delete.append(backup.id)
+                if backup.file_path:
+                    try:
+                        if os.path.exists(backup.file_path):
+                            os.remove(backup.file_path)
+                    except OSError as exc:
+                        logger.debug("Failed to remove backup file %s: %s", backup.file_path, exc)
         if ids_to_delete:
             model_cls.objects.filter(id__in=ids_to_delete).delete()
 
@@ -1501,7 +1523,7 @@ rm -rf {remote_tmp}
                 plaintext = fin.read(chunk_size)
                 if not plaintext:
                     break
-                nonce_suffix = os.urandom(12)
+                nonce_suffix = os.urandom(8)
                 nonce = nonce_prefix + nonce_suffix
                 ct = aesgcm.encrypt(nonce, plaintext, None)
                 chunk_data = nonce_suffix + ct
