@@ -147,6 +147,12 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.WARNING("\nNo credentials to write."))
 
+        # ── Step 5b: Persist to PlatformConfig (DB) ────────────────
+        # Writing to the DB ensures Celery workers (which may have been
+        # started before these env vars existed) can still read the
+        # GitHub App credentials at runtime without a container restart.
+        self._persist_to_platform_config(app_id, private_key, oauth_id, oauth_secret)
+
         # ── Step 5: Create SocialApp for OAuth ────────────────────────
         if oauth_id and oauth_secret:
             self._create_social_app(oauth_id, oauth_secret)
@@ -177,6 +183,38 @@ class Command(BaseCommand):
 
         with open(env_path, "w") as f:
             f.writelines(new_lines)
+
+    def _persist_to_platform_config(self, app_id, private_key, oauth_id, oauth_secret):
+        """Write GitHub credentials to PlatformConfig so Celery workers can
+        read them even if .env was updated after container creation."""
+        try:
+            from apps.deployments.models.platform import PlatformConfig
+            cfg, _ = PlatformConfig.objects.get_or_create(pk=1)
+            changed = False
+            if app_id and cfg.github_app_id != app_id:
+                cfg.github_app_id = app_id
+                changed = True
+            if private_key and cfg.github_app_private_key != private_key:
+                cfg.github_app_private_key = private_key
+                changed = True
+            if oauth_id and cfg.github_client_id != oauth_id:
+                cfg.github_client_id = oauth_id
+                changed = True
+            if oauth_secret and cfg.github_client_secret != oauth_secret:
+                cfg.github_client_secret = oauth_secret
+                changed = True
+            if changed:
+                cfg.save()
+                self.stdout.write(self.style.SUCCESS(
+                    "Persisted GitHub credentials to PlatformConfig (DB). "
+                    "Celery workers will pick them up on next token request."
+                ))
+            else:
+                self.stdout.write("PlatformConfig already up to date.")
+        except Exception as exc:
+            self.stdout.write(self.style.WARNING(
+                f"Could not persist to PlatformConfig (non-fatal): {exc}"
+            ))
 
     def _create_social_app(self, client_id: str, secret: str):
         """Create or update the GitHub SocialApp for OAuth login."""
@@ -273,7 +311,11 @@ You need to create TWO things on GitHub:
         --oauth-client-id YOUR_CLIENT_ID \\
         --oauth-client-secret YOUR_SECRET
 
-  Then restart the backend:
+  Then restart ALL services (backend + workers):
 
-    docker compose up -d --build --no-deps backend
+    docker compose up -d --build --no-deps backend celery celery-2 celery-3 celery-deploy celery-fast celery-beat
+
+  NOTE: Credentials are also saved to the database (PlatformConfig) so
+  that even without a restart, Celery workers can resolve GitHub tokens
+  on their next request.
 """)

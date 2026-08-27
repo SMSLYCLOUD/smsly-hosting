@@ -306,6 +306,20 @@ class PlatformConfig(models.Model):
         help_text="Caddy on_demand_tls ask shared secret. Set via UI — if empty, "
                   "falls back to CADDY_ASK_SECRET env var. A random ephemeral value "
                   "is generated on each restart if neither is configured.")
+    github_app_id = models.CharField(
+        max_length=64, blank=True, default='',
+        help_text="GitHub App numeric ID. Set via setup_github — "
+                  "falls back to GITHUB_APP_ID env var if empty.")
+    github_app_private_key = EncryptedCharField(
+        max_length=8192, blank=True, default='',
+        help_text="GitHub App private key PEM. Set via setup_github — "
+                  "falls back to GITHUB_APP_PRIVATE_KEY env var if empty.")
+    github_client_id = models.CharField(
+        max_length=128, blank=True, default='',
+        help_text="GitHub OAuth App Client ID. Falls back to GITHUB_CLIENT_ID env var.")
+    github_client_secret = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="GitHub OAuth App Client Secret. Falls back to GITHUB_CLIENT_SECRET env var.")
     github_webhook_secret = EncryptedCharField(
         max_length=512, blank=True, default='',
         help_text="GitHub webhook secret for push event verification")

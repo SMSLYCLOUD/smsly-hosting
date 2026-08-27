@@ -536,17 +536,34 @@ def get_github_app_service() -> GitHubAppService | None:
     This is the preferred factory. Callers should treat ``None`` as "App not
     configured" and fall back to the user OAuth token path.
 
-    Configuration (settings.py / .env)::
+    Configuration priority:
+      1. Django settings (env vars: GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY)
+      2. PlatformConfig singleton (DB — written by ``setup_github`` command)
 
-        GITHUB_APP_ID          = "123456"
-        GITHUB_APP_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\n..."
+    The DB fallback ensures long-running Celery workers still get tokens
+    even if env vars were added to ``.env`` *after* the containers started.
     """
+    app_id = ""
+    private_key = ""
+
     try:
         from django.conf import settings as django_settings
         app_id = getattr(django_settings, "GITHUB_APP_ID", "") or ""
         private_key = getattr(django_settings, "GITHUB_APP_PRIVATE_KEY", "") or ""
     except Exception:
-        return None
+        pass
+
+    if not app_id or not private_key:
+        try:
+            from apps.deployments.models.platform import PlatformConfig
+            cfg = PlatformConfig.objects.first()
+            if cfg:
+                if not app_id:
+                    app_id = cfg.github_app_id or ""
+                if not private_key:
+                    private_key = cfg.github_app_private_key or ""
+        except Exception:
+            pass
 
     if not app_id or not private_key:
         return None
