@@ -44,6 +44,8 @@ SECRET_DEFINITIONS = [
     ("REGISTRY_HTTP_SECRET", 32, "Docker registry internal secret"),
     ("CROWDSEC_BOUNCER_KEY", 32, "CrowdSec bouncer key for Traefik"),
     ("COSIGN_PASSWORD", 32, "Password protecting the Cosign private key"),
+    ("PATRONI_SUPERUSER_PASSWORD", 32, "Patroni superuser password for HA cluster"),
+    ("CADDY_ASK_SECRET", 64, "Shared secret for Caddy on_demand_tls ask endpoint"),
 ]
 
 

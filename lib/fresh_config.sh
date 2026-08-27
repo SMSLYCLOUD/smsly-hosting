@@ -207,6 +207,8 @@ else
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || openssl rand -base64 32)"
     [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${REGISTRY_HTTP_SECRET:-}" ] || REGISTRY_HTTP_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+    [ -n "${CADDY_ASK_SECRET:-}" ] || CADDY_ASK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+    [ -n "${PATRONI_SUPERUSER_PASSWORD:-}" ] || PATRONI_SUPERUSER_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
     # SECURITY: SSH strict host-key checking. Defaults to false (accept-first)
     # for convenience during initial provisioning. Operators managing trusted
@@ -371,6 +373,8 @@ SENTINEL_PASSWORD=${SENTINEL_PASSWORD:-}
 REPLICATION_PASSWORD=${REPLICATION_PASSWORD:-}
 DB_REPLICA_HOSTS=${DB_REPLICA_HOSTS:-}
 REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET:-}
+CADDY_ASK_SECRET=${CADDY_ASK_SECRET:-}
+PATRONI_SUPERUSER_PASSWORD=${PATRONI_SUPERUSER_PASSWORD:-}
 
 # ── PostgreSQL durability ─────────────────────────────────────────────
 PG_SYNCHRONOUS_COMMIT=on

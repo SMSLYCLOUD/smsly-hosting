@@ -3723,6 +3723,7 @@ harden_security_verify() {
         checks=$((checks + 1))
     fi
 
+    local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
@@ -5869,7 +5870,9 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 64)" "GitHub webhook signature verification"
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
-    env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Registry token signing secret"`n    env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Registry token signing secret"
+    env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || openssl rand -base64 32)" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -6650,7 +6653,9 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 64)" "GitHub webhook signature verification"
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
-    env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Registry token signing secret"`n    env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Registry token signing secret"
+    env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || openssl rand -base64 32)" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -8312,6 +8317,7 @@ harden_security_verify() {
         checks=$((checks + 1))
     fi
 
+    local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
@@ -9308,6 +9314,7 @@ harden_security_verify() {
         checks=$((checks + 1))
     fi
 
+    local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
@@ -12304,6 +12311,7 @@ harden_security_verify() {
         checks=$((checks + 1))
     fi
 
+    local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
@@ -12660,6 +12668,8 @@ else
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || openssl rand -base64 32)"
     [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${REGISTRY_HTTP_SECRET:-}" ] || REGISTRY_HTTP_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+    [ -n "${CADDY_ASK_SECRET:-}" ] || CADDY_ASK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+    [ -n "${PATRONI_SUPERUSER_PASSWORD:-}" ] || PATRONI_SUPERUSER_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
     # SECURITY: SSH strict host-key checking. Defaults to false (accept-first)
     # for convenience during initial provisioning. Operators managing trusted
@@ -12826,6 +12836,8 @@ SENTINEL_PASSWORD=${SENTINEL_PASSWORD:-}
 REPLICATION_PASSWORD=${REPLICATION_PASSWORD:-}
 DB_REPLICA_HOSTS=${DB_REPLICA_HOSTS:-}
 REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET:-}
+CADDY_ASK_SECRET=${CADDY_ASK_SECRET:-}
+PATRONI_SUPERUSER_PASSWORD=${PATRONI_SUPERUSER_PASSWORD:-}
 
 # ── PostgreSQL durability ─────────────────────────────────────────────
 PG_SYNCHRONOUS_COMMIT=on
