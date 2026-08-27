@@ -646,7 +646,11 @@ class BuildMixin:
                 pass
             tar_buffer = io.BytesIO()
             with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
-                # Respect .dockerignore via filtering (docker-py tar.add ignores it)
+                # Respect .dockerignore via filtering (docker-py tar.add ignores it).
+                # IMPORTANT: Never exclude the Dockerfile or .dockerignore itself —
+                # some repos (e.g. Next.js starters) add "Dockerfile" to their
+                # .dockerignore to keep it out of the image, but Docker needs it
+                # in the build context to actually build.
                 try:
                     import fnmatch
                     di_path = os.path.join(context_dir, ".dockerignore")
@@ -657,10 +661,15 @@ class BuildMixin:
                                 line = line.strip()
                                 if line and not line.startswith("#"):
                                     patterns.append(line)
+                    # Files that must never be excluded from the build context tar
+                    _always_include = {"Dockerfile", ".dockerignore"}
                     def _exclude(tarinfo):
+                        basename = os.path.basename(tarinfo.name)
+                        if basename in _always_include:
+                            return tarinfo
                         rel = os.path.relpath(tarinfo.name, context_dir) if tarinfo.name != context_dir else "."
                         for pat in patterns:
-                            if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(os.path.basename(rel), pat):
+                            if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(basename, pat):
                                 return None
                         return tarinfo
                     tar.add(context_dir, arcname=".", filter=_exclude)
