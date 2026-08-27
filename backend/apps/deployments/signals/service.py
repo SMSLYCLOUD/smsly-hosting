@@ -48,7 +48,7 @@ def audit_service_lifecycle(sender, instance, created, **kwargs):
 @receiver(post_save, sender=Service)
 def regenerate_caddyfile_on_service_change(sender, instance, created, **kwargs):
     update_fields = kwargs.get('update_fields')
-    if update_fields is not None and 'public_domain' not in update_fields and 'custom_domains' not in update_fields and 'staging_domain' not in update_fields:
+    if update_fields is not None and 'public_domain' not in update_fields and 'custom_domains' not in update_fields and 'staging_domain' not in update_fields and 'host_aliases' not in update_fields and 'path_redirects' not in update_fields:
         return
     try:
         from apps.deployments.tasks.deploy.helpers import _regenerate_caddyfile
