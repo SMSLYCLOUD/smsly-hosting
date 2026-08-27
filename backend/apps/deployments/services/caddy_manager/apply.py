@@ -25,6 +25,66 @@ _last_caddy_reload_ts: float = 0.0
 _last_caddy_content_hash: str = ""
 
 
+def _ensure_caddy_dir_writable():
+    """Ensure CADDY_CONFIG_DIR exists and is writable by the current process.
+
+    Self-heals ownership and permissions so that both the backend (root)
+    and the Caddy container (UID 1000) can read/write files.  Called
+    before every file write to prevent the PermissionError that occurs
+    when the caddy container creates files with UID 1000 and the backend
+    later tries to overwrite them.
+    """
+    os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
+    CADDY_GID = int(os.environ.get("CADDY_GID", "1000"))
+    try:
+        if hasattr(os, "chown"):
+            os.chown(CADDY_CONFIG_DIR, os.getuid(), CADDY_GID)
+        os.chmod(CADDY_CONFIG_DIR, 0o775)
+    except (OSError, PermissionError) as exc:
+        logger.debug("Could not chown/chmod %s: %s", CADDY_CONFIG_DIR, exc)
+
+    for fname in (".cloudflare_token", ".cloudflare_token_cache", ".cloudflare_token_clear"):
+        fpath = os.path.join(CADDY_CONFIG_DIR, fname)
+        if os.path.exists(fpath):
+            try:
+                os.chmod(fpath, 0o664)
+                if hasattr(os, "chown"):
+                    os.chown(fpath, os.getuid(), CADDY_GID)
+            except (OSError, PermissionError):
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+
+
+def _safe_write_file(path: str, content: str):
+    """Write *content* to *path*, creating or replacing atomically.
+
+    Handles permission errors by fixing ownership before retrying.
+    """
+    try:
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o664), "w", encoding="utf-8") as handle:
+            handle.write(content)
+    except PermissionError:
+        _ensure_caddy_dir_writable()
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o664), "w", encoding="utf-8") as handle:
+            handle.write(content)
+
+
+def _safe_remove(path: str):
+    """Remove a file if it exists, ignoring permission errors."""
+    if not os.path.exists(path):
+        return
+    try:
+        os.remove(path)
+    except PermissionError:
+        try:
+            os.chmod(path, 0o664)
+            os.remove(path)
+        except (OSError, PermissionError):
+            pass
+
+
 def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_token: bool = True) -> dict:
     global _last_caddy_reload_ts, _last_caddy_content_hash
 
@@ -104,10 +164,11 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         if not probe_ok:
             raise PermissionError(
                 f"Cannot write to {CADDY_CONFIG_DIR}. "
-                "Fix host permissions: sudo chown -R 0:1000 "
-                f"{CADDY_CONFIG_DIR} && sudo chmod 775 {CADDY_CONFIG_DIR}."
+                "Fix host permissions: sudo chown -R caddy:caddy "
+                f"{CADDY_CONFIG_DIR} && sudo chmod -R 775 {CADDY_CONFIG_DIR}."
             )
 
+        _ensure_caddy_dir_writable()
         tmp_path = os.path.join(CADDY_CONFIG_DIR, ".Caddyfile.tmp")
         with open(tmp_path, "w", encoding="utf-8") as handle:
             handle.write(content)
@@ -118,27 +179,18 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             logger.warning("chmod on %s failed (%s) — continuing", CADDY_FILE_PATH, chmod_exc)
 
         if cloudflare_token:
-            try:
-                os.chmod(CADDY_CONFIG_DIR, 0o775)
-            except (OSError, PermissionError):
-                pass
-            with os.fdopen(os.open(CADDY_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
-                handle.write(cloudflare_token)
+            _ensure_caddy_dir_writable()
+            _safe_write_file(CADDY_TOKEN_FILE, cloudflare_token)
             cache_payload = json.dumps({
                 "token": cloudflare_token,
                 "expires_at": time.time() + CADDY_TOKEN_CACHE_TTL_SECONDS,
             })
-            with os.fdopen(os.open(CADDY_TOKEN_CACHE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
-                handle.write(cache_payload)
-            if os.path.exists(CADDY_TOKEN_CLEAR_FILE):
-                os.remove(CADDY_TOKEN_CLEAR_FILE)
+            _safe_write_file(CADDY_TOKEN_CACHE, cache_payload)
+            _safe_remove(CADDY_TOKEN_CLEAR_FILE)
         else:
-            if os.path.exists(CADDY_TOKEN_FILE):
-                os.remove(CADDY_TOKEN_FILE)
-            if os.path.exists(CADDY_TOKEN_CACHE):
-                os.remove(CADDY_TOKEN_CACHE)
-            with os.fdopen(os.open(CADDY_TOKEN_CLEAR_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
-                handle.write("clear")
+            _safe_remove(CADDY_TOKEN_FILE)
+            _safe_remove(CADDY_TOKEN_CACHE)
+            _safe_write_file(CADDY_TOKEN_CLEAR_FILE, "clear")
 
         try:
             with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as f:
@@ -191,8 +243,8 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         result["message"] = f"Failed to apply Caddyfile: {exc}"
         if isinstance(exc, PermissionError):
             result["message"] = str(result["message"]) + (
-                " | Fix host dir perms: sudo chown -R 0:1000 /opt/smsly-hosting/caddy-config "
-                "&& sudo chmod 775 /opt/smsly-hosting/caddy-config"
+                " | Fix host dir perms: sudo chown -R caddy:caddy /opt/smsly-hosting/caddy-config "
+                "&& sudo chmod -R 775 /opt/smsly-hosting/caddy-config"
             )
         logger.error("Failed to write Caddyfile: %s", exc)
 
