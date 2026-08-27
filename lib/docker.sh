@@ -162,11 +162,11 @@ compose_stack_services() {
         # Base exclusion: no frontend/caddy/spire-server on nodes
         local exclude_pattern='^(frontend|caddy|spire-server|spire-server-ecosystem)$'
         # Read component flags from .env (set by bootstrap script)
-        local node_obs="${NODE_OBSERVABILITY:-0}"
-        local node_sec="${NODE_SECURITY:-0}"
-        local node_crowd="${NODE_CROWDSEC:-0}"
-        local node_falco="${NODE_FALCO:-0}"
-        local node_spire="${NODE_SPIRE:-0}"
+        local node_obs="${NODE_OBSERVABILITY:-1}"
+        local node_sec="${NODE_SECURITY:-1}"
+        local node_crowd="${NODE_CROWDSEC:-1}"
+        local node_falco="${NODE_FALCO:-1}"
+        local node_spire="${NODE_SPIRE:-1}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
         if [ "$node_obs" != "1" ]; then
             exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
@@ -219,10 +219,10 @@ stop_node_excluded_services() {
         docker compose -f "$COMPOSE_FILE" rm -f $base_excluded 2>/dev/null || true
     fi
     # Stop/remove excluded component containers
-    local node_obs="${NODE_OBSERVABILITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_obs="${NODE_OBSERVABILITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
     local extras=""
     [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"

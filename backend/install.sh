@@ -3634,10 +3634,10 @@ _harden_infisical_verify() {
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
     local _harden_failures=0
-    local node_sec="${NODE_SECURITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_sec="${NODE_SECURITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
     if [ "$node_sec" = "1" ]; then
         _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
         _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
@@ -3681,10 +3681,10 @@ harden_security_verify() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 
     local failures=0 checks=0
-    local node_sec="${NODE_SECURITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_sec="${NODE_SECURITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
 
     if [ "$node_sec" = "1" ]; then
         # NOTE: never use standalone `((checks++))` here — when the counter is 0
@@ -8236,10 +8236,10 @@ _harden_infisical_verify() {
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
     local _harden_failures=0
-    local node_sec="${NODE_SECURITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_sec="${NODE_SECURITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
     if [ "$node_sec" = "1" ]; then
         _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
         _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
@@ -8283,10 +8283,10 @@ harden_security_verify() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 
     local failures=0 checks=0
-    local node_sec="${NODE_SECURITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_sec="${NODE_SECURITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
 
     if [ "$node_sec" = "1" ]; then
         # NOTE: never use standalone `((checks++))` here — when the counter is 0
@@ -9233,10 +9233,10 @@ _harden_infisical_verify() {
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
     local _harden_failures=0
-    local node_sec="${NODE_SECURITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_sec="${NODE_SECURITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
     if [ "$node_sec" = "1" ]; then
         _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
         _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
@@ -9280,10 +9280,10 @@ harden_security_verify() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 
     local failures=0 checks=0
-    local node_sec="${NODE_SECURITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_sec="${NODE_SECURITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
 
     if [ "$node_sec" = "1" ]; then
         # NOTE: never use standalone `((checks++))` here — when the counter is 0
@@ -12230,10 +12230,10 @@ _harden_infisical_verify() {
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
     local _harden_failures=0
-    local node_sec="${NODE_SECURITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_sec="${NODE_SECURITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
     if [ "$node_sec" = "1" ]; then
         _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
         _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
@@ -12277,10 +12277,10 @@ harden_security_verify() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 
     local failures=0 checks=0
-    local node_sec="${NODE_SECURITY:-0}"
-    local node_crowd="${NODE_CROWDSEC:-0}"
-    local node_falco="${NODE_FALCO:-0}"
-    local node_spire="${NODE_SPIRE:-0}"
+    local node_sec="${NODE_SECURITY:-1}"
+    local node_crowd="${NODE_CROWDSEC:-1}"
+    local node_falco="${NODE_FALCO:-1}"
+    local node_spire="${NODE_SPIRE:-1}"
 
     if [ "$node_sec" = "1" ]; then
         # NOTE: never use standalone `((checks++))` here — when the counter is 0
