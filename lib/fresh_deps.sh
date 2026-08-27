@@ -181,7 +181,7 @@ WGCONF
         systemctl enable --now "wg-quick@${wg_iface}"  || true
         if ip link show "$wg_iface" ; then
             echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port 51820)${NC}"
-            wg_ensure_listening "$wg_iface" "$mesh_ip" || true
+            if declare -F wg_ensure_listening >/dev/null 2>&1; then wg_ensure_listening "$wg_iface" "$mesh_ip" || true; fi
         else
             echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"
         fi
@@ -217,7 +217,7 @@ WGCONF
     systemctl enable --now "wg-quick@${wg_iface}"  || true
     if ip link show "$wg_iface" ; then
         echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port 51820)${NC}"
-        wg_ensure_listening "$wg_iface" "$mesh_ip" || true
+        if declare -F wg_ensure_listening >/dev/null 2>&1; then wg_ensure_listening "$wg_iface" "$mesh_ip" || true; fi
     else
         echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start — PgCat mesh binding may fail${NC}"
     fi

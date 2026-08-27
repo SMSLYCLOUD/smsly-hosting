@@ -340,7 +340,7 @@ DATABASE_CONNECT_TIMEOUT=5
 # Docker Compose natively honors COMPOSE_PROFILES from this file, so
 # every `docker compose` call picks the right DB stack with no flags.
 DB_HA_ENABLED=${DB_HA_ENABLED:-local-ha}
-COMPOSE_PROFILES=$DB_HA_ENABLED
+COMPOSE_PROFILES=${DB_HA_ENABLED:-local-ha}
 # PgCat upstream. patroni mode routes through HAProxy write/read ports.
 PGCAT_DB_HOST=${PGCAT_DB_HOST:-postgres-primary}
 PGCAT_DB_PORT=${PGCAT_DB_PORT:-5432}

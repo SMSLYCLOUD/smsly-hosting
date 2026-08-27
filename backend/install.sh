@@ -12338,6 +12338,37 @@ EOF
 fi
 
 
+# ─── WireGuard port fallback helpers (inlined from lib/utils.sh) ──
+WG_PRIMARY_PORT="${WG_PRIMARY_PORT:-51820}"
+WG_FALLBACK_PORT="${WG_FALLBACK_PORT:-33500}"
+REGISTRY_PRIMARY_PORT="${REGISTRY_PRIMARY_PORT:-5000}"
+REGISTRY_FALLBACK_PORT="${REGISTRY_FALLBACK_PORT:-443}"
+if ! declare -F wg_ensure_listening >/dev/null 2>&1; then
+wg_ensure_listening() {
+    local wg_iface="${1:?}" mesh_ip="${2:?}"
+    local primary="$WG_PRIMARY_PORT" fallback="$WG_FALLBACK_PORT"
+    local conf="/etc/wireguard/${wg_iface}.conf"
+    if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
+        echo -e "${GREEN}  ✓ WireGuard $wg_iface already active (handshake present)${NC}"
+        return 0
+    fi
+    if [ -f "$conf" ]; then sed -i "s/^ListenPort = .*/ListenPort = ${primary}/" "$conf"; fi
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null || true
+    echo -ne "${BLUE}  → Waiting for WireGuard handshake on port ${primary}...${NC}"
+    local waited=0
+    while [ "$waited" -lt 10 ]; do sleep 2; waited=$((waited+2)); if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then echo -e " ${GREEN}done${NC}"; echo -e "${GREEN}  ✓ WireGuard mesh active on port ${primary}${NC}"; return 0; fi; echo -ne "."; done
+    echo -e " ${YELLOW}timeout${NC}"
+    echo -e "${YELLOW}  ⚠ Port ${primary} blocked by cloud firewall, falling back to ${fallback}...${NC}"
+    systemctl stop "wg-quick@${wg_iface}" 2>/dev/null || true
+    if [ -f "$conf" ]; then sed -i "s/^ListenPort = .*/ListenPort = ${fallback}/" "$conf"; fi
+    systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
+    sleep 3
+    if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then echo -e "${GREEN}  ✓ WireGuard mesh active on fallback port ${fallback}${NC}"; return 0; fi
+    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port (peer may not be configured yet)${NC}"
+    return 0
+}
+fi
+
 # Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get
 # a placeholder that will be updated by WireGuardService after provisioning).
 ensure_wireguard_mesh() {
@@ -12371,7 +12402,7 @@ WGCONF
         systemctl enable --now "wg-quick@${wg_iface}"  || true
         if ip link show "$wg_iface" ; then
             echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port 51820)${NC}"
-            wg_ensure_listening "$wg_iface" "$mesh_ip" || true
+            if declare -F wg_ensure_listening >/dev/null 2>&1; then wg_ensure_listening "$wg_iface" "$mesh_ip" || true; fi
         else
             echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"
         fi
@@ -12407,7 +12438,7 @@ WGCONF
     systemctl enable --now "wg-quick@${wg_iface}"  || true
     if ip link show "$wg_iface" ; then
         echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port 51820)${NC}"
-        wg_ensure_listening "$wg_iface" "$mesh_ip" || true
+        if declare -F wg_ensure_listening >/dev/null 2>&1; then wg_ensure_listening "$wg_iface" "$mesh_ip" || true; fi
     else
         echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start — PgCat mesh binding may fail${NC}"
     fi
@@ -12764,7 +12795,7 @@ DATABASE_CONNECT_TIMEOUT=5
 # Docker Compose natively honors COMPOSE_PROFILES from this file, so
 # every `docker compose` call picks the right DB stack with no flags.
 DB_HA_ENABLED=${DB_HA_ENABLED:-local-ha}
-COMPOSE_PROFILES=$DB_HA_ENABLED
+COMPOSE_PROFILES=${DB_HA_ENABLED:-local-ha}
 # PgCat upstream. patroni mode routes through HAProxy write/read ports.
 PGCAT_DB_HOST=${PGCAT_DB_HOST:-postgres-primary}
 PGCAT_DB_PORT=${PGCAT_DB_PORT:-5432}
