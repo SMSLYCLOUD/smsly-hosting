@@ -1,0 +1,5 @@
+echo "Repo HEAD: $(git rev-parse --short HEAD)"
+echo "Modified files (not untracked): $(git status --short --untracked-files=no | grep '^ M' | wc -l)"
+echo "Untracked: $(git status --short --untracked-files=all | grep '^??' | wc -l)"
+echo "Last commit: $(git log -1 --pretty=format:%h -- %s)"
+echo "Recent files changed (HEAD vs HEAD~1): $(git diff --name-only HEAD~1..HEAD | tr '\n' ' ')"
