@@ -5873,6 +5873,10 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Registry token signing secret"
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
+    env_ensure_var "$env_file" "NODE_CROWDSEC" "1" "Enable CrowdSec WAF/IPS"
+    env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
+    env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || openssl rand -base64 32)" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -6656,6 +6660,10 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Registry token signing secret"
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
+    env_ensure_var "$env_file" "NODE_CROWDSEC" "1" "Enable CrowdSec WAF/IPS"
+    env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
+    env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || openssl rand -base64 32)" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -12914,6 +12922,10 @@ SMSLY_RUN_ENTRYPOINT_TASKS=false
 SMSLY_ENABLE_STARTUP_CADDY_SYNC=$ENV_STARTUP_CADDY_SYNC
 TRAEFIK_HTTP_BIND=$ENV_TRAEFIK_HTTP_BIND
 TRAEFIK_HTTPS_BIND=$ENV_TRAEFIK_HTTPS_BIND
+NODE_SECURITY=${NODE_SECURITY:-1}
+NODE_CROWDSEC=${NODE_CROWDSEC:-1}
+NODE_FALCO=${NODE_FALCO:-1}
+NODE_SPIRE=${NODE_SPIRE:-1}
 EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
