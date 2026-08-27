@@ -51,8 +51,8 @@ function GitHubCallbackContent() {
         setMessage(
           `GitHub connected as ${res.data?.account?.login || "your account"}!`
         );
-        // Redirect to settings after a brief moment
-        setTimeout(() => router.push("/settings"), 2000);
+        // Redirect to Git & Deploy tab after a brief moment
+        setTimeout(() => router.push("/settings?tab=git"), 2000);
       } catch (e: unknown) {
         setStatus("error");
         const axiosErr = e as { response?: { data?: { error?: string; detail?: string } } };
@@ -94,7 +94,7 @@ function GitHubCallbackContent() {
             </p>
             <p className="mt-1 text-sm text-muted-foreground">{message}</p>
             <button
-              onClick={() => router.push("/settings")}
+              onClick={() => router.push("/settings?tab=git")}
               className="mt-4 text-sm text-primary underline hover:no-underline"
             >
               Return to Settings

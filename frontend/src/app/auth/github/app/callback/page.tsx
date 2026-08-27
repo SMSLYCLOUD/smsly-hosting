@@ -25,7 +25,7 @@ function GitHubAppCallbackContent() {
     if (setupAction === "update") {
       setStatus("success");
       setMessage("GitHub App installation updated!");
-      setTimeout(() => router.push("/settings"), 1500);
+      setTimeout(() => router.push("/settings?tab=git"), 1500);
       return;
     }
 
@@ -52,7 +52,7 @@ function GitHubAppCallbackContent() {
           `GitHub App linked to ${res.data?.account_login || "your account"}! ` +
           `${res.data?.repositories?.length || 0} repositories accessible.`
         );
-        setTimeout(() => router.push("/settings"), 2000);
+        setTimeout(() => router.push("/settings?tab=git"), 2000);
       } catch (e: unknown) {
         const axiosErr = e as { response?: { status?: number; data?: { error?: string; detail?: string } } };
         const statusCode = axiosErr?.response?.status;
@@ -101,7 +101,7 @@ function GitHubAppCallbackContent() {
             </p>
             <p className="mt-1 text-sm text-muted-foreground">{message}</p>
             <button
-              onClick={() => router.push("/settings")}
+              onClick={() => router.push("/settings?tab=git")}
               className="mt-4 text-sm text-primary underline hover:no-underline"
             >
               Return to Settings

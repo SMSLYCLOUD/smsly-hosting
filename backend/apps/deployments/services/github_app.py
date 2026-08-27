@@ -427,23 +427,43 @@ class GitHubAppService:
         """List repositories accessible to an installation.
 
         Returns a list of dicts with at least 'id', 'full_name', 'private' keys.
+        Handles pagination (GitHub defaults to 30, max 100 per page).
         """
         try:
             token = self.get_installation_token_for_id(installation_id)
             if not token:
                 return []
-            resp = requests.get(
-                f"{_GH_API}/installation/repositories",
-                headers=self._auth_headers(token),
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                return resp.json().get("repositories", [])
-            logger.error(
-                "GitHubAppService: failed to list repos for installation %s (status %s)",
-                installation_id,
-                resp.status_code,
-            )
+            all_repos: list[dict] = []
+            page = 1
+            while True:
+                resp = requests.get(
+                    f"{_GH_API}/installation/repositories",
+                    headers=self._auth_headers(token),
+                    params={"per_page": 100, "page": page},
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    logger.error(
+                        "GitHubAppService: failed to list repos for installation %s page %s (status %s)",
+                        installation_id,
+                        page,
+                        resp.status_code,
+                    )
+                    break
+                data = resp.json()
+                repos = data.get("repositories", [])
+                all_repos.extend(repos)
+                # GitHub returns total_count; if we have all, break
+                total = data.get("total_count")
+                if total is not None and len(all_repos) >= total:
+                    break
+                if len(repos) < 100:
+                    break
+                page += 1
+                if page > 50:  # safety cap: 50*100=5000 repos
+                    logger.warning("GitHubAppService: pagination cap reached for installation %s", installation_id)
+                    break
+            return all_repos
         except Exception:
             logger.exception(
                 "GitHubAppService: error listing repos for installation %s",
