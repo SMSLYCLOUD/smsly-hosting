@@ -164,7 +164,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         if not probe_ok:
             raise PermissionError(
                 f"Cannot write to {CADDY_CONFIG_DIR}. "
-                "Fix host permissions: sudo chown -R caddy:caddy "
+                "Fix host permissions: sudo chown -R 1000:1000 "
                 f"{CADDY_CONFIG_DIR} && sudo chmod -R 775 {CADDY_CONFIG_DIR}."
             )
 
@@ -243,7 +243,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         result["message"] = f"Failed to apply Caddyfile: {exc}"
         if isinstance(exc, PermissionError):
             result["message"] = str(result["message"]) + (
-                " | Fix host dir perms: sudo chown -R caddy:caddy /opt/smsly-hosting/caddy-config "
+                " | Fix host dir perms: sudo chown -R 1000:1000 /opt/smsly-hosting/caddy-config "
                 "&& sudo chmod -R 775 /opt/smsly-hosting/caddy-config"
             )
         logger.error("Failed to write Caddyfile: %s", exc)
