@@ -774,13 +774,11 @@ def is_remote_sync_request(request):
     """Check if the request is an authenticated inter-node remote sync request."""
     if not request or not hasattr(request, 'headers'):
         return False
-    token = getattr(request, 'auth', None)
     authenticator = getattr(request, 'successful_authenticator', None)
     authenticator_name = authenticator.__class__.__name__ if authenticator else ''
     is_hmac_remote_sync = authenticator_name == 'RemoteSyncHMACAuthentication'
-    is_api_token = hasattr(token, 'prefix')
     has_header = request.headers.get('X-SMSLY-Remote-Sync') == '1'
-    return has_header and (is_api_token or is_hmac_remote_sync)
+    return has_header and is_hmac_remote_sync
 
 
 __all__ = [

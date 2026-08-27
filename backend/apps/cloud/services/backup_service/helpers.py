@@ -91,8 +91,13 @@ def _safe_tar_extractall(tar: tarfile.TarFile, dest: str) -> None:
         tar.extractall(path=dest, filter='data')
     else:
         for member in tar.getmembers():
-            if member.issym() or member.islnk():
+            if member.issym() or member.islnk() or member.ischr() or member.isblk() or member.isfifo() or member.isdev():
                 continue
+            # Validate parent dirs for symlink escape (a/b where a is symlink to /etc)
+            member_path = os.path.join(dest, member.name)
+            parent = os.path.dirname(os.path.abspath(member_path))
+            if not parent.startswith(os.path.abspath(dest) + os.sep) and parent != os.path.abspath(dest):
+                raise ValueError(f"Refusing path outside dest: {member.name}")
             tar.extract(member, path=dest)
 
 

@@ -331,7 +331,10 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         )
                     )
 
-            for domain_obj in service.domain_instances.all():
+            for domain_obj in service.domain_instances.filter(
+                status__in=['ACTIVE', 'DNS_VERIFIED', 'SSL_PROVISIONING'],
+                verified=True,
+            ):
                 value = domain_obj.domain_name.strip()
                 if not value:
                     continue

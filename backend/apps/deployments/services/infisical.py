@@ -319,3 +319,58 @@ def inject_infisical_env_for_service(
     env["INFISICAL_ENVIRONMENT"] = "prod"
     env["INFISICAL_SERVICE_ID"] = service_id
     return env
+
+
+def push_service_secrets_to_infisical(
+    service_id: str,
+    client: InfisicalClient | None = None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Push a service's secret env vars to Infisical.
+
+    Creates/updates secrets under path /service/<service_id>/ so they are
+    isolated per-service. Call before build/deploy so the runtime can pull
+    via the Infisical SDK instead of plaintext env.
+    """
+    from apps.deployments.models.core import EnvironmentVariable
+
+    if client is None:
+        client = get_infisical_client()
+    if client is None:
+        return {"ok": False, "error": "Infisical not configured"}
+    if workspace_id is None:
+        workspace_id = get_or_create_workspace(client)
+    if workspace_id is None:
+        return {"ok": False, "error": "No workspace"}
+
+    env_vars = EnvironmentVariable.objects.filter(service_id=service_id, is_secret=True)
+    results: dict[str, Any] = {"synced": [], "failed": [], "skipped": []}
+    for ev in env_vars:
+        if not ev.key or not ev.value:
+            results["skipped"].append(ev.key)
+            continue
+        path = f"/service/{service_id}"
+        try:
+            existing = client.get_secrets(workspace_id, _path=path)
+            names = {s.get("secretKey") for s in existing}
+            ok = client.update_secret(workspace_id, ev.key, ev.value, _path=path) if ev.key in names else client.create_secret(workspace_id, ev.key, ev.value, _path=path)
+            (results["synced"] if ok else results["failed"]).append(ev.key)
+        except Exception as exc:
+            logger.warning("Infisical push failed for %s/%s: %s", service_id, ev.key, exc)
+            results["failed"].append(ev.key)
+    results["ok"] = len(results["failed"]) == 0
+    logger.info("Infisical service push %s: synced=%d failed=%d", service_id, len(results["synced"]), len(results["failed"]))
+    return results
+
+
+def is_infisical_healthy(client: InfisicalClient | None = None) -> bool:
+    """Check if Infisical is reachable and authenticated."""
+    if client is None:
+        client = get_infisical_client()
+    if client is None:
+        return False
+    try:
+        workspaces = client.get_workspaces()
+        return isinstance(workspaces, list)
+    except Exception:
+        return False

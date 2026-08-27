@@ -337,13 +337,27 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
         env_vars.pop('CUSTOM_DOMAINS', None)
 
     try:
-        from .services.infisical import get_infisical_client, get_or_create_workspace, inject_infisical_env_for_service
+        from .services.infisical import (
+            get_infisical_client,
+            get_or_create_workspace,
+            inject_infisical_env_for_service,
+            is_infisical_healthy,
+            push_service_secrets_to_infisical,
+        )
         _client = get_infisical_client()
-        if _client is not None:
+        if _client is not None and is_infisical_healthy(_client):
             _ws_id = get_or_create_workspace(_client)
             if _ws_id:
+                # Push this service's secrets to Infisical first so the
+                # injected INFISICAL_* vars actually have secrets to pull.
+                try:
+                    push_service_secrets_to_infisical(str(service.id), _client, _ws_id)
+                except Exception as push_exc:
+                    logger.warning("Infisical service push failed for %s: %s", service.name, push_exc)
                 infisical_vars = inject_infisical_env_for_service(str(service.id), _client, _ws_id)
                 env_vars.update(infisical_vars)
+        elif _client is not None:
+            logger.warning("Infisical not healthy — falling back to plaintext env for %s", service.name)
     except Exception as exc:
         logger.debug("Infisical env injection skipped: %s", exc)
 
