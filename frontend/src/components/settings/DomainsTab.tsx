@@ -494,7 +494,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                     <ol className="text-xs text-muted-foreground space-y-1 list-decimal pl-4 mb-3">
                         <li>Add the alias hostname below.</li>
                         <li>Point its DNS at Grid — CNAME to your default domain, or an A record to your server IP.</li>
-                        <li>SSL is issued automatically once DNS resolves. That's it — no config, no redeploy.</li>
+                        <li>SSL is issued automatically once DNS resolves. That&apos;s it — no config, no redeploy.</li>
                     </ol>
 
                     {(service.host_aliases ?? []).map(({ host, rewrite_root }) => (
@@ -543,7 +543,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 <div className="mb-8">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Path Redirects</h4>
                     <p className="text-xs text-muted-foreground mb-3">
-                        Permanently forward paths on this service's domains to another host, e.g. /account → account.example.com.
+                        Permanently forward paths on this service&apos;s domains to another host, e.g. /account → account.example.com.
                     </p>
 
                     {(service.path_redirects ?? []).map(({ path, target }) => (
