@@ -298,15 +298,21 @@ class AddonProvisioner:
         Mesh forwarders (addon_mesh.py) dial the addon inside its scoped
         bridge, so platform-side access keeps working without smsly-net.
         """
+        scoped_attached = False
         try:
             self._connect_to_service_scoped_network(container_name, addon)
+            scoped_attached = True
         except Exception as exc:
             logger.warning("Scoped attach failed for %s: %s", container_name, exc)
         exposed = bool(public_domain or getattr(addon, 'public_domain', None))
         if exposed:
             self._connect_to_proxy_network(container_name)
             return
-        # Best-effort detach from the shared bridge (no-op when absent).
+        # Only detach from shared smsly-net if scoped attach succeeded.
+        # If the scoped network doesn't exist yet (first deploy race), keep
+        # the addon on smsly-net so the service can still reach it.
+        if not scoped_attached:
+            return
         try:
             subprocess.run(
                 ['docker', 'network', 'disconnect', self.network_name, container_name],
@@ -1527,6 +1533,9 @@ class AddonProvisioner:
         '--cap-add=CHOWN',
         '--cap-add=SETUID',
         '--cap-add=SETGID',
+        '--cap-add=FOWNER',
+        '--cap-add=DAC_OVERRIDE',
+        '--cap-add=FSETID',
         '--pids-limit', '1024',
     ]
 

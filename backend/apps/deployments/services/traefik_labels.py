@@ -50,6 +50,7 @@ def generate_traefik_labels(
     rate_limit_avg: int = 100,
     rate_limit_burst: int = 200,
     health_check_path: str | None = None,
+    host_aliases: list | None = None,
 ) -> dict[str, str]:
     """
     Generate Traefik labels for a deployed service container.
@@ -64,6 +65,7 @@ def generate_traefik_labels(
         rate_limit_burst: Maximum burst requests allowed
         health_check_path: Primary health check path (e.g., "/health").
                            Falls back to common paths if not specified.
+        host_aliases: List of alias dicts [{"host": "alias.example.com"}, ...] or strings.
     """
     # Sanitize service name for use in router names
     router_name = service_name.replace("-", "_").replace(".", "_").lower()
@@ -72,9 +74,21 @@ def generate_traefik_labels(
     if not domain:
         domain = f"{service_name}.apps.smsly.cloud"
 
+    # Build list of all domains for Host() rule
+    all_domains = [domain]
+    for item in (host_aliases or []):
+        if isinstance(item, dict):
+            alias = str(item.get("host") or "").strip().lower()
+        else:
+            alias = str(item or "").strip().lower()
+        if alias and alias not in all_domains:
+            all_domains.append(alias)
+
     # Use same fallback logic as Docker health check
     hc_paths = _health_paths(health_check_path)
     hc_path_primary = hc_paths[0] if hc_paths else health_check_path or "/"
+
+    host_rule = " || ".join(f"Host(`{d}`)" for d in all_domains)
 
     labels = {
         # Enable Traefik for this container
@@ -84,7 +98,7 @@ def generate_traefik_labels(
         # NOTE: Always use the 'web' entrypoint because Caddy handles SSL
         # termination in production and forwards plain HTTP to Traefik:8081.
         # Traefik does NOT have a 'websecure' entrypoint in production.
-        f"traefik.http.routers.{router_name}.rule": f"Host(`{domain}`)",
+        f"traefik.http.routers.{router_name}.rule": host_rule,
         f"traefik.http.routers.{router_name}.entrypoints": "web",
         f"traefik.http.routers.{router_name}.service": f"{router_name}-service",
 

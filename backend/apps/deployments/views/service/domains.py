@@ -641,6 +641,18 @@ class DomainActionsMixin:
         domain_obj = Domain.objects.filter(domain_name=domain).exclude(service=service).first()
         if domain_obj:
             return domain_obj.service
+
+        # Check host_aliases on other services
+        alias_conflict = (
+            Service.objects
+            .exclude(id=service.id)
+            .filter(host_aliases__contains=[{"host": domain}])
+            .only("id", "name")
+            .first()
+        )
+        if alias_conflict:
+            return alias_conflict
+
         return None
 
 

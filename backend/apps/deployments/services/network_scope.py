@@ -323,7 +323,17 @@ def reconcile_network_isolation() -> dict[str, int]:
     # 2. Reapply + router attach for live scoped bridges.
     try:
         client = docker.from_env()
-        nets = [n for n in client.networks.list(names=["paas-svc-*"]) if n.name != "smsly-net"]
+        paas_nets = client.networks.list(names=["paas-svc-*"])
+        smsly_nets = client.networks.list(names=["smsly-net-*"])
+        nets = [n for n in paas_nets + smsly_nets
+                if n.name not in ("smsly-net", "traefik-proxy-net", "smsly-internal-net")]
+        seen = set()
+        unique_nets = []
+        for n in nets:
+            if n.name not in seen:
+                seen.add(n.name)
+                unique_nets.append(n)
+        nets = unique_nets
         rules_snapshot = _list_docker_user_rules()
         for net in nets:
             name = net.name

@@ -51,7 +51,7 @@ class ComposeNetworkingMixin:
 
 
     def _collect_compose_domains(self) -> list:
-        """Collect primary + custom domains for compose routing."""
+        """Collect primary + custom domains + host aliases for compose routing."""
         if getattr(self, "staged_only", False):
             staging_url = self.deployment.staging_url or self.service.generate_staging_url()
             from urllib.parse import urlparse
@@ -76,6 +76,14 @@ class ComposeNetworkingMixin:
             value = str(item or "").strip().lower()
             if value and value not in domains:
                 domains.append(value)
+
+        for item in self.service.host_aliases or []:
+            if isinstance(item, dict):
+                host = str(item.get("host") or "").strip().lower()
+            else:
+                host = str(item or "").strip().lower()
+            if host and host not in domains:
+                domains.append(host)
 
         return domains
 

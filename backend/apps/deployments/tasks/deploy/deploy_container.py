@@ -293,6 +293,20 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 # Also signal the adapter this is a staged deployment
                 env_vars['STAGING_DOMAIN'] = staging_host
 
+        # Inject host aliases so Traefik labels include them in Host() rule
+        host_aliases = getattr(service, 'host_aliases', None) or []
+        if host_aliases:
+            alias_hosts = []
+            for item in host_aliases:
+                if isinstance(item, dict):
+                    h = str(item.get('host') or '').strip().lower()
+                else:
+                    h = str(item or '').strip().lower()
+                if h:
+                    alias_hosts.append(h)
+            if alias_hosts:
+                env_vars['HOST_ALIASES'] = ','.join(alias_hosts)
+
         resource = compute.deploy_container(
             name=service.name,
             image=image_name,

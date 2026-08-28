@@ -406,6 +406,16 @@ class LocalAdapter(BaseCloudAdapter):
                             all_domains.append(normalized)
                     except ValueError:
                         logger.warning("Skipping invalid custom domain: %s", d)
+        # Include host aliases in the Host() rule
+        aliases_raw = env.get('HOST_ALIASES', '')
+        if aliases_raw:
+            for d in aliases_raw.split(','):
+                d = d.strip().lower()
+                if d and d not in all_domains:
+                    try:
+                        all_domains.append(normalize_domain(d, allow_ip=True))
+                    except ValueError:
+                        logger.warning("Skipping invalid host alias: %s", d)
         host_rule = ' || '.join(f'Host(`{d}`)' for d in all_domains)
 
         try:
