@@ -13,6 +13,17 @@ def caddy_disabled_mode() -> bool:
     }
 
 
+def caddy_node_mode() -> bool:
+    """Return True when this node is a secondary worker that should generate
+    a local-only Caddyfile instead of the full platform Caddyfile."""
+    mode = str(os.environ.get("MODE", "")).strip().lower()
+    node_type = str(os.environ.get("NODE_TYPE", "")).strip().lower()
+    return mode in {"agent", "agent-lite"} or node_type in {
+        "agent",
+        "agent-lite",
+    }
+
+
 def is_agent_lite() -> bool:
     mode = str(os.environ.get("MODE", "")).strip().lower()
     node_type = str(os.environ.get("NODE_TYPE", "")).strip().lower()
