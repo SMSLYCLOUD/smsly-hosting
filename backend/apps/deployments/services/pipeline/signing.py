@@ -40,6 +40,41 @@ class SigningMixin:
         except Exception:
             return True
 
+    def _get_cosign_version(self, cosign_bin: str) -> tuple[int, ...]:
+        """Return cosign major.minor version as a tuple, e.g. (3, 1)."""
+        try:
+            result = subprocess.run(
+                [cosign_bin, "version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in (result.stdout + result.stderr).splitlines():
+                if "GitVersion:" in line:
+                    ver_str = line.split("GitVersion:")[-1].strip().lstrip("v")
+                    parts = ver_str.split(".")
+                    return (int(parts[0]), int(parts[1])) if len(parts) >= 2 else (int(parts[0]),)
+        except Exception:
+            pass
+        return (0,)
+
+    def _create_nolog_signing_config(self, cosign_bin: str) -> str | None:
+        """Create a cosign signing config without transparency log for v3+.
+
+        Returns the path to the temp config file, or None on failure.
+        """
+        try:
+            config_path = "/tmp/cosign-signing-config.json"
+            result = subprocess.run(
+                [cosign_bin, "signing-config", "create", "--rekor-url", ""],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                with open(config_path, "w") as f:
+                    f.write(result.stdout)
+                return config_path
+        except Exception:
+            pass
+        return None
+
     # ── SIGN (runs before push) ─────────────────────────────────────────
 
     def _sign_image(self):
@@ -79,16 +114,34 @@ class SigningMixin:
             # Check if key is actually readable (mounted into container).
             key_available = key_path and os.path.isfile(key_path) and os.access(key_path, os.R_OK)
 
+            cosign_ver = self._get_cosign_version(cosign_bin)
+            is_v3_plus = cosign_ver[0] >= 3
+
             if key_available:
-                cmd = [cosign_bin, "sign", "--key", key_path, "--tlog-upload=false", self.image_name]
+                if is_v3_plus:
+                    # cosign v3+ requires --signing-config for --tlog-upload=false
+                    nolog_config = self._create_nolog_signing_config(cosign_bin)
+                    if nolog_config:
+                        cmd = [
+                            cosign_bin, "sign",
+                            "--key", key_path,
+                            "--signing-config", nolog_config,
+                            self.image_name,
+                        ]
+                    else:
+                        # Fallback: just use --key without tlog config
+                        cmd = [cosign_bin, "sign", "--key", key_path, self.image_name]
+                else:
+                    cmd = [cosign_bin, "sign", "--key", key_path, "--tlog-upload=false", self.image_name]
+
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=cosign_env)
                 if result.returncode == 0:
-                    append_log(self.deployment, f"Image signed with Cosign (private key): {self.image_name}\n")
+                    append_log(self.deployment, f"Image signed with Cosign (private key, v{cosign_ver[0]}): {self.image_name}\n")
                 else:
                     append_log(
                         self.deployment,
                         f"Cosign key signing failed (exit {result.returncode}): "
-                        f"{(result.stderr or result.stdout or '').strip()[:200]}\n"
+                        f"{(result.stderr or result.stdout or '').strip()[:300]}\n"
                     )
                     update_stage(self.deployment, 'Sign', 'failed')
                     return
@@ -109,7 +162,7 @@ class SigningMixin:
                 if result.returncode == 0:
                     append_log(self.deployment, f"Image signed with Cosign (keyless/Sigstore): {self.image_name}\n")
                 else:
-                    stderr_msg = (result.stderr or result.stdout or '').strip()[:200]
+                    stderr_msg = (result.stderr or result.stdout or '').strip()[:300]
                     append_log(
                         self.deployment,
                         f"Cosign keyless signing failed (exit {result.returncode}): "
@@ -169,6 +222,8 @@ class SigningMixin:
             cosign_oidc_issuer = os.environ.get("COSIGN_OIDC_ISSUER", "")
             cosign_env = self._cosign_env()
 
+            cosign_ver = self._get_cosign_version(cosign_bin)
+
             if cosign_oidc_issuer:
                 verify_cmd = [
                     cosign_bin, "verify",
@@ -189,7 +244,7 @@ class SigningMixin:
             else:
                 verify_msg = (
                     f"Cosign verification returned code {vresult.returncode}: "
-                    f"{(vresult.stderr or vresult.stdout or '').strip()[:200]}\n"
+                    f"{(vresult.stderr or vresult.stdout or '').strip()[:300]}\n"
                 )
                 if cosign_require_verify:
                     update_stage(self.deployment, 'Verify', 'failed')
