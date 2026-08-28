@@ -240,7 +240,10 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
             "    handle @alias_root {",
             f"        rewrite * {rewrite_root}",
         ])
+        before = len(lines)
         _append_reverse_proxy(lines, upstream_url, host_header)
+        for i in range(before, len(lines)):
+            lines[i] = "    " + lines[i]
         lines.append("    }")
     lines.append("    handle {")
     _append_reverse_proxy(lines, upstream_url, host_header)
