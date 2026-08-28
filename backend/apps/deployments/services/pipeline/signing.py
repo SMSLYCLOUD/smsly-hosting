@@ -118,21 +118,21 @@ class SigningMixin:
             is_v3_plus = cosign_ver[0] >= 3
 
             if key_available:
+                # Build base sign command
+                sign_args = [cosign_bin, "sign", "--key", key_path, "--yes"]
+
                 if is_v3_plus:
-                    # cosign v3+ requires --signing-config for --tlog-upload=false
+                    # cosign v3+ removed --tlog-upload=false; use signing-config
                     nolog_config = self._create_nolog_signing_config(cosign_bin)
                     if nolog_config:
-                        cmd = [
-                            cosign_bin, "sign",
-                            "--key", key_path,
-                            "--signing-config", nolog_config,
-                            self.image_name,
-                        ]
-                    else:
-                        # Fallback: just use --key without tlog config
-                        cmd = [cosign_bin, "sign", "--key", key_path, self.image_name]
-                else:
-                    cmd = [cosign_bin, "sign", "--key", key_path, "--tlog-upload=false", self.image_name]
+                        sign_args += ["--signing-config", nolog_config]
+
+                # For local registries with self-signed certs, skip TLS verify
+                if self._is_local_registry():
+                    sign_args += ["--allow-insecure-registry"]
+
+                sign_args.append(self.image_name)
+                cmd = sign_args
 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=cosign_env)
                 if result.returncode == 0:
@@ -236,6 +236,10 @@ class SigningMixin:
                     "--certificate-identity-regexp", ".*",
                     self.image_name,
                 ]
+
+            # For local registries with self-signed certs, skip TLS verify
+            if self._is_local_registry():
+                verify_cmd.insert(1, "--allow-insecure-registry")
 
             vresult = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=30, env=cosign_env)
             if vresult.returncode == 0:
