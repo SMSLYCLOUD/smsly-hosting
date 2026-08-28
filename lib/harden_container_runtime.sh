@@ -4,9 +4,23 @@ _harden_container_runtime_bootstrap() {
     local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
     local env_file="$install_dir/.env"
 
-    # If CONTAINER_RUNTIME is already persisted in .env, skip detection.
-    # The user can clear it to re-detect.
+    # If CONTAINER_RUNTIME is already persisted in .env, skip install
+    # but still ensure Docker daemon.json registration is correct.
     if [ -f "$env_file" ] && grep -q '^CONTAINER_RUNTIME=' "$env_file" ; then
+        local existing_runtime
+        existing_runtime="$(grep '^CONTAINER_RUNTIME=' "$env_file" | cut -d= -f2)"
+        case "$existing_runtime" in
+            kata)
+                if command -v kata-runtime ; then
+                    bash "$install_dir/lib/install-kata.sh" || true
+                fi
+                ;;
+            runsc)
+                if command -v runsc ; then
+                    bash "$install_dir/lib/install-gvisor.sh" || true
+                fi
+                ;;
+        esac
         return 0
     fi
 
@@ -63,7 +77,11 @@ _harden_container_runtime_verify() {
             _harden_log ok "gVisor registered with Docker"
         elif python3 -c "import json; import sys; cfg=json.load(open('/etc/docker/daemon.json')); sys.exit(0 if 'kata-runtime' in cfg.get('runtimes',{}) else 1)" ; then
             _harden_log ok "Kata registered with Docker"
+        else
+            _harden_log warn "container runtime NOT registered in Docker daemon.json — re-run install to fix"
         fi
+    else
+        _harden_log warn "Docker daemon.json missing — cannot verify runtime registration"
     fi
 
     # `found` is a 0/1 FLAG, not an exit code — returning it turns a successful

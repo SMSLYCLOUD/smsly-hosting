@@ -74,7 +74,9 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
         try:
             res = subprocess.run([cosign_bin, "version"], capture_output=True, text=True, timeout=3)
             if res.returncode == 0:
-                cosign_ver = res.stdout.splitlines()[0].strip() if res.stdout else f"Installed ({cosign_bin})"
+                # cosign version outputs ASCII art first, version string last
+                lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+                cosign_ver = lines[-1] if lines else f"Installed ({cosign_bin})"
         except Exception as exc:
             logger.debug("cosign version detection failed: %s", exc)
 

@@ -9,9 +9,56 @@
 # ============================================================
 set -euo pipefail
 
+_ensure_docker_kata_registration() {
+    local kata_bin
+    kata_bin="$(command -v kata-runtime 2>/dev/null || true)"
+    if [ -z "$kata_bin" ]; then
+        echo "ERROR: kata-runtime binary not found, cannot register with Docker"
+        return 1
+    fi
+
+    local DAEMON_JSON="/etc/docker/daemon.json"
+    if [ ! -f "$DAEMON_JSON" ]; then
+        echo '{}' > "$DAEMON_JSON"
+    fi
+
+    python3 -c "
+import json
+
+daemon = '$DAEMON_JSON'
+kata_path = '$kata_bin'
+
+with open(daemon) as f:
+    cfg = json.load(f)
+
+runtimes = cfg.setdefault('runtimes', {})
+current = runtimes.get('kata-runtime', {})
+new_entry = {'path': kata_path}
+
+if current != new_entry:
+    runtimes['kata-runtime'] = new_entry
+    with open(daemon, 'w') as f:
+        json.dump(cfg, f, indent=2)
+    print(f'  Registered kata-runtime at {kata_path} in {daemon}')
+else:
+    print(f'  kata-runtime already registered correctly at {kata_path}')
+"
+
+    if command -v systemctl ; then
+        systemctl daemon-reload
+        systemctl restart docker
+        echo "  Docker restarted with kata-runtime support"
+        sleep 3
+    fi
+}
+
 main() {
     [ "$EUID" -eq 0 ] || { echo "ERROR: Must run as root"; return 1; }
-    command -v kata-runtime  && echo "  kata-runtime already installed — skipping" && return 0
+    if command -v kata-runtime ; then
+        echo "  kata-runtime already installed at $(command -v kata-runtime) — ensuring Docker registration"
+        _ensure_docker_kata_registration
+        return 0
+    fi
     [ -e /dev/kvm ] || {
         echo "  KVM not available (/dev/kvm missing) — skipping Kata Containers."
         echo "  gVisor (runsc) will be used for container sandboxing instead."

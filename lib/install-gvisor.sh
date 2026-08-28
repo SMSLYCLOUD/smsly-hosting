@@ -9,10 +9,56 @@
 # ============================================================
 set -euo pipefail
 
-main() {
-    local rc=0
+_ensure_docker_runsc_registration() {
+    local runsc_bin
+    runsc_bin="$(command -v runsc 2>/dev/null || true)"
+    if [ -z "$runsc_bin" ]; then
+        echo "ERROR: runsc binary not found, cannot register with Docker"
+        return 1
+    fi
 
-    command -v runsc  && echo "  runsc already installed — skipping" && return 0
+    local DAEMON_JSON="/etc/docker/daemon.json"
+    if [ ! -f "$DAEMON_JSON" ]; then
+        echo '{}' > "$DAEMON_JSON"
+    fi
+
+    python3 -c "
+import json, sys
+
+daemon = '$DAEMON_JSON'
+runsc_path = '$runsc_bin'
+
+with open(daemon) as f:
+    cfg = json.load(f)
+
+runtimes = cfg.setdefault('runtimes', {})
+current = runtimes.get('runsc', {})
+new_entry = {'path': runsc_path}
+
+if current != new_entry:
+    runtimes['runsc'] = new_entry
+    with open(daemon, 'w') as f:
+        json.dump(cfg, f, indent=2)
+    print(f'  Registered runsc at {runsc_path} in {daemon}')
+else:
+    print(f'  runsc already registered correctly at {runsc_path}')
+"
+
+    # Restart Docker if runtime was changed
+    if command -v systemctl ; then
+        systemctl daemon-reload
+        systemctl restart docker
+        echo "  Docker restarted with runsc support"
+        sleep 3
+    fi
+}
+
+main() {
+    if command -v runsc ; then
+        echo "  runsc already installed at $(command -v runsc) — ensuring Docker registration"
+        _ensure_docker_runsc_registration
+        return 0
+    fi
 
     local ARCH
     ARCH="$(uname -m)"
@@ -27,15 +73,16 @@ main() {
     # ---- Prefer apt (reliable) over the legacy download bucket (often dead) ----
     _install_via_apt() {
         apt-get update -qq
-        apt-get install -y -qq apt-transport-https ca-certificates curl gnupg 
-        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg 
+        apt-get install -y -qq apt-transport-https ca-certificates curl gnupg
+        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
             > /etc/apt/sources.list.d/gvisor.list
         apt-get update -qq
         apt-get install -y -qq runsc
-        command -v runsc 
+        command -v runsc
     }
 
+    local SKIP_DOWNLOAD=""
     if _install_via_apt; then
         echo "  Installed via apt"
         SKIP_DOWNLOAD=true
@@ -67,8 +114,6 @@ main() {
     }
 
     if [ -z "${SKIP_DOWNLOAD:-}" ]; then
-        # Only use stable release builds — nightly/master are unaudited
-        # and pose a supply-chain risk.
         for url in \
             "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"; do
             if download_via_curl "$url"; then
@@ -81,39 +126,10 @@ main() {
 
     command -v runsc  || { echo "ERROR: gVisor installation failed"; return 1; }
 
-    # ---- Docker runtime registration ----
-    DAEMON_JSON="/etc/docker/daemon.json"
-    if [ ! -f "$DAEMON_JSON" ]; then
-        echo '{}' > "$DAEMON_JSON"
-    fi
-
-    if ! grep -q '"runsc"' "$DAEMON_JSON" ; then
-        python3 -c "
-import json
-with open('$DAEMON_JSON') as f:
-    cfg = json.load(f)
-cfg.setdefault('runtimes', {})['runsc'] = {
-    'path': '/usr/local/bin/runsc'
-}
-with open('$DAEMON_JSON', 'w') as f:
-    json.dump(cfg, f, indent=2)
-"
-        echo "  Added runsc runtime to Docker daemon.json"
-    fi
-
-    # Restart Docker (only if runsc runtime not already registered)
-    if command -v systemctl ; then
-        systemctl daemon-reload
-        if grep -q '"runsc"' /etc/docker/daemon.json ; then
-            echo "  runsc already registered in daemon.json — skipping Docker restart"
-        else
-            systemctl restart docker
-            echo "  Docker restarted with runsc support"
-        fi
-    fi
+    # ---- Register with Docker and restart ----
+    _ensure_docker_runsc_registration
 
     # Verify
-    sleep 3
     if runsc --version ; then
         echo "=== gVisor (runsc) installed successfully ==="
     else
