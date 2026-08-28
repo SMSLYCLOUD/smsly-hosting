@@ -74,7 +74,7 @@ def generate_traefik_labels(
 
     # Use same fallback logic as Docker health check
     hc_paths = _health_paths(health_check_path)
-    hc_path_joined = " || ".join(hc_paths)
+    hc_path_primary = hc_paths[0] if hc_paths else health_check_path or "/"
 
     labels = {
         # Enable Traefik for this container
@@ -91,8 +91,8 @@ def generate_traefik_labels(
         # Load balancer configuration
         f"traefik.http.services.{router_name}-service.loadbalancer.server.port": str(internal_port),
 
-        # Health check — support multiple paths with OR logic (same as Docker)
-        f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.path": hc_path_joined,
+        # Health check — use the primary path (Traefik health checks take a single path)
+        f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.path": hc_path_primary,
         f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.interval": "20s",
         f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.timeout": "8s",
     }

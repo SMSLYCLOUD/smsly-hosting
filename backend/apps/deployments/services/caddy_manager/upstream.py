@@ -58,3 +58,18 @@ def _remote_upstream_url_for_service(service) -> str:
 
 def _service_proxy_upstream() -> str:
     return SERVICE_PROXY_UPSTREAM or "traefik:80"
+
+
+def _local_upstream_for_service(service) -> str:
+    """Direct container upstream for local/primary-server services.
+
+    Returns ``{container_name}:{internal_port}`` so Caddy proxies directly
+    to the service container on the shared Docker network, bypassing Traefik.
+    Traefik's socket proxy doesn't forward container events, so user service
+    containers are invisible to Traefik and routing through it returns 503.
+    """
+    name = str(getattr(service, "name", "") or "").strip()
+    port = getattr(service, "internal_port", None) or 8000
+    if name:
+        return f"{name}:{port}"
+    return _service_proxy_upstream()
