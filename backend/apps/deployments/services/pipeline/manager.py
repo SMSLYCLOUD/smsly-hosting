@@ -69,8 +69,9 @@ class PipelineManager(
                 self._inject_env_vars()
                 self._auto_provision_addons()
             self._build_image()
-            self._push_image()
             self._sign_image()
+            self._push_image()
+            self._verify_signature()
             log_exhaustive_network_and_routing_diagnostics(self.deployment, self.service)
             if not self.image_name:
                 raise PipelineError("Pipeline completed without producing an image")
@@ -147,8 +148,9 @@ class PipelineManager(
             self._capture_pre_deploy_snapshot()
 
             self._build_image()
-            self._push_image()
             self._sign_image()
+            self._push_image()
+            self._verify_signature()
             log_exhaustive_network_and_routing_diagnostics(self.deployment, self.service)
             if not self.image_name:
                 raise PipelineError("Build phase completed without producing an image")

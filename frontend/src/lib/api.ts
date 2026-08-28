@@ -131,6 +131,7 @@ const PROXY_BYPASS_PREFIXES = [
   '/replication/',
   '/platform-updates/',
   '/deployments/',
+  '/addons/',
 ];
 
 // Sub-paths under /services/ that must always hit the local controller
@@ -1984,11 +1985,11 @@ export const addonsApi = {
 };
 
 export const addonMaintenanceApi = {
-  tables: (addonId: string) => api.get(`/addons/${addonId}/maintenance/tables/`).then(r => r.data),
-  query: (addonId: string, query: string) => api.post(`/addons/${addonId}/maintenance/query/`, { query }).then(r => r.data),
-  stats: (addonId: string) => api.get(`/addons/${addonId}/maintenance/stats/`).then(r => r.data),
-  vacuum: (addonId: string) => api.post(`/addons/${addonId}/maintenance/vacuum/`).then(r => r.data),
-  rotateCredentials: (addonId: string) => api.post(`/addons/${addonId}/maintenance/rotate-credentials/`).then(r => r.data),
+  tables: (addonId: string) => api.get(`/addons/maintenance/${addonId}/tables/`).then(r => r.data),
+  query: (addonId: string, query: string) => api.post(`/addons/maintenance/${addonId}/query/`, { sql: query }).then(r => r.data),
+  stats: (addonId: string) => api.get(`/addons/maintenance/${addonId}/stats/`).then(r => r.data),
+  vacuum: (addonId: string) => api.post(`/addons/maintenance/${addonId}/vacuum/`).then(r => r.data),
+  rotateCredentials: (addonId: string) => api.post(`/addons/maintenance/${addonId}/rotate-credentials/`).then(r => r.data),
 };
 
 export default api;
