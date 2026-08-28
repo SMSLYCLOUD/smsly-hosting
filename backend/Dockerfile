@@ -41,6 +41,10 @@ RUN apt-get update \
     && COSIGN_ARCH=$(dpkg --print-architecture | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
     && curl -sSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${COSIGN_ARCH}" \
     && chmod +x /usr/local/bin/cosign \
+    # Nixpacks buildpack CLI for nixpacks-strategy deployments
+    && NIXPACKS_ARCH=$(dpkg --print-architecture) \
+    && curl -sSL -o /tmp/nixpacks.deb "https://github.com/railwayapp/nixpacks/releases/download/v1.40.0/nixpacks-v1.40.0-${NIXPACKS_ARCH}.deb" \
+    && dpkg -i /tmp/nixpacks.deb && rm /tmp/nixpacks.deb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
