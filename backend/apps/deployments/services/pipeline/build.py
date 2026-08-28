@@ -668,10 +668,13 @@ class BuildMixin:
                         if basename in _always_include:
                             return tarinfo
                         rel = os.path.relpath(tarinfo.name, context_dir) if tarinfo.name != context_dir else "."
+                        excluded = False
                         for pat in patterns:
-                            if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(basename, pat):
-                                return None
-                        return tarinfo
+                            negated = pat.startswith("!")
+                            raw_pat = pat[1:] if negated else pat
+                            if fnmatch.fnmatch(rel, raw_pat) or fnmatch.fnmatch(basename, raw_pat):
+                                excluded = not negated
+                        return None if excluded else tarinfo
                     tar.add(context_dir, arcname=".", filter=_exclude)
                 except Exception:
                     tar.add(context_dir, arcname=".")
