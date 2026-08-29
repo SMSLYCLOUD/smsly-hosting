@@ -463,7 +463,7 @@ services:
       - -c
       - |
         printf '%s\n' \
-          "sentinel monitor mymaster redis-primary 6379 2" \
+          "sentinel monitor mymaster redis-replica 6379 2" \
           "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
           "sentinel down-after-milliseconds mymaster 5000" \
           "sentinel failover-timeout mymaster 15000" \
@@ -477,10 +477,8 @@ services:
         fi
         exec redis-sentinel /tmp/sentinel.conf
     depends_on:
-      redis-primary:
-        condition: service_started
       redis-replica:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
@@ -513,7 +511,7 @@ services:
       - -c
       - |
         printf '%s\n' \
-          "sentinel monitor mymaster redis-primary 6379 2" \
+          "sentinel monitor mymaster redis-replica 6379 2" \
           "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
           "sentinel down-after-milliseconds mymaster 5000" \
           "sentinel failover-timeout mymaster 15000" \
@@ -527,10 +525,8 @@ services:
         fi
         exec redis-sentinel /tmp/sentinel.conf
     depends_on:
-      redis-primary:
-        condition: service_started
       redis-replica:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
@@ -563,7 +559,7 @@ services:
       - -c
       - |
         printf '%s\n' \
-          "sentinel monitor mymaster redis-primary 6379 2" \
+          "sentinel monitor mymaster redis-replica 6379 2" \
           "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
           "sentinel down-after-milliseconds mymaster 5000" \
           "sentinel failover-timeout mymaster 15000" \
@@ -577,10 +573,8 @@ services:
         fi
         exec redis-sentinel /tmp/sentinel.conf
     depends_on:
-      redis-primary:
-        condition: service_started
       redis-replica:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
