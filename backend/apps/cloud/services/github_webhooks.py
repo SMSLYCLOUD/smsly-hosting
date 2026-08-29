@@ -70,7 +70,18 @@ def setup_github_webhook(user, repo_url: str):
         )
         return False
 
-    webhook_secret = getattr(settings, "GITHUB_WEBHOOK_SECRET", "")
+    # Read webhook secret from PlatformConfig (DB) first, then fall back
+    # to settings. This matches the verification logic in github.py so
+    # the secret used to create the webhook always matches the secret
+    # used to verify incoming webhooks.
+    webhook_secret = ""
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        webhook_secret = PlatformConfig.load().get_webhook_secret('github') or ""
+    except Exception:
+        pass
+    if not webhook_secret:
+        webhook_secret = getattr(settings, "GITHUB_WEBHOOK_SECRET", "")
     if not webhook_secret or webhook_secret == "replace_me_with_random_string":
         logger.error(
             "GITHUB_WEBHOOK_SECRET is missing/placeholder. Refusing to create webhook until a secure secret is set."

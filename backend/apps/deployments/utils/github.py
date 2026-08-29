@@ -26,6 +26,37 @@ def get_github_token_for_repo(user, repo_full_name: str) -> str | None:
     return get_github_oauth_token_for_user(user)
 
 
+def get_github_token_for_user(user) -> str | None:
+    """Get a GitHub token for user-level operations (listing repos, etc.).
+
+    Tries GitHub App installation token first (for any installation linked
+    to the user), then falls back to the user's OAuth token.
+    """
+    if not user:
+        return None
+
+    # Try GitHub App first — find any active installation linked to this user
+    try:
+        from apps.cloud.models.github_app import GitHubAppInstallation
+        from apps.deployments.services.github_app import get_github_app_service
+
+        installation = GitHubAppInstallation.objects.filter(
+            user=user,
+            status=GitHubAppInstallation.Status.ACTIVE,
+        ).order_by('-created_at').first()
+
+        if installation:
+            svc = get_github_app_service()
+            if svc:
+                token = svc.get_installation_token_for_id(installation.installation_id)
+                if token:
+                    return token
+    except Exception as exc:
+        logger.debug("GitHub App token fetch failed for user %s, falling back to OAuth: %s", user, exc)
+
+    return get_github_oauth_token_for_user(user)
+
+
 def get_github_oauth_token_for_user(user):
     if not user:
         return None

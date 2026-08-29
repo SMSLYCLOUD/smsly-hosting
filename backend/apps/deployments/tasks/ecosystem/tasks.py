@@ -84,7 +84,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
     from django.contrib.auth import get_user_model
     from apps.deployments.services.ecosystem import scan_and_analyze
 
-    from apps.deployments.views.github import _get_github_token
+    from apps.deployments.utils.github import get_github_token_for_user
 
     user_model = get_user_model()
     try:
@@ -92,7 +92,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
     except user_model.DoesNotExist:
         return {"error": "User not found"}
 
-    token = _get_github_token(user)
+    token = get_github_token_for_user(user)
     if not token:
         return {"error": "GitHub not connected. Please link your GitHub account first."}
 
