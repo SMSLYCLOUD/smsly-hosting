@@ -9,11 +9,13 @@ export interface MtlsHealth {
   expired_svids: number;
   trust_domain: string;
   platform?: {
+    deployed?: boolean;
     spire_server_healthy: boolean;
     spire_agent_healthy: boolean;
     trust_domain: string;
   };
   ecosystem?: {
+    deployed?: boolean;
     spire_server_healthy: boolean;
     spire_agent_healthy: boolean;
     trust_domain: string;
