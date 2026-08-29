@@ -77,12 +77,46 @@ def fetch_all_repos(token: str) -> list[dict]:
             timeout=15,
         )
 
+        # If /user/repos fails with 403, the token is likely a GitHub App
+        # installation token — fall back to /installation/repositories
+        if resp.status_code == 403 and "rate limit" not in resp.text.lower():
+            logger.info("GitHub App token detected (403 on /user/repos), "
+                        "falling back to /installation/repositories")
+            return _fetch_installation_repos(token)
+
         if resp.status_code == 403 and "rate limit" in resp.text.lower():
             logger.error("SEC-ZT-009: GitHub rate-limit hit during repo fetch")
             break
 
         resp.raise_for_status()
         batch = resp.json()
+        if not batch:
+            break
+        repos.extend(batch)
+        page += 1
+        if len(batch) < 100:
+            break
+    return repos
+
+
+def _fetch_installation_repos(token: str) -> list[dict]:
+    """Fetch repos via GitHub App installation token (fallback for /user/repos)."""
+    headers = _github_headers(token)
+    repos: list[dict] = []
+    page = 1
+    while True:
+        resp = requests.get(
+            f"{_GITHUB_API_BASE}/installation/repositories",
+            headers=headers,
+            params={"per_page": 100, "page": page},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            logger.error("Failed to fetch installation repos: %s %s",
+                         resp.status_code, resp.text[:200])
+            break
+        data = resp.json()
+        batch = data.get("repositories", [])
         if not batch:
             break
         repos.extend(batch)
