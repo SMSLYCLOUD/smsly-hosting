@@ -956,6 +956,10 @@ export const systemApi = {
     const response = await api.put('/system/domain-config/', data);
     return response.data;
   },
+  toggleDbHa: async (enabled: boolean) => {
+    const response = await api.post('/system/db-ha-toggle/', { enabled });
+    return response.data;
+  },
 };
 
 export interface AIProviderBalance {

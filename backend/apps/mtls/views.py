@@ -35,6 +35,18 @@ SPIRE_SERVER_SOCKET = "/tmp/spire-server/private/api.sock"
 SPIRE_AGENT_SOCKET = "/opt/spire/run/agent.sock"
 
 
+def _container_running(container_name: str) -> bool:
+    """Check if a Docker container is running."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "true"
+    except Exception:
+        return False
+
+
 def _user_can_access_service(user, service) -> bool:
     """Check if a user can manage a service."""
     if user.is_superuser:
@@ -204,10 +216,15 @@ def mtls_health(request):
         except Exception:
             return False
 
-    platform_server_healthy = _check_spire(PLATFORM_SPIRE_SERVER_CONTAINER, SPIRE_SERVER_SOCKET)
-    platform_agent_healthy = _check_agent(PLATFORM_SPIRE_AGENT_CONTAINER, SPIRE_AGENT_SOCKET)
-    ecosystem_server_healthy = _check_spire(ECOSYSTEM_SPIRE_SERVER_CONTAINER, SPIRE_SERVER_SOCKET)
-    ecosystem_agent_healthy = _check_agent(ECOSYSTEM_SPIRE_AGENT_CONTAINER, SPIRE_AGENT_SOCKET)
+    platform_server_deployed = _container_running(PLATFORM_SPIRE_SERVER_CONTAINER)
+    platform_agent_deployed = _container_running(PLATFORM_SPIRE_AGENT_CONTAINER)
+    ecosystem_server_deployed = _container_running(ECOSYSTEM_SPIRE_SERVER_CONTAINER)
+    ecosystem_agent_deployed = _container_running(ECOSYSTEM_SPIRE_AGENT_CONTAINER)
+
+    platform_server_healthy = _check_spire(PLATFORM_SPIRE_SERVER_CONTAINER, SPIRE_SERVER_SOCKET) if platform_server_deployed else False
+    platform_agent_healthy = _check_agent(PLATFORM_SPIRE_AGENT_CONTAINER, SPIRE_AGENT_SOCKET) if platform_agent_deployed else False
+    ecosystem_server_healthy = _check_spire(ECOSYSTEM_SPIRE_SERVER_CONTAINER, SPIRE_SERVER_SOCKET) if ecosystem_server_deployed else False
+    ecosystem_agent_healthy = _check_agent(ECOSYSTEM_SPIRE_AGENT_CONTAINER, SPIRE_AGENT_SOCKET) if ecosystem_agent_deployed else False
 
     total_services = MtlsConfig.objects.count()
     enabled_services = MtlsConfig.objects.filter(enabled=True).count()
@@ -217,11 +234,13 @@ def mtls_health(request):
 
     return Response({
         "platform": {
+            "deployed": platform_server_deployed or platform_agent_deployed,
             "spire_server_healthy": platform_server_healthy,
             "spire_agent_healthy": platform_agent_healthy,
             "trust_domain": os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"),
         },
         "ecosystem": {
+            "deployed": ecosystem_server_deployed or ecosystem_agent_deployed,
             "spire_server_healthy": ecosystem_server_healthy,
             "spire_agent_healthy": ecosystem_agent_healthy,
             "trust_domain": os.getenv("ECOSYSTEM_TRUST_DOMAIN", "ecosystem.local"),
@@ -261,6 +280,7 @@ def mtls_list(request):
             "spiffe_id": c.spiffe_id,
             "svid_expiry": c.svid_expiry.isoformat() if c.svid_expiry else None,
             "is_svid_expired": c.is_svid_expired,
+            "sidecar_enabled": c.sidecar_enabled,
         }
         for c in configs
     ])

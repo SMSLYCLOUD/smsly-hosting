@@ -49,7 +49,9 @@ export function MtlsHealthCard({ health, isLoading }: Props) {
     );
   }
 
-  const ecosystemHealthy = health.ecosystem?.spire_server_healthy && health.ecosystem?.spire_agent_healthy;
+  const ecosystemDeployed = health.ecosystem?.deployed ?? false;
+  const ecosystemHealthy = ecosystemDeployed && health.ecosystem?.spire_server_healthy && health.ecosystem?.spire_agent_healthy;
+  const platformDeployed = health.platform?.deployed ?? false;
 
   return (
     <Card>
@@ -63,7 +65,9 @@ export function MtlsHealthCard({ health, isLoading }: Props) {
         <div className="grid grid-cols-2 gap-4">
           {/* Ecosystem SPIRE */}
           <div className="flex items-center gap-3 p-3 rounded-lg border">
-            {ecosystemHealthy ? (
+            {!ecosystemDeployed ? (
+              <Server className="h-5 w-5 text-slate-400" />
+            ) : ecosystemHealthy ? (
               <ShieldCheck className="h-5 w-5 text-emerald-500" />
             ) : (
               <ShieldOff className="h-5 w-5 text-red-500" />
@@ -74,17 +78,19 @@ export function MtlsHealthCard({ health, isLoading }: Props) {
                 Trust domain: {health.ecosystem?.trust_domain || "ecosystem.local"}
               </p>
             </div>
-            <Badge variant={ecosystemHealthy ? "default" : "destructive"} className="ml-auto">
-              {ecosystemHealthy ? "Healthy" : "Unhealthy"}
+            <Badge variant={!ecosystemDeployed ? "secondary" : ecosystemHealthy ? "default" : "destructive"} className="ml-auto">
+              {!ecosystemDeployed ? "Not Deployed" : ecosystemHealthy ? "Healthy" : "Unhealthy"}
             </Badge>
           </div>
 
           {/* Platform SPIRE */}
           <div className="flex items-center gap-3 p-3 rounded-lg border">
-            {health.platform?.spire_server_healthy ? (
+            {!platformDeployed ? (
+              <Server className="h-5 w-5 text-slate-400" />
+            ) : health.platform?.spire_server_healthy ? (
               <ShieldCheck className="h-5 w-5 text-emerald-500" />
             ) : (
-              <ShieldOff className="h-5 w-5 text-slate-400" />
+              <ShieldOff className="h-5 w-5 text-red-500" />
             )}
             <div>
               <p className="text-sm font-medium">Platform SPIRE</p>
@@ -92,8 +98,8 @@ export function MtlsHealthCard({ health, isLoading }: Props) {
                 Trust domain: {health.platform?.trust_domain || "platform.local"}
               </p>
             </div>
-            <Badge variant={health.platform?.spire_server_healthy ? "default" : "secondary"}>
-              {health.platform?.spire_server_healthy ? "Healthy" : "N/A"}
+            <Badge variant={!platformDeployed ? "secondary" : health.platform?.spire_server_healthy ? "default" : "destructive"}>
+              {!platformDeployed ? "Not Deployed" : health.platform?.spire_server_healthy ? "Healthy" : "Unhealthy"}
             </Badge>
           </div>
 

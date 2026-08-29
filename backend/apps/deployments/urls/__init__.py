@@ -25,6 +25,7 @@ from ..views import (
     SnapshotScheduleViewSet,
     SystemConfigView,
 )
+from apps.core.views.system import DatabaseHaToggleView
 from ..views.addons import AddonViewSet, service_addons_unified
 from ..views.analysis import RepoAnalysisView
 from ..views.autoscale import ScalingViewSet
@@ -186,6 +187,7 @@ urlpatterns = [
     path('webhooks/bitbucket/', BitbucketWebhookView.as_view(), name='bitbucket-webhook'),
     path('services/<uuid:service_id>/health/webhook/', ServiceHealthWebhookView.as_view(), name='service-health-webhook'),
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
+    path('system/db-ha-toggle/', DatabaseHaToggleView.as_view(), name='db-ha-toggle'),
     path('system/security-status/', SecurityStatusView.as_view(), name='security-status'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
     path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),

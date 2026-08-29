@@ -5,6 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Switch } from '@/components/ui/switch';
+import {
+    Dialog, DialogContent, DialogDescription, DialogFooter,
+    DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
 import {
     Database, RefreshCw, Loader2, Trash2, Plus, Power, CheckCircle2,
@@ -16,6 +21,7 @@ import {
     DatabaseReplicaKind,
     DatabaseReplicaSslMode,
     DatabaseReplicaStatus,
+    systemApi,
 } from '@/lib/api';
 
 // ─── Status badge ────────────────────────────────────────────────────────────
@@ -395,6 +401,10 @@ export function DatabaseReplicasTab() {
     const [endpoints, setEndpoints] = useState<string>('');
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
+    const [dbHaEnabled, setDbHaEnabled] = useState(true);
+    const [haLoading, setHaLoading] = useState(false);
+    const [confirmOpen, setConfirmOpen] = useState(false);
+    const [pendingHaValue, setPendingHaValue] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -412,7 +422,12 @@ export function DatabaseReplicasTab() {
         }
     }, [toast]);
 
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => {
+        load();
+        systemApi.getConfig().then((config: any) => {
+            setDbHaEnabled(config.DB_HA_ENABLED ?? true);
+        }).catch(() => {});
+    }, [load]);
 
     const sync = async () => {
         setSyncing(true);
@@ -433,8 +448,81 @@ export function DatabaseReplicasTab() {
         }
     };
 
+    const handleHaToggle = (checked: boolean) => {
+        if (!checked) {
+            setPendingHaValue(checked);
+            setConfirmOpen(true);
+        } else {
+            doHaToggle(checked);
+        }
+    };
+
+    const doHaToggle = async (enabled: boolean) => {
+        setHaLoading(true);
+        try {
+            const result = await systemApi.toggleDbHa(enabled);
+            setDbHaEnabled(enabled);
+            toast({ title: 'PostgreSQL HA Updated', description: result.message });
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to toggle HA', variant: 'destructive' });
+        } finally {
+            setHaLoading(false);
+            setConfirmOpen(false);
+        }
+    };
+
     return (
         <div className="space-y-6">
+            {/* PostgreSQL HA Toggle */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Database className="h-5 w-5 text-purple-500" />
+                        PostgreSQL High Availability
+                    </CardTitle>
+                    <CardDescription>
+                        Enable a local read replica for high availability and read scaling.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-medium">
+                                {dbHaEnabled ? 'Replica Active' : 'Replica Disabled'}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                                {dbHaEnabled
+                                    ? 'Read queries are routed to the replica. Writes go to primary.'
+                                    : 'All queries route to the primary. No read scaling.'}
+                            </p>
+                        </div>
+                        <Switch
+                            checked={dbHaEnabled}
+                            onCheckedChange={handleHaToggle}
+                            disabled={haLoading}
+                        />
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Disable PostgreSQL HA?</DialogTitle>
+                        <DialogDescription>
+                            This will stop the postgres-replica container and reconfigure pgcat.
+                            All database queries will route to the primary.
+                            The replica data is preserved and can be restored by re-enabling HA.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+                        <Button variant="destructive" onClick={() => doHaToggle(pendingHaValue)}>
+                            Disable HA
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
             <Card>
                 <CardHeader>
                     <CardTitle className="text-lg">Current pgcat endpoints</CardTitle>

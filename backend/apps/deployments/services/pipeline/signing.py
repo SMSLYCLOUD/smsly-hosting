@@ -253,8 +253,12 @@ class SigningMixin:
 
             if key_available:
                 # Extract public key from private key for verification
-                pub_key = self._get_cosign_pubkey(cosign_bin, key_path, cosign_env)
-                if pub_key:
+                # First check if .pub file already exists alongside the key
+                pub_key = key_path.rsplit(".", 1)[0] + ".pub"
+                if not os.path.isfile(pub_key):
+                    # Extract from private key
+                    pub_key = self._get_cosign_pubkey(cosign_bin, key_path, cosign_env)
+                if pub_key and os.path.isfile(pub_key):
                     verify_cmd = [
                         cosign_bin, "verify",
                         "--key", pub_key,
@@ -262,7 +266,7 @@ class SigningMixin:
                     ]
                 else:
                     # Fallback: no pub key, skip verification
-                    append_log(self.deployment, "Could not extract public key from cosign key. Skipping verification.\n")
+                    append_log(self.deployment, "Could not find or extract public key from cosign key. Skipping verification.\n")
                     update_stage(self.deployment, 'Verify', 'skipped')
                     return
             elif cosign_oidc_issuer:

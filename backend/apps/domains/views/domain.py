@@ -79,6 +79,8 @@ class DomainConfigView(GenericAPIView):
             # Traffic Geo
             'traffic_geo_enabled': config.traffic_geo_enabled,
             'mapbox_token_set': bool(config.mapbox_token),
+            # Database HA
+            'db_ha_enabled': config.db_ha_enabled,
             # CrowdSec
             'crowdsec_bouncer_key_set': bool(config.crowdsec_bouncer_key),
             'crowdsec_enroll_key_set': bool(config.crowdsec_enroll_key),
@@ -252,6 +254,9 @@ class DomainConfigView(GenericAPIView):
             # Traffic Geo
             if 'traffic_geo_enabled' in data:
                 config.traffic_geo_enabled = _parse_bool(data.get('traffic_geo_enabled'))
+            # Database HA
+            if 'db_ha_enabled' in data:
+                config.db_ha_enabled = _parse_bool(data.get('db_ha_enabled'))
             if 'mapbox_token' in data:
                 config.mapbox_token = str(data.get('mapbox_token') or '').strip()
             # CrowdSec

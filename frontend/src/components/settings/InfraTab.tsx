@@ -5,6 +5,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+    Dialog, DialogContent, DialogDescription, DialogFooter,
+    DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { Loader2, Globe, Lock, Shield, Server, Settings as SettingsIcon, Eye, EyeOff } from "lucide-react";
 import { systemApi } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -21,6 +26,9 @@ export function InfraTab() {
   const [cfTokenTouched, setCfTokenTouched] = useState(false);
   const [recheckLoading, setRecheckLoading] = useState(false);
   const [recheckLastRun, setRecheckLastRun] = useState<string | null>(null);
+  const [haLoading, setHaLoading] = useState(false);
+  const [haConfirmOpen, setHaConfirmOpen] = useState(false);
+  const [pendingHaValue, setPendingHaValue] = useState(false);
 
   const fetchDomainConfig = useCallback(async () => {
     try {
@@ -68,6 +76,29 @@ export function InfraTab() {
     } catch (err: any) {
       toast({ title: "Error", description: err?.response?.data?.error || "Failed to trigger route recheck.", variant: "destructive" });
     } finally { setRecheckLoading(false); }
+  };
+
+  const handleHaToggle = (checked: boolean) => {
+    if (!checked) {
+      setPendingHaValue(checked);
+      setHaConfirmOpen(true);
+    } else {
+      doHaToggle(checked);
+    }
+  };
+
+  const doHaToggle = async (enabled: boolean) => {
+    setHaLoading(true);
+    try {
+      const result = await systemApi.toggleDbHa(enabled);
+      setSystemConfig((prev: any) => ({ ...prev, DB_HA_ENABLED: enabled }));
+      toast({ title: "PostgreSQL HA Updated", description: result.message });
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.response?.data?.error || "Failed to toggle HA", variant: "destructive" });
+    } finally {
+      setHaLoading(false);
+      setHaConfirmOpen(false);
+    }
   };
 
   if (!systemConfig) return <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
@@ -175,20 +206,50 @@ export function InfraTab() {
         </CardContent>
       </Card>
 
-      {/* Database */}
+      {/* Database + HA Toggle */}
       <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><SettingsIcon className="h-5 w-5 text-purple-500" /> Database</CardTitle><CardDescription>Database connection info (read-only).</CardDescription></CardHeader>
-        <CardContent>
+        <CardHeader><CardTitle className="flex items-center gap-2"><SettingsIcon className="h-5 w-5 text-purple-500" /> Database</CardTitle><CardDescription>Database connection and high availability.</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
           <Table>
             <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
             <TableBody>
               <TableRow><TableCell className="font-mono">ENGINE</TableCell><TableCell className="truncate max-w-[300px]">{systemConfig.DATABASE_ENGINE}</TableCell><TableCell><Badge variant="outline">Info</Badge></TableCell></TableRow>
               <TableRow><TableCell className="font-mono">DATABASE</TableCell><TableCell>{systemConfig.DATABASE_NAME}</TableCell><TableCell><Badge variant="outline">Info</Badge></TableCell></TableRow>
               <TableRow><TableCell className="font-mono">HOST</TableCell><TableCell>{systemConfig.DATABASE_HOST}</TableCell><TableCell><Badge variant="outline">Info</Badge></TableCell></TableRow>
+              <TableRow>
+                <TableCell className="font-mono">HA MODE</TableCell>
+                <TableCell>{systemConfig.DB_HA_ENABLED ? 'Primary + Replica' : 'Primary Only'}</TableCell>
+                <TableCell>
+                  <Switch
+                    checked={systemConfig.DB_HA_ENABLED ?? true}
+                    onCheckedChange={handleHaToggle}
+                    disabled={haLoading}
+                  />
+                </TableCell>
+              </TableRow>
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={haConfirmOpen} onOpenChange={setHaConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disable PostgreSQL HA?</DialogTitle>
+            <DialogDescription>
+              This will stop the postgres-replica container and reconfigure pgcat.
+              All database queries will route to the primary.
+              The replica data is preserved and can be restored by re-enabling HA.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHaConfirmOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => doHaToggle(pendingHaValue)}>
+              Disable HA
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

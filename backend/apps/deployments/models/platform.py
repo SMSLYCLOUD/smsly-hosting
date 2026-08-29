@@ -523,6 +523,11 @@ class PlatformConfig(models.Model):
         max_length=10, default='INFO',
         help_text="Django log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
 
+    # ── Database HA ────────────────────────────────────────────────────────
+    db_ha_enabled = models.BooleanField(
+        default=True,
+        help_text="Enable PostgreSQL read replica for high availability and read scaling.")
+
     # ── Traffic Geo ────────────────────────────────────────────────────────
     traffic_geo_enabled = models.BooleanField(
         default=True,

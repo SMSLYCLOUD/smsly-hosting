@@ -188,6 +188,8 @@ class SystemConfigView(GenericAPIView):
         'API_RATE_LIMIT_FAIL_CLOSED': ('api_rate_limit_fail_closed', bool),
         # Logging
         'DJANGO_LOG_LEVEL': ('django_log_level', str),
+        # Database HA
+        'DB_HA_ENABLED': ('db_ha_enabled', bool),
         # Feature flags / Security
         'GRID_ALLOW_CONTROL_PLANE_WORKLOADS': ('grid_allow_control_plane_workloads', bool),
         'ALLOW_INSECURE_INTER_NODE_TLS': ('allow_insecure_inter_node_tls', bool),
@@ -558,3 +560,122 @@ class SystemConfigView(GenericAPIView):
             return Response(payload, status=status_code)
 
         return Response(payload, status=status.HTTP_202_ACCEPTED)
+
+
+class DatabaseHaToggleView(GenericAPIView):
+    """
+    POST /api/v1/system/db-ha-toggle/
+    Body: { "enabled": true/false }
+
+    Stops or starts the postgres-replica container and reconfigures pgcat.
+    """
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    COMPOSE_FILE = 'docker-compose.prod.yml'
+    INSTALL_DIR = '/opt/smsly-hosting'
+
+    def post(self, request):
+        enabled = request.data.get('enabled')
+        if enabled is None:
+            return Response(
+                {'error': 'enabled field is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        enabled = bool(enabled)
+        config = PlatformConfig.load()
+
+        if config.db_ha_enabled == enabled:
+            return Response({
+                'status': 'no_change',
+                'db_ha_enabled': enabled,
+                'message': 'PostgreSQL HA is already in the requested state.',
+            })
+
+        if enabled:
+            result = self._start_replica()
+        else:
+            result = self._stop_replica()
+
+        if result.get('error'):
+            return Response(result, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        config.db_ha_enabled = enabled
+        config.save(update_fields=['db_ha_enabled'])
+
+        return Response({
+            'status': 'ok',
+            'db_ha_enabled': enabled,
+            'message': (
+                'PostgreSQL HA enabled. Replica started and pgcat reconfigured.'
+                if enabled
+                else 'PostgreSQL HA disabled. Replica stopped. All queries route to primary.'
+            ),
+        })
+
+    def _run_compose(self, args, timeout=150):
+        import subprocess
+        cmd = [
+            'docker', 'compose', '-f', self.COMPOSE_FILE,
+        ] + args
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True, text=True, timeout=timeout,
+                cwd=self.INSTALL_DIR,
+            )
+            if result.returncode != 0:
+                logger.error("compose command failed: %s\nstderr: %s", ' '.join(cmd), result.stderr)
+                return {'error': result.stderr.strip() or 'Docker Compose command failed.'}
+            return {'ok': True}
+        except subprocess.TimeoutExpired:
+            return {'error': 'Docker Compose command timed out.'}
+        except Exception as exc:
+            return {'error': str(exc)}
+
+    def _start_replica(self):
+        result = self._run_compose([
+            '--profile', 'local-ha', 'up', '-d',
+            '--wait', '--wait-timeout', '120',
+            'postgres-replica',
+        ], timeout=150)
+        if result.get('error'):
+            return result
+
+        self._update_env('DB_REPLICA_HOSTS', 'postgres-replica:5432')
+
+        pgcat_result = self._run_compose(['restart', 'pgcat'], timeout=30)
+        if pgcat_result.get('error'):
+            logger.warning("pgcat restart failed after enabling HA: %s", pgcat_result['error'])
+
+        return {'ok': True}
+
+    def _stop_replica(self):
+        result = self._run_compose([
+            'stop', '--timeout', '15', 'postgres-replica',
+        ], timeout=30)
+
+        self._update_env('DB_REPLICA_HOSTS', '')
+
+        pgcat_result = self._run_compose(['restart', 'pgcat'], timeout=30)
+        if pgcat_result.get('error'):
+            logger.warning("pgcat restart failed after disabling HA: %s", pgcat_result['error'])
+
+        return {'ok': True}
+
+    def _update_env(self, key, value):
+        import re
+        env_path = os.path.join(self.INSTALL_DIR, '.env')
+        try:
+            with open(env_path, 'r') as f:
+                content = f.read()
+            pattern = rf'^{re.escape(key)}=.*$'
+            if re.search(pattern, content, re.MULTILINE):
+                content = re.sub(pattern, f'{key}={value}', content, flags=re.MULTILINE)
+            else:
+                content += f'\n{key}={value}\n'
+            with open(env_path, 'w') as f:
+                f.write(content)
+        except Exception as exc:
+            logger.error("Failed to update .env key %s: %s", key, exc)
