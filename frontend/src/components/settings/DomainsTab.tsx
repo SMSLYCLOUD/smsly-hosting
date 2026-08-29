@@ -182,7 +182,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const updateHostAliases = async (next: { host: string; rewrite_root: string }[]) => {
         try {
             const updated = await servicesApi.update(service.id, { host_aliases: next });
-            setService(updated);
+            setService(prev => ({ ...prev, ...updated }));
             toast({ title: 'Host alias saved', description: 'Routing sync dispatched. SSL is issued automatically once DNS resolves.' });
         } catch (err: any) {
             toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to save host alias.', variant: 'destructive' });
@@ -195,19 +195,19 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
             toast({ title: 'Invalid hostname', description: 'Enter a host like account.example.com', variant: 'destructive' });
             return;
         }
-        if ((service.host_aliases ?? []).some(a => a.host === host)) {
+        if ((Array.isArray(service.host_aliases) ? service.host_aliases : []).some(a => a.host === host)) {
             toast({ title: 'Alias already added', variant: 'destructive' });
             return;
         }
         const rewriteRoot = newAliasRoot.trim() || '';
-        void updateHostAliases([...(service.host_aliases ?? []), { host, rewrite_root: rewriteRoot }]);
+        void updateHostAliases([...(Array.isArray(service.host_aliases) ? service.host_aliases : []), { host, rewrite_root: rewriteRoot }]);
         setNewAliasHost('');
     };
 
     const updatePathRedirects = async (next: { path: string; target: string }[]) => {
         try {
             const updated = await servicesApi.update(service.id, { path_redirects: next });
-            setService(updated);
+            setService(prev => ({ ...prev, ...updated }));
             toast({ title: 'Path redirects saved', description: 'Routing sync dispatched.' });
         } catch (err: any) {
             toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to save path redirect.', variant: 'destructive' });
@@ -240,7 +240,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
             const oldDomain = service.staging_domain || '';
             const newDomain = stagingDomain.trim() || '';
             const updated = await servicesApi.update(service.id, { staging_domain: newDomain || undefined });
-            setService(updated);
+            setService(prev => ({ ...prev, ...updated }));
             if (oldDomain !== newDomain) {
                 setStagingVerified(null);
             }
@@ -402,7 +402,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                                     };
                                                     try {
                                                         const updated = await servicesApi.update(service.id, payload);
-                                                        setService(updated);
+                                                        setService(prev => ({ ...prev, ...updated }));
                                                         toast({
                                                             title:
                                                                 key === 'public'
@@ -468,7 +468,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                 onCheckedChange={async (checked) => {
                                     try {
                                         const updated = await servicesApi.update(service.id, { wildcard_redirect_custom_domain: checked });
-                                        setService(updated);
+                                        setService(prev => ({ ...prev, ...updated }));
                                         toast({
                                             title: checked ? 'Redirect enabled' : 'Redirect disabled',
                                             description: checked
@@ -497,7 +497,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         <li>SSL is issued automatically once DNS resolves. That&apos;s it — no config, no redeploy.</li>
                     </ol>
 
-                    {(service.host_aliases ?? []).map(({ host, rewrite_root }) => (
+                    {(Array.isArray(service.host_aliases) ? service.host_aliases : []).map(({ host, rewrite_root }) => (
                         <div key={host} className="flex items-center gap-3 p-3 bg-card border border-border rounded-lg mb-2">
                             <div className="h-2 w-2 rounded-full bg-emerald-500" />
                             <span className="font-mono text-sm flex-1 truncate">{host}</span>
@@ -508,7 +508,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                onClick={() => updateHostAliases((service.host_aliases ?? []).filter(a => a.host !== host))}
+                                onClick={() => updateHostAliases((Array.isArray(service.host_aliases) ? service.host_aliases : []).filter(a => a.host !== host))}
                             >
                                 <Trash2 className="w-4 h-4" />
                             </Button>

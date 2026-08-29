@@ -582,7 +582,7 @@ export default function ServiceDetailPage() {
                                         const newVal = !(service.is_public !== false);
                                         try {
                                             const updated = await servicesApi.update(service.id, { is_public: newVal });
-                                            setService(updated);
+                                            setService(prev => ({ ...prev, ...updated }));
                                             toast({
                                                 title: newVal ? 'Domain set to Public' : 'Domain set to Private',
                                                 description: newVal
@@ -617,7 +617,7 @@ export default function ServiceDetailPage() {
                                         const newVal = !service.public_domain_hidden;
                                         try {
                                             const updated = await servicesApi.update(service.id, { public_domain_hidden: newVal });
-                                            setService(updated);
+                                            setService(prev => ({ ...prev, ...updated }));
                                             toast({
                                                 title: newVal ? 'Public Domain Hidden' : 'Public Domain Visible',
                                                 description: newVal
@@ -655,7 +655,7 @@ export default function ServiceDetailPage() {
                                             const newVal = !(service.wildcard_redirect_custom_domain === true);
                                             try {
                                                 const updated = await servicesApi.update(service.id, { wildcard_redirect_custom_domain: newVal });
-                                                setService(updated);
+                                                setService(prev => ({ ...prev, ...updated }));
                                                 toast({
                                                     title: newVal ? 'Redirect enabled' : 'Redirect disabled',
                                                     description: newVal

@@ -104,11 +104,12 @@ export default function WorldTrafficMapImpl({ token, countries, totalRequests }:
         if (!mapContainer.current || map.current) return;
 
         // Use Mapbox style if token provided, otherwise use free OpenFreeMap tiles
-        const styleUrl = token
+        const mapboxStyle = token
             ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11?access_token=${token}`
-            : STYLES.dark;
+            : null;
+        const styleUrl = mapboxStyle || STYLES.dark;
 
-        map.current = new maplibregl.Map({
+        const m = new maplibregl.Map({
             container: mapContainer.current,
             style: styleUrl,
             center: [20, 20],
@@ -117,7 +118,16 @@ export default function WorldTrafficMapImpl({ token, countries, totalRequests }:
             interactive: true,
         });
 
-        map.current.addControl(new maplibregl.NavigationControl(), 'top-right');
+        if (mapboxStyle) {
+            m.on('error', (e) => {
+                console.warn('Map tile error:', e.error?.message || e);
+                console.warn('Mapbox token invalid or expired, falling back to OpenFreeMap');
+                try { m.setStyle(STYLES.dark); } catch {}
+            });
+        }
+
+        m.addControl(new maplibregl.NavigationControl(), 'top-right');
+        map.current = m;
 
         return () => {
             markers.current.forEach(m => m.remove());

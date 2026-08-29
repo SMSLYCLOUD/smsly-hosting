@@ -252,7 +252,7 @@ export default function EcosystemPage() {
     const [bulkEnvOpen, setBulkEnvOpen] = useState(false);
 
     // Derive app list from plan for bulk env dialog
-    const ecosystemApps = plan?.services.map(s => ({
+    const ecosystemApps = (plan?.services || []).map(s => ({
         id: s.repo || s.name || `svc-${Math.random().toString(36).slice(2, 8)}`,
         name: s.name || s.repo,
         repo: s.repo,
@@ -328,12 +328,12 @@ export default function EcosystemPage() {
                             setStep('review');
                         }
                     });
-                } else if (data.status === 'review' && data.plan) {
+                } else if (data.status === 'review' && data.plan && Array.isArray(data.plan.services)) {
                     setPlan(data.plan);
                     setStep('review');
                 } else if (data.status === 'deploying' && data.deploy_task_id) {
                     setDeployTaskId(data.deploy_task_id);
-                    setPlan(data.plan);
+                    setPlan(data.plan && Array.isArray(data.plan.services) ? data.plan : null);
                     setStep('deploying');
                     pollTask(data.deploy_task_id, (result: any) => {
                         if (result.error) {
