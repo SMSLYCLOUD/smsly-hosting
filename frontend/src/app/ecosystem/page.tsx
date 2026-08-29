@@ -252,7 +252,9 @@ export default function EcosystemPage() {
     const [bulkEnvOpen, setBulkEnvOpen] = useState(false);
 
     // Derive app list from plan for bulk env dialog
-    const ecosystemApps = (plan?.services || []).map(s => ({
+    const planServices = plan?.services ?? [];
+    const planAddons = plan?.addons ?? [];
+    const ecosystemApps = planServices.map(s => ({
         id: s.repo || s.name || `svc-${Math.random().toString(36).slice(2, 8)}`,
         name: s.name || s.repo,
         repo: s.repo,
@@ -515,7 +517,7 @@ export default function EcosystemPage() {
         setDeepScanProgress('Initializing deep codebase scan...');
         
         // Convert plan to simplified repos_data structure that deep scan expects
-        const reposData = plan.services.map((s: any) => ({ repo: s.repo, stack: s.stack }));
+        const reposData = (plan.services ?? []).map((s: any) => ({ repo: s.repo, stack: s.stack }));
 
         try {
             const data = await ecosystemApi.startDeepScan({
@@ -548,7 +550,7 @@ export default function EcosystemPage() {
         // so the backend doesn't fall through to auto-node-selection.
         const normalizedPlan = {
             ...plan,
-            services: plan.services.map(s => ({
+            services: (plan.services ?? []).map(s => ({
                 ...s,
                 server_id: s.server_id || 'local',
             })),
@@ -599,7 +601,7 @@ export default function EcosystemPage() {
     // Update env var
     const updateEnvVar = (idx: number, key: string, value: string) => {
         if (!plan) return;
-        const newServices = [...plan.services];
+        const newServices = [...(plan.services ?? [])];
         const newEnv = { ...newServices[idx].env_vars };
         newEnv[key] = value;
         newServices[idx] = { ...newServices[idx], env_vars: newEnv };
@@ -608,7 +610,7 @@ export default function EcosystemPage() {
 
     const updateServer = (idx: number, serverId: string) => {
         if (!plan) return;
-        const newServices = [...plan.services];
+        const newServices = [...(plan.services ?? [])];
         newServices[idx] = { ...newServices[idx], server_id: serverId };
         setPlan({ ...plan, services: newServices });
     };
@@ -1016,7 +1018,7 @@ export default function EcosystemPage() {
                                 </div>
                                 <div className="bg-card border border-border p-4 rounded-xl">
                                     <p className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Deployable</p>
-                                    <p className="text-2xl font-bold mt-1 text-emerald-500">{plan.services?.length || 0}</p>
+                                    <p className="text-2xl font-bold mt-1 text-emerald-500">{planServices.length}</p>
                                 </div>
                                 <div className="bg-card border border-border p-4 rounded-xl relative overflow-hidden group">
                                     <p className="text-xs text-muted-foreground uppercase tracking-wider font-bold">AI Intelligence</p>
@@ -1182,9 +1184,9 @@ export default function EcosystemPage() {
                                                 }`} />
                                             </button>
                                         </div>
-                                        {plan.addons && plan.addons.length > 0 && (
+                                        {planAddons.length > 0 && (
                                             <div className="flex flex-wrap gap-1.5">
-                                                {plan.addons.map((addon) => {
+                                                {planAddons.map((addon) => {
                                                     const cfg = sharedAddonConfig[addon.type];
                                                     const isShared = cfg !== undefined ? cfg.shared : useSharedAddons;
                                                     return (
@@ -1267,9 +1269,9 @@ export default function EcosystemPage() {
                                         </p>
 
                                         {/* Per-addon overrides */}
-                                        {plan.addons && plan.addons.length > 0 && (
+                                        {planAddons.length > 0 && (
                                             <div className="space-y-2 mt-3">
-                                                {plan.addons.map((addon) => {
+                                                {planAddons.map((addon) => {
                                                     const cfg = sharedAddonConfig[addon.type];
                                                     const isShared = cfg !== undefined ? cfg.shared : useSharedAddons;
                                                     return (
@@ -1353,7 +1355,7 @@ export default function EcosystemPage() {
                                             </button>
                                         </div>
 
-                                        {plan.services
+                                        {planServices
                                             .sort((a, b) => a.deploy_order - b.deploy_order)
                                             .map((svc, idx) => (
                                                 <div key={svc.repo}>
@@ -1657,7 +1659,7 @@ export default function EcosystemPage() {
                             </div>
 
                             {/* Service Communication Rules */}
-                            {mtlsConfig.enabled && plan.services.length > 0 && (
+                            {mtlsConfig.enabled && planServices.length > 0 && (
                                 <div className="bg-card border border-border p-5 rounded-xl">
                                     <div className="flex items-center justify-between mb-3">
                                         <div>
@@ -1694,7 +1696,7 @@ export default function EcosystemPage() {
                                                     <thead>
                                                         <tr>
                                                             <th className="text-left p-2 text-muted-foreground font-medium">Target ↓ / Caller →</th>
-                                                            {plan.services.filter(s => !s.skip).map(svc => (
+                                                            {planServices.filter(s => !s.skip).map(svc => (
                                                                 <th key={svc.repo} className="p-2 text-center text-muted-foreground font-medium min-w-[80px]">
                                                                     {svc.name || svc.repo.split('/').pop() || ''}
                                                                 </th>
@@ -1702,7 +1704,7 @@ export default function EcosystemPage() {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {plan.services.filter(s => !s.skip).map(targetSvc => {
+                                                        {planServices.filter(s => !s.skip).map(targetSvc => {
                                                             const targetName = targetSvc.name || targetSvc.repo.split('/').pop() || 'unknown';
                                                             const targetKey = targetName.toLowerCase().replace(/[^a-z0-9]/g, '-');
                                                             const rules = communicationRules[targetKey] || { allowed_callers: [] };
@@ -1712,7 +1714,7 @@ export default function EcosystemPage() {
                                                                     <td className="p-2 font-medium text-muted-foreground">
                                                                         {targetName}
                                                                     </td>
-                                                                    {plan.services.filter(s => !s.skip).map(callerSvc => {
+                                                                    {planServices.filter(s => !s.skip).map(callerSvc => {
                                                                         const callerName = callerSvc.name || callerSvc.repo.split('/').pop() || '';
                                                                         const callerKey = callerName.toLowerCase().replace(/[^a-z0-9]/g, '-');
                                                                         const callerSpiffeId = `spiffe://${mtlsConfig.trust_domain}/service/${callerKey}`;
@@ -1769,7 +1771,7 @@ export default function EcosystemPage() {
                                                 <button
                                                     onClick={() => {
                                                         const newRules: CommunicationRules = {};
-                                                        const services = plan.services.filter(s => !s.skip);
+                                                        const services = planServices.filter(s => !s.skip);
                                                         services.forEach(svc => {
                                                             const name = (svc.name || svc.repo.split('/').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '-');
                                                             if (name === 'audit') {
@@ -1801,7 +1803,7 @@ export default function EcosystemPage() {
                                                 <button
                                                     onClick={() => {
                                                         const newRules: CommunicationRules = {};
-                                                        const services = plan.services.filter(s => !s.skip);
+                                                        const services = planServices.filter(s => !s.skip);
                                                         services.forEach(svc => {
                                                             const name = (svc.name || svc.repo.split('/').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '-');
                                                             newRules[name] = { allowed_callers: [] };
@@ -1833,7 +1835,7 @@ export default function EcosystemPage() {
                                     className="btn-shimmer px-10 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold shadow-lg shadow-emerald-500/25 flex items-center gap-3 text-lg"
                                 >
                                     <Rocket size={22} />
-                                    Deploy {plan.services.filter(s => !s.skip).length} Services
+                                    Deploy {planServices.filter(s => !s.skip).length} Services
                                     <ArrowRight size={18} />
                                 </motion.button>
                             </div>
@@ -1908,13 +1910,13 @@ export default function EcosystemPage() {
                             )}
 
                             {/* Addons created from plan */}
-                            {plan?.addons && plan.addons.length > 0 && (
+                            {planAddons.length > 0 && (
                                 <div className="bg-card border border-border rounded-xl p-4">
                                     <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2 mb-3">
                                         <Database size={14} /> Addons Provisioned
                                     </h3>
                                     <div className="flex flex-wrap gap-2">
-                                        {plan.addons.map((a, i) => (
+                                        {planAddons.map((a, i) => (
                                             <span key={i} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
                                                 <Database size={12} />
                                                 {a.type}

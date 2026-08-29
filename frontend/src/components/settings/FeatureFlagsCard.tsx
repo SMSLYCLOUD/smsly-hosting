@@ -5,7 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Shield } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Shield, X } from "lucide-react";
 
 interface FeatureFlagsCardProps {
   config: any;
@@ -36,11 +37,25 @@ export function FeatureFlagsCard({ config, onChange }: FeatureFlagsCardProps) {
         {config.traffic_geo_enabled && (
           <div className="space-y-2 ml-1">
             <Label>Mapbox Token (optional)</Label>
-            <Input
-              type="password"
-              placeholder={config.mapbox_token_set ? "•••••••• (Saved)" : "Leave empty to use free OpenFreeMap tiles"}
-              onChange={(e) => onChange("mapbox_token", e.target.value)}
-            />
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                placeholder={config.mapbox_token_set ? "•••••••• (Saved)" : "Leave empty to use free OpenFreeMap tiles"}
+                onChange={(e) => onChange("mapbox_token", e.target.value)}
+                className="flex-1"
+              />
+              {config.mapbox_token_set && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onChange("mapbox_token", "")}
+                  className="shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                  title="Clear saved Mapbox token"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
               Optional. When empty, the map uses free OpenFreeMap tiles (no account needed).
               Get a token at <a href="https://mapbox.com" target="_blank" rel="noopener noreferrer" className="underline">mapbox.com</a> for premium styles.

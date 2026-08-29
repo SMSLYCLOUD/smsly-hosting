@@ -39,7 +39,8 @@ SYSTEMD_TIMERS=(
 
 # ─── Production stack ──────────────────────────────────────────────────
 PROD_SERVICES=(
-    "db" "pgcat" "redis" "registry" "rabbitmq"
+    "db" "pgcat" "redis-primary" "redis-replica" "redis-sentinel-1" "redis-sentinel-2" "redis-sentinel-3"
+    "registry" "rabbitmq"
     "backend" "celery" "celery-fast" "celery-deploy" "celery-beat"
     "frontend" "socket-proxy" "caddy"
 )
