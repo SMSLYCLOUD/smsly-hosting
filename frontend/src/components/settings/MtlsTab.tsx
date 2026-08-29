@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
 import {
   Loader2,
@@ -14,6 +15,8 @@ import {
   RefreshCw,
   Plus,
   Trash2,
+  Server,
+  Globe,
 } from "lucide-react";
 import api from "@/lib/api";
 import { MtlsHealthCard } from "@/app/console/settings/security/components/MtlsHealthCard";
@@ -33,6 +36,9 @@ export function MtlsTab() {
   const [policiesLoading, setPoliciesLoading] = useState(true);
   const [showCreatePolicy, setShowCreatePolicy] = useState(false);
   const [mutating, setMutating] = useState(false);
+  const [deploying, setDeploying] = useState<"platform" | "ecosystem" | null>(null);
+  const [mtlsEnabled, setMtlsEnabled] = useState(false);
+  const [mtlsEcosystemEnabled, setMtlsEcosystemEnabled] = useState(false);
   const [policyForm, setPolicyForm] = useState({
     name: "",
     source_spiffe_id: "",
@@ -51,6 +57,10 @@ export function MtlsTab() {
       ]);
       setServices(servicesRes.data || []);
       setHealth(healthRes.data);
+      if (healthRes.data) {
+        setMtlsEnabled(healthRes.data.mtls_enabled ?? false);
+        setMtlsEcosystemEnabled(healthRes.data.mtls_ecosystem_enabled ?? false);
+      }
     } catch {
       console.error("Failed to fetch mTLS data");
     } finally {
@@ -113,6 +123,40 @@ export function MtlsTab() {
     }
   };
 
+  const handleDeploySpire = async (scope: "platform" | "ecosystem") => {
+    setDeploying(scope);
+    try {
+      const res = await api.post("/mtls/spire/deploy/", { scope });
+      toast({
+        title: "SPIRE Deployed",
+        description: scope === "platform"
+          ? "Platform SPIRE infrastructure is now running."
+          : "Ecosystem SPIRE infrastructure is now running.",
+      });
+      fetchData();
+    } catch (e: any) {
+      toast({ title: "Deploy Failed", description: e?.response?.data?.message || "Failed to deploy SPIRE", variant: "destructive" });
+    } finally {
+      setDeploying(null);
+    }
+  };
+
+  const handleUndeploySpire = async (scope: "platform" | "ecosystem") => {
+    if (!confirm(scope === "platform"
+      ? "Stop platform SPIRE infrastructure? Platform mTLS will be disabled."
+      : "Stop ecosystem SPIRE infrastructure? Ecosystem mTLS will be disabled. All user services will lose SPIFFE identity.")) return;
+    setDeploying(scope);
+    try {
+      await api.post("/mtls/spire/undeploy/", { scope });
+      toast({ title: "SPIRE Stopped", description: `${scope} SPIRE infrastructure has been stopped.` });
+      fetchData();
+    } catch (e: any) {
+      toast({ title: "Error", description: e?.response?.data?.message || "Failed to stop SPIRE", variant: "destructive" });
+    } finally {
+      setDeploying(null);
+    }
+  };
+
   const createPolicy = async () => {
     setMutating(true);
     try {
@@ -171,6 +215,86 @@ export function MtlsTab() {
 
   return (
     <div className="space-y-6">
+      {/* Global SPIRE Deploy */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Server className="h-5 w-5" />
+            SPIRE Infrastructure
+          </CardTitle>
+          <CardDescription>
+            Deploy or stop the SPIRE identity service. Platform SPIRE handles internal services; ecosystem SPIRE handles user-deployed services.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-2">
+            {/* Platform SPIRE */}
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Server className="h-4 w-4" />
+                  <Label className="text-base">Platform SPIRE</Label>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {mtlsEnabled ? "Running — platform services have SPIFFE identity" : "Stopped — platform mTLS inactive"}
+                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  <Badge variant={mtlsEnabled ? "default" : "secondary"}>
+                    {mtlsEnabled ? "Active" : "Inactive"}
+                  </Badge>
+                  {health?.platform?.spire_server_healthy && (
+                    <Badge variant="outline" className="text-emerald-600">Server Healthy</Badge>
+                  )}
+                  {health?.platform?.spire_agent_healthy && (
+                    <Badge variant="outline" className="text-emerald-600">Agent Healthy</Badge>
+                  )}
+                </div>
+              </div>
+              <Switch
+                checked={mtlsEnabled}
+                disabled={deploying === "platform"}
+                onCheckedChange={(v) => v ? handleDeploySpire("platform") : handleUndeploySpire("platform")}
+              />
+            </div>
+
+            {/* Ecosystem SPIRE */}
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4" />
+                  <Label className="text-base">Ecosystem SPIRE</Label>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {mtlsEcosystemEnabled ? "Running — user services have SPIFFE identity" : "Stopped — ecosystem mTLS inactive"}
+                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  <Badge variant={mtlsEcosystemEnabled ? "default" : "secondary"}>
+                    {mtlsEcosystemEnabled ? "Active" : "Inactive"}
+                  </Badge>
+                  {health?.ecosystem?.spire_server_healthy && (
+                    <Badge variant="outline" className="text-emerald-600">Server Healthy</Badge>
+                  )}
+                  {health?.ecosystem?.spire_agent_healthy && (
+                    <Badge variant="outline" className="text-emerald-600">Agent Healthy</Badge>
+                  )}
+                </div>
+              </div>
+              <Switch
+                checked={mtlsEcosystemEnabled}
+                disabled={deploying === "ecosystem"}
+                onCheckedChange={(v) => v ? handleDeploySpire("ecosystem") : handleUndeploySpire("ecosystem")}
+              />
+            </div>
+          </div>
+          {deploying && (
+            <div className="flex items-center gap-2 mt-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {deploying === "platform" ? "Deploying platform SPIRE..." : "Deploying ecosystem SPIRE..."}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Health Status — uses MtlsHealthCard component */}
       <MtlsHealthCard health={health} isLoading={false} />
 

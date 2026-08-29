@@ -50,6 +50,16 @@ ALLOWED_ECOSYSTEM_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN, PLATFORM_SPIFF
 
 def is_mtls_enabled(service) -> bool:
     """Check if mTLS is enabled for a service."""
+    # Check PlatformConfig DB toggle first
+    try:
+        from apps.deployments.models.platform import PlatformConfig
+        pc = PlatformConfig.load()
+        if not pc.mtls_ecosystem_enabled:
+            return False
+    except Exception:
+        pass
+
+    # Fall back to env var
     platform_enabled = os.getenv("MTLS_ENABLED", "true").lower() in ("true", "1", "yes")
     if not platform_enabled:
         return False

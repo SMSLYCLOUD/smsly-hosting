@@ -15,7 +15,7 @@ interface FeatureFlagsCardProps {
 
 export function FeatureFlagsCard({ config, onChange }: FeatureFlagsCardProps) {
   return (
-    <Card className="md:col-span-2">
+    <Card>
       <CardHeader>
         <CardTitle className="flex items-center space-x-2">
           <Shield className="h-5 w-5" />

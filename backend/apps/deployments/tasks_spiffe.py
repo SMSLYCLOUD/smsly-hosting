@@ -47,8 +47,18 @@ def sync_spiffe_entries_task(self):
     """
     mtls_enabled = os.getenv("MTLS_ENABLED", "true").lower() in ("true", "1", "yes")
     if not mtls_enabled:
-        logger.info("mTLS disabled globally, skipping SPIRE sync")
+        logger.info("mTLS disabled globally (env var), skipping SPIRE sync")
         return {"status": "skipped", "reason": "mtls_disabled"}
+
+    # Also check PlatformConfig DB toggle
+    try:
+        from apps.deployments.models.platform import PlatformConfig
+        pc = PlatformConfig.load()
+        if not pc.mtls_ecosystem_enabled:
+            logger.info("mTLS ecosystem disabled in PlatformConfig, skipping SPIRE sync")
+            return {"status": "skipped", "reason": "mtls_ecosystem_disabled"}
+    except Exception:
+        pass
 
     try:
         from apps.mtls.models import MtlsConfig

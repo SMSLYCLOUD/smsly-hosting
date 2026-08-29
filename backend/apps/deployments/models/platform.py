@@ -550,6 +550,16 @@ class PlatformConfig(models.Model):
         help_text="CrowdSec console enrollment key (optional). "
                   "Falls back to CROWDSEC_ENROLL_KEY env var if empty.")
 
+    # ── SPIFFE mTLS ─────────────────────────────────────────────────────
+    mtls_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable SPIFFE mTLS for platform services. "
+                  "Requires platform SPIRE infrastructure to be deployed.")
+    mtls_ecosystem_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable SPIFFE mTLS for user-deployed services. "
+                  "Requires ecosystem SPIRE infrastructure to be deployed.")
+
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:

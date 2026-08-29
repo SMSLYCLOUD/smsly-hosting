@@ -182,6 +182,162 @@ def mtls_disable(request, service_id):
     })
 
 
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mtls_sidecar_toggle(request, service_id):
+    """
+    POST /api/v1/services/{service_id}/mtls/sidecar
+
+    Toggles Envoy sidecar for transparent mTLS on a service.
+    Requires mTLS to be enabled on the service.
+    """
+    from apps.deployments.models import Service
+    service = get_object_or_404(Service, id=service_id)
+    if not _user_can_access_service(request.user, service):
+        return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+
+    enabled = request.data.get("enabled", False)
+
+    config, created = MtlsConfig.objects.get_or_create(
+        service=service,
+        defaults={"enabled": True, "trust_domain": "ecosystem.local", "sidecar_enabled": enabled},
+    )
+    if not created:
+        config.sidecar_enabled = enabled
+        config.save(update_fields=["sidecar_enabled", "updated_at"])
+
+    return Response({
+        "status": "enabled" if enabled else "disabled",
+        "sidecar_enabled": config.sidecar_enabled,
+        "message": f"Envoy sidecar {'enabled' if enabled else 'disabled'}. "
+                   f"Redeploy the service for changes to take effect.",
+        "requires_redeploy": True,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mtls_spire_deploy(request):
+    """
+    POST /api/v1/mtls/spire/deploy
+
+    Starts SPIRE infrastructure containers.
+    Accepts {"scope": "platform"} or {"scope": "ecosystem"} or {"scope": "both"} (default).
+    Admin only.
+    """
+    if not request.user.is_superuser:
+        return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+
+    from apps.deployments.models import PlatformConfig
+    pc = PlatformConfig.load()
+    scope = request.data.get("scope", "both")
+
+    spire_file = "/opt/smsly-hosting/docker-compose.spire.yml"
+    results = {}
+
+    if scope in ("platform", "both"):
+        already = _container_running(PLATFORM_SPIRE_SERVER_CONTAINER)
+        if already:
+            results["platform"] = "already_deployed"
+        else:
+            try:
+                r = subprocess.run(
+                    ["docker", "compose", "-f", spire_file,
+                     "up", "-d", "spire-server", "spire-agent", "--remove-orphans"],
+                    capture_output=True, text=True, timeout=120,
+                    cwd="/opt/smsly-hosting",
+                )
+                results["platform"] = "deployed" if r.returncode == 0 else f"error: {r.stderr[:300]}"
+            except Exception as e:
+                results["platform"] = f"error: {e}"
+
+    if scope in ("ecosystem", "both"):
+        already = _container_running(ECOSYSTEM_SPIRE_SERVER_CONTAINER)
+        if already:
+            results["ecosystem"] = "already_deployed"
+        else:
+            try:
+                r = subprocess.run(
+                    ["docker", "compose", "-f", spire_file,
+                     "up", "-d", "spire-server-ecosystem", "spire-agent-ecosystem", "--remove-orphans"],
+                    capture_output=True, text=True, timeout=120,
+                    cwd="/opt/smsly-hosting",
+                )
+                results["ecosystem"] = "deployed" if r.returncode == 0 else f"error: {r.stderr[:300]}"
+            except Exception as e:
+                results["ecosystem"] = f"error: {e}"
+
+    # Update PlatformConfig flags
+    if scope in ("platform", "both"):
+        pc.mtls_enabled = results.get("platform", "").startswith(("deployed", "already"))
+    if scope in ("ecosystem", "both"):
+        pc.mtls_ecosystem_enabled = results.get("ecosystem", "").startswith(("deployed", "already"))
+    pc.save(update_fields=["mtls_enabled", "mtls_ecosystem_enabled"])
+
+    return Response({
+        "status": "deployed",
+        "results": results,
+        "mtls_enabled": pc.mtls_enabled,
+        "mtls_ecosystem_enabled": pc.mtls_ecosystem_enabled,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mtls_spire_undeploy(request):
+    """
+    POST /api/v1/mtls/spire/undeploy
+
+    Stops SPIRE infrastructure containers.
+    Accepts {"scope": "platform"} or {"scope": "ecosystem"} or {"scope": "both"} (default).
+    Admin only.
+    """
+    if not request.user.is_superuser:
+        return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+
+    from apps.deployments.models import PlatformConfig
+    pc = PlatformConfig.load()
+    scope = request.data.get("scope", "both")
+
+    spire_file = "/opt/smsly-hosting/docker-compose.spire.yml"
+    results = {}
+
+    if scope in ("platform", "both"):
+        try:
+            subprocess.run(
+                ["docker", "compose", "-f", spire_file,
+                 "rm", "-fsv", "spire-server", "spire-agent"],
+                capture_output=True, text=True, timeout=60,
+                cwd="/opt/smsly-hosting",
+            )
+            results["platform"] = "stopped"
+        except Exception as e:
+            results["platform"] = f"error: {e}"
+        pc.mtls_enabled = False
+
+    if scope in ("ecosystem", "both"):
+        try:
+            subprocess.run(
+                ["docker", "compose", "-f", spire_file,
+                 "rm", "-fsv", "spire-server-ecosystem", "spire-agent-ecosystem"],
+                capture_output=True, text=True, timeout=60,
+                cwd="/opt/smsly-hosting",
+            )
+            results["ecosystem"] = "stopped"
+        except Exception as e:
+            results["ecosystem"] = f"error: {e}"
+        pc.mtls_ecosystem_enabled = False
+
+    pc.save(update_fields=["mtls_enabled", "mtls_ecosystem_enabled"])
+
+    return Response({
+        "status": "undeployed",
+        "results": results,
+        "mtls_enabled": pc.mtls_enabled,
+        "mtls_ecosystem_enabled": pc.mtls_ecosystem_enabled,
+    })
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def mtls_health(request):
@@ -232,7 +388,12 @@ def mtls_health(request):
         enabled=True, svid_expiry__lt=timezone.now()
     ).count()
 
+    from apps.deployments.models import PlatformConfig
+    pc = PlatformConfig.load()
+
     return Response({
+        "mtls_enabled": pc.mtls_enabled,
+        "mtls_ecosystem_enabled": pc.mtls_ecosystem_enabled,
         "platform": {
             "deployed": platform_server_deployed or platform_agent_deployed,
             "spire_server_healthy": platform_server_healthy,

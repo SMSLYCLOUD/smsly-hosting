@@ -2,6 +2,8 @@
 // Generic — works with any tenant service, not SMSLY-specific.
 
 export interface MtlsHealth {
+  mtls_enabled: boolean;
+  mtls_ecosystem_enabled: boolean;
   spire_server_healthy: boolean;
   spire_agent_healthy: boolean;
   total_services: number;

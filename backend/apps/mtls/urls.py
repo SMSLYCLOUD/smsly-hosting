@@ -24,6 +24,11 @@ urlpatterns = [
         name="mtls-disable",
     ),
     path(
+        "services/<uuid:service_id>/mtls/sidecar/",
+        views.mtls_sidecar_toggle,
+        name="mtls-sidecar-toggle",
+    ),
+    path(
         "mtls/health/",
         views.mtls_health,
         name="mtls-health",
@@ -43,5 +48,15 @@ urlpatterns = [
         "mtls/policies/<int:policy_id>/",
         views.policy_update_delete,
         name="mtls-policy-update-delete",
+    ),
+    path(
+        "mtls/spire/deploy/",
+        views.mtls_spire_deploy,
+        name="mtls-spire-deploy",
+    ),
+    path(
+        "mtls/spire/undeploy/",
+        views.mtls_spire_undeploy,
+        name="mtls-spire-undeploy",
     ),
 ]
