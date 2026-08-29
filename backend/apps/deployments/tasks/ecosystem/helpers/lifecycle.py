@@ -1,6 +1,8 @@
 import logging
 import os
+import shutil
 from collections import defaultdict
+from functools import lru_cache
 
 from django.core.cache import cache
 from django.utils import timezone
@@ -11,6 +13,7 @@ from apps.deployments.tasks.ecosystem.constants import (
     _BUILD_DEFER_SECONDS,
     _DEFAULT_WAVE_SIZE,
     _MAX_CONCURRENT_BUILDS,
+    _MAX_WAVE_SIZE,
     _MIN_FREE_MEMORY_MB,
     _WAVE_RECHECK_SECONDS,
 )
@@ -18,22 +21,146 @@ from apps.deployments.tasks.ecosystem.constants import (
 logger = logging.getLogger(__name__)
 
 
-def _get_available_memory_mb() -> int:
-    """Return available RAM in MB, or a large default if psutil is unavailable."""
+_MB = 1024 * 1024
+
+
+@lru_cache(maxsize=1)
+def _get_system_capacity() -> dict:
+    """Return a snapshot of the host's compute and memory capacity.
+
+    Uses psutil when available; falls back to /proc/meminfo + os.cpu_count()
+    so the logic still works in slim containers that don't ship psutil.
+    Result is cached for 30s to avoid hammering /proc on every wave.
+    """
+    cpu_count = os.cpu_count() or 1
+
+    total_mb = 0
+    available_mb = 0
     try:
         import psutil
-        return int(psutil.virtual_memory().available / (1024 * 1024))
+        vm = psutil.virtual_memory()
+        total_mb = int(vm.total / _MB)
+        available_mb = int(vm.available / _MB)
     except ImportError:
-        logger.warning("psutil unavailable — using conservative 512 MB memory estimate")
-        return 512
+        try:
+            with open("/proc/meminfo") as fh:
+                lines = fh.read().splitlines()
+            kv = {}
+            for line in lines:
+                key, _, rest = line.partition(":")
+                kv[key.strip()] = rest.strip()
+            total_mb = int(kv.get("MemTotal", "0").split()[0]) // 1024
+            available_mb = int(kv.get("MemAvailable", kv.get("MemFree", "0")).split()[0]) // 1024
+        except Exception:
+            total_mb = 0
+            available_mb = 0
+    except Exception as exc:
+        logger.debug("psutil memory read failed: %s", exc)
+
+    disk_free_gb = 0
+    try:
+        disk_free_gb = int(shutil.disk_usage("/").free / (1024 ** 3))
+    except Exception as exc:
+        logger.debug("disk usage read failed: %s", exc)
+
+    return {
+        "cpu_count": cpu_count,
+        "total_memory_mb": total_mb,
+        "available_memory_mb": available_mb,
+        "disk_free_gb": disk_free_gb,
+    }
 
 
-def _has_enough_memory(min_free_mb: int = _MIN_FREE_MEMORY_MB) -> bool:
-    """Check if system has at least min_free_mb of available memory."""
-    free = _get_available_memory_mb()
-    if free >= min_free_mb:
+def _get_available_memory_mb() -> int:
+    """Return available RAM in MB, or a large default if it can't be measured."""
+    cap = _get_system_capacity()
+    if cap["available_memory_mb"] > 0:
+        return cap["available_memory_mb"]
+    logger.warning("Memory measurement unavailable — using conservative 512 MB estimate")
+    return 512
+
+
+# ── Per-build memory budget ───────────────────────────────────────────────
+# A build runs `nixpacks` or `docker build`, then `docker compose up`. Worst
+# case memory: ~1.5 GB per build (Nixpacks + compose resolution + layer cache
+# for a mid-size app). On a 8 GB host with 1 GB reserved for infra, this gives
+# 4 parallel builds at 1.5 GB each. Tuneable via PlatformConfig.
+_DEFAULT_BUILD_MEMORY_MB = 1500
+_SAFETY_RESERVE_MB = 1024        # Always keep this much free for infra/celery
+_MIN_CONCURRENCY = 1
+_MAX_CONCURRENCY = 12            # Hard ceiling regardless of how much RAM we have
+_DYNAMIC_WAVE_MIN = 1
+_DYNAMIC_WAVE_MAX_CAP = 10       # Don't ever build a wave bigger than this
+
+
+def _calculate_dynamic_concurrency(
+    per_build_mb: int = _DEFAULT_BUILD_MEMORY_MB,
+    safety_reserve_mb: int = _SAFETY_RESERVE_MB,
+) -> int:
+    """Compute the maximum number of concurrent builds based on available RAM.
+
+    Returns a value between _MIN_CONCURRENCY and _MAX_CONCURRENCY inclusive.
+    """
+    cap = _get_system_capacity()
+    free = cap["available_memory_mb"]
+    if free <= 0 or per_build_mb <= 0:
+        return _MIN_CONCURRENCY
+    usable = max(0, free - safety_reserve_mb)
+    by_memory = max(_MIN_CONCURRENCY, usable // per_build_mb)
+    # CPU ceiling: leave at least 1 core for the host (celery, traefik, caddy)
+    by_cpu = max(_MIN_CONCURRENCY, cap["cpu_count"] - 1)
+    chosen = min(by_memory, by_cpu, _MAX_CONCURRENCY)
+    logger.info(
+        "Dynamic concurrency: %d MB free, %d cores, per_build=%d MB → max_concurrent=%d",
+        free, cap["cpu_count"], per_build_mb, chosen,
+    )
+    return chosen
+
+
+def _calculate_dynamic_wave_size(
+    concurrency: int,
+    per_build_mb: int = _DEFAULT_BUILD_MEMORY_MB,
+    safety_reserve_mb: int = _SAFETY_RESERVE_MB,
+) -> int:
+    """Compute a wave size that fits comfortably in current memory budget.
+
+    A wave launches at most `concurrency` builds in parallel, each consuming
+    ~per_build_mb. We size the wave so that even if every slot starts at once
+    we stay above the safety reserve.
+    """
+    cap = _get_system_capacity()
+    free = cap["available_memory_mb"]
+    if free <= 0:
+        return min(_DYNAMIC_WAVE_MIN, _DYNAMIC_WAVE_MAX_CAP)
+    usable = max(0, free - safety_reserve_mb)
+    if per_build_mb <= 0:
+        return _DYNAMIC_WAVE_MIN
+    by_memory = max(_DYNAMIC_WAVE_MIN, usable // per_build_mb)
+    chosen = min(
+        by_memory,
+        max(concurrency, _DYNAMIC_WAVE_MIN),
+        _DYNAMIC_WAVE_MAX_CAP,
+    )
+    return chosen
+
+
+def _has_enough_memory(required_mb: int = _MIN_FREE_MEMORY_MB) -> bool:
+    """Check if the system has at least ``required_mb`` free RAM available.
+
+    The required_mb is *added* to the safety reserve, so callers asking for
+    2048 MB effectively need 2 GB free above the 1 GB reserve.
+    """
+    cap = _get_system_capacity()
+    free = cap["available_memory_mb"]
+    if free <= 0:
+        return True  # Can't measure — don't block
+    needed = required_mb + _SAFETY_RESERVE_MB
+    if free >= needed:
         return True
-    logger.warning("Low memory: %d MB available, need %d MB. Deferring wave.", free, min_free_mb)
+    logger.warning(
+        "Low memory: %d MB free, need %d MB (build=%d + reserve=%d). Deferring wave.",
+        free, needed, required_mb, _SAFETY_RESERVE_MB,
+    )
     return False
 
 
@@ -109,19 +236,53 @@ def _rebuild_ecosystem_build_counter() -> None:
 
 
 def _get_ecosystem_build_config() -> dict:
-    """Read ecosystem build settings from PlatformConfig with env var fallback."""
+    """Read ecosystem build settings with dynamic overrides.
+
+    Order of precedence for ``max_concurrent_builds`` and ``wave_size``:
+    1. PlatformConfig field (operator's static ceiling)
+    2. Dynamic calculation from available RAM + CPU
+    3. Hardcoded constant fallback
+
+    This means the operator can cap concurrency with a single number on
+    PlatformConfig, but if memory is tight we drop below that cap
+    automatically. Likewise, if the operator leaves it at 0, we size
+    based on real resources.
+    """
+    dynamic_concurrency = _calculate_dynamic_concurrency()
     try:
         from apps.deployments.models.core import PlatformConfig
         cfg = PlatformConfig.load()
-        max_concurrent = cfg.ecosystem_max_concurrent_builds or _MAX_CONCURRENT_BUILDS
+        pc_concurrency = cfg.ecosystem_max_concurrent_builds or 0
+        # Cap by the operator's static ceiling if set; otherwise use dynamic
+        if pc_concurrency > 0:
+            max_concurrent = min(dynamic_concurrency, pc_concurrency)
+        else:
+            max_concurrent = dynamic_concurrency
+
+        # Stagger stays static — it's a politeness delay, not a resource gate
         stagger = cfg.ecosystem_build_stagger_seconds or 30
-        wave_size = cfg.ecosystem_default_wave_size or _DEFAULT_WAVE_SIZE
+
+        # Wave size: dynamic baseline, then clipped by operator override
+        dynamic_wave = _calculate_dynamic_wave_size(max_concurrent)
+        pc_wave = cfg.ecosystem_default_wave_size or 0
+        if pc_wave > 0:
+            wave_size = min(dynamic_wave, pc_wave)
+        else:
+            wave_size = dynamic_wave
+        wave_size = max(1, min(_MAX_WAVE_SIZE, wave_size))
+
         recheck = cfg.ecosystem_wave_recheck_seconds or _WAVE_RECHECK_SECONDS
     except Exception:
-        max_concurrent = _MAX_CONCURRENT_BUILDS
+        max_concurrent = dynamic_concurrency
         stagger = 30
-        wave_size = _DEFAULT_WAVE_SIZE
+        wave_size = max(1, min(_MAX_WAVE_SIZE, _calculate_dynamic_wave_size(max_concurrent)))
         recheck = _WAVE_RECHECK_SECONDS
+
+    cap = _get_system_capacity()
+    logger.info(
+        "Ecosystem build config: %d MB free, %d cores → max_concurrent=%d, wave_size=%d",
+        cap["available_memory_mb"], cap["cpu_count"], max_concurrent, wave_size,
+    )
     return {
         "max_concurrent_builds": max_concurrent,
         "build_stagger_seconds": stagger,
@@ -136,12 +297,39 @@ def _wave_recheck_countdown() -> int:
 
 
 def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: int) -> int:
-    """Queue QUEUED deployments in this wave with concurrency control."""
+    """Queue QUEUED deployments in this wave with dynamic concurrency control.
+
+    Before queuing, the function re-checks available memory. If the wave
+    would push us below the safety reserve, the entire wave is deferred
+    (not partially queued) so we don't end up with a half-running set
+    that OOMs the host.
+    """
 
     queued = 0
     build_cfg = _get_ecosystem_build_config()
     max_concurrent = build_cfg["max_concurrent_builds"]
     stagger = build_cfg["build_stagger_seconds"]
+
+    # Re-evaluate memory under the wave's own footprint. Each build
+    # needs ~1.5 GB; the wave will at most launch `max_concurrent` at once.
+    wave_memory_required = max_concurrent * _DEFAULT_BUILD_MEMORY_MB
+    if not _has_enough_memory(wave_memory_required):
+        for deployment_id in deployment_ids:
+            deployment = Deployment.objects.filter(id=deployment_id).first()
+            if not deployment or deployment.status != Deployment.Status.QUEUED:
+                continue
+            deployment.build_logs = (
+                f"{deployment.build_logs or ''}"
+                f"\n[Ecosystem] Wave {wave_index + 1} deferred — "
+                f"insufficient free memory for {max_concurrent} concurrent builds.\n"
+            )
+            deployment.save(update_fields=["build_logs"])
+            app.send_task(
+                "apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task",
+                args=[str(deployment.id), str(provider_id), wave_index],
+                countdown=_BUILD_DEFER_SECONDS,
+            )
+        return 0
 
     for i, deployment_id in enumerate(deployment_ids):
         deployment = Deployment.objects.filter(id=deployment_id).first()
@@ -155,7 +343,8 @@ def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: in
         if active >= max_concurrent:
             deployment.build_logs = (
                 f"{deployment.build_logs or ''}"
-                f"\n[Ecosystem] Build concurrency limit reached — deferred in wave {wave_index + 1}.\n"
+                f"\n[Ecosystem] Build concurrency limit reached "
+                f"({active}/{max_concurrent}) — deferred in wave {wave_index + 1}.\n"
             )
             deployment.save(update_fields=["build_logs"])
             app.send_task(

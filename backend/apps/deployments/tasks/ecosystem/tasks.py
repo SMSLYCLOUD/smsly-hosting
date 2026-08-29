@@ -219,7 +219,10 @@ def ecosystem_release_wave_task(
 
     # Wave 0 has no previous wave to check — handle memory gating directly
     if wave_index == 0:
-        if not _has_enough_memory():
+        # Ask the dynamic config how much memory this wave will need
+        _wave_cfg = _get_ecosystem_build_config()
+        _wave_mem_req = _wave_cfg["max_concurrent_builds"] * 1500  # ~1.5 GB per concurrent build
+        if not _has_enough_memory(_wave_mem_req):
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[provider_id, waves, 0, recheck_count, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
@@ -350,7 +353,9 @@ def ecosystem_release_wave_task(
         }
 
     # Memory-aware gating: defer wave if system is under memory pressure
-    if not _has_enough_memory():
+    _wave_cfg = _get_ecosystem_build_config()
+    _wave_mem_req = _wave_cfg["max_concurrent_builds"] * 1500  # ~1.5 GB per concurrent build
+    if not _has_enough_memory(_wave_mem_req):
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
@@ -508,6 +513,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             from django.contrib.contenttypes.models import ContentType
 
             from apps.deployments.models.core import PlatformConfig
+            from apps.deployments.models.network_scope import ScopedNetwork
             from apps.deployments.models.registry_scope import ScopedRegistry
 
             _ct = ContentType.objects.get_for_model(Project)
@@ -584,6 +590,93 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 )
         except Exception as exc:
             logger.warning("Failed to ensure scoped registry for ecosystem project: %s", exc)
+
+    # Ensure the ecosystem project also has its own ScopedNetwork so its
+    # services run on a dedicated Docker bridge instead of sharing
+    # ``smsly-net`` with the platform. Without this, every service lands on
+    # the global flat network and there's no L3 isolation between
+    # ecosystem tenants.
+    if project:
+        try:
+            from django.contrib.contenttypes.models import ContentType
+
+            from apps.deployments.models.network_scope import ScopedNetwork
+
+            _ct = ContentType.objects.get_for_model(Project)
+            _has_network = ScopedNetwork.objects.filter(
+                content_type=_ct, object_id=project.id,
+            ).exists()
+            if not _has_network:
+                # Network name is derived from the project UUID so it's
+                # unique per ecosystem deploy. Suffix ``-net`` mirrors the
+                # existing ``smsly-net`` convention so Traefik/Caddy
+                # discovery still works.
+                _scope_id = str(project.id).replace("-", "")[:8]
+                _network_name = f"smsly-net-{_scope_id}"
+
+                # Pick a subnet that doesn't collide with the default
+                # ``smsly-net`` (172.18.0.0/16) or any of the bridge
+                # networks we already create. 172.30.x.x is in the
+                # CGNAT range and unused on this host.
+                _subnet = f"172.30.{abs(hash(_scope_id)) % 254}.0/24"
+
+                # Actually create the Docker network so containers can
+                # attach immediately. Idempotent — re-runs on a
+                # half-created project won't fail.
+                try:
+                    import subprocess as _sp
+                    _create = _sp.run(
+                        ["docker", "network", "create",
+                         "--driver", "bridge",
+                         "--subnet", _subnet,
+                         "--label", f"smsly.scope=ecosystem",
+                         "--label", f"smsly.project_id={project.id}",
+                         _network_name],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    if _create.returncode == 0:
+                        logger.info(
+                            "Created scoped Docker network '%s' "
+                            "(subnet=%s) for ecosystem project %s",
+                            _network_name, _subnet, project.id,
+                        )
+                    elif "already exists" in (_create.stderr or "").lower():
+                        logger.info(
+                            "Scoped Docker network '%s' already exists for "
+                            "ecosystem project %s",
+                            _network_name, project.id,
+                        )
+                    else:
+                        logger.warning(
+                            "docker network create failed for %s: rc=%d, "
+                            "stderr=%s",
+                            _network_name, _create.returncode, _create.stderr,
+                        )
+                except Exception as _net_exc:
+                    logger.warning(
+                        "Could not create Docker network %s: %s",
+                        _network_name, _net_exc,
+                    )
+
+                ScopedNetwork.objects.create(
+                    content_type=_ct,
+                    object_id=project.id,
+                    network_name=_network_name,
+                    driver="bridge",
+                    isolated=True,
+                    internal=False,
+                    enable_ipv6=False,
+                    subnet=_subnet,
+                    allow_public_traefik=True,
+                    is_active=True,
+                )
+                logger.info(
+                    "Auto-created ScopedNetwork '%s' (isolated=True, "
+                    "subnet=%s) for ecosystem project %s",
+                    _network_name, _subnet, project.id,
+                )
+        except Exception as exc:
+            logger.warning("Failed to ensure scoped network for ecosystem project: %s", exc)
 
     # 1. Parse and validate manifest if provided, bulk verify env before continuing
     manifest_content = plan.get("manifest")
@@ -1268,7 +1361,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     safe_dependencies = {k: list(v) for k, v in dependencies.items()} if dependencies else {}
 
     if waves:
-        if not _has_enough_memory():
+        # Use the dynamic config to size the first wave's memory ask
+        _wave_cfg = _get_ecosystem_build_config()
+        _wave_mem_req = _wave_cfg["max_concurrent_builds"] * 1500  # ~1.5 GB per concurrent build
+        if not _has_enough_memory(_wave_mem_req):
             # Defer first wave — start via release task with memory gating
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
