@@ -10,7 +10,7 @@ from apps.deployments.utils.error_handling import (
     ValidationError,
     log_error,
 )
-from apps.deployments.views.github import _get_github_token
+from apps.deployments.utils.github import get_github_token_for_repo, get_github_token_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def setup_github_webhook(user, repo_url: str):
     repo = path_parts[1].replace(".git", "")
     full_name = f"{owner}/{repo}"
 
-    token = _get_github_token(user)
+    token = get_github_token_for_user(user)
     if not token:
         log_error(
             ValidationError(
