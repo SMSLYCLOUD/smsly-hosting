@@ -56,6 +56,22 @@ class SigningMixin:
             pass
         return (0,)
 
+    def _get_cosign_pubkey(self, cosign_bin: str, key_path: str, cosign_env: dict) -> str | None:
+        """Extract public key from a cosign private key file. Returns path to pub key."""
+        try:
+            result = subprocess.run(
+                [cosign_bin, "public-key", "--key", key_path],
+                capture_output=True, text=True, timeout=10, env=cosign_env,
+            )
+            if result.returncode == 0 and "PUBLIC KEY" in result.stdout:
+                pub_path = key_path.rsplit(".", 1)[0] + ".pub"
+                with open(pub_path, "w") as f:
+                    f.write(result.stdout)
+                return pub_path
+        except Exception:
+            pass
+        return None
+
     def _create_nolog_signing_config(self, cosign_bin: str) -> str | None:
         """Create a cosign signing config without transparency log for v3+.
 
@@ -130,6 +146,12 @@ class SigningMixin:
                 # For local registries with self-signed certs, skip TLS verify
                 if self._is_local_registry():
                     sign_args += ["--allow-insecure-registry"]
+
+                # Pass registry auth if configured
+                reg_user = os.environ.get("REGISTRY_USER", "")
+                reg_pass = os.environ.get("REGISTRY_PASSWORD", "")
+                if reg_user and reg_pass:
+                    sign_args += ["--registry-username", reg_user, "--registry-password", reg_pass]
 
                 sign_args.append(self.image_name)
                 cmd = sign_args
@@ -224,7 +246,26 @@ class SigningMixin:
 
             cosign_ver = self._get_cosign_version(cosign_bin)
 
-            if cosign_oidc_issuer:
+            # Determine verify command based on signing method
+            # If we signed with a private key, verify with the public key
+            key_path = os.environ.get("COSIGN_PRIVATE_KEY_PATH") or os.environ.get("COSIGN_KEY")
+            key_available = key_path and os.path.isfile(key_path) and os.access(key_path, os.R_OK)
+
+            if key_available:
+                # Extract public key from private key for verification
+                pub_key = self._get_cosign_pubkey(cosign_bin, key_path, cosign_env)
+                if pub_key:
+                    verify_cmd = [
+                        cosign_bin, "verify",
+                        "--key", pub_key,
+                        self.image_name,
+                    ]
+                else:
+                    # Fallback: no pub key, skip verification
+                    append_log(self.deployment, "Could not extract public key from cosign key. Skipping verification.\n")
+                    update_stage(self.deployment, 'Verify', 'skipped')
+                    return
+            elif cosign_oidc_issuer:
                 verify_cmd = [
                     cosign_bin, "verify",
                     "--certificate-oidc-issuer", cosign_oidc_issuer,
@@ -240,6 +281,12 @@ class SigningMixin:
             # For local registries with self-signed certs, skip TLS verify
             if self._is_local_registry():
                 verify_cmd.insert(1, "--allow-insecure-registry")
+
+            # Pass registry auth if configured
+            reg_user = os.environ.get("REGISTRY_USER", "")
+            reg_pass = os.environ.get("REGISTRY_PASSWORD", "")
+            if reg_user and reg_pass:
+                verify_cmd += ["--registry-username", reg_user, "--registry-password", reg_pass]
 
             vresult = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=30, env=cosign_env)
             if vresult.returncode == 0:
