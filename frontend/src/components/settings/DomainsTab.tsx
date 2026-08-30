@@ -182,7 +182,19 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const updateHostAliases = async (next: { host: string; rewrite_root: string }[]) => {
         try {
             const updated = await servicesApi.update(service.id, { host_aliases: next });
-            setService(prev => ({ ...prev, ...updated }));
+            // API may return either a Service object (success) or an error
+            // envelope like {host_aliases: ['error msg'], ...}. Only merge
+            // the response if it actually looks like a Service — otherwise
+            // we'd spread 'host_aliases' (an error array) as a top-level
+            // key, which then trips React error #31 on the next render.
+            const looksLikeService = updated && (
+                typeof updated === 'object' &&
+                !('host_aliases' in updated && Object.keys(updated).length <= 3) &&
+                ('id' in updated || 'name' in updated)
+            );
+            if (looksLikeService) {
+                setService(prev => ({ ...prev, ...updated }));
+            }
             toast({ title: 'Host alias saved', description: 'Routing sync dispatched. SSL is issued automatically once DNS resolves.' });
         } catch (err: any) {
             toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to save host alias.', variant: 'destructive' });
