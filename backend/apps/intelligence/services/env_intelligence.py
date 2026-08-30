@@ -380,8 +380,16 @@ class EnvironmentIntelligenceService:
         stack = scan_results.get('stack', '') or getattr(service, 'stack', '') or ''
         service_name = service.name
 
-        # Patterns indicating a var needs a real production value
-        _PLACEHOLDER_EXACT = {"", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO", "YOUR_API_KEY", "YOUR_SECRET_KEY"}
+        # Patterns indicating a var needs a real production value.
+        # The Senate prompt at line ~77 tells the AI to return "GENERATE"
+        # for secrets, but the AI sometimes wraps it in {{...}} and sometimes
+        # not. Treat every variant as a placeholder so we either fill it
+        # (if it's a secret) or drop it (if it isn't).
+        _PLACEHOLDER_EXACT = {
+            "", "{{GENERATE}}", "{GENERATE}", "GENERATE",
+            "{{FILL_ME}}", "{FILL_ME}", "FILL_ME",
+            "CHANGEME", "TODO", "YOUR_API_KEY", "YOUR_SECRET_KEY",
+        }
         _PLACEHOLDER_PREFIX = ("REPLACE_WITH_", "YOUR_", "REPLACE_ME__")
         _PLACEHOLDER_IN = ("<CHANGE_ME",)
         _MOCK_PATTERNS = (
