@@ -652,16 +652,16 @@ class LocalAdapter(BaseCloudAdapter):
 
         networking_config = self.docker_client.api.create_networking_config(networks_dict)
 
+        # docker-py 7.x create_container has NO 'networks' parameter —
+        # multi-network attach happens purely via networking_config (each
+        # key is a bridge, each value its endpoint/aliases). Passing
+        # 'network' alongside would override the config and leave the
+        # container on a single bridge, so both are omitted here; the
+        # first key of networks_dict is the primary bridge.
         create_kwargs = {
             "image": image,
             "name": container_name,
             "environment": env,
-            # networks (plural) lists every bridge the container should
-            # join on first start. networking_config (below) sets the
-            # aliases/IP per bridge. Using `network` (singular) would
-            # leave the container on only the first bridge, so the
-            # project-scoped and platform-wide bridges never coexist.
-            "networks": list(networks_dict.keys()),
             "networking_config": networking_config,
             "labels": labels,
             "volumes": docker_volumes if docker_volumes else None,
@@ -1165,9 +1165,9 @@ class LocalAdapter(BaseCloudAdapter):
                 "image": image_ref,
                 "name": name,
                 "environment": green_env,
-                # networks (plural) puts the container on every bridge
-                # listed in promote_networks_dict (project + platform).
-                "networks": list(promote_networks_dict.keys()),
+                # Multi-network attach via networking_config only —
+                # docker-py create_container has no 'networks' kwarg and
+                # 'network' (singular) would override to a single bridge.
                 "networking_config": self.docker_client.api.create_networking_config(promote_networks_dict),
                 "labels": live_labels,
                 "volumes": green_volumes,
