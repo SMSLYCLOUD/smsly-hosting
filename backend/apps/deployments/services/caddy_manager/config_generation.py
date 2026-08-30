@@ -1393,8 +1393,16 @@ def generate_caddyfile(config) -> str:
 
             wildcard_lines.extend(
                 [
+                    # Wildcard catch-all: forward unmatched subdomains to
+                    # Traefik (which has the per-service routers). Traefik
+                    # returns 404 for hosts it doesn't know — much better
+                    # than silently serving the PaaS landing page. The
+                    # 'header_up Host {host}' preserves the original Host
+                    # so Traefik can do its Host() match correctly.
                     "    handle {",
-                    "        reverse_proxy frontend:3000",
+                    "        reverse_proxy traefik:80 {",
+                    "            header_up Host {host}",
+                    "        }",
                     "    }",
                     "}",
                 ]
