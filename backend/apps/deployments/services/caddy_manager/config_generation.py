@@ -1010,23 +1010,33 @@ def _get_wildcard_path_redirect_lines(wildcard_domain: str) -> list[str]:
             # (Caddyfile block-matcher syntax) — `handle` accepts
             # exactly one matcher argument, so ANDing must happen
             # inside the matcher definition itself.
+            # The remainder is extracted with path_regexp so the target
+            # path is exact for /seg and /seg/rest maps to
+            # https://host/target-path/rest (handle_path-style stripping
+            # without needing a second matcher).
             for r_index, (segment, target, target_path) in enumerate(rules):
                 matcher = f"@wpr_{svc_alias}_{r_index}"
-                lines.append(f"    {matcher} {{")
-                lines.append(f"        host {public_domain}")
-                lines.append(f"        path {segment} {segment}/*")
-                lines.append("    }")
-                lines.append(f"    handle {matcher} {{")
+                rest_re = f"wpr_{svc_alias}_{r_index}"
+                seg_q = segment.replace('/', r'\/')
                 if target_path and target_path != "/":
-                    # host/path target: replace the matched segment with
-                    # the target path, keep the remainder + query.
-                    lines.append(f"        uri strip_prefix {segment}")
-                    lines.append(f"        redir https://{target}{target_path}{{uri}} 301")
+                    tp = target_path.rstrip('/')
+                    lines.append(f"    {matcher} {{")
+                    lines.append(f"        host {public_domain}")
+                    lines.append(f"        path {segment} {segment}/*")
+                    lines.append("    }")
+                    lines.append(f"    handle {matcher} {{")
+                    lines.append(f"        path_regexp {rest_re} ^{seg_q}(\\/.*)?$")
+                    lines.append(f"        redir https://{target}{tp}{{re.{rest_re}.1}} 301")
+                    lines.append("    }")
                 else:
-                    # bare-host target: strip segment, remainder goes to root
-                    lines.append(f"        uri strip_prefix {segment}")
-                    lines.append(f"        redir https://{target}{{uri}} 301")
-                lines.append("    }")
+                    lines.append(f"    {matcher} {{")
+                    lines.append(f"        host {public_domain}")
+                    lines.append(f"        path {segment} {segment}/*")
+                    lines.append("    }")
+                    lines.append(f"    handle {matcher} {{")
+                    lines.append(f"        path_regexp {rest_re} ^{seg_q}(\\/.*)?$")
+                    lines.append(f"        redir https://{target}{{re.{rest_re}.1}} 301")
+                    lines.append("    }")
     except Exception as exc:
         logger.warning("Could not load wildcard path redirects: %s", exc)
         return []
