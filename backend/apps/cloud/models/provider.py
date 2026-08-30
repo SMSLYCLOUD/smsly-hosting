@@ -58,8 +58,20 @@ class CloudProvider(models.Model):
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
     is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
 
+    # SEC-ECO-001: Scope tag for multi-tenant isolation. Used by the
+    # ecosystem deploy task to pick (or auto-create) a provider that's
+    # dedicated to the ecosystem so its services don't share a provider
+    # record (and its Docker network/registry) with platform workloads.
+    # Allowed values: 'platform' (default, all pre-existing rows),
+    # 'ecosystem' (auto-created by ecosystem_deploy_task), or any
+    # operator-defined string for future custom scopes.
+    scope = models.CharField(
+        max_length=32, blank=True, default='platform',
+        help_text="Tenant scope: 'platform' (default), 'ecosystem', or custom.",
+    )
+
     def __str__(self):
-        return f"{self.name} ({self.provider_type})"
+        return f"{self.name} ({self.provider_type}, scope={self.scope or 'platform'})"
 
 
 class CloudResource(models.Model):

@@ -341,9 +341,24 @@ def _resolve_from_manifest_or_fallback(
                 else:
                     manifest_resolved[key] = value
 
-            for unres_k in getattr(resolver, "unresolved_vars", []):
-                if unres_k not in manifest_resolved:
-                    manifest_resolved[unres_k] = ""
+            # Skip unresolved vars entirely — don't write empty strings
+            # that will override the service's own defaults and crash
+            # pydantic-typed env parsing. CORS_ORIGINS= is the classic
+            # example: the manifest can't infer it, an empty value
+            # makes pydantic json.loads("") fail at boot, and the
+            # service's own default ("http://localhost:3000") would
+            # have worked fine if we just left the key unset.
+            unresolved = getattr(resolver, "unresolved_vars", [])
+            skipped_unresolved = [k for k in unresolved if k not in manifest_resolved]
+            manifest_resolved = {k: v for k, v in manifest_resolved.items() if str(v or "").strip()}
+            if skipped_unresolved:
+                logger.info(
+                    "Manifest resolver leaving %d unresolved vars unset for %s "
+                    "(service defaults will apply): %s",
+                    len(skipped_unresolved), service_name,
+                    ", ".join(sorted(skipped_unresolved)[:10]),
+                )
+            resolved_env = manifest_resolved
 
             logger.info(
                 "Manifest resolver filled %d vars for %s (stack=%s)",

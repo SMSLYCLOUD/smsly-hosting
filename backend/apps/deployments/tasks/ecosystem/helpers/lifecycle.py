@@ -1,10 +1,11 @@
 import logging
 import os
 import shutil
+import time
 from collections import defaultdict
 from functools import lru_cache
 
-from django.core.cache import cache
+from django.core.cache import cache as django_cache
 from django.utils import timezone
 
 from apps.deployments.models import Deployment
@@ -22,16 +23,28 @@ logger = logging.getLogger(__name__)
 
 
 _MB = 1024 * 1024
+_CAPACITY_CACHE_KEY = "smsly:ecosystem:host_capacity"
+_CAPACITY_CACHE_TTL_SECONDS = 30
 
 
-@lru_cache(maxsize=1)
 def _get_system_capacity() -> dict:
     """Return a snapshot of the host's compute and memory capacity.
 
     Uses psutil when available; falls back to /proc/meminfo + os.cpu_count()
     so the logic still works in slim containers that don't ship psutil.
-    Result is cached for 30s to avoid hammering /proc on every wave.
+    Result is cached in Django's cache (or an in-process dict if the
+    cache backend isn't ready) for 30s to avoid hammering /proc on
+    every wave.
     """
+    # Fast path: return from cache if recent
+    try:
+        cached = django_cache.get(_CAPACITY_CACHE_KEY)
+        if isinstance(cached, dict) and cached.get("cached_at"):
+            if (time.time() - cached["cached_at"]) < _CAPACITY_CACHE_TTL_SECONDS:
+                return {k: v for k, v in cached.items() if k != "cached_at"}
+    except Exception:
+        pass  # cache backend not ready (e.g. during boot)
+
     cpu_count = os.cpu_count() or 1
 
     total_mb = 0
@@ -63,12 +76,21 @@ def _get_system_capacity() -> dict:
     except Exception as exc:
         logger.debug("disk usage read failed: %s", exc)
 
-    return {
+    result = {
         "cpu_count": cpu_count,
         "total_memory_mb": total_mb,
         "available_memory_mb": available_mb,
         "disk_free_gb": disk_free_gb,
+        "cached_at": time.time(),
     }
+
+    # Best-effort write to Django cache (silently ignore failures)
+    try:
+        django_cache.set(_CAPACITY_CACHE_KEY, result, timeout=_CAPACITY_CACHE_TTL_SECONDS + 5)
+    except Exception:
+        pass
+
+    return {k: v for k, v in result.items() if k != "cached_at"}
 
 
 def _get_available_memory_mb() -> int:

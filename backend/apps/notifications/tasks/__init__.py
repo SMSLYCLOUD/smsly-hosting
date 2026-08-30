@@ -97,6 +97,18 @@ def _dispatch_email(user, title: str, message: str, metadata: dict) -> dict:
         result['reason'] = 'user has no email address'
         return result
 
+    # Skip silently when SMTP isn't configured — the default Django SMTP
+    # backend is the in-memory console backend (no real host) on a stock
+    # install, so the connection error spams the logs every deploy.
+    smtp_host = (
+        os.environ.get('SMTP_HOST')
+        or getattr(settings, 'EMAIL_HOST', None)
+    )
+    if not smtp_host:
+        result['reason'] = 'SMTP not configured (set SMTP_HOST env var to enable)'
+        logger.debug("[notify:email] Skipped for %s — SMTP_HOST unset", user.email)
+        return result
+
     from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@smsly.cloud')
     recipient = user.email
     result['recipient'] = recipient

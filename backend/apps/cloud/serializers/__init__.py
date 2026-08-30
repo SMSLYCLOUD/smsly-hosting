@@ -14,6 +14,7 @@ class CloudProviderSerializer(serializers.ModelSerializer):
             'provider_type',
             'region',
             'project_id',
+            'scope',
             'is_active',
             'created_at']
         read_only_fields = ['id', 'created_at']
@@ -31,6 +32,7 @@ class CloudProviderCreateSerializer(serializers.ModelSerializer):
             'region',
             'project_id',
             'tenant_id',
+            'scope',
             'api_key',
             'api_secret']
 
