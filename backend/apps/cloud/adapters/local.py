@@ -636,6 +636,7 @@ class LocalAdapter(BaseCloudAdapter):
             )
         }
         if getattr(self, '_service_id', None):
+            logger.info("DEBUG dual-homing: _service_id=%s, network_name=%s", self._service_id, network_name)
             try:
                 from apps.deployments.models import Service as _SvcBridge
                 _svc_obj = _SvcBridge.objects.filter(
