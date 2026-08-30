@@ -625,11 +625,32 @@ class LocalAdapter(BaseCloudAdapter):
 
         self._apply_egress_restrictions(network_name)
 
-        networking_config = self.docker_client.api.create_networking_config({
+        # Dual-homing: services that opted into the internal network
+        # also get attached to the platform-wide bridge ('smsly-platform-net')
+        # so they can reach services in other projects without going
+        # through public DNS. The two networks coexist on the same
+        # container; DNS names are scoped per-network.
+        networks_dict: dict[str, Any] = {
             network_name: self.docker_client.api.create_endpoint_config(
                 aliases=aliases
             )
-        })
+        }
+        if getattr(self, '_service_id', None):
+            try:
+                from apps.deployments.models import Service as _SvcBridge
+                _svc_obj = _SvcBridge.objects.filter(
+                    id=self._service_id
+                ).only('use_internal_network').first()
+                if _svc_obj and getattr(_svc_obj, 'use_internal_network', True):
+                    from apps.deployments.services.network_scope import ensure_platform_bridge
+                    platform_bridge = ensure_platform_bridge()
+                    networks_dict[platform_bridge] = self.docker_client.api.create_endpoint_config(
+                        aliases=aliases,
+                    )
+            except Exception as exc:
+                logger.debug("Platform-bridge dual-homing skipped: %s", exc)
+
+        networking_config = self.docker_client.api.create_networking_config(networks_dict)
 
         create_kwargs = {
             "image": image,
@@ -873,6 +894,21 @@ class LocalAdapter(BaseCloudAdapter):
                 "BLUE_GREEN_AUTO_PROMOTE=1 to auto-promote on hold expiry)",
                 container_name,
             )
+            # Cache the platform-bridge IP for the API surface — the
+            # service detail page surfaces this so other services know
+            # how to dial it cross-project.
+            try:
+                _new.reload()
+                _pnets = _new.attrs.get('NetworkSettings', {}).get('Networks', {}) or {}
+                for _pn, _pd in _pnets.items():
+                    if _pn == 'smsly-platform-net':
+                        _svc_db = Service.objects.filter(id=getattr(self, '_service_id', None)).first()
+                        if _svc_db:
+                            _svc_db.platform_internal_ip = _pd.get('IPAddress') or None
+                            _svc_db.save(update_fields=['platform_internal_ip', 'updated_at'])
+                        break
+            except Exception as exc:
+                logger.debug("Could not cache platform IP for %s: %s", container_name, exc)
             return new_container.id
 
         logger.info("Container %s is healthy and serving traffic", name)

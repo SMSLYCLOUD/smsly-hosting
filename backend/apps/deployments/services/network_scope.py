@@ -370,3 +370,79 @@ def _purge_stale_only() -> int:
                 removed += 1
                 logger.info("Purged stale DOCKER-USER rules for dead bridge %s", iface)
     return removed
+
+def ensure_platform_bridge() -> str:
+    """Ensure the platform-wide shared bridge exists.
+
+    The platform bridge is what every internal-network-enabled service
+    gets attached to, regardless of project. It provides
+    inter-service connectivity across the whole platform - a service
+    in project A can reach a service in project B through this
+    bridge, no public DNS, no TLS.
+
+    The subnet is a /24 in the 172.31.0.0/16 IETF CGNAT range so it
+    doesn't collide with the project's scoped bridges (172.30.x.x)
+    or the default 'smsly-net' (172.18.0.0/16). When services need to
+    talk across project boundaries, they use this bridge's DNS name
+    (e.g. 'smsly-backend.smsly-platform-net').
+
+    Idempotent: the network is created once on first use, then
+    returned by name on subsequent calls.
+    """
+    client = docker.from_env()
+    name = 'smsly-platform-net'
+    try:
+        net = client.networks.get(name)
+        return name
+    except docker.errors.NotFound:
+        pass
+    create_kwargs = {
+        'name': name,
+        'driver': 'bridge',
+        'internal': False,
+        'enable_ipv6': False,
+    }
+    try:
+        client.networks.create(**create_kwargs)
+        logger.info("Created platform-wide bridge: %s", name)
+    except Exception as exc:
+        # Some other process may have raced us. Tolerate that.
+        logger.debug("Platform bridge create race (%s); continuing", exc)
+    return name
+
+
+def attach_container_to_platform_bridge(container_id: str, service_name: str) -> bool:
+    """Attach a running container to smsly-platform-net if it isn't already.
+
+    No-op if the service opted out of the internal network. Returns
+    True on success or no-op, False on failure.
+    """
+    try:
+        client = docker.from_env()
+        container = client.containers.get(container_id)
+        container.reload()
+        nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+        if 'smsly-platform-net' in nets:
+            return True
+        bridge = ensure_platform_bridge()
+        container.reload()
+        nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+        if 'smsly-platform-net' in nets:
+            return True
+        try:
+            net = client.networks.get(bridge)
+            net.connect(container)
+            logger.info(
+                "Attached %s (%s) to platform bridge %s",
+                service_name, container_id[:12], bridge,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Failed to attach %s to platform bridge: %s",
+                service_name, exc,
+            )
+            return False
+    except Exception as exc:
+        logger.debug("attach_container_to_platform_bridge failed: %s", exc)
+        return False
