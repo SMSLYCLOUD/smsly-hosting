@@ -1018,25 +1018,23 @@ def _get_wildcard_path_redirect_lines(wildcard_domain: str) -> list[str]:
                 matcher = f"@wpr_{svc_alias}_{r_index}"
                 rest_re = f"wpr_{svc_alias}_{r_index}"
                 seg_q = segment.replace('/', r'\/')
+                # Named matcher combining host + path_regexp. The regexp
+                # captures the remainder (empty for the exact /seg match,
+                # /rest for sub-paths) into {re.<rest_re>.1} — used
+                # directly in the redir below. path_regexp lives INSIDE
+                # the matcher block (it's a matcher directive, not a
+                # handler directive).
+                lines.append(f"    {matcher} {{")
+                lines.append(f"        host {public_domain}")
+                lines.append(f"        path_regexp {rest_re} ^{seg_q}(\\/.*)?$")
+                lines.append("    }")
+                lines.append(f"    handle {matcher} {{")
                 if target_path and target_path != "/":
                     tp = target_path.rstrip('/')
-                    lines.append(f"    {matcher} {{")
-                    lines.append(f"        host {public_domain}")
-                    lines.append(f"        path {segment} {segment}/*")
-                    lines.append("    }")
-                    lines.append(f"    handle {matcher} {{")
-                    lines.append(f"        path_regexp {rest_re} ^{seg_q}(\\/.*)?$")
                     lines.append(f"        redir https://{target}{tp}{{re.{rest_re}.1}} 301")
-                    lines.append("    }")
                 else:
-                    lines.append(f"    {matcher} {{")
-                    lines.append(f"        host {public_domain}")
-                    lines.append(f"        path {segment} {segment}/*")
-                    lines.append("    }")
-                    lines.append(f"    handle {matcher} {{")
-                    lines.append(f"        path_regexp {rest_re} ^{seg_q}(\\/.*)?$")
                     lines.append(f"        redir https://{target}{{re.{rest_re}.1}} 301")
-                    lines.append("    }")
+                lines.append("    }")
     except Exception as exc:
         logger.warning("Could not load wildcard path redirects: %s", exc)
         return []
