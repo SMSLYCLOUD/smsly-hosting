@@ -293,9 +293,25 @@ class ServiceSerializer(serializers.ModelSerializer):
                 host = normalize_domain(host)
             except ValueError as e:
                 raise serializers.ValidationError(f"Invalid host_alias '{raw_host}': {e}")
-            if host in seen:
-                raise serializers.ValidationError(f"Duplicate host_alias '{host}'.")
-            seen.add(host)
+            normalized_entry = dict(entry)
+            normalized_entry['host'] = host
+            # If the operator wrote a path in the host field, prefer it over
+            # any existing rewrite_root (or set it when none was given).
+            if path and not normalized_entry.get('rewrite_root'):
+                normalized_entry['rewrite_root'] = path
+            # Dedup key is (bare_host, rewrite_root). Two entries with the
+            # same host but different rewrite_roots (e.g. 'accounts.google.com'
+            # rewriting / to /login AND /signup to /register) are legitimate
+            # and must coexist — each rewrite_root becomes a distinct
+            # @alias_root path matcher in the Caddyfile.
+            dedup_key = (host, normalized_entry.get('rewrite_root', ''))
+            if dedup_key in seen:
+                raise serializers.ValidationError(
+                    f"Duplicate host_alias '{host}' with rewrite_root "
+                    f"'{normalized_entry.get('rewrite_root', '')}'."
+                )
+            seen.add(dedup_key)
+            normalized_aliases.append(normalized_entry)
             normalized_entry = dict(entry)
             normalized_entry['host'] = host
             # If the operator wrote a path in the host field, prefer it over
