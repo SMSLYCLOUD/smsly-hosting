@@ -806,27 +806,71 @@ class LocalAdapter(BaseCloudAdapter):
             return self.promote_container(name, new_container.id)
 
         if hold_for_staging:
-            # ECOSYSTEM-001: ecosystem-deploy commits use a *temporary*
-            # staging domain. Auto-promote the green as soon as it passes
-            # the health check, then the staging Traefik router falls out
-            # of scope and the service serves traffic on its real
-            # public_domain. Manual `skip_review=False` deploys still
-            # require explicit user approval.
-            deployment = self._service
-            commit_hash = ""
-            if deployment is not None:
+            # Auto-promote after a configurable hold period. Push/webhook
+            # deploys run unattended — waiting forever for a human would
+            # mean the green sits as a ghost container indefinitely, and
+            # any later cleanup pass would tear it down.
+            #
+            # Settings (in priority order):
+            # 1. PlatformConfig.blue_green_auto_promote / .staging_hold_seconds
+            #    (editable from /console/settings — the operator's
+            #    preferred path)
+            # 2. Env vars BLUE_GREEN_AUTO_PROMOTE / BLUE_GREEN_STAGING_HOLD_SECONDS
+            #    (fallback for hosts that haven't saved PlatformConfig yet)
+            # 3. Hardcoded defaults (60s hold, auto-promote on ecosystem only)
+            try:
+                from apps.deployments.models.core import PlatformConfig
+                _pc = PlatformConfig.load()
+                hold_seconds = int(_pc.blue_green_staging_hold_seconds or 60)
+                auto_promote_flag = bool(_pc.blue_green_auto_promote)
+            except Exception:
+                hold_seconds = _env_int('BLUE_GREEN_STAGING_HOLD_SECONDS', 60, minimum=0)
+                auto_promote_flag = _env_bool('BLUE_GREEN_AUTO_PROMOTE', default=False)
+
+            commit_hash = ''
+            # Resolve the Service object from the stashed service_id so we
+            # can look up the latest Deployment's commit_hash for the
+            # ecosystem-deploy auto-promote heuristic. Previously this
+            # referenced self._service which was never set, so the
+            # ecosystem-deploy check always saw an empty commit_hash.
+            svc_id = getattr(self, '_service_id', None) or getattr(self, 'service_id', None)
+            svc_obj = None
+            if svc_id:
+                from apps.deployments.models import Service as _Svc
+                try:
+                    svc_obj = _Svc.objects.get(id=svc_id)
+                except Exception:
+                    svc_obj = None
+            if svc_obj is not None:
                 from apps.deployments.models.deployment import Deployment
-                d = Deployment.objects.filter(service=deployment).order_by("-created_at").first()
+                d = Deployment.objects.filter(service=svc_obj).order_by('-created_at').first()
                 if d is not None:
-                    commit_hash = str(d.commit_hash or "").strip()
-            if commit_hash == "ecosystem-deploy":
-                logger.info(
-                    "Ecosystem deploy green %s is healthy; auto-promoting as %s",
-                    container_name, name,
+                    commit_hash = str(d.commit_hash or '').strip()
+            auto_promote = (
+                hold_seconds > 0
+                and (
+                    auto_promote_flag
+                    or commit_hash == 'ecosystem-deploy'
                 )
+            )
+            if auto_promote:
+                logger.info(
+                    "Staged green %s is healthy; auto-promoting after %ds "
+                    "hold (commit_hash=%s, platform_auto_promote=%s)",
+                    container_name, hold_seconds, commit_hash or '(none)',
+                    auto_promote_flag,
+                )
+                # Sleep the hold period before promoting. If the green goes
+                # unhealthy in the meantime, _promote will fail and roll
+                # back via the existing safety net.
+                import time as _time
+                _time.sleep(hold_seconds)
                 return self.promote_container(name, new_container.id)
+
             logger.info(
-                "Green container %s is healthy and held for staging review",
+                "Green container %s is healthy and held for staging review "
+                "(PlatformConfig.blue_green_auto_promote or set "
+                "BLUE_GREEN_AUTO_PROMOTE=1 to auto-promote on hold expiry)",
                 container_name,
             )
             return new_container.id
