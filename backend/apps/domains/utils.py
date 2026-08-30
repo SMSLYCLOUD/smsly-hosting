@@ -27,16 +27,19 @@ def split_host_and_path(value: str) -> tuple[str, str]:
 
     Trailing slashes on the path are normalized to a single leading slash.
     If there's no path, the second element is the empty string.
+
+    Only the host portion is lowercased (hosts are case-insensitive);
+    the path preserves case (URL paths are case-sensitive).
     """
-    raw = str(value or "").strip().lower()
+    raw = str(value or "").strip()
     if "://" in raw:
         raise ValueError("Host must not include a URL scheme")
     if " " in raw:
         raise ValueError("Host must not include spaces")
     if "/" not in raw:
-        return raw, ""
+        return raw.lower(), ""
     host, _, path = raw.partition("/")
-    host = host.strip().rstrip(".")
+    host = host.strip().lower().rstrip(".")
     if not host:
         raise ValueError("Host part is required before the path")
     path = "/" + path.lstrip("/") if path else "/"

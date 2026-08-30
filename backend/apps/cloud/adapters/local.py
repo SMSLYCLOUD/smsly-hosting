@@ -703,17 +703,23 @@ class LocalAdapter(BaseCloudAdapter):
                 from apps.deployments.models.addons import Addon as _Addon
                 from urllib.parse import urlparse as _urlparse
                 extra_hosts = []
-                # Resolve the service_id for addon lookup so we also pick
-                # up shared addons attached to other services in the
-                # same project (postgres-shared, redis-shared, etc.)
+                # Resolve the service_id for addon lookup. Only addons the
+                # service can actually reach count: its OWN addons plus
+                # project-level SHARED addons (name ends with '-shared').
+                # SECURITY (addon-theft): never inject other services'
+                # personal addon hostnames into this container's
+                # /etc/hosts — a manual service in the same project
+                # would otherwise have its private DB hostname wired in.
                 svc_id = getattr(self, '_service_id', None) or getattr(self, 'service_id', None)
                 addon_qs = _Addon.objects.filter(status='ACTIVE')
                 if svc_id:
                     from apps.deployments.models import Service as _AddonSvc
+                    from django.db.models import Q
                     _addsvc = _AddonSvc.objects.filter(id=svc_id).select_related('project').first()
                     if _addsvc and _addsvc.project:
                         addon_qs = addon_qs.filter(
-                            service__project=_addsvc.project,
+                            Q(service=_addsvc)
+                            | Q(service__project=_addsvc.project, name__endswith='-shared'),
                         )
                 for _addon in addon_qs:
                     if not _addon.connection_url:

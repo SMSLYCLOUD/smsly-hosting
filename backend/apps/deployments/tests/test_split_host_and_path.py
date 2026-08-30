@@ -1,9 +1,9 @@
-from django.test import TestCase
+from django.test import SimpleTestCase
 
 from apps.domains.utils import normalize_domain, split_host_and_path
 
 
-class NormalizeDomainTests(TestCase):
+class NormalizeDomainTests(SimpleTestCase):
     def test_bare_domain_unchanged(self):
         self.assertEqual(normalize_domain('app.example.com'), 'app.example.com')
 
@@ -28,7 +28,7 @@ class NormalizeDomainTests(TestCase):
             normalize_domain('')
 
 
-class SplitHostAndPathTests(TestCase):
+class SplitHostAndPathTests(SimpleTestCase):
     def test_no_path_returns_empty_string(self):
         self.assertEqual(split_host_and_path('app.example.com'), ('app.example.com', ''))
 

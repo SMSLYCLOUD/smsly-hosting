@@ -234,7 +234,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
             return;
         }
         if (!target || !target.includes('.') || target.includes(' ')) {
-            toast({ title: 'Invalid target', description: 'Enter a host like account.example.com', variant: 'destructive' });
+            toast({ title: 'Invalid target', description: 'Enter a host like account.example.com or account.example.com/login', variant: 'destructive' });
             return;
         }
         if ((service.path_redirects ?? []).some(r => r.path === path)) {
@@ -583,7 +583,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                             className="w-40"
                         />
                         <Input
-                            placeholder="account.example.com"
+                            placeholder="account.example.com or account.example.com/login"
                             value={newTarget}
                             onChange={(e) => setNewTarget(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleAddPathRedirect()}

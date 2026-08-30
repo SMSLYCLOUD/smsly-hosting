@@ -44,12 +44,20 @@ def build_ecosystem_graph(service) -> dict[str, Any]:
         logger.debug("Service %s has no owner — skipping ecosystem graph", service.name)
         return {'deployed': {}, 'shared_addons': {}}
 
-    siblings = (
+    # SECURITY (addon-theft): scope siblings to the SAME PROJECT when the
+    # current service has one. Previously this pulled every ACTIVE service
+    # the owner controlled — including manually-deployed services in other
+    # projects — and merged their personal addon URLs into shared_addons,
+    # which then leaked into this service's DATABASE_URL/REDIS_URL env.
+    siblings_qs = (
         Service.objects
         .filter(owner=service.owner)
         .exclude(id=service.id)
         .prefetch_related('addons', 'env_vars')
     )
+    if getattr(service, 'project_id', None):
+        siblings_qs = siblings_qs.filter(project_id=service.project_id)
+    siblings = siblings_qs
 
     graph: dict[str, Any] = {
         'deployed': {},
@@ -73,21 +81,18 @@ def build_ecosystem_graph(service) -> dict[str, Any]:
         for addon in sib.addons.filter(status='ACTIVE'):
             conn_url = addon.connection_url or ''
             sib_info['addons'][addon.addon_type] = conn_url
-            if addon.addon_type not in graph['shared_addons'] and conn_url:
-                graph['shared_addons'][addon.addon_type] = conn_url
-            elif addon.addon_type in graph['shared_addons'] and conn_url:
-                # Multiple addons of same type — check if current service has a preference
-                current_addon_urls = {a.connection_url for a in service.addons.filter(status='ACTIVE', addon_type=addon.addon_type) if a.connection_url}
-                if current_addon_urls and conn_url in current_addon_urls:
-                    # This sibling's addon matches our own — prefer it
+            # Only addons explicitly NAMED '{type}-shared' contribute to
+            # the project-wide shared_addons map. Personal addons (named
+            # '{service}-{type}' by the standard provisioner) stay visible
+            # in this sibling's own addons dict for URL resolution, but
+            # must NOT become the shared default for other services.
+            is_shared_named = (addon.name or '').endswith('-shared')
+            if is_shared_named and conn_url:
+                if addon.addon_type not in graph['shared_addons']:
                     graph['shared_addons'][addon.addon_type] = conn_url
-                    logger.info(
-                        "Ecosystem graph: preferred addon %s from '%s' (matches current service)",
-                        addon.addon_type, sib.name,
-                    )
-                else:
+                elif graph['shared_addons'].get(addon.addon_type) != conn_url:
                     logger.warning(
-                        "Ecosystem graph: duplicate addon %s from '%s' ignored (keeping '%s')",
+                        "Ecosystem graph: duplicate shared addon %s from '%s' ignored (keeping '%s')",
                         addon.addon_type, sib.name, graph['shared_addons'].get(addon.addon_type, ''),
                     )
 

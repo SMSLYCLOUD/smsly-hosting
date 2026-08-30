@@ -250,11 +250,20 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             if addon.connection_url:
                 addon_url.setdefault(addon.addon_type, addon.connection_url)
         # Fill in from shared addons in the same project.
+        # SECURITY (addon-theft): only addons NAMED '{type}-shared' are
+        # project-wide fallbacks. Ecosystem deploys create shared addons
+        # with that exact name. A manually-deployed service's personal
+        # addons ('{service}-{type}') must NEVER leak into another
+        # service's DATABASE_URL / REDIS_URL — previously this loop
+        # matched ANY active addon in the project, so when a manual
+        # service shared a project with ecosystem services, every
+        # deploy picked up the manual service's private DB URL.
         project = getattr(service, "project", None)
         if project:
             for addon in Addon.objects.filter(
                 service__project=project,
                 status='ACTIVE',
+                name__endswith='-shared',
             ).exclude(service=service):
                 if addon.connection_url and addon.addon_type not in addon_url:
                     addon_url[addon.addon_type] = addon.connection_url

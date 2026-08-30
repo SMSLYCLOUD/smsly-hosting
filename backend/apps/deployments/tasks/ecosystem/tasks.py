@@ -842,10 +842,31 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             existing_svc = Service.objects.filter(owner=user, name=anchor_name).first()
             if existing_svc:
                 addon_anchor_service = existing_svc
-                if project and addon_anchor_service.project != project:
+                # SECURITY (addon-theft): NEVER move an existing service into
+                # the ecosystem project. When the anchor name matches a
+                # MANUALLY-deployed service (e.g. the operator deployed
+                # smsly-backend by hand before running an ecosystem deploy),
+                # claiming it silently reassigns its project — and once it
+                # lives in the ecosystem project, its PRIVATE addons become
+                # eligible for the shared-addon reuse below and get stolen
+                # (reassigned to the anchor) or their connection URLs leak
+                # into every ecosystem service's env via the project-wide
+                # addon fallback in deploy_container.py.
+                # If the existing service is in a DIFFERENT project, create
+                # a fresh ecosystem service instead of squatting on it.
+                if project and existing_svc.project and existing_svc.project != project:
+                    logger.warning(
+                        "Ecosystem anchor name '%s' matches existing service %s "
+                        "in a different project (%s) — creating a separate "
+                        "ecosystem service instead of reassigning it.",
+                        anchor_name, existing_svc.name, existing_svc.project.name,
+                    )
+                    existing_svc = None
+                elif project and not existing_svc.project:
+                    # Service has no project — safe to adopt into ecosystem.
                     addon_anchor_service.project = project
                     addon_anchor_service.save(update_fields=["project", "updated_at"])
-            else:
+            if not existing_svc:
                 final_anchor_name = _next_available_service_name(Service, anchor_name)
                 addon_anchor_service = Service.objects.create(
                     name=final_anchor_name,
@@ -928,24 +949,31 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
             existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
             if not existing_addon:
-                # Search for an existing ACTIVE addon of this type WITHIN THIS
-                # ECOSYSTEM (same project) to avoid creating duplicate volumes
-                # on re-deploys (SEC-VOL-001).
-                # SECURITY/SCOPE: never reuse addons from other projects — a
-                # stale addon from an unrelated ecosystem previously leaked its
-                # connection_url into every service of a new deploy (its
-                # container alias doesn't even resolve on this network).
+                # Search for an existing ACTIVE *shared* addon of this type
+                # WITHIN THIS ECOSYSTEM (same project) to avoid creating
+                # duplicate volumes on re-deploys (SEC-VOL-001).
+                #
+                # SECURITY (addon-theft): only addons NAMED '{type}-shared'
+                # are candidates. Ecosystem shared addons are created with
+                # name='{type}-shared' below. A manually-deployed service's
+                # personal addons (named '{service}-{type}' by the standard
+                # provisioner) are NEVER eligible for reuse — previously
+                # the lookup matched ANY ACTIVE addon in the project, so a
+                # manual service's private database/redis got reassigned
+                # to the ecosystem anchor and its connection URL leaked
+                # into every ecosystem service's env vars.
                 existing_addon = Addon.objects.filter(
                     service__owner=user,
                     service__project=addon_anchor_service.project,
                     addon_type=addon_type,
                     status=Addon.Status.ACTIVE,
+                    name=f"{addon_type.lower()}-shared",
                 ).exclude(
                     service=addon_anchor_service,
                 ).select_related('service').first()
                 if existing_addon:
                     logger.info(
-                        "Reusing existing %s addon %s from service %s",
+                        "Reusing existing shared %s addon %s from service %s",
                         addon_type, existing_addon.id, existing_addon.service.name,
                     )
                     # Re-attach to the current anchor service

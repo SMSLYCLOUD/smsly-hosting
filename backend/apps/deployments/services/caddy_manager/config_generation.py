@@ -128,15 +128,27 @@ def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: st
         lines.append(f"    reverse_proxy {upstream_url}")
 
 
-def _service_path_redirect_rules(service) -> list[tuple[str, str]]:
-    """Sanitized (path_segment, target_host) pairs from service.path_redirects.
+def _service_path_redirect_rules(service) -> list[tuple[str, str, str]]:
+    """Sanitized (path_segment, target_host, target_path) triples from
+    service.path_redirects.
 
     Fully user-configurable — invalid entries are skipped defensively at
     generation time.  Each rule 301-redirects ``/segment`` and ``/segment/*``
     on the service's own domains to ``https://target`` (prefix stripped,
     query preserved).
+
+    Targets may include a path: ``accounts.trulay.co/login`` redirects
+    ``/login`` on the service's domain to ``https://accounts.trulay.co/login``.
+    The UI accepts host/path, the serializer stores it verbatim, so the
+    generator must split it here (previously it ran normalize_domain on the
+    whole string, which rejects paths and silently dropped every rule with
+    a path — the user's /login and /register redirects never generated).
+    Bare-host targets (``accounts.trulay.co``) keep the existing semantics:
+    ``/segment`` goes to the target root and ``/segment/*`` preserves the
+    remainder.
     """
-    rules: list[tuple[str, str]] = []
+    from apps.domains.utils import normalize_domain, split_host_and_path
+    rules: list[tuple[str, str, str]] = []
     seen: set[str] = set()
     raw_entries = getattr(service, "path_redirects", None)
     if not isinstance(raw_entries, list):
@@ -150,36 +162,63 @@ def _service_path_redirect_rules(service) -> list[tuple[str, str]]:
             continue
         if not _PATH_REDIRECT_SEGMENT_RE.match(path):
             continue
+        # Strip a URL scheme if the operator pasted a full URL.
+        if "://" in target:
+            target = target.split("://", 1)[1]
         try:
-            target = normalize_domain(target)
+            target_host, target_path = split_host_and_path(target)
+        except ValueError:
+            continue
+        try:
+            target_host = normalize_domain(target_host)
         except ValueError:
             continue
         if path in seen:
             continue
         seen.add(path)
-        rules.append((path, target))
+        rules.append((path, target_host, target_path))
         if len(rules) >= _MAX_PATH_REDIRECTS_PER_SERVICE:
             break
     return rules
 
 
-def _path_redirect_site_lines(rules: list[tuple[str, str]], indent: str = "    ") -> list[str]:
+def _path_redirect_site_lines(rules: list[tuple[str, str, str]], indent: str = "    ") -> list[str]:
     """Caddyfile lines implementing 301 path redirects inside a site block.
 
-    Exact match (/seg) goes to the target root; /seg/* keeps the remainder of
-    the path and query string.
+    Two target shapes:
+      - Bare host (``accounts.trulay.co``): exact ``/seg`` → target root;
+        ``/seg/*`` preserves the remainder (``/seg/x`` →
+        ``https://target/x`` — the old prefix-strip semantics).
+      - Host with path (``accounts.trulay.co/login``): exact ``/seg`` →
+        ``https://host/login``; ``/seg/x`` → ``https://host/login/x``
+        (the target path replaces the matched segment, the remainder is
+        appended). This is the 'domain/path' format the UI accepts.
     """
     lines: list[str] = []
-    for index, (segment, target) in enumerate(rules):
-        lines.extend([
-            f"{indent}@path_redir_{index}_exact path {segment}",
-            f"{indent}handle @path_redir_{index}_exact {{",
-            f"{indent}    redir https://{target}/ 301",
-            f"{indent}}}",
-            f"{indent}handle_path {segment}/* {{",
-            f"{indent}    redir https://{target}{{uri}} 301",
-            f"{indent}}}",
-        ])
+    for index, (segment, target, target_path) in enumerate(rules):
+        if target_path and target_path != "/":
+            # Host/path target: /seg -> https://host/path, /seg/x -> https://host/path/x
+            # Caddy's {http.request.uri.path} excludes the query; {uri} keeps it.
+            lines.extend([
+                f"{indent}@path_redir_{index}_exact path {segment}",
+                f"{indent}handle @path_redir_{index}_exact {{",
+                f"{indent}    redir https://{target}{target_path} 301",
+                f"{indent}}}",
+                f"{indent}handle_path {segment}/* {{",
+                f"{indent}    redir https://{target}{target_path}{{uri}} 301",
+                f"{indent}}}",
+            ])
+        else:
+            # Bare-host target: /seg -> https://host/, /seg/x -> https://host/x
+            lines.extend([
+                f"{indent}@path_redir_{index}_exact path {segment}",
+                f"{indent}handle @path_redir_{index}_exact {{",
+                f"{indent}    redir https://{target}/ 301",
+                f"{indent}}}",
+                f"{indent}handle_path {segment}/* {{",
+                f"{indent}    redir https://{target}{{uri}} 301",
+                f"{indent}}}",
+            ])
     return lines
 
 
@@ -226,14 +265,20 @@ def _service_host_alias_rules(service) -> list[tuple[str, str]]:
 def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: str, host_header: str) -> str:
     """Caddyfile site block for a host alias (accounts.google.com pattern).
 
-    For the rewrite_root short-hand, the Caddyfile needs a request matcher
-    that fires for any path UNDER the rewrite_root. For example,
-    rewrite_root='/login' should rewrite both '/' and '/anything' to
-    '/login/anything', which means matching path /login* (and '/' as
-    a special case). The previous version hardcoded 'path /' which
-    meant the rewrite only triggered for the exact root path — so
-    visiting /dashboard on accounts.trulay.co fell through to the
-    default reverse_proxy and didn't get the rewrite at all.
+    Semantics (from Service.host_aliases help_text):
+      - Visiting the alias's ROOT (/) is rewritten to ``rewrite_root``
+        (e.g. /login), so https://accounts.example.com/ shows the app's
+        login page.
+      - All other paths (/login, /dashboard, /api/...) pass through
+        UNCHANGED — the alias serves the whole app, not just one path.
+
+    Therefore the matcher must be exactly ``/`` — the root only. An
+    earlier revision changed the matcher to ``path {rewrite_root}*``,
+    which matched only requests already under the rewrite_root; the
+    root itself fell through to the catch-all handle and served the
+    unrewritten homepage instead of /login (and the /login rewrite
+    rewrote /login to itself — a no-op). Root-only matcher, rewrite
+    to rewrite_root, everything else unchanged.
     """
     lines = [f"{alias_host} {{"]
     lines.extend([
@@ -244,17 +289,9 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         "        output file /var/log/caddy/access.log",
         "    }",
     ])
-    if rewrite_root:
-        # Match the rewrite_root itself, with a trailing wildcard so any
-        # sub-path rewrites to rewrite_root + sub-path. Special-case the
-        # bare '/' rewrite_root to match only '/' (otherwise '/foo' would
-        # never match '/foo' via the same matcher).
-        if rewrite_root == "/":
-            matcher = "path /"
-        else:
-            matcher = f"path {rewrite_root}*"
+    if rewrite_root and rewrite_root != "/":
         lines.extend([
-            f"    @alias_root {matcher}",
+            "    @alias_root path /",
             "    handle @alias_root {",
             f"        rewrite * {rewrite_root}",
         ])
@@ -274,7 +311,7 @@ def _build_service_domain_block(
     domain: str,
     upstream_host: str,
     upstream_url: str = "",
-    path_redirect_rules: list[tuple[str, str]] | None = None,
+    path_redirect_rules: list[tuple[str, str, str]] | None = None,
 ) -> str:
     lines = [f"{domain} {{"]
 
@@ -311,7 +348,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
 
         for service in Service.objects.only(
             "id", "public_domain", "custom_domains", "public_domain_hidden", "staging_domain",
-            "host_aliases",
+            "host_aliases", "path_redirects",
         ).order_by("id"):
             raw_public = (
                 str(service.public_domain or "").strip().lower()
@@ -924,6 +961,73 @@ def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
     return dict(sorted(redirects.items()))
 
 
+def _get_wildcard_path_redirect_lines(wildcard_domain: str) -> list[str]:
+    """Per-service path-redirect handles for wildcard-covered public domains.
+
+    Services whose public_domain is a subdomain of the wildcard (e.g.
+    ``smsly-frontend-j51qi-801dc1.grid.smsly.cloud`` under
+    ``*.grid.smsly.cloud``) get their whole domain block skipped in
+    ``_get_service_domain_blocks`` — which also skips their
+    ``path_redirects``. This emits those redirects into the wildcard
+    site block, scoped to the specific service host so two services
+    with a ``/login`` redirect don't collide.
+
+    Each rule is a single ``handle`` with a combined host+path matcher
+    covering both the exact segment and sub-paths, using
+    ``uri strip_prefix <segment>`` so ``/login/x`` redirects to the
+    target with the remainder preserved (matching the per-domain block
+    semantics from _path_redirect_site_lines).
+    """
+    lines: list[str] = []
+    if not wildcard_domain:
+        return []
+    try:
+        from apps.deployments.models import Service
+
+        if not _table_exists(Service._meta.db_table):
+            return []
+
+        suffix = f".{wildcard_domain}"
+        for service in Service.objects.only(
+            "id", "public_domain", "path_redirects",
+        ).order_by("id"):
+            raw_public = str(getattr(service, "public_domain", "") or "").strip().lower()
+            if not raw_public:
+                continue
+            try:
+                public_domain = normalize_domain(raw_public)
+            except ValueError:
+                continue
+            if not public_domain.endswith(suffix):
+                continue
+            rules = _service_path_redirect_rules(service)
+            if not rules:
+                continue
+            svc_alias = str(service.id).replace("-", "")[:8]
+            # Scope every redirect to this service's own hostname so
+            # the wildcard block can host rules for many services.
+            for r_index, (segment, target, target_path) in enumerate(rules):
+                host_m = f"@wprh_{svc_alias}_{r_index}"
+                path_m = f"@wprp_{svc_alias}_{r_index}"
+                lines.append(f"    {host_m} host {public_domain}")
+                lines.append(f"    {path_m} path {segment} {segment}/*")
+                lines.append(f"    handle {host_m} and {path_m} {{")
+                if target_path and target_path != "/":
+                    # host/path target: replace the matched segment with
+                    # the target path, keep the remainder + query.
+                    lines.append(f"        uri strip_prefix {segment}")
+                    lines.append(f"        redir https://{target}{target_path}{{uri}} 301")
+                else:
+                    # bare-host target: strip segment, remainder goes to root
+                    lines.append(f"        uri strip_prefix {segment}")
+                    lines.append(f"        redir https://{target}{{uri}} 301")
+                lines.append("    }")
+    except Exception as exc:
+        logger.warning("Could not load wildcard path redirects: %s", exc)
+        return []
+    return lines
+
+
 def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> list[str]:
     """Generate Caddyfile blocks for node subdomains (node-{slug}.{domain}).
 
@@ -1356,6 +1460,14 @@ def generate_caddyfile(config) -> str:
                         "    }",
                     ]
                 )
+
+            # Per-service path redirects on wildcard-covered public domains.
+            # A service whose public_domain is a subdomain of this wildcard
+            # gets its own domain block skipped above, so its path_redirects
+            # (/login -> accounts.trulay.co/login) must be emitted here,
+            # scoped to that service's hostname. BEFORE the proxy handlers
+            # so the redirect wins over proxying to the app.
+            wildcard_lines.extend(_get_wildcard_path_redirect_lines(domain))
 
             # Disabled/private/hidden wildcard domains serve the 503 fallback
             # page from route-fallback — NEVER the platform landing page.
