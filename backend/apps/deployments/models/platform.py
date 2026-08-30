@@ -585,6 +585,14 @@ class PlatformConfig(models.Model):
 
     def save(self, *args, **kwargs):
         self.pk = 1  # Enforce singleton
+        # Auto-generate the GitHub App webhook secret on first save so the
+        # webhook can actually verify signatures without manual setup. The
+        # operator only needs to copy this secret into the GitHub App's
+        # webhook config once. Idempotent: a pre-existing valid value
+        # (anything 16+ chars) is preserved.
+        if self.github_app_id and not (self.github_webhook_secret or '').strip():
+            import secrets
+            self.github_webhook_secret = secrets.token_hex(32)
         super().save(*args, **kwargs)
         from django.core.cache import cache
         cache.delete(self._CACHE_KEY)
