@@ -171,10 +171,16 @@ class LocalAdapter(BaseCloudAdapter):
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
         try:
             from apps.deployments.models import Service as _Svc
-            _svc = _Svc.objects.filter(id=self.service_id).select_related('project__team__organization').first() if hasattr(self, 'service_id') and hasattr(self, '_service') else None
-            if _svc is None and hasattr(self, 'service_id'):
-                _svc = self._service if hasattr(self, '_service') else None
-            if _svc and hasattr(_svc, 'project') and _svc.project:
+            # Prefer the service_id stashed by deploy_container()
+            svc_id = getattr(self, '_service_id', None) or getattr(self, 'service_id', None)
+            if not svc_id:
+                return network_name
+            _svc = (
+                _Svc.objects.filter(id=svc_id)
+                .select_related('project__team__organization')
+                .first()
+            )
+            if _svc and getattr(_svc, 'project', None):
                 from apps.deployments.models.network_scope import ScopedNetwork
                 network_name = ScopedNetwork.resolve_network_name(_svc.project)
         except Exception as exc:
@@ -309,6 +315,12 @@ class LocalAdapter(BaseCloudAdapter):
     def deploy_container(self, service_name: str, image: str,
                          env_vars: dict[str, str], cpu: int, memory: int,
                          replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> str:
+        # SEC-NET-001: cache service_id so _resolve_network_name() can find
+        # the service's ScopedNetwork. Previously the adapter never knew
+        # which service it was deploying, so it always fell back to
+        # DOCKER_NETWORK env var (or 'smsly-net'), bypassing all
+        # per-project ScopedNetwork isolation.
+        self._service_id = kwargs.get('service_id', '')
         volumes = kwargs.pop('volumes', None)
         healthcheck = kwargs.pop('healthcheck', None)
         restart_policy = kwargs.pop('restart_policy', 'unless-stopped')
@@ -348,12 +360,11 @@ class LocalAdapter(BaseCloudAdapter):
             driver = "bridge"
             try:
                 from apps.deployments.models.network_scope import ScopedNetwork
-                if hasattr(self, 'service_id'):
+                svc_id = getattr(self, '_service_id', None) or getattr(self, 'service_id', None)
+                if svc_id:
                     from apps.deployments.models import Service as _Svc2
-                    _svc2 = _Svc2.objects.filter(id=self.service_id).select_related('project').first() if hasattr(self, 'service_id') and hasattr(self, '_service') else None
-                    if _svc2 is None and hasattr(self, 'service_id'):
-                        _svc2 = self._service if hasattr(self, '_service') else None
-                    if _svc2 and hasattr(_svc2, 'project') and _svc2.project:
+                    _svc2 = _Svc2.objects.filter(id=svc_id).select_related('project').first()
+                    if _svc2 and getattr(_svc2, 'project', None):
                         cfg = ScopedNetwork.resolve_network_config(_svc2.project)
                         driver = cfg.get("driver", "bridge")
             except Exception as exc:
@@ -666,7 +677,19 @@ class LocalAdapter(BaseCloudAdapter):
                 from apps.deployments.models.addons import Addon as _Addon
                 from urllib.parse import urlparse as _urlparse
                 extra_hosts = []
-                for _addon in _Addon.objects.filter(service_id=self.service_id, status='ACTIVE'):
+                # Resolve the service_id for addon lookup so we also pick
+                # up shared addons attached to other services in the
+                # same project (postgres-shared, redis-shared, etc.)
+                svc_id = getattr(self, '_service_id', None) or getattr(self, 'service_id', None)
+                addon_qs = _Addon.objects.filter(status='ACTIVE')
+                if svc_id:
+                    from apps.deployments.models import Service as _AddonSvc
+                    _addsvc = _AddonSvc.objects.filter(id=svc_id).select_related('project').first()
+                    if _addsvc and _addsvc.project:
+                        addon_qs = addon_qs.filter(
+                            service__project=_addsvc.project,
+                        )
+                for _addon in addon_qs:
                     if not _addon.connection_url:
                         continue
                     _parsed = _urlparse(_addon.connection_url)

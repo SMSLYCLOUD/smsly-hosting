@@ -242,13 +242,29 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
         _ensure_addons_ready(service, deployment)
 
         from apps.addons.services.addon_provisioner import AddonProvisioner
+        # Build a map of addon_type -> connection_url for this service.
+        # The service's OWN addons win, but shared (project-level) addons
+        # are the fallback for any type the service doesn't have itself.
+        addon_url: dict[str, str] = {}
         for addon in Addon.objects.filter(service=service, status='ACTIVE'):
-            env_key = AddonProvisioner.ENV_KEY_MAP.get(addon.addon_type)
-            if env_key and addon.connection_url:
-                env_vars[env_key] = addon.connection_url
-                if addon.addon_type == 'QDRANT':
+            if addon.connection_url:
+                addon_url.setdefault(addon.addon_type, addon.connection_url)
+        # Fill in from shared addons in the same project.
+        project = getattr(service, "project", None)
+        if project:
+            for addon in Addon.objects.filter(
+                service__project=project,
+                status='ACTIVE',
+            ).exclude(service=service):
+                if addon.connection_url and addon.addon_type not in addon_url:
+                    addon_url[addon.addon_type] = addon.connection_url
+        for addon_type, url in addon_url.items():
+            env_key = AddonProvisioner.ENV_KEY_MAP.get(addon_type)
+            if env_key:
+                env_vars[env_key] = url
+                if addon_type == 'QDRANT':
                     from urllib.parse import urlparse
-                    parsed = urlparse(addon.connection_url)
+                    parsed = urlparse(url)
                     env_vars['QDRANT_HOST'] = parsed.hostname or 'localhost'
                     env_vars['QDRANT_PORT'] = str(parsed.port or 6333)
 
