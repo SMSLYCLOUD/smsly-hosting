@@ -312,13 +312,6 @@ class ServiceSerializer(serializers.ModelSerializer):
                 )
             seen.add(dedup_key)
             normalized_aliases.append(normalized_entry)
-            normalized_entry = dict(entry)
-            normalized_entry['host'] = host
-            # If the operator wrote a path in the host field, prefer it over
-            # any existing rewrite_root (or set it when none was given).
-            if path and not normalized_entry.get('rewrite_root'):
-                normalized_entry['rewrite_root'] = path
-            normalized_aliases.append(normalized_entry)
             # Check global conflict (public_domain, custom_domains, other host_aliases)
             qs = Service.objects.exclude(id=getattr(self.instance, 'id', None) or 0)
             if qs.filter(public_domain=host).exists():
