@@ -636,19 +636,38 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             _has_network = ScopedNetwork.objects.filter(
                 content_type=_ct, object_id=project.id,
             ).exists()
-            if not _has_network:
+            # The internal network is per-service now. If a project
+            # has ANY service with use_internal_network=True we
+            # provision the scoped bridge. If all services opt out
+            # we fall back to the shared 'smsly-net' bridge and the
+            # service-to-service traffic uses public DNS / Traefik.
+            any_wants_internal = any(
+                getattr(svc, 'use_internal_network', True)
+                for svc in target_services
+            )
+            if not _has_network and any_wants_internal:
                 # Network name is derived from the project UUID so it's
-                # unique per ecosystem deploy. Suffix ``-net`` mirrors the
-                # existing ``smsly-net`` convention so Traefik/Caddy
-                # discovery still works.
+                # unique per ecosystem deploy. Suffix mirrors the existing
+                # ``smsly-net`` convention so Traefik/Caddy discovery
+                # still works.
                 _scope_id = str(project.id).replace("-", "")[:8]
                 _network_name = f"smsly-net-{_scope_id}"
 
-                # Pick a subnet that doesn't collide with the default
-                # ``smsly-net`` (172.18.0.0/16) or any of the bridge
-                # networks we already create. 172.30.x.x is in the
-                # CGNAT range and unused on this host.
-                _subnet = f"172.30.{abs(hash(_scope_id)) % 254}.0/24"
+                # Subnet comes from the project-level setting if set, else
+                # we use the platform-level default (PlatformConfig
+                # .default_internal_subnet, falls back to 172.30.224.0/24).
+                # The 172.30.0.0/16 CGNAT range doesn't collide with the
+                # default ``smsly-net`` (172.18.0.0/16) or any other
+                # bridge we already create.
+                if getattr(project, 'internal_subnet', '').strip():
+                    _subnet = project.internal_subnet.strip()
+                else:
+                    try:
+                        from apps.deployments.models.core import PlatformConfig
+                        _subnet = (PlatformConfig.load().default_internal_subnet or '').strip() \
+                            or '172.30.224.0/24'
+                    except Exception:
+                        _subnet = '172.30.224.0/24'
 
                 # Actually create the Docker network so containers can
                 # attach immediately. Idempotent — re-runs on a

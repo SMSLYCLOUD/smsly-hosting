@@ -659,6 +659,30 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
             latest_deploy = DepModel.objects.filter(service=service).order_by("-created_at").first()
             saved_logs = latest_deploy.build_logs[-2000:] if latest_deploy and latest_deploy.build_logs else ""
 
+            # Surface the container's IP and the Docker networks it is
+            # attached to. Ecosystem services on smsly-net-a5f086aa
+            # (172.30.224.0/24) can talk to each other via their container
+            # IPs directly without ever leaving the host, so the UI can
+            # surface those IPs as the recommended service-to-service
+            # address (lower latency, no public DNS lookup).
+            container.reload()
+            network_settings = container.attrs.get('NetworkSettings') or {}
+            attached_networks = network_settings.get('Networks') or {}
+            networks_info = []
+            primary_ip = None
+            for net_name, net_data in attached_networks.items():
+                ip = net_data.get('IPAddress') or ''
+                gw = net_data.get('Gateway') or ''
+                aliases = net_data.get('Aliases') or []
+                if ip and not primary_ip:
+                    primary_ip = ip
+                networks_info.append({
+                    'name': net_name,
+                    'ip': ip,
+                    'gateway': gw,
+                    'aliases': aliases,
+                })
+
             return Response({
                 'service_id': str(service.id),
                 'service_name': service.name,
@@ -670,6 +694,8 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                 'image': ','.join(getattr(container.image, 'tags', []) or []),
                 'exit_code': exit_code,
                 'restart_count': restart_count,
+                'primary_ip': primary_ip,
+                'networks': networks_info,
                 'saved_logs': saved_logs,
                 'saved_logs_source': 'build_logs' if saved_logs else None,
             })

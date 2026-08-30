@@ -377,14 +377,28 @@ ALLOW_LOCAL_NODES = config(
 )
 
 # Restrictive ALLOWED_HOSTS with mandatory internal whitelisting.
-# The scoped ecosystem network (smsly-net-a5f086aa, 172.30.224.0/24) gets
-# a wildcard entry so services on that bridge can health-check themselves
-# via their own container IP. Without this, Django rejects the request
-# with DisallowedHost: Invalid HTTP_HOST header: '172.30.224.X:8080'.
+# The scoped ecosystem network gets a wildcard entry so services
+# on that bridge can health-check themselves via their own container
+# IP. Without this, Django rejects the request with DisallowedHost:
+# Invalid HTTP_HOST header: '172.30.224.X:8080'. The actual CIDR is
+# resolved at runtime from PlatformConfig.default_internal_subnet so
+# the operator can change it from the UI without a code deploy.
+def _resolve_default_ecosystem_subnet() -> str:
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        val = (PlatformConfig.load().default_internal_subnet or '').strip()
+        if val:
+            return val
+    except Exception:
+        pass
+    return '172.30.224.0/24'
+
+_DEFAULT_ECOSYSTEM_SUBNET = _resolve_default_ecosystem_subnet()
 _BASE_HOSTS = [
     'localhost', '127.0.0.1', 'backend', 'smsly-hosting-backend-1',
-    # Ecosystem scoped network (whole /24)
-    '172.30.224.0/24',
+    # Ecosystem scoped network — read from PlatformConfig so the
+    # operator can change it without touching this file.
+    _DEFAULT_ECOSYSTEM_SUBNET,
     # Common SMSLY/Trulay wildcard DNS — operators behind a corporate
     # proxy that rewrites the Host header to a public hostname will
     # still resolve correctly.

@@ -168,6 +168,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
     node_metadata = serializers.SerializerMethodField()
     node_url = serializers.SerializerMethodField()
     running_replicas = serializers.SerializerMethodField()
+    internal_addresses = serializers.SerializerMethodField()
 
     class Meta:
         model = Service
@@ -180,10 +181,19 @@ class ServiceListSerializer(serializers.ModelSerializer):
             'wildcard_redirect_custom_domain', 'wildcard_internal_only',
             'path_redirects', 'host_aliases',
             'env_scan_depth', 'running_replicas',
+            'internal_addresses',
         ]
 
     def get_running_replicas(self, obj):
         return getattr(obj, 'running_replicas_count', 0)
+
+    def get_internal_addresses(self, obj):
+        """Cached at serialization time so the service list page can
+        show each service's internal IP without an N+1 Docker inspect
+        burst."""
+        if not getattr(obj, '_internal_addresses_cache', None):
+            obj._internal_addresses_cache = obj.generate_internal_addresses()
+        return obj._internal_addresses_cache
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
         return _get_latest_deployment(obj)
@@ -220,6 +230,7 @@ class ServiceSerializer(serializers.ModelSerializer):
     latest_deployment = serializers.SerializerMethodField()
     service_url = serializers.SerializerMethodField()
     node_url = serializers.SerializerMethodField()
+    internal_addresses = serializers.SerializerMethodField()
     project_name = serializers.CharField(
         source='project.name', read_only=True, default=None)
     project_slug = serializers.CharField(
@@ -372,6 +383,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             # SerializerMethodField / nested fields
             'env_vars', 'server_id',
             'latest_deployment', 'service_url', 'node_url',
+            'internal_addresses',
             'project_name', 'project_slug', 'project_emoji',
             'estimated_cost', 'node_metadata', 'domain_instances',
             'running_replicas',
@@ -484,3 +496,11 @@ class ServiceSerializer(serializers.ModelSerializer):
             }
             for d in obj.domain_instances.all()
         ]
+
+    def get_internal_addresses(self, obj):
+        """Same as the list serializer's get_internal_addresses — returns
+        the container's IP(s) and the Docker networks it's attached to so
+        the detail page can show the recommended inter-service URL."""
+        if not getattr(obj, '_internal_addresses_cache', None):
+            obj._internal_addresses_cache = obj.generate_internal_addresses()
+        return obj._internal_addresses_cache

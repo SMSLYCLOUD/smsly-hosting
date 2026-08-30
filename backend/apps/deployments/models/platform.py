@@ -318,6 +318,19 @@ class PlatformConfig(models.Model):
         max_length=20, default='shallow',
         choices=[('shallow', 'Shallow'), ('standard', 'Standard'), ('deep', 'Deep')],
         help_text="Default environment scan depth for new services and ecosystem deploys")
+    # Default CIDR for project-level internal (scoped) Docker bridges.
+    # When a Project.internal_subnet is empty, the ecosystem deploy
+    # task falls back to this value. Operators can change it here once
+    # instead of editing every project.
+    default_internal_subnet = models.CharField(  # type: ignore[var-annotated]
+        max_length=64, blank=True, default='172.30.224.0/24',
+        help_text=(
+            "Default Docker bridge subnet (CIDR) for new ecosystem "
+            "projects' scoped networks. 172.30.0.0/16 is the IETF CGNAT "
+            "range and doesn't collide with typical LANs. Override at "
+            "the project level via Project.internal_subnet."
+        ),
+    )
     caddy_ask_secret = EncryptedCharField(
         max_length=512, blank=True, default='',
         help_text="Caddy on_demand_tls ask shared secret. Set via UI — if empty, "

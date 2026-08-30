@@ -224,7 +224,17 @@ def _service_host_alias_rules(service) -> list[tuple[str, str]]:
 
 
 def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: str, host_header: str) -> str:
-    """Caddyfile site block for a host alias (accounts.google.com pattern)."""
+    """Caddyfile site block for a host alias (accounts.google.com pattern).
+
+    For the rewrite_root short-hand, the Caddyfile needs a request matcher
+    that fires for any path UNDER the rewrite_root. For example,
+    rewrite_root='/login' should rewrite both '/' and '/anything' to
+    '/login/anything', which means matching path /login* (and '/' as
+    a special case). The previous version hardcoded 'path /' which
+    meant the rewrite only triggered for the exact root path — so
+    visiting /dashboard on accounts.trulay.co fell through to the
+    default reverse_proxy and didn't get the rewrite at all.
+    """
     lines = [f"{alias_host} {{"]
     lines.extend([
         "    tls {",
@@ -235,8 +245,16 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         "    }",
     ])
     if rewrite_root:
+        # Match the rewrite_root itself, with a trailing wildcard so any
+        # sub-path rewrites to rewrite_root + sub-path. Special-case the
+        # bare '/' rewrite_root to match only '/' (otherwise '/foo' would
+        # never match '/foo' via the same matcher).
+        if rewrite_root == "/":
+            matcher = "path /"
+        else:
+            matcher = f"path {rewrite_root}*"
         lines.extend([
-            "    @alias_root path /",
+            f"    @alias_root {matcher}",
             "    handle @alias_root {",
             f"        rewrite * {rewrite_root}",
         ])

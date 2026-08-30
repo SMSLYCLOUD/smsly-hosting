@@ -59,6 +59,21 @@ class Project(models.Model):
         help_text="Auto-created for custom-registry deploy; hidden from default project list"
     )
 
+    # Operator-configured Docker bridge subnet for this project's
+    # services. Each service that opts into the internal network gets
+    # attached to a per-project bridge built on this CIDR. Empty falls
+    # back to PlatformConfig.default_internal_subnet (the platform's
+    # shared /24).
+    internal_subnet = models.CharField(  # type: ignore[var-annotated]
+        max_length=64, blank=True, default="",
+        help_text=(
+            "Docker bridge subnet (CIDR) for this project's scoped network. "
+            "When empty, falls back to PlatformConfig.default_internal_subnet "
+            "(default 172.30.224.0/24). Example: 10.99.0.0/24 for an isolated "
+            "team bridge."
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
@@ -433,6 +448,36 @@ class Service(TimeStampedModel):
             "internal/mesh traffic. Custom domains keep working normally."
         ))
 
+    # Per-service internal network exposure. When enabled, this
+    # service is attached to the project's scoped Docker bridge so
+    # other services in the same project can reach it via its container
+    # IP on the host (no public DNS, no Cloudflare round-trip). The
+    # project-level Project.internal_subnet determines the CIDR.
+    use_internal_network = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text=(
+            "Attach this service to the project's scoped Docker bridge "
+            "for low-latency internal service-to-service traffic. Disable "
+            "to keep the service on the shared 'smsly-net' bridge only."
+        ),
+    )
+    # Auto-populated at spawn time: the service's IP on the
+    # platform-wide shared bridge ('smsly-platform-net' by default).
+    # Other services inside or outside the project can reach this
+    # service on this IP without TLS or public DNS. The dual-homing
+    # means the service is on both bridges: project-scoped (lowest
+    # latency, project members only) and platform-scoped (any
+    # internal-network-enabled service, regardless of project).
+    platform_internal_ip = models.GenericIPAddressField(  # type: ignore[var-annotated]
+        blank=True, null=True,
+        help_text=(
+            "Auto-populated at spawn time: this service's IP on the "
+            "platform-wide shared bridge. Use it for inter-service "
+            "traffic that needs to escape the project's scope. Empty "
+            "when use_internal_network=False."
+        ),
+    )
+
     # Deploy Mode (single container vs docker-compose)
     DEPLOY_MODE_CHOICES = [
         ('SINGLE', 'Single Container'),
@@ -651,6 +696,80 @@ class Service(TimeStampedModel):
         return ServiceReplica.objects.filter(
             service=self, status='RUNNING'
         ).count()
+
+    def generate_internal_addresses(self) -> list[dict]:
+        """Return the container's IPs and the Docker networks it's on.
+
+        Used by the service detail page to surface the IPs that other
+        services should connect to. On the scoped ecosystem network
+        (smsly-net-a5f086aa, 172.30.224.0/24) these IPs are
+        host-internal — no public DNS lookup, no Cloudflare round trip,
+        no TLS overhead. Traefik (which is also on the bridge) can
+        route to them directly via the Traefik docker provider.
+
+        Returns a list of dicts shaped like::
+
+            [{'network': 'smsly-net-a5f086aa',
+              'ip': '172.30.224.5',
+              'port': 8080,
+              'gateway': '172.30.224.1',
+              'aliases': ['smsly-identity-service', 'smsly-identity-service.default.internal']}]
+
+        The first entry is the IP on the project's scoped network if
+        the container is on it; that's the recommended value for
+        service-to-service env vars.
+        """
+        try:
+            import docker as docker_lib
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = None
+            try:
+                container = client.containers.get(self.name)
+            except docker_lib.errors.NotFound:
+                candidates = client.containers.list(
+                    all=True, filters={'name': self.name}
+                )
+                for c in candidates:
+                    if getattr(c, 'name', '') == self.name:
+                        container = c
+                        break
+                if container is None and candidates:
+                    container = candidates[0]
+            if container is None:
+                return []
+            container.reload()
+            nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+            port = self.internal_port or 8000
+            # Project-scoped bridge first (smsly-net-<id>), then the
+            # platform-wide bridge (smsly-platform-net by convention),
+            # then anything else.
+            def _net_sort_key(item):
+                name, _ = item
+                if name.startswith('smsly-net-') and name != 'smsly-net-a5f086aa':
+                    return (0, name)
+                if name == 'smsly-platform-net':
+                    return (1, name)
+                if name == 'smsly-net-a5f086aa':
+                    return (2, name)
+                if name == 'smsly-net':
+                    return (3, name)
+                return (4, name)
+            out = []
+            for net_name, net_data in sorted(nets.items(), key=_net_sort_key):
+                ip = net_data.get('IPAddress') or ''
+                if not ip:
+                    continue
+                out.append({
+                    'network': net_name,
+                    'ip': ip,
+                    'port': port,
+                    'gateway': net_data.get('Gateway') or '',
+                    'aliases': list(net_data.get('Aliases') or []),
+                })
+            return out
+        except Exception:
+            return []
 
     def generate_staging_url(self, commit_hash: str = "") -> str:
         """Generate a staging preview URL for webhook deployments.
