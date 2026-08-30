@@ -297,6 +297,23 @@ class PlatformConfig(models.Model):
     ecosystem_wave_recheck_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=15,
         help_text="Seconds between wave completion rechecks")
+    blue_green_auto_promote = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text=(
+            "When True, webhook / push-triggered green containers are "
+            "auto-promoted to live after BLUE_GREEN_STAGING_HOLD_SECONDS. "
+            "When False, greens stay in the staging router until manual "
+            "promotion (PaaS landing page still resolves the staging URL)."
+        ),
+    )
+    blue_green_staging_hold_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=60,
+        help_text=(
+            "How long to hold a staged green container before auto-promoting "
+            "it. Set to 0 with BLUE_GREEN_AUTO_PROMOTE=0 to require manual "
+            "approval for every deploy."
+        ),
+    )
     default_env_scan_depth = models.CharField(  # type: ignore[var-annotated]
         max_length=20, default='shallow',
         choices=[('shallow', 'Shallow'), ('standard', 'Standard'), ('deep', 'Deep')],
