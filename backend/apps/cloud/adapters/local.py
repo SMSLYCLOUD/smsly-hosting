@@ -806,6 +806,25 @@ class LocalAdapter(BaseCloudAdapter):
             return self.promote_container(name, new_container.id)
 
         if hold_for_staging:
+            # ECOSYSTEM-001: ecosystem-deploy commits use a *temporary*
+            # staging domain. Auto-promote the green as soon as it passes
+            # the health check, then the staging Traefik router falls out
+            # of scope and the service serves traffic on its real
+            # public_domain. Manual `skip_review=False` deploys still
+            # require explicit user approval.
+            deployment = self._service
+            commit_hash = ""
+            if deployment is not None:
+                from apps.deployments.models.deployment import Deployment
+                d = Deployment.objects.filter(service=deployment).order_by("-created_at").first()
+                if d is not None:
+                    commit_hash = str(d.commit_hash or "").strip()
+            if commit_hash == "ecosystem-deploy":
+                logger.info(
+                    "Ecosystem deploy green %s is healthy; auto-promoting as %s",
+                    container_name, name,
+                )
+                return self.promote_container(name, new_container.id)
             logger.info(
                 "Green container %s is healthy and held for staging review",
                 container_name,

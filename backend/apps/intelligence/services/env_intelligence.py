@@ -42,14 +42,24 @@ _DELIBERATION_RE = re.compile(
 
 
 def _sanitize_senate_value(val: str) -> str:
-    """Strip AI deliberation text from a value (e.g. 'boolean => likely true ...' → 'true')."""
+    """Strip AI deliberation text from a value (e.g. 'boolean => likely true ...' → 'true').
+
+    Also strips stray backticks, quotes, and markdown formatting that
+    the AI sometimes embeds in its answers — particularly Traefik
+    syntax like `` `https://app.example.com,https://api.example.com` ``
+    which is valid for a Traefik ``Host()`` label but crashes pydantic
+    JSON env parsers like ``cors_origins``.
+    """
     v = str(val).strip()
     m = _DELIBERATION_RE.match(v)
     if m:
-        # Return the first non-None group (the actual value)
         for g in m.groups():
             if g is not None:
-                return g.strip().strip('"').strip("'")
+                v = g
+                break
+    # Strip leading/trailing Traefik backticks (the AI sometimes wraps
+    # the value in `` `...` `` when it confuses env values with label syntax)
+    v = v.strip().strip('`').strip().strip('"').strip("'").strip()
     return v
 
 
