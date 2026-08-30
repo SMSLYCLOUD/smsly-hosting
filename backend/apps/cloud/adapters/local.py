@@ -645,9 +645,11 @@ class LocalAdapter(BaseCloudAdapter):
                 if _svc_obj and getattr(_svc_obj, 'use_internal_network', True):
                     from apps.deployments.services.network_scope import ensure_platform_bridge
                     platform_bridge = ensure_platform_bridge()
+                    logger.info("DEBUG dual-homing: platform_bridge=%s, networks_dict_keys=%s", platform_bridge, list(networks_dict.keys()))
                     networks_dict[platform_bridge] = self.docker_client.api.create_endpoint_config(
                         aliases=aliases,
                     )
+                    logger.info("DEBUG dual-homing: networks_dict after add: %s", list(networks_dict.keys()))
             except Exception as exc:
                 logger.debug("Platform-bridge dual-homing skipped: %s", exc)
 
