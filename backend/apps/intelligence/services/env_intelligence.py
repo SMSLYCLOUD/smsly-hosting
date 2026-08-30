@@ -156,6 +156,36 @@ class EnvironmentIntelligenceService:
                 "MAX_", "MIN_", "LIMIT", "COUNT", "COOLDOWN",
                 "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES", "SIZE",
             }
+            # Hard-coded production defaults for vars the AI commonly gets
+            # wrong. These prevent empty-string env vars from crashing
+            # downstream consumers (pydantic, argparse, etc.).
+            _FALLBACK_DEFAULTS = {
+                "LOG_LEVEL": "info",
+                "LOG_FORMAT": "json",
+                "ENVIRONMENT": "production",
+                "DEBUG": "false",
+                "TESTING": "false",
+                "NODE_ENV": "production",
+                "PYTHONUNBUFFERED": "1",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "WEB_CONCURRENCY": "4",
+                "WORKERS": "4",
+                "CORS_ORIGINS": "http://localhost:3000",
+                "CORS_DEV_ORIGINS": "http://localhost:3000",
+                "ALLOWED_ORIGINS": "http://localhost:3000",
+                "CORS_ALLOWED_ORIGINS": "http://localhost:3000",
+                "CORS_ALLOW_ALL_ORIGINS": "false",
+                "RATE_LIMIT_ENABLED": "true",
+                "AUDIT_ENABLED": "true",
+                "AUDIT_FAIL_CLOSED": "false",
+                "AUDIT_ASYNC_MODE": "true",
+                "ENABLE_DEVICE_TRACKING": "true",
+                "ENABLE_MFA": "true",
+                "ENABLE_SSO": "true",
+                "AUTO_APPLY_CHANGES": "true",
+                "FAIL_CLOSED_ON_AUDIT_ERROR": "false",
+                "FAIL_OPEN_ON_RATE_LIMIT_ERROR": "false",
+            }
             final_env = {}
             for var, val in suggestions.items():
                 val = _sanitize_senate_value(val)
@@ -165,6 +195,17 @@ class EnvironmentIntelligenceService:
                     continue
                 # Skip platform-managed vars (addon provisioning handles these)
                 if var_upper in _PLATFORM_MANAGED_VARS:
+                    continue
+                # Drop empty / placeholder values entirely — don't write them
+                # to the DB. The service's own default will apply at runtime,
+                # which is almost always safer than "" (which crashes pydantic
+                # and similar typed env parsers).
+                if val is None or (isinstance(val, str) and not val.strip()):
+                    logger.debug(
+                        "Senate returned empty value for '%s' — omitting "
+                        "(service default will apply).",
+                        var,
+                    )
                     continue
                 # Config vars keep AI values
                 if any(p in var_upper for p in _CONFIG_PATTERNS):
@@ -182,8 +223,22 @@ class EnvironmentIntelligenceService:
                         else:
                             final_env[var] = secrets.token_hex(32)
                     else:
-                        # AI's GENERATE on a non-secret var — don't fill
-                        continue
+                        # AI's GENERATE on a non-secret var — fall back to
+                        # the hard-coded default if we have one, else skip.
+                        fallback = _FALLBACK_DEFAULTS.get(var_upper)
+                        if fallback:
+                            final_env[var] = fallback
+                            logger.debug(
+                                "Senate returned GENERATE for non-secret '%s' — "
+                                "using hard-coded default %r.",
+                                var, fallback,
+                            )
+                        else:
+                            logger.info(
+                                "Senate returned GENERATE for non-secret '%s' — "
+                                "no default, omitting.",
+                                var,
+                            )
                     continue
 
                 # AI provided a value — trust it.
@@ -363,7 +418,7 @@ class EnvironmentIntelligenceService:
         # Only accept suggestions for vars that were detected from the user's
         # code or already exist on the service with placeholder values.
         # AI-invented keys are discarded — the user didn't ask for them.
-        known_keys = set(env_context.keys())
+        known_keys = set(scan_env_context.keys())
         for ev in service.env_vars.all():
             known_keys.add(ev.key)
 
@@ -378,6 +433,15 @@ class EnvironmentIntelligenceService:
                 continue
             if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', key):
                 logger.warning("Skipping invalid env var key from AI: %s", key)
+                continue
+            # Drop empty / placeholder values — never write "" to the DB.
+            # An empty env var masks the service's own default and crashes
+            # pydantic-typed consumers (CORS_ORIGINS= is the classic case).
+            if val is None or (isinstance(val, str) and not val.strip()):
+                logger.debug(
+                    "Senate returned empty value for '%s' — omitting.",
+                    key,
+                )
                 continue
             # Validate the AI suggestion — if it's itself a placeholder,
             # don't write it to the database.

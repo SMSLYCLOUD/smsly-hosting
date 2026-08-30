@@ -427,7 +427,37 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if not isinstance(services_plan, list) or not services_plan:
         return {"error": "No services in deploy plan"}
 
-    provider = CloudProvider.objects.filter(is_active=True).first() or CloudProvider.objects.first()
+    # SEC-ECO-001: Always pick (or create) a provider whose scope == 'ecosystem'.
+    # If the operator has not yet provisioned one, auto-create a LOCAL provider
+    # so the ecosystem gets its own FK row, its own ScopedNetwork, and its own
+    # ScopedRegistry — all isolated from the platform's provider.
+    provider = (
+        CloudProvider.objects.filter(is_active=True, scope="ecosystem").first()
+        or CloudProvider.objects.filter(scope="ecosystem").first()
+    )
+    if not provider:
+        try:
+            provider = CloudProvider.objects.create(
+                name="Ecosystem Docker",
+                provider_type=CloudProvider.ProviderType.LOCAL,
+                scope="ecosystem",
+                region="us-east-1",
+                is_active=True,
+            )
+            logger.info(
+                "Auto-created ecosystem CloudProvider '%s' (%s, scope=ecosystem)",
+                provider.name, provider.id,
+            )
+        except Exception as _prov_exc:
+            logger.warning(
+                "Failed to auto-create ecosystem provider: %s. "
+                "Falling back to first active provider.",
+                _prov_exc,
+            )
+            provider = (
+                CloudProvider.objects.filter(is_active=True).first()
+                or CloudProvider.objects.first()
+            )
     if not provider:
         return {"error": "No cloud provider configured. Add one in Settings -> Cloud Providers."}
 
@@ -847,6 +877,23 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             return bool(cfg.get("shared", use_shared_addons))
         return use_shared_addons
 
+    def _has_shared_addon(addon_type: str) -> bool:
+        """True if a shared ACTIVE addon of this type already exists for the project.
+
+        Defensive: if a prior run already provisioned the shared addon
+        (e.g. via the anchor service), the per-service loop MUST skip to
+        avoid duplicate containers and alias collisions. This is the
+        source-of-truth check — the config flag is advisory.
+        """
+        if not project:
+            return False
+        return Addon.objects.filter(
+            service__owner=user,
+            service__project=project,
+            addon_type=addon_type,
+            status=Addon.Status.ACTIVE,
+        ).exists()
+
     if addon_anchor_service and required_addons:
         supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
         for addon_type in required_addons:
@@ -1143,8 +1190,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     if addon_type not in supported_addons:
                         logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
                         continue
-                    # Only provision individually if this addon is NOT shared
-                    if _addon_is_shared(addon_type):
+                    # Only provision individually if this addon is NOT shared.
+                    # Use the DB as source of truth: if a shared ACTIVE addon
+                    # already exists for this project, skip even if the config
+                    # flag is wrong (config flag is advisory only).
+                    if _addon_is_shared(addon_type) or _has_shared_addon(addon_type):
+                        logger.debug(
+                            "Skipping individual addon %s for %s — shared addon exists",
+                            addon_type, service.name,
+                        )
                         continue
                     try:
                         # Check if this service already has an addon of this type
