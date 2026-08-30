@@ -404,6 +404,16 @@ export interface Service {
   watch_paths?: string[];
   bot_pr_strategy?: 'DEPLOY' | 'SKIP' | 'COMMENT_ONLY';
   last_pr_comment_id?: number;
+  // Internal network (per-service)
+  use_internal_network?: boolean;
+  platform_internal_ip?: string | null;
+  internal_addresses?: {
+    network: string;
+    ip: string;
+    port: number;
+    gateway?: string;
+    aliases?: string[];
+  }[];
 }
 
 export interface AiRouterDetectedModel {
@@ -441,6 +451,9 @@ export interface Project {
   latest_deploy_at?: string | null;
   created_at: string;
   updated_at: string;
+  // Internal network
+  internal_subnet?: string;
+  internal_network_enabled?: boolean;
 }
 
 export interface Deployment {
