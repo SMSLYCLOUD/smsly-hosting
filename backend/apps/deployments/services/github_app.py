@@ -196,11 +196,19 @@ class GitHubAppService:
         The token is scoped to a single repository with only the permissions
         the App was granted (Contents: read-only in our case).
         """
+        # Step A: resolve repo name to its numeric ID. The
+        # ``/access_tokens`` endpoint requires ``repositories`` to be a list
+        # of integer IDs, not names. If we pass names, GitHub returns
+        # 422 "There is at least one repository that does not exist or is
+        # not accessible to the parent installation."
+        repo_id = self._resolve_repo_id(installation_id, repo_name, headers)
+        payload: dict = {"repositories": [repo_id]} if repo_id else {}
+
         try:
             resp = requests.post(
                 f"{_GH_API}/app/installations/{installation_id}/access_tokens",
                 headers=headers,
-                json={"repositories": [repo_name]},
+                json=payload,
                 timeout=10,
             )
         except requests.Timeout:
@@ -221,12 +229,92 @@ class GitHubAppService:
                 )
                 return token
 
+        # First attempt failed — log the error, then fall back to a
+        # bare installation token (no repositories filter). The token
+        # still only grants access to repos the App can see, so this is
+        # a safe retry. Many production installs hit the 422 because
+        # the App's installation explicitly omitted this repo even
+        # though it's still in the org; the bare token + Docker git
+        # auth then succeeds if the App is installed "All repositories"
+        # OR if the repo is public.
+        if payload:
+            logger.warning(
+                "GitHubAppService: repo-scoped token failed for %s "
+                "(status %s) — falling back to bare installation token.",
+                repo_name, resp.status_code,
+            )
+            try:
+                fallback = requests.post(
+                    f"{_GH_API}/app/installations/{installation_id}/access_tokens",
+                    headers=headers,
+                    json={},
+                    timeout=10,
+                )
+            except requests.Timeout:
+                logger.error(
+                    "GitHubAppService: timeout creating bare installation token",
+                )
+                return None
+
+            if fallback.status_code == 201:
+                token = fallback.json().get("token")
+                if token:
+                    logger.info(
+                        "GitHubAppService: bare installation token issued "
+                        "(installation %s, 1hr expiry). Note: if the repo "
+                        "is private and the App has 'Selected repositories', "
+                        "the clone may still fail.",
+                        installation_id,
+                    )
+                    return token
+            logger.error(
+                "GitHubAppService: bare token also failed (status %s): %s",
+                fallback.status_code, fallback.text[:200],
+            )
+
         logger.error(
             "GitHubAppService: failed to create installation token "
             "(status %s): %s",
             resp.status_code,
             resp.text[:200],
         )
+        return None
+
+    def _resolve_repo_id(
+        self, installation_id: int, repo_name: str, headers: dict,
+    ) -> int | None:
+        """Look up the numeric ID of a repo via the installation's repo list.
+
+        Returns None if the repo isn't in this installation's accessible
+        set — the caller will fall back to a bare installation token
+        which still works for public repos and for "all repositories"
+        installations.
+        """
+        try:
+            resp = requests.get(
+                f"{_GH_API}/installation/repositories",
+                headers=headers,
+                params={"per_page": 100},
+                timeout=10,
+            )
+        except requests.Timeout:
+            logger.warning("GitHubAppService: timeout listing installation repos")
+            return None
+        except Exception as exc:
+            logger.warning("GitHubAppService: list installation repos failed: %s", exc)
+            return None
+
+        if resp.status_code != 200:
+            logger.warning(
+                "GitHubAppService: list installation repos returned status %s",
+                resp.status_code,
+            )
+            return None
+
+        repos = (resp.json() or {}).get("repositories", [])
+        for r in repos:
+            if (r.get("name") or "").lower() == repo_name.lower():
+                return r.get("id")
         return None
 
     # ── GitHub Deployments API ───────────────────────────────────────────────
