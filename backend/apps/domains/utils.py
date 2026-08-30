@@ -5,6 +5,12 @@ _LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def normalize_domain(value: str, allow_wildcard: bool = False, allow_ip: bool = False) -> str:
+    """Normalize a bare domain string. Rejects paths and schemes.
+
+    For host values that may include a path (e.g. ``app.example.com/login``),
+    use :func:`split_host_and_path` first so the path can be stored
+    separately as ``rewrite_root`` on the host_alias.
+    """
     raw = str(value or "").strip().lower().rstrip(".")
     if not raw:
         raise ValueError("Domain is required")
@@ -13,7 +19,31 @@ def normalize_domain(value: str, allow_wildcard: bool = False, allow_ip: bool = 
         raise ValueError("Domain must not include a URL scheme")
     if "/" in raw or " " in raw:
         raise ValueError("Domain must not include paths or spaces")
+    return _normalize_host_no_path(raw, allow_wildcard=allow_wildcard, allow_ip=allow_ip)
 
+
+def split_host_and_path(value: str) -> tuple[str, str]:
+    """Split ``app.example.com/login`` into ``("app.example.com", "/login")``.
+
+    Trailing slashes on the path are normalized to a single leading slash.
+    If there's no path, the second element is the empty string.
+    """
+    raw = str(value or "").strip().lower()
+    if "://" in raw:
+        raise ValueError("Host must not include a URL scheme")
+    if " " in raw:
+        raise ValueError("Host must not include spaces")
+    if "/" not in raw:
+        return raw, ""
+    host, _, path = raw.partition("/")
+    host = host.strip().rstrip(".")
+    if not host:
+        raise ValueError("Host part is required before the path")
+    path = "/" + path.lstrip("/") if path else "/"
+    return host, path
+
+
+def _normalize_host_no_path(raw: str, allow_wildcard: bool = False, allow_ip: bool = False) -> str:
     wildcard = False
     domain = raw
     if raw.startswith("*."):

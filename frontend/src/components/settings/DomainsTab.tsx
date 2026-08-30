@@ -517,7 +517,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
 
                     <div className="flex gap-2 mt-3">
                         <Input
-                            placeholder="account.example.com"
+                            placeholder="account.example.com or account.example.com/login"
                             value={newAliasHost}
                             onChange={(e) => setNewAliasHost(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleAddAlias()}

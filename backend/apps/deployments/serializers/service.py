@@ -273,21 +273,36 @@ class ServiceSerializer(serializers.ModelSerializer):
         if not isinstance(value, list):
             raise serializers.ValidationError("host_aliases must be a list.")
         # Prevent subdomain squatting via host_aliases — same check as custom_domains
-        from apps.domains.utils import normalize_domain
+        from apps.domains.utils import normalize_domain, split_host_and_path
         seen = set()
+        normalized_aliases = []
         for entry in value:
             if not isinstance(entry, dict):
                 raise serializers.ValidationError("Each host_alias must be an object with 'host'.")
-            host = str(entry.get('host') or '').strip().lower()
-            if not host:
+            raw_host = str(entry.get('host') or '').strip().lower()
+            if not raw_host:
                 continue
+            # Accept 'app.example.com/login' as a shortcut: the path becomes
+            # the host_alias.rewrite_root and the bare host is what we route on.
+            # This mirrors the domain/path format the operator types in the UI.
+            try:
+                host, path = split_host_and_path(raw_host)
+            except ValueError as e:
+                raise serializers.ValidationError(f"Invalid host_alias '{raw_host}': {e}")
             try:
                 host = normalize_domain(host)
             except ValueError as e:
-                raise serializers.ValidationError(f"Invalid host_alias '{host}': {e}")
+                raise serializers.ValidationError(f"Invalid host_alias '{raw_host}': {e}")
             if host in seen:
                 raise serializers.ValidationError(f"Duplicate host_alias '{host}'.")
             seen.add(host)
+            normalized_entry = dict(entry)
+            normalized_entry['host'] = host
+            # If the operator wrote a path in the host field, prefer it over
+            # any existing rewrite_root (or set it when none was given).
+            if path and not normalized_entry.get('rewrite_root'):
+                normalized_entry['rewrite_root'] = path
+            normalized_aliases.append(normalized_entry)
             # Check global conflict (public_domain, custom_domains, other host_aliases)
             qs = Service.objects.exclude(id=getattr(self.instance, 'id', None) or 0)
             if qs.filter(public_domain=host).exists():
