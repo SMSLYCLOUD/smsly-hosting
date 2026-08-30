@@ -1006,12 +1006,17 @@ def _get_wildcard_path_redirect_lines(wildcard_domain: str) -> list[str]:
             svc_alias = str(service.id).replace("-", "")[:8]
             # Scope every redirect to this service's own hostname so
             # the wildcard block can host rules for many services.
+            # A single named matcher with host AND path conditions
+            # (Caddyfile block-matcher syntax) — `handle` accepts
+            # exactly one matcher argument, so ANDing must happen
+            # inside the matcher definition itself.
             for r_index, (segment, target, target_path) in enumerate(rules):
-                host_m = f"@wprh_{svc_alias}_{r_index}"
-                path_m = f"@wprp_{svc_alias}_{r_index}"
-                lines.append(f"    {host_m} host {public_domain}")
-                lines.append(f"    {path_m} path {segment} {segment}/*")
-                lines.append(f"    handle {host_m} and {path_m} {{")
+                matcher = f"@wpr_{svc_alias}_{r_index}"
+                lines.append(f"    {matcher} {{")
+                lines.append(f"        host {public_domain}")
+                lines.append(f"        path {segment} {segment}/*")
+                lines.append("    }")
+                lines.append(f"    handle {matcher} {{")
                 if target_path and target_path != "/":
                     # host/path target: replace the matched segment with
                     # the target path, keep the remainder + query.
