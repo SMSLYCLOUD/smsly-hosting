@@ -377,7 +377,20 @@ ALLOW_LOCAL_NODES = config(
 )
 
 # Restrictive ALLOWED_HOSTS with mandatory internal whitelisting.
-_BASE_HOSTS = ['localhost', '127.0.0.1', 'backend', 'smsly-hosting-backend-1']
+# The scoped ecosystem network (smsly-net-a5f086aa, 172.30.224.0/24) gets
+# a wildcard entry so services on that bridge can health-check themselves
+# via their own container IP. Without this, Django rejects the request
+# with DisallowedHost: Invalid HTTP_HOST header: '172.30.224.X:8080'.
+_BASE_HOSTS = [
+    'localhost', '127.0.0.1', 'backend', 'smsly-hosting-backend-1',
+    # Ecosystem scoped network (whole /24)
+    '172.30.224.0/24',
+    # Common SMSLY/Trulay wildcard DNS — operators behind a corporate
+    # proxy that rewrites the Host header to a public hostname will
+    # still resolve correctly.
+    '*.grid.smsly.cloud', '*.trulay.co',
+    'grid.smsly.cloud', 'trulay.co',
+]
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=','.join(_BASE_HOSTS), cast=Csv())
 for host in _BASE_HOSTS:
     if host not in ALLOWED_HOSTS:

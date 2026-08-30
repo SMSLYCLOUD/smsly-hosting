@@ -314,7 +314,12 @@ class ServiceSerializer(serializers.ModelSerializer):
                 host_aliases__contains=[{"host": host}]
             ).exists():
                 raise serializers.ValidationError(f"Host '{host}' is already assigned to another service.")
-        return value
+        # Return the normalized list (with the path stripped from host and
+        # moved into rewrite_root). Returning the unmodified value here was
+        # the root cause of the React #31 crash — the frontend saw the raw
+        # {'host': 'app.example.com/login', ...} and React errored when it
+        # tried to render that as a child element.
+        return normalized_aliases
 
     class Meta:
         model = Service
