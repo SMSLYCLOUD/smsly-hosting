@@ -244,27 +244,24 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
             # specific alias isn't declared. Re-attach with the alias to
             # self-heal, matching the logic in _ensure_addons_ready. This
             # is idempotent so it's safe to run here.
-            try:
-                for net in service_networks:
-                    if net in addon_networks:
-                        # attach missing alias to the shared network
-                        addon_container.exec_run(
-                            [],  # noop, we use the network connect below
-                        ) if False else None  # placeholder kept for diff clarity
-                # Use docker network connect to add the alias
-                net = next(iter(service_networks & set(addon_networks.keys())), None)
-                if net:
+            shared_net = None
+            shared_net_for_repair = next(
+                iter(service_networks & set(addon_networks.keys())), None
+            )
+            if shared_net_for_repair:
+                try:
                     subprocess.run(
-                        ['docker', 'network', 'connect', '--alias', hostname, net, container_name],
+                        ['docker', 'network', 'connect', '--alias', hostname,
+                         shared_net_for_repair, container_name],
                         capture_output=True, check=False, timeout=5,
                     )
-                    shared_net = net
+                    shared_net = shared_net_for_repair
                     logger.info(
                         "Repaired missing alias '%s' for addon %s on network %s",
-                        hostname, container_name, net,
+                        hostname, container_name, shared_net_for_repair,
                     )
-            except Exception as exc:
-                logger.debug("Alias repair attempt failed: %s", exc)
+                except Exception as exc:
+                    logger.debug("Alias repair attempt failed: %s", exc)
 
         if not shared_net:
             errors.append(
