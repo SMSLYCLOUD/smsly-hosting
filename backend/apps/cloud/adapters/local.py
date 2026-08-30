@@ -636,7 +636,6 @@ class LocalAdapter(BaseCloudAdapter):
             )
         }
         if getattr(self, '_service_id', None):
-            logger.info("DEBUG dual-homing: _service_id=%s, network_name=%s", self._service_id, network_name)
             try:
                 from apps.deployments.models import Service as _SvcBridge
                 _svc_obj = _SvcBridge.objects.filter(
@@ -645,11 +644,9 @@ class LocalAdapter(BaseCloudAdapter):
                 if _svc_obj and getattr(_svc_obj, 'use_internal_network', True):
                     from apps.deployments.services.network_scope import ensure_platform_bridge
                     platform_bridge = ensure_platform_bridge()
-                    logger.info("DEBUG dual-homing: platform_bridge=%s, networks_dict_keys=%s", platform_bridge, list(networks_dict.keys()))
                     networks_dict[platform_bridge] = self.docker_client.api.create_endpoint_config(
                         aliases=aliases,
                     )
-                    logger.info("DEBUG dual-homing: networks_dict after add: %s", list(networks_dict.keys()))
             except Exception as exc:
                 logger.debug("Platform-bridge dual-homing skipped: %s", exc)
 
@@ -659,7 +656,12 @@ class LocalAdapter(BaseCloudAdapter):
             "image": image,
             "name": container_name,
             "environment": env,
-            "network": network_name,
+            # networks (plural) lists every bridge the container should
+            # join on first start. networking_config (below) sets the
+            # aliases/IP per bridge. Using `network` (singular) would
+            # leave the container on only the first bridge, so the
+            # project-scoped and platform-wide bridges never coexist.
+            "networks": list(networks_dict.keys()),
             "networking_config": networking_config,
             "labels": labels,
             "volumes": docker_volumes if docker_volumes else None,
@@ -1129,12 +1131,38 @@ class LocalAdapter(BaseCloudAdapter):
 
             self._apply_egress_restrictions(network_name)
 
+            # Same dual-homing logic as _deploy_docker. The promoted
+            # container must be on BOTH the project-scoped bridge and the
+            # platform-wide bridge so service-to-service traffic (intra- AND
+            # inter-project) stays host-internal.
+            from apps.deployments.services.network_scope import ensure_platform_bridge
+            promote_networks_dict: dict[str, Any] = {
+                network_name: self.docker_client.api.create_endpoint_config(
+                    aliases=[name, f"{name}.default.internal"]
+                )
+            }
+            try:
+                _promote_svc = Service.objects.filter(
+                    id=getattr(self, '_service_id', None)
+                ).only('use_internal_network').first() if getattr(self, '_service_id', None) else None
+                if _promote_svc and getattr(_promote_svc, 'use_internal_network', True):
+                    platform_bridge = ensure_platform_bridge()
+                    promote_networks_dict[platform_bridge] = (
+                        self.docker_client.api.create_endpoint_config(
+                            aliases=[name, f"{name}.default.internal"]
+                        )
+                    )
+            except Exception as exc:
+                logger.debug("Promote dual-homing skipped: %s", exc)
+
             create_kwargs = {
                 "image": image_ref,
                 "name": name,
                 "environment": green_env,
-                "network": network_name,
-                "networking_config": networking_config,
+                # networks (plural) puts the container on every bridge
+                # listed in promote_networks_dict (project + platform).
+                "networks": list(promote_networks_dict.keys()),
+                "networking_config": self.docker_client.api.create_networking_config(promote_networks_dict),
                 "labels": live_labels,
                 "volumes": green_volumes,
                 "restart_policy": rp,
@@ -1170,6 +1198,25 @@ class LocalAdapter(BaseCloudAdapter):
                     "Blue-green promote: network alias update failed: %s",
                     exc,
                 )
+
+            # Cache the platform-bridge IP for the API surface. The
+            # promote path is the canonical case (skip_review=True
+            # services auto-promote here) so this is the most common
+            # code path; without it the frontend would show null for
+            # platform_internal_ip on every actively-running service.
+            try:
+                promoted.reload()
+                for _pn, _pd in (promoted.attrs.get('NetworkSettings', {}) or {}).get('Networks', {}).items():
+                    if _pn == 'smsly-platform-net':
+                        _psvc = Service.objects.filter(
+                            id=getattr(self, '_service_id', None)
+                        ).first() if getattr(self, '_service_id', None) else None
+                        if _psvc:
+                            _psvc.platform_internal_ip = _pd.get('IPAddress') or None
+                            _psvc.save(update_fields=['platform_internal_ip', 'updated_at'])
+                        break
+            except Exception as exc:
+                logger.debug("Could not cache platform IP for %s: %s", name, exc)
 
             with contextlib.suppress(Exception):
                 green.stop(timeout=10)

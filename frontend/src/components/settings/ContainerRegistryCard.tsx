@@ -22,7 +22,7 @@ export function ContainerRegistryCard({ config, onChange }: ContainerRegistryCar
             (() => {
               const url = config.container_registry_url || '';
               const isExternal = !url.startsWith('registry:') && !url.startsWith('127.') && !url.startsWith('localhost');
-              const hasCreds = config.REGISTRY_PASSWORD_SET;
+              const hasCreds = config.registry_password_set;
               return (
                 <span className="ml-2 flex items-center gap-1 text-xs font-normal">
                   {hasCreds ? (

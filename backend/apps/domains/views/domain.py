@@ -234,7 +234,12 @@ class DomainConfigView(GenericAPIView):
                 config.container_registry_url = str(data.get('container_registry_url') or '').strip()[:255]
             if 'registry_user' in data:
                 config.registry_user = str(data.get('registry_user') or '').strip()[:255]
-            if 'registry_password' in data:
+            # Registry password: only overwrite when a non-empty value is
+            # sent. The settings form round-trips the whole config object,
+            # and the password Input is always blank (the API never returns
+            # the secret). Treating blank as "keep existing" prevents the
+            # PUT from silently wiping stored credentials on every save.
+            if 'registry_password' in data and str(data.get('registry_password') or '').strip():
                 config.registry_password = str(data.get('registry_password') or '').strip()
             # Observability
             if 'sentry_dsn' in data:

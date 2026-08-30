@@ -379,6 +379,10 @@ class ServiceSerializer(serializers.ModelSerializer):
             'locked', 'locked_reason', 'restrict_to_creator',
             'allowed_actions', 'restricted_environments',
             'env_scan_depth',
+            # Internal network (per-service). The platform-wide
+            # internal_addresses SerializerMethodField returns the
+            # container IPs on each attached bridge.
+            'use_internal_network', 'platform_internal_ip',
             'created_at', 'updated_at',
             # SerializerMethodField / nested fields
             'env_vars', 'server_id',
@@ -401,6 +405,9 @@ class ServiceSerializer(serializers.ModelSerializer):
             'active_runtime_id',
             'last_scale_at',
             'staging_domain_verified',
+            # Auto-populated at spawn time from the platform-bridge
+            # network attachment; users don't set this directly.
+            'platform_internal_ip',
         ]
 
     def get_service_url(self, obj: Service) -> str:

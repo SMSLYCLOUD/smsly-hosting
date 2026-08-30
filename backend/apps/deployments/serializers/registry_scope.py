@@ -59,11 +59,14 @@ class ScopedRegistrySerializer(serializers.ModelSerializer):
 
 
 class ScopedRegistryReadSerializer(serializers.ModelSerializer):
-    """Lightweight read serializer — no password, no write-only fields."""
+    """Lightweight read serializer — no password (secret), but includes
+    username so the frontend can pre-fill the edit form with the current
+    credentials instead of showing blank fields."""
 
     scope_type = serializers.SerializerMethodField()
     scope_id = serializers.SerializerMethodField()
     scope_label = serializers.SerializerMethodField()
+    has_password = serializers.SerializerMethodField()
 
     class Meta:
         model = ScopedRegistry
@@ -73,6 +76,8 @@ class ScopedRegistryReadSerializer(serializers.ModelSerializer):
             "scope_id",
             "scope_label",
             "registry_url",
+            "username",
+            "has_password",
             "is_internal",
             "allowed_registry_hosts",
             "is_active",
@@ -90,3 +95,6 @@ class ScopedRegistryReadSerializer(serializers.ModelSerializer):
 
     def get_scope_label(self, obj) -> str:
         return str(obj.scope) if obj.scope else "(orphaned)"
+
+    def get_has_password(self, obj) -> bool:
+        return bool(getattr(obj, "password", None))

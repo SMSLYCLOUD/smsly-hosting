@@ -20,6 +20,8 @@ interface ScopedRegistryItem {
   scope_id?: string;
   scope_label?: string;
   registry_url: string;
+  username?: string;
+  has_password?: boolean;
   is_internal: boolean;
   allowed_registry_hosts: string[];
   is_active: boolean;
@@ -86,11 +88,28 @@ export function ScopedRegistryTab({
       if (scopeId) params.scope_id = scopeId;
       const data = await scopedRegistryApi.list(params);
       setRegistries(data);
+      // Auto-fill the form with the current registry's values so the
+      // operator sees the live config instead of blank inputs. Without
+      // this, the Configure panel looks unconfigured even when a
+      // scoped registry exists and is actively serving deploys.
+      const current = Array.isArray(data) ? data.find((r: ScopedRegistryItem) => r.is_active) || data[0] : null;
+      if (current && !editingId) {
+        setForm((prev: typeof form) => ({
+          ...prev,
+          registry_url: current.registry_url || "",
+          username: current.username || "",
+          password: "",
+          is_internal: current.is_internal,
+          is_active: current.is_active,
+          allowed_registry_hosts: (current.allowed_registry_hosts || []).join(", "),
+        }));
+      }
     } catch {
       toast({ title: "Error", description: "Failed to load scoped registries", variant: "destructive" });
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toast, scopeType, scopeId]);
 
   const fetchResolved = useCallback(async () => {
@@ -193,7 +212,11 @@ export function ScopedRegistryTab({
       scope_type: item.scope_type || scopeType || "project",
       scope_id: item.scope_id || scopeId || "",
       registry_url: item.registry_url || "",
-      username: "",
+      // Pre-fill the username so the operator sees the current value
+      // instead of a blank field that looks like nothing is configured.
+      username: item.username || "",
+      // Password is always blank in edit mode — the backend stores it
+      // encrypted and never returns it. Leaving blank keeps the saved one.
       password: "",
       is_internal: item.is_internal,
       is_active: item.is_active,

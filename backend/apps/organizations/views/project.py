@@ -59,6 +59,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 'icon_emoji', 'color', 'is_default', 'is_ephemeral',
                 'services_count', 'latest_deploy_status', 'latest_deploy_at',
                 'created_at', 'updated_at',
+                # Internal network (project-scoped Docker bridge).
+                # Operators can override the platform default by setting a
+                # specific CIDR (e.g. 10.99.0.0/24). Empty string falls
+                # back to PlatformConfig.default_internal_subnet.
+                'internal_subnet',
             ]
             read_only_fields = ['id', 'slug', 'created_at', 'updated_at']
             # Disable DRF's auto UniqueTogetherValidator for (owner, slug)
