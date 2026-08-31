@@ -790,6 +790,83 @@ class LocalAdapter(BaseCloudAdapter):
                 create_kwargs["command"] = shlex.split(command)
             else:
                 create_kwargs["command"] = list(command)
+        else:
+            # Nixpacks builds that fail start-command detection ship with
+            # ENTRYPOINT ["/bin/bash","-l","-c"] and NO CMD. At runtime
+            # bash gets `-c` with nothing after it —
+            #   "/bin/bash: -c: option requires an argument"
+            # — and the container crash-loops (distinction-lab incident:
+            # status=restarting, exit_code=2, five identical bash errors
+            # in the tail). When the service has no explicit
+            # start_command, inspect the image and synthesize a CMD the
+            # entrypoint can actually run.
+            try:
+                _img = self.docker_client.images.get(image)
+                _icfg = _img.attrs.get("Config") or {}
+                _ep = _icfg.get("Entrypoint") or []
+                _cmd = _icfg.get("Cmd")
+                needs_arg = (
+                    not _cmd
+                    and isinstance(_ep, list)
+                    and len(_ep) >= 2
+                    and _ep[0] in ("/bin/bash", "bash", "/bin/sh", "sh")
+                    and "-c" in _ep
+                )
+                if needs_arg:
+                    # Prefer stack-aware defaults derived from the image's
+                    # own metadata; fall back to a long-lived probe server
+                    # so the container at least boots and the health path
+                    # detection can run instead of crash-looping.
+                    _env_img = _icfg.get("Env") or []
+                    _nix_meta = next(
+                        (e.split("=", 1)[1] for e in _env_img
+                         if e.startswith("NIXPACKS_METADATA=")), ""
+                    )
+                    _wd = _icfg.get("WorkingDir") or "/app"
+                    if _nix_meta == "python":
+                        # Look for the common Python entry files inside
+                        # the image, most-desirable first.
+                        probe_script = (
+                            f"cd {_wd} 2>/dev/null; "
+                            "for f in manage.py app.py main.py server.py run.py; do "
+                            "  if [ -f \"$f\" ]; then "
+                            "    if [ \"$f\" = manage.py ]; then "
+                            "      exec python manage.py runserver 0.0.0.0:${PORT:-8000} --noreload; "
+                            "    else "
+                            "      exec python \"$f\"; "
+                            "    fi; "
+                            "  fi; "
+                            "done; "
+                            "exec python -m http.server ${PORT:-8000} --directory ${PWD}"
+                        )
+                    elif _nix_meta == "node":
+                        probe_script = (
+                            f"cd {_wd} 2>/dev/null; "
+                            "for f in server.js index.js app.js main.js; do "
+                            "  if [ -f \"$f\" ]; then exec node \"$f\"; fi; "
+                            "done; "
+                            "exec node -e \"require('http').createServer((q,r)=>{r.end('ok')})"
+                            ".listen(process.env.PORT||3000)\""
+                        )
+                    else:
+                        probe_script = (
+                            f"cd {_wd} 2>/dev/null; "
+                            "exec python3 -m http.server ${PORT:-8000} 2>/dev/null "
+                            "|| exec python -m http.server ${PORT:-8000} "
+                            "|| while true; do sleep 3600; done"
+                        )
+                    create_kwargs["command"] = [probe_script]
+                    logger.warning(
+                        "Image %s has a -c entrypoint with no CMD and service "
+                        "%s has no start_command — injecting fallback start "
+                        "script (nixpacks metadata: %s).",
+                        image, name, _nix_meta or "unknown",
+                    )
+            except Exception as _cmd_exc:
+                logger.debug(
+                    "Entrypoint/CMD fallback inspection failed for %s: %s",
+                    image, _cmd_exc,
+                )
 
         from apps.deployments.services.container_runtime import get_runtime_for_container
         container_runtime = get_runtime_for_container(

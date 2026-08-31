@@ -500,12 +500,20 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         return
 
     deployment.refresh_from_db()
-    deployment.build_logs += (
-        f"\n--- Runtime Crash Logs (exit code: {exit_code}) ---\n"
-        f"{container_logs[-4000:]}\n"
-        f"--- End Crash Logs ---\n"
+    # Runtime crash output belongs in runtime_logs — the Build tab shows
+    # build output only, the Runtime tab shows runtime output only. A
+    # one-line pointer in build_logs keeps the build log actionable.
+    deployment.runtime_logs = (
+        (deployment.runtime_logs or "")
+        + f"--- Runtime Crash Logs (exit code: {exit_code}) ---\n"
+        + f"{container_logs[-4000:]}\n"
+        + "--- End Crash Logs ---\n"
     )
-    deployment.save(update_fields=["build_logs", "updated_at"])
+    deployment.build_logs = (
+        (deployment.build_logs or "")
+        + f"\nRuntime crash detected (exit code {exit_code}) — see the Runtime tab for the container output.\n"
+    )
+    deployment.save(update_fields=["build_logs", "runtime_logs", "updated_at"])
 
     try:
         from apps.core.tasks.alerts import alert_user_task
@@ -551,7 +559,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                 f"Manual intervention required.\n"
             )
             deployment.status = 'FAILED'
-            deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
+            deployment.runtime_logs = (deployment.runtime_logs or "") + f"--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
             deployment.finished_at = timezone.now()
             deployment.save()
             broadcast_status(deployment)
@@ -564,7 +572,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
             f"Triggering automatic redeploy...\n"
         )
         deployment.status = 'FAILED'
-        deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
+        deployment.runtime_logs = (deployment.runtime_logs or "") + f"--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
         deployment.save()
         broadcast_status(deployment)
 
@@ -614,7 +622,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         logger.warning("Failed to trigger Jules auto-fix for runtime crash: %s", e)
 
     deployment.status = 'FAILED'
-    deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
+    deployment.runtime_logs = (deployment.runtime_logs or "") + f"--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
     deployment.finished_at = timezone.now()
     deployment.save()
     broadcast_status(deployment)

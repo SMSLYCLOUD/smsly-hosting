@@ -57,6 +57,13 @@ class Deployment(TimeStampedModel):
     )
 
     build_logs = models.TextField(blank=True)  # type: ignore[var-annotated]
+    # Runtime output (crash logs, captured stdout/stderr) kept SEPARATE
+    # from build_logs so the Build tab shows build output only and the
+    # Runtime tab shows runtime output only — both preserved. The old
+    # design embedded crash logs into build_logs with '--- Runtime Crash
+    # Logs ---' markers, which meant the Build tab surfaced runtime
+    # errors and the Runtime tab had to regex-scrape them back out.
+    runtime_logs = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     runtime_logs_url = models.URLField(blank=True, null=True)  # type: ignore[var-annotated]
 
     pipeline_stages = models.JSONField(  # type: ignore[var-annotated]

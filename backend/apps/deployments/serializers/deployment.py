@@ -15,7 +15,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'service', 'service_name',
             'commit_hash', 'commit_message', 'branch', 'status',
-            'build_logs', 'runtime_logs_url', 'pipeline_stages',
+            'build_logs', 'runtime_logs', 'runtime_logs_url', 'pipeline_stages',
             'ai_diagnosis', 'review_summary', 'vulnerability_report',
             'container_id', 'remote_deployment_id', 'green_container_id',
             'staging_url', 'staged_at',

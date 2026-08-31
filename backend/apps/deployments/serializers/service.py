@@ -195,30 +195,6 @@ class ServiceListSerializer(serializers.ModelSerializer):
             obj._internal_addresses_cache = obj.generate_internal_addresses()
         return obj._internal_addresses_cache
 
-    def get_effective_registry(self, obj):
-        """The registry host this service's images actually push/pull to.
-
-        Walks the ScopedRegistry chain (service → project → team → org)
-        and falls back to the platform's configured registry. Surfaced so
-        the Advanced tab can pre-fill the image name with the REAL
-        registry instead of a hardcoded domain (the old UI fabricated
-        'registry.Trulay.co/<name>' for every service and then persisted
-        that bogus value on save).
-        """
-        try:
-            from ..models.registry_scope import ScopedRegistry
-            url = ScopedRegistry.resolve_registry_url(obj.project) if obj.project_id else None
-            if not url:
-                # Service-level credential (external registry) wins if set.
-                cred = getattr(obj, 'registry_credential', None)
-                if cred and getattr(cred, 'registry_url', ''):
-                    url = cred.registry_url
-            if not url:
-                return None
-            return url.replace('https://', '').replace('http://', '').rstrip('/')
-        except Exception:
-            return None
-
     def get_latest_deployment(self, obj: Service) -> dict | None:
         return _get_latest_deployment(obj)
 
@@ -536,3 +512,27 @@ class ServiceSerializer(serializers.ModelSerializer):
         if not getattr(obj, '_internal_addresses_cache', None):
             obj._internal_addresses_cache = obj.generate_internal_addresses()
         return obj._internal_addresses_cache
+
+    def get_effective_registry(self, obj):
+        """The registry host this service's images actually push/pull to.
+
+        Walks the ScopedRegistry chain (project → team → org) and falls
+        back to the service's own credential, then the platform config.
+        Surfaced so the Advanced tab can pre-fill the image name with the
+        REAL registry instead of a hardcoded domain (the old UI fabricated
+        'registry.Trulay.co/<name>' for every service and then persisted
+        that bogus value on save).
+        """
+        try:
+            from ..models.registry_scope import ScopedRegistry
+            url = ScopedRegistry.resolve_registry_url(obj.project) if obj.project_id else None
+            if not url:
+                # Service-level credential (external registry) wins if set.
+                cred = getattr(obj, 'registry_credential', None)
+                if cred and getattr(cred, 'registry_url', ''):
+                    url = cred.registry_url
+            if not url:
+                return None
+            return url.replace('https://', '').replace('http://', '').rstrip('/')
+        except Exception:
+            return None

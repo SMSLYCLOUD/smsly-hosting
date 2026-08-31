@@ -156,20 +156,26 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
             container, source = _find_container_for_logs(dep)
 
             if not container:
-                # Fallback to saved crash logs
-                saved_logs = dep.build_logs or ""
-                import re as _re
-                crash_match = _re.search(
-                    r"--- (?:Runtime Crash Logs|Runtime Failure Logs)[^\n]*\n(.*?)--- End (?:Crash|Failure) Logs ---",
-                    saved_logs, _re.DOTALL
-                )
-                fallback = crash_match.group(1).strip() if crash_match else (saved_logs[-4000:] if saved_logs else "")
+                # Fallback to saved logs. Prefer the dedicated runtime_logs
+                # field (build/runtime separation); legacy deployments fall
+                # back to scraping the crash-log markers out of build_logs.
+                saved_runtime = getattr(dep, 'runtime_logs', '') or ''
+                if saved_runtime.strip():
+                    fallback = saved_runtime
+                else:
+                    saved_logs = dep.build_logs or ""
+                    import re as _re
+                    crash_match = _re.search(
+                        r"--- (?:Runtime Crash Logs|Runtime Failure Logs)[^\n]*\n(.*?)--- End (?:Crash|Failure) Logs ---",
+                        saved_logs, _re.DOTALL
+                    )
+                    fallback = crash_match.group(1).strip() if crash_match else (saved_logs[-4000:] if saved_logs else "")
                 return {
                     'logs': fallback,
                     'status': dep.status,
                     'container_id': dep.container_id or '',
                     'container_status': 'stopped',
-                    'source': 'build_logs',
+                    'source': 'saved_runtime_logs',
                 }
 
             logs = container.logs(

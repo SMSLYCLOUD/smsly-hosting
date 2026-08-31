@@ -93,6 +93,7 @@ class LogsActionsMixin:
             'id': str(deployment.id),
             'status': deployment.status,
             'build_logs': deployment.build_logs,
+            'runtime_logs': getattr(deployment, 'runtime_logs', '') or '',
             'started_at': deployment.started_at,
             'finished_at': deployment.finished_at,
             'duration_seconds': deployment.duration_seconds,
@@ -170,19 +171,29 @@ class LogsActionsMixin:
             container, source = _find_container_for_logs(deployment)
 
             if not container:
-                # Container is dead or removed — fallback to saved crash logs
-                saved_logs = deployment.build_logs or ""
-                # Extract the most recent crash logs section if present
-                crash_match = _re.search(
-                    r"--- (?:Runtime Crash Logs|Runtime Failure Logs)[^\n]*\n(.*?)--- End (?:Crash|Failure) Logs ---",
-                    saved_logs, _re.DOTALL
-                )
-                fallback_logs = crash_match.group(1).strip() if crash_match else (saved_logs[-4000:] if saved_logs else "")
+                # Container is dead or removed — fallback to saved logs.
+                # Prefer the dedicated runtime_logs field (crash output is
+                # written there since the build/runtime separation); only
+                # legacy deployments need the marker-scrape of build_logs.
+                saved_runtime = getattr(deployment, 'runtime_logs', '') or ''
+                if saved_runtime.strip():
+                    fallback_logs = saved_runtime
+                else:
+                    saved_logs = deployment.build_logs or ""
+                    crash_match = _re.search(
+                        r"--- (?:Runtime Crash Logs|Runtime Failure Logs)[^\n]*\n(.*?)--- End (?:Crash|Failure) Logs ---",
+                        saved_logs, _re.DOTALL
+                    )
+                    fallback_logs = (
+                        crash_match.group(1).strip()
+                        if crash_match
+                        else (saved_logs[-4000:] if saved_logs else "")
+                    )
                 return Response({
                     'id': str(deployment.id),
                     'runtime_logs': fallback_logs,
-                    'source': 'build_logs',
-                    'message': 'Container is not running. Showing saved crash logs from deployment.',
+                    'source': 'saved_runtime_logs',
+                    'message': 'Container is not running. Showing saved runtime/crash logs.',
                 })
 
             logs = container.logs(
