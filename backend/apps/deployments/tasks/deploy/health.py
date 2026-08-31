@@ -380,6 +380,21 @@ def _wait_for_local_route_ready(
                     continue
 
                 if response.status_code >= 500:
+                    # 5xx from the app's own handler still proves the ROUTE
+                    # exists for direct probes — Traefik forwarded the request
+                    # and the app answered. Only edge probes need the app
+                    # healthy (a 503 at the edge means the route is broken
+                    # or the upstream is down). Keeping this distinction
+                    # avoids infinite loops when an app returns 5xx on '/' but
+                    # 200 on its real health path.
+                    if probe.get("kind") == "direct":
+                        append_log(
+                            deployment,
+                            f"[ROUTE-CHECK] Route active via {url} "
+                            f"(app returned HTTP {response.status_code}, but the "
+                            f"route itself is registered — accepting).\n",
+                        )
+                        return True
                     last_error = f"{url}: HTTP {response.status_code}"
                     continue
 
@@ -395,6 +410,11 @@ def _wait_for_local_route_ready(
                     )
                     continue
 
+                # Any other status (including app-level 404 on '/') proves
+                # the ROUTE exists — the request reached the app through
+                # Traefik. The app's HTTP semantics are NOT this check's
+                # concern; the container health check already validated the
+                # app serves its real health path.
                 append_log(
                     deployment,
                     f"[ROUTE-CHECK] Route active via {url} "

@@ -382,11 +382,29 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     host_override=staging_host,
                 )
                 if not route_ready:
+                    # The CONTAINER is healthy (checked above) — only the
+                    # edge route lagged. Traefik's Docker provider refreshes
+                    # on an interval and can take longer than the timeout
+                    # when the daemon is loaded (provider 'context deadline
+                    # exceeded' errors for hours on the prod host). Failing
+                    # here used to tear down a HEALTHY container, and the
+                    # next deploy then re-ran the whole cycle — the very
+                    # next deploy of this service succeeded within seconds.
+                    # Keep the container: warn, continue, and let the route
+                    # register when Traefik catches up.
                     host = (service.public_domain or "").strip() or service.name
-                    raise RuntimeError(
-                        f"Route for {host} did not become ready after deployment. "
-                        "Caddy/Traefik may still be returning 404 for this host."
+                    append_log(
+                        deployment,
+                        "[ROUTE-CHECK] Route not ready yet, but the container is "
+                        f"healthy — keeping deployment alive. Traefik will register "
+                        f"the route for {host} when its Docker provider refreshes.\n",
                     )
+                    deployment.build_logs = (
+                        (deployment.build_logs or "")
+                        + f"\n[ROUTE-WARN] Edge route for {host} did not answer within "
+                        f"{route_timeout}s; container is healthy and was kept running.\n"
+                    )
+                    deployment.save(update_fields=["build_logs"])
             # Regenerate Caddyfile AFTER route readiness check to avoid
             # stale Caddyfile pointing to a dead container on failure.
             _regenerate_caddyfile()
