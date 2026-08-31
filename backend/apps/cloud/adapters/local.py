@@ -644,25 +644,31 @@ class LocalAdapter(BaseCloudAdapter):
                 if _svc_obj and getattr(_svc_obj, 'use_internal_network', True):
                     from apps.deployments.services.network_scope import ensure_platform_bridge
                     platform_bridge = ensure_platform_bridge()
-                    networks_dict[platform_bridge] = self.docker_client.api.create_endpoint_config(
-                        aliases=aliases,
-                    )
+                    if platform_bridge != network_name:
+                        networks_dict[platform_bridge] = self.docker_client.api.create_endpoint_config(
+                            aliases=aliases,
+                        )
             except Exception as exc:
                 logger.debug("Platform-bridge dual-homing skipped: %s", exc)
 
-        networking_config = self.docker_client.api.create_networking_config(networks_dict)
-
-        # docker-py 7.x create_container has NO 'networks' parameter —
-        # multi-network attach happens purely via networking_config (each
-        # key is a bridge, each value its endpoint/aliases). Passing
-        # 'network' alongside would override the config and leave the
-        # container on a single bridge, so both are omitted here; the
-        # first key of networks_dict is the primary bridge.
+        # docker-py 7.x quirk (see _create_container_args): the high-level
+        # containers.create() only honors networking_config when the
+        # 'network' kwarg is ALSO passed, AND the networking_config must
+        # be a PLAIN DICT (not a NetworkingConfig wrapper) so the
+        # `network not in networking_config` sanity check finds the
+        # primary bridge as a top-level key. Passing the wrapper object
+        # makes the check fail and docker-py silently degrades to a
+        # single network with no aliases — which is exactly how deploys
+        # landed on the default 'bridge' (172.17.x.x) with Traefik
+        # reporting "no available server". Verified live on the host:
+        #   network=primary + networking_config={net1: epc, net2: epc}
+        # preserves BOTH bridges and BOTH alias sets.
         create_kwargs = {
             "image": image,
             "name": container_name,
             "environment": env,
-            "networking_config": networking_config,
+            "network": network_name,
+            "networking_config": networks_dict,
             "labels": labels,
             "volumes": docker_volumes if docker_volumes else None,
             "restart_policy": rp,
@@ -1129,11 +1135,6 @@ class LocalAdapter(BaseCloudAdapter):
         try:
             if self.docker_client is None:
                 raise RuntimeError("Docker client unavailable")
-            networking_config = self.docker_client.api.create_networking_config({
-                network_name: self.docker_client.api.create_endpoint_config(
-                    aliases=[name, f"{name}.default.internal"]
-                )
-            })
 
             self._apply_egress_restrictions(network_name)
 
@@ -1142,9 +1143,10 @@ class LocalAdapter(BaseCloudAdapter):
             # platform-wide bridge so service-to-service traffic (intra- AND
             # inter-project) stays host-internal.
             from apps.deployments.services.network_scope import ensure_platform_bridge
+            promote_aliases = [name, f"{name}.default.internal"]
             promote_networks_dict: dict[str, Any] = {
                 network_name: self.docker_client.api.create_endpoint_config(
-                    aliases=[name, f"{name}.default.internal"]
+                    aliases=promote_aliases
                 )
             }
             try:
@@ -1153,11 +1155,12 @@ class LocalAdapter(BaseCloudAdapter):
                 ).only('use_internal_network').first() if getattr(self, '_service_id', None) else None
                 if _promote_svc and getattr(_promote_svc, 'use_internal_network', True):
                     platform_bridge = ensure_platform_bridge()
-                    promote_networks_dict[platform_bridge] = (
-                        self.docker_client.api.create_endpoint_config(
-                            aliases=[name, f"{name}.default.internal"]
+                    if platform_bridge != network_name:
+                        promote_networks_dict[platform_bridge] = (
+                            self.docker_client.api.create_endpoint_config(
+                                aliases=promote_aliases
+                            )
                         )
-                    )
             except Exception as exc:
                 logger.debug("Promote dual-homing skipped: %s", exc)
 
@@ -1165,10 +1168,14 @@ class LocalAdapter(BaseCloudAdapter):
                 "image": image_ref,
                 "name": name,
                 "environment": green_env,
-                # Multi-network attach via networking_config only —
-                # docker-py create_container has no 'networks' kwarg and
-                # 'network' (singular) would override to a single bridge.
-                "networking_config": self.docker_client.api.create_networking_config(promote_networks_dict),
+                # docker-py 7.x quirk (see _deploy_docker for the full
+                # story): networking_config alone is silently dropped by
+                # the high-level create(); it must be a PLAIN DICT passed
+                # alongside 'network' (the primary bridge) or the promoted
+                # container lands on the default bridge and Traefik
+                # reports "no available server".
+                "network": network_name,
+                "networking_config": promote_networks_dict,
                 "labels": live_labels,
                 "volumes": green_volumes,
                 "restart_policy": rp,
@@ -1193,15 +1200,43 @@ class LocalAdapter(BaseCloudAdapter):
                     f"Promoted container failed health checks: {promoted.id[:12]}"
                 )
 
+            # Self-heal the network attachments. The create() call above
+            # SHOULD have attached both bridges (plain-dict networking_config),
+            # but if the Docker daemon raced us or the endpoint config was
+            # rejected, the container may be missing a bridge. Verify actual
+            # attachment and repair it instead of blindly disconnecting
+            # (the old disconnect-then-connect pattern threw
+            # "container is not connected to network" and left the promoted
+            # container unreachable by Traefik).
             try:
-                if self.docker_client is None:
-                    raise RuntimeError("Docker client unavailable")
-                net = self.docker_client.networks.get(network_name)
-                net.disconnect(promoted)
-                net.connect(promoted, aliases=[name, f"{name}.default.internal"])
+                promoted.reload()
+                attached = set(
+                    ((promoted.attrs.get('NetworkSettings') or {}).get('Networks') or {}).keys()
+                )
+                expected = {network_name}
+                try:
+                    _bridge_check = ensure_platform_bridge()
+                    expected.add(_bridge_check)
+                except Exception:
+                    pass
+                for needed_net in sorted(expected):
+                    if needed_net in attached:
+                        continue
+                    try:
+                        missing_net = self.docker_client.networks.get(needed_net)
+                        missing_net.connect(promoted, aliases=[name, f"{name}.default.internal"])
+                        logger.info(
+                            "Blue-green promote: repaired missing network attachment %s for %s",
+                            needed_net, name,
+                        )
+                    except Exception as repair_exc:
+                        logger.warning(
+                            "Blue-green promote: could not attach %s to %s: %s",
+                            name, needed_net, repair_exc,
+                        )
             except Exception as exc:
                 logger.warning(
-                    "Blue-green promote: network alias update failed: %s",
+                    "Blue-green promote: network attachment check failed: %s",
                     exc,
                 )
 
@@ -1316,11 +1351,32 @@ class LocalAdapter(BaseCloudAdapter):
                         backup_name,
                     )
                     try:
+                        # Emergency recreate: same dual-homing shape as the
+                        # normal promote path (plain dict + network kwarg),
+                        # so the emergency container is reachable both on
+                        # the project bridge AND cross-project.
+                        emergency_aliases = [name, f"{name}.default.internal"]
+                        emergency_networks: dict[str, Any] = {
+                            network_name: self.docker_client.api.create_endpoint_config(
+                                aliases=emergency_aliases
+                            )
+                        }
+                        try:
+                            _emerg_bridge = ensure_platform_bridge()
+                            if _emerg_bridge != network_name:
+                                emergency_networks[_emerg_bridge] = (
+                                    self.docker_client.api.create_endpoint_config(
+                                        aliases=emergency_aliases
+                                    )
+                                )
+                        except Exception:
+                            pass
                         emergency = self.docker_client.containers.create(
                             image=image_ref,
                             name=name,
                             environment=green_env,
                             network=network_name,
+                            networking_config=emergency_networks,
                             labels=live_labels,
                             restart_policy=rp,
                             command=green_cmd,
