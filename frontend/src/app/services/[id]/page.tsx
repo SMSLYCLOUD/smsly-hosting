@@ -8,6 +8,7 @@ import ScalingTab from '@/components/settings/ScalingTab';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
 import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug } from 'lucide-react';
+import { InternalNetworkCard } from '@/components/settings/InternalNetworkCard';
 import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
 const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false, loading: () => <Skeleton className="h-[400px] w-full" /> });
@@ -498,6 +499,12 @@ export default function ServiceDetailPage() {
                             </div>
                         </div>
                     )}
+
+                    {/* Internal Network (dual-homed host-internal addresses) */}
+                    <InternalNetworkCard
+                        service={service}
+                        onUpdated={(updated) => setService(prev => ({ ...prev, ...updated }))}
+                    />
 
                     <div className="col-span-1 md:col-span-4 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
                         <h3 className="font-bold mb-6 text-lg text-foreground">Configuration</h3>

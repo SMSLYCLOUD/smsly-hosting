@@ -53,6 +53,7 @@ function ProjectDetailContent() {
   const [editDesc, setEditDesc] = useState('');
   const [editEmoji, setEditEmoji] = useState('📦');
   const [editColor, setEditColor] = useState('#6366f1');
+  const [editSubnet, setEditSubnet] = useState('');
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -76,6 +77,7 @@ function ProjectDetailContent() {
       setServices(svcs);
       setEditName(proj.name);
       setEditDesc(proj.description || '');
+      setEditSubnet(proj.internal_subnet || '');
       setEditEmoji(proj.icon_emoji);
       setEditColor(proj.color);
       setTeams(teamList);
@@ -130,6 +132,7 @@ function ProjectDetailContent() {
         description: editDesc.trim(),
         icon_emoji: editEmoji,
         color: editColor,
+        internal_subnet: editSubnet.trim(),
       });
       setProject(updated);
       toast({ title: 'Project updated' });
@@ -525,6 +528,26 @@ function ProjectDetailContent() {
                     />
                   ))}
                 </div>
+              </div>
+
+              {/* Internal Network */}
+              <div className="border-t border-zinc-800 pt-5">
+                <label className="block text-sm font-medium text-zinc-400 mb-1.5">
+                  Internal Network Subnet (CIDR)
+                </label>
+                <input
+                  value={editSubnet}
+                  onChange={e => setEditSubnet(e.target.value)}
+                  placeholder="172.30.224.0/24 (platform default)"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 font-mono text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <p className="text-xs text-zinc-500 mt-2">
+                  Docker bridge subnet for this project&apos;s services. Services in
+                  the same project talk to each other host-internally on this
+                  bridge — no public DNS, no TLS. Leave empty to use the
+                  platform default. Applies to the scoped network on the next
+                  ecosystem deploy.
+                </p>
               </div>
 
               {/* Team */}
