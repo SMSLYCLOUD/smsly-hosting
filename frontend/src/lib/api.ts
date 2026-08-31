@@ -2059,7 +2059,7 @@ export const projectsApi = {
     const response = await api.get(`/projects/${id}/internal-network/`);
     return response.data;
   },
-  provisionInternalNetwork: async (id: string): Promise<{
+  provisionInternalNetwork: async (id: string, body?: { dual_platform?: boolean }): Promise<{
     status: string;
     exists: boolean;
     network_name: string;
@@ -2068,7 +2068,7 @@ export const projectsApi = {
     services_running: number;
     services_attached: number;
   }> => {
-    const response = await api.post(`/projects/${id}/internal-network/`);
+    const response = await api.post(`/projects/${id}/internal-network/`, body || {});
     return response.data;
   },
 };

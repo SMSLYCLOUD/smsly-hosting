@@ -400,19 +400,22 @@ class ProjectViewSet(viewsets.ModelViewSet):
         def _state_response(status_label: str, http_status=200):
             running = 0
             attached = 0
-            for svc in project.services.all():
-                try:
-                    import docker as docker_lib
-                    client = docker_lib.from_env()
-                    container = client.containers.get(svc.name)
-                    container.reload()
-                    if (container.attrs.get('State') or {}).get('Status') == 'running':
-                        running += 1
-                        nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
-                        if scoped and scoped.network_name in nets:
-                            attached += 1
-                except Exception:
-                    continue
+            try:
+                import docker as docker_lib
+                client = docker_lib.from_env()
+                for svc in project.services.all():
+                    try:
+                        container = client.containers.get(svc.name)
+                        container.reload()
+                        if (container.attrs.get('State') or {}).get('Status') == 'running':
+                            running += 1
+                            nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                            if scoped and scoped.network_name in nets:
+                                attached += 1
+                    except Exception:
+                        continue
+            except Exception:
+                pass
             return Response({
                 'status': status_label,
                 'exists': scoped is not None,
@@ -423,6 +426,53 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 'services_attached': attached,
             }, status=http_status)
 
+        def _attach_running_containers(client, net, network_name):
+            """Attach the project's running service containers AND its ACTIVE
+            addon containers to *net*.
+
+            Services need their DB/redis reachable on the project bridge or
+            the first request after attaching fails with a DNS error; addons
+            connect under their alias so existing connection URLs keep
+            resolving. The addon lookup uses the service-scoped rule (own +
+            '-shared' only) so we never steal another project's personal
+            addons.
+            """
+            attached_services = 0
+            attached_addons = 0
+            for svc in project.services.all():
+                try:
+                    container = client.containers.get(svc.name)
+                    container.reload()
+                    nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                    if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                            and network_name not in nets:
+                        net.connect(container, aliases=[svc.name, f"{svc.name}.default.internal"])
+                        attached_services += 1
+                except Exception:
+                    continue
+            try:
+                from django.db.models import Q
+                from apps.deployments.models.addons import Addon
+                addon_qs = Addon.objects.filter(status=Addon.Status.ACTIVE).filter(
+                    Q(service__project=project) | Q(service__project=project, name__endswith='-shared')
+                )
+                for addon in addon_qs:
+                    try:
+                        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+                        container = client.containers.get(container_name)
+                        container.reload()
+                        nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                        if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                                and network_name not in nets:
+                            alias = addon.name or f"{addon.addon_type.lower()}-shared"
+                            net.connect(container, aliases=[alias])
+                            attached_addons += 1
+                    except Exception:
+                        continue
+            except Exception as exc:
+                logger.debug("Addon attach during network provisioning skipped: %s", exc)
+            return attached_services, attached_addons
+
         if request.method == 'GET':
             return _state_response('ok')
 
@@ -430,7 +480,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if scoped:
             # Already exists — attach any running containers that aren't on
             # it yet (idempotent backfill).
-            attached_now = 0
+            attached_services, attached_addons = 0, 0
+            platform_services, platform_addons = 0, 0
             try:
                 import docker as docker_lib
                 client = docker_lib.from_env()
@@ -449,23 +500,75 @@ class ProjectViewSet(viewsets.ModelViewSet):
                     logger.info("Recreated missing Docker bridge %s for project %s",
                                 scoped.network_name, project.id)
                 net = client.networks.get(scoped.network_name)
-                for svc in project.services.all():
+                attached_services, attached_addons = _attach_running_containers(
+                    client, net, scoped.network_name
+                )
+
+                # Dual-network backfill: same option as the create path —
+                # bring services + addons onto the platform bridge too.
+                dual_platform = True
+                if isinstance(request.data, dict):
+                    raw_dual = request.data.get('dual_platform')
+                    if raw_dual is not None:
+                        dual_platform = str(raw_dual).strip().lower() not in ('false', '0', 'no', 'off')
+                if dual_platform:
                     try:
-                        container = client.containers.get(svc.name)
-                        container.reload()
-                        nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
-                        if (container.attrs.get('State') or {}).get('Status') == 'running' \
-                                and scoped.network_name not in nets:
-                            net.connect(container, aliases=[svc.name, f"{svc.name}.default.internal"])
-                            attached_now += 1
-                    except Exception:
-                        continue
+                        from apps.deployments.services.network_scope import (
+                            attach_container_to_platform_bridge,
+                            ensure_platform_bridge,
+                        )
+                        platform_bridge_name = ensure_platform_bridge()
+                        platform_net = client.networks.get(platform_bridge_name)
+                        for svc in project.services.all():
+                            try:
+                                container = client.containers.get(svc.name)
+                                container.reload()
+                                if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                                        and attach_container_to_platform_bridge(container.id, svc.name):
+                                    platform_services += 1
+                            except Exception:
+                                continue
+                        try:
+                            from django.db.models import Q as _Q
+                            from apps.deployments.models.addons import Addon as _Addon
+                            addon_qs = _Addon.objects.filter(status=_Addon.Status.ACTIVE).filter(
+                                _Q(service__project=project)
+                                | _Q(service__project=project, name__endswith='-shared')
+                            )
+                            for addon in addon_qs:
+                                try:
+                                    container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+                                    container = client.containers.get(container_name)
+                                    container.reload()
+                                    nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                                    if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                                            and platform_bridge_name not in nets:
+                                        alias = addon.name or f"{addon.addon_type.lower()}-shared"
+                                        platform_net.connect(container, aliases=[alias])
+                                        platform_addons += 1
+                                except Exception:
+                                    continue
+                        except Exception as exc:
+                            logger.debug("Addon platform-bridge backfill skipped: %s", exc)
+                    except Exception as exc:
+                        logger.debug("Platform-bridge backfill skipped: %s", exc)
             except Exception as exc:
                 return Response(
                     {'error': f'Failed to backfill bridge attachment: {exc}'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            return _state_response('existing' if attached_now == 0 else 'backfilled')
+            logger.info(
+                "Backfilled project bridge %s for project %s "
+                "(%d services + %d addons; %d + %d dual-homed to platform bridge)",
+                scoped.network_name, project.id,
+                attached_services, attached_addons, platform_services, platform_addons,
+            )
+            return _state_response(
+                'existing'
+                if attached_services == 0 and attached_addons == 0
+                and platform_services == 0 and platform_addons == 0
+                else 'backfilled'
+            )
 
         # No ScopedNetwork — create record + Docker bridge + attach services
         try:
@@ -514,20 +617,83 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 is_active=True,
             )
 
-            # Attach every running service container
-            attached_now = 0
-            for svc in project.services.all():
-                try:
-                    container = client.containers.get(svc.name)
-                    container.reload()
-                    if (container.attrs.get('State') or {}).get('Status') == 'running':
-                        net.connect(container, aliases=[svc.name, f"{svc.name}.default.internal"])
-                        attached_now += 1
-                except Exception:
-                    continue
+            # Attach every running service container + the project's ACTIVE
+            # addon containers to the new project bridge (shared helper
+            # defined alongside _state_response above).
+            attached_services, attached_addons = _attach_running_containers(
+                client, net, network_name
+            )
 
-            logger.info("Provisioned internal network %s for project %s (%d services attached)",
-                        network_name, project.id, attached_now)
+            # Dual-network option: attach services AND their addons to the
+            # platform-wide bridge (smsly-platform-net) so cross-project
+            # traffic stays host-internal too. Addons dual-home with the
+            # same alias so a connection URL resolved from either bridge
+            # works. Enabled by default (the whole point of the internal
+            # network is to keep traffic off public DNS); disable with
+            # {"dual_platform": false} in the POST body.
+            dual_platform = True
+            if isinstance(request.data, dict):
+                raw_dual = request.data.get('dual_platform')
+                if raw_dual is not None:
+                    dual_platform = str(raw_dual).strip().lower() not in ('false', '0', 'no', 'off')
+
+            platform_services = 0
+            platform_addons = 0
+            if dual_platform:
+                try:
+                    from apps.deployments.services.network_scope import (
+                        attach_container_to_platform_bridge,
+                        ensure_platform_bridge,
+                    )
+                    platform_bridge_name = ensure_platform_bridge()
+                    platform_net = client.networks.get(platform_bridge_name)
+                    for svc in project.services.all():
+                        try:
+                            container = client.containers.get(svc.name)
+                            container.reload()
+                            if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                                    and attach_container_to_platform_bridge(container.id, svc.name):
+                                platform_services += 1
+                        except Exception:
+                            continue
+                    # Addons dual-home too — a cross-project service
+                    # reaching for this project's shared postgres should
+                    # resolve it on the platform bridge without any public
+                    # hop. Uses the same service-scoped addon lookup as
+                    # _attach_running_containers (own + '-shared').
+                    try:
+                        from django.db.models import Q as _Q
+                        from apps.deployments.models.addons import Addon as _Addon
+                        addon_qs = _Addon.objects.filter(status=_Addon.Status.ACTIVE).filter(
+                            _Q(service__project=project)
+                            | _Q(service__project=project, name__endswith='-shared')
+                        )
+                        for addon in addon_qs:
+                            try:
+                                container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+                                container = client.containers.get(container_name)
+                                container.reload()
+                                nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                                if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                                        and platform_bridge_name not in nets:
+                                    alias = addon.name or f"{addon.addon_type.lower()}-shared"
+                                    platform_net.connect(container, aliases=[alias])
+                                    platform_addons += 1
+                            except Exception:
+                                continue
+                    except Exception as exc:
+                        logger.debug("Addon platform-bridge attach skipped: %s", exc)
+                except Exception as exc:
+                    logger.debug("Platform-bridge attach during provision skipped: %s", exc)
+
+            logger.info(
+                "Provisioned internal network %s for project %s "
+                "(%d services + %d addons on project bridge; "
+                "%d services + %d addons dual-homed to platform bridge)",
+                network_name, project.id,
+                attached_services, attached_addons,
+                platform_services, platform_addons,
+            )
             return _state_response('created', status.HTTP_201_CREATED)
 
         except Exception as exc:

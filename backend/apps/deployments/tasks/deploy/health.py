@@ -90,10 +90,16 @@ def _local_route_timeout_seconds(service: Service) -> int:
     if _is_low_resource_service(service):
         return _env_int(
             "LOCAL_ROUTE_READY_TIMEOUT_LOW_RESOURCE_SECONDS",
-            120,
+            300,
             minimum=10,
         )
-    return _env_int("LOCAL_ROUTE_READY_TIMEOUT_SECONDS", 60, minimum=10)
+    # Default 180s: Traefik's Docker provider polls on an interval and can
+    # take minutes to refresh when the Docker daemon is loaded (we've seen
+    # 'context deadline exceeded' provider errors for hours on the prod
+    # host). The container is already healthy at this point — the route
+    # poll is only waiting for label propagation, so a short timeout
+    # marks healthy deploys FAILED and tears down good containers.
+    return _env_int("LOCAL_ROUTE_READY_TIMEOUT_SECONDS", 180, minimum=10)
 
 def _local_container_timeout_seconds(service: Service) -> int:
     if _is_low_resource_service(service):
@@ -261,6 +267,22 @@ def _wait_for_local_route_ready(
         verify=should_verify("http://traefik:80"),
     )
 
+    # Host-port fallbacks (127.0.0.1:8081 = Traefik's published port on the
+    # HOST). These only work when the backend runs directly on the host —
+    # inside the smsly-net container, localhost:8081 is nothing and the probe
+    # can NEVER succeed, so it just masks the real failure reason (and makes
+    # every timeout log 'Connection refused' instead of the actual edge
+    # error). Detect in-container execution by whether the Docker-DNS name
+    # 'traefik' resolves; if it does, the traefik:80 probe above already
+    # covers the direct-ingress case and host ports are dead weight.
+    def _in_container() -> bool:
+        try:
+            import socket as _socket
+            _socket.gethostbyname("traefik")
+            return True
+        except OSError:
+            return False
+
     is_lite = getattr(service.server, "is_lite_agent", False) if service.server else False
     if is_lite:
         _add_probe(
@@ -273,7 +295,9 @@ def _wait_for_local_route_ready(
             headers={"Host": host},
             verify=should_verify("http://localhost:80"),
         )
-    else:
+    elif not _in_container():
+        # Backend runs on the host itself — the published host port is the
+        # only way to reach Traefik directly.
         _add_probe(
             "http://127.0.0.1:8081",
             headers={"Host": host},

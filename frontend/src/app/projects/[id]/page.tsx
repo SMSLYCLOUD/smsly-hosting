@@ -65,6 +65,7 @@ function ProjectDetailContent() {
   } | null>(null);
   const [netStateLoading, setNetStateLoading] = useState(true);
   const [provisioning, setProvisioning] = useState(false);
+  const [dualPlatform, setDualPlatform] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -120,11 +121,11 @@ function ProjectDetailContent() {
   const provisionNetwork = async () => {
     try {
       setProvisioning(true);
-      const result = await projectsApi.provisionInternalNetwork(projectId);
+      const result = await projectsApi.provisionInternalNetwork(projectId, { dual_platform: dualPlatform });
       setNetState(result);
       toast({
         title: 'Internal network generated',
-        description: `${result.network_name} (${result.subnet}) created — ${result.services_attached}/${result.services_running} running services attached.`,
+        description: `${result.network_name} (${result.subnet}) created — ${result.services_attached}/${result.services_running} services attached${dualPlatform ? ' and dual-homed with addons' : ''}.`,
       });
     } catch (err: any) {
       toast({
@@ -140,12 +141,12 @@ function ProjectDetailContent() {
   const backfillNetwork = async () => {
     try {
       setProvisioning(true);
-      const result = await projectsApi.provisionInternalNetwork(projectId);
+      const result = await projectsApi.provisionInternalNetwork(projectId, { dual_platform: dualPlatform });
       setNetState(result);
       toast({
         title: result.status === 'backfilled' ? 'Services attached' : 'Network is up to date',
         description: result.status === 'backfilled'
-          ? `${result.services_attached}/${result.services_running} services now on the internal bridge.`
+          ? `${result.services_attached}/${result.services_running} services now on the internal bridge${dualPlatform ? ' with dual-networked addons' : ''}.`
           : 'All running services are already attached.',
       });
     } catch (err: any) {
@@ -617,7 +618,7 @@ function ProjectDetailContent() {
                   ecosystem deploy.
                 </p>
 
-                {/* Network status + Generate button */}
+                {/* Dual-network toggle + action buttons */}
                 <div className="mt-3 flex items-center justify-between p-3 bg-zinc-800/50 border border-zinc-700 rounded-lg">
                   <div className="min-w-0 flex-1">
                     {netStateLoading ? (
@@ -644,25 +645,36 @@ function ProjectDetailContent() {
                       </>
                     )}
                   </div>
-                  {netState?.exists ? (
-                    <button
-                      onClick={backfillNetwork}
-                      disabled={netStateLoading || provisioning}
-                      className="ml-3 shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                    >
-                      {provisioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                      {provisioning ? 'Attaching...' : 'Attach services'}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={provisionNetwork}
-                      disabled={netStateLoading || provisioning}
-                      className="ml-3 shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                    >
-                      {provisioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                      {provisioning ? 'Generating...' : 'Generate network'}
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2 ml-3 shrink-0">
+                    <label className="flex items-center gap-1.5 text-[10px] text-zinc-400 cursor-pointer select-none" title="Also attach services AND their addons (DB, Redis, etc.) to the platform-wide bridge so cross-project traffic stays host-internal.">
+                      <input
+                        type="checkbox"
+                        checked={dualPlatform}
+                        onChange={e => setDualPlatform(e.target.checked)}
+                        className="accent-indigo-500 w-3.5 h-3.5"
+                      />
+                      Dual-network addons
+                    </label>
+                    {netState?.exists ? (
+                      <button
+                        onClick={backfillNetwork}
+                        disabled={netStateLoading || provisioning}
+                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {provisioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                        {provisioning ? 'Attaching...' : 'Attach services'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={provisionNetwork}
+                        disabled={netStateLoading || provisioning}
+                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {provisioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                        {provisioning ? 'Generating...' : 'Generate network'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
