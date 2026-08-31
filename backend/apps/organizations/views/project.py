@@ -370,6 +370,173 @@ class ProjectViewSet(viewsets.ModelViewSet):
             'hierarchy': ['project', 'team', 'organization', 'platform'],
         })
 
+    @action(detail=True, methods=['get', 'post'], url_path='internal-network')
+    def internal_network(self, request, pk=None):
+        """
+        GET  /api/v1/projects/{id}/internal-network/ — current network state
+        POST /api/v1/projects/{id}/internal-network/ — provision now
+
+        GET returns whether the project has a scoped Docker bridge, its
+        name/subnet, and how many services are attached.
+
+        POST (idempotent) creates the ScopedNetwork DB record + the actual
+        Docker bridge if missing, then attaches every RUNNING service
+        container in the project to it. Use this when Project.internal_subnet
+        is set (or the platform default applies) but no bridge exists yet —
+        e.g. a manual project whose services were deployed before the
+        internal-network feature. No re-deploy needed: live containers get
+        dual-homed in place via docker network connect.
+        """
+        from django.contrib.contenttypes.models import ContentType
+
+        project = self.get_object()
+        ct = ContentType.objects.get_for_model(project)
+
+        from apps.deployments.models.network_scope import ScopedNetwork
+        scoped = ScopedNetwork.objects.filter(
+            content_type=ct, object_id=project.id, is_active=True
+        ).first()
+
+        def _state_response(status_label: str, http_status=200):
+            running = 0
+            attached = 0
+            for svc in project.services.all():
+                try:
+                    import docker as docker_lib
+                    client = docker_lib.from_env()
+                    container = client.containers.get(svc.name)
+                    container.reload()
+                    if (container.attrs.get('State') or {}).get('Status') == 'running':
+                        running += 1
+                        nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                        if scoped and scoped.network_name in nets:
+                            attached += 1
+                except Exception:
+                    continue
+            return Response({
+                'status': status_label,
+                'exists': scoped is not None,
+                'network_name': scoped.network_name if scoped else '',
+                'subnet': scoped.subnet if scoped else '',
+                'isolated': bool(scoped.isolated) if scoped else False,
+                'services_running': running,
+                'services_attached': attached,
+            }, status=http_status)
+
+        if request.method == 'GET':
+            return _state_response('ok')
+
+        # POST: provision
+        if scoped:
+            # Already exists — attach any running containers that aren't on
+            # it yet (idempotent backfill).
+            attached_now = 0
+            try:
+                import docker as docker_lib
+                client = docker_lib.from_env()
+                try:
+                    client.networks.get(scoped.network_name)
+                except docker_lib.errors.NotFound:
+                    # DB record exists but the bridge was lost (host reboot,
+                    # docker prune) — recreate it.
+                    client.networks.create(
+                        scoped.network_name,
+                        driver=scoped.driver or 'bridge',
+                        internal=bool(scoped.internal),
+                        enable_ipv6=bool(scoped.enable_ipv6),
+                        **({'subnet': scoped.subnet} if scoped.subnet else {}),
+                    )
+                    logger.info("Recreated missing Docker bridge %s for project %s",
+                                scoped.network_name, project.id)
+                net = client.networks.get(scoped.network_name)
+                for svc in project.services.all():
+                    try:
+                        container = client.containers.get(svc.name)
+                        container.reload()
+                        nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                        if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                                and scoped.network_name not in nets:
+                            net.connect(container, aliases=[svc.name, f"{svc.name}.default.internal"])
+                            attached_now += 1
+                    except Exception:
+                        continue
+            except Exception as exc:
+                return Response(
+                    {'error': f'Failed to backfill bridge attachment: {exc}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            return _state_response('existing' if attached_now == 0 else 'backfilled')
+
+        # No ScopedNetwork — create record + Docker bridge + attach services
+        try:
+            import secrets as _secrets
+            scope_id = str(project.id).replace('-', '')[:8]
+            network_name = f"smsly-net-{scope_id}"
+
+            # Resolve subnet: project override → platform default → hardcoded
+            subnet = (getattr(project, 'internal_subnet', '') or '').strip()
+            if not subnet:
+                from apps.deployments.models.core import PlatformConfig
+                subnet = (PlatformConfig.load().default_internal_subnet or '').strip() \
+                    or '172.30.224.0/24'
+
+            import docker as docker_lib
+            client = docker_lib.from_env()
+            # Create the bridge (tolerate a race)
+            try:
+                net = client.networks.create(
+                    network_name,
+                    driver='bridge',
+                    subnet=subnet,
+                    labels={
+                        'smsly.scope': 'project',
+                        'smsly.project_id': str(project.id),
+                    },
+                )
+                logger.info("Created Docker bridge %s (%s) for project %s",
+                            network_name, subnet, project.id)
+            except docker_lib.errors.APIError as exc:
+                if 'already exists' not in str(exc).lower():
+                    raise
+                net = client.networks.get(network_name)
+
+            # Create the DB record
+            scoped = ScopedNetwork.objects.create(
+                content_type=ct,
+                object_id=project.id,
+                network_name=network_name,
+                driver='bridge',
+                isolated=True,
+                internal=False,
+                enable_ipv6=False,
+                subnet=subnet,
+                allow_public_traefik=True,
+                is_active=True,
+            )
+
+            # Attach every running service container
+            attached_now = 0
+            for svc in project.services.all():
+                try:
+                    container = client.containers.get(svc.name)
+                    container.reload()
+                    if (container.attrs.get('State') or {}).get('Status') == 'running':
+                        net.connect(container, aliases=[svc.name, f"{svc.name}.default.internal"])
+                        attached_now += 1
+                except Exception:
+                    continue
+
+            logger.info("Provisioned internal network %s for project %s (%d services attached)",
+                        network_name, project.id, attached_now)
+            return _state_response('created', status.HTTP_201_CREATED)
+
+        except Exception as exc:
+            logger.exception("Failed to provision internal network for project %s", project.id)
+            return Response(
+                {'error': str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(detail=True, methods=['post'], url_path='sync-envs')
     def sync_envs(self, request, pk=None):
         """

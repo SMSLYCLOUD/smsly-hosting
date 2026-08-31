@@ -15,7 +15,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Plus, FolderOpen, Settings2,
   GitBranch, Globe, Layers, Trash2, X, Save, RefreshCcw, Server,
-  UserPlus, Mail, Shield, Users, Loader2,
+  UserPlus, Mail, Shield, Users, Loader2, Check, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
@@ -54,6 +54,17 @@ function ProjectDetailContent() {
   const [editEmoji, setEditEmoji] = useState('📦');
   const [editColor, setEditColor] = useState('#6366f1');
   const [editSubnet, setEditSubnet] = useState('');
+  const [netState, setNetState] = useState<{
+    status: string;
+    exists: boolean;
+    network_name: string;
+    subnet: string;
+    isolated: boolean;
+    services_running: number;
+    services_attached: number;
+  } | null>(null);
+  const [netStateLoading, setNetStateLoading] = useState(true);
+  const [provisioning, setProvisioning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -90,6 +101,63 @@ function ProjectDetailContent() {
   }, [projectId, toast]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Fetch internal-network provisioning state
+  const fetchNetState = useCallback(async () => {
+    try {
+      setNetStateLoading(true);
+      const state = await projectsApi.getInternalNetwork(projectId);
+      setNetState(state);
+    } catch {
+      setNetState(null);
+    } finally {
+      setNetStateLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => { fetchNetState(); }, [fetchNetState]);
+
+  const provisionNetwork = async () => {
+    try {
+      setProvisioning(true);
+      const result = await projectsApi.provisionInternalNetwork(projectId);
+      setNetState(result);
+      toast({
+        title: 'Internal network generated',
+        description: `${result.network_name} (${result.subnet}) created — ${result.services_attached}/${result.services_running} running services attached.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: 'Failed to generate network',
+        description: err?.response?.data?.error || 'Could not provision the internal network.',
+        variant: 'destructive',
+      });
+    } finally {
+      setProvisioning(false);
+    }
+  };
+
+  const backfillNetwork = async () => {
+    try {
+      setProvisioning(true);
+      const result = await projectsApi.provisionInternalNetwork(projectId);
+      setNetState(result);
+      toast({
+        title: result.status === 'backfilled' ? 'Services attached' : 'Network is up to date',
+        description: result.status === 'backfilled'
+          ? `${result.services_attached}/${result.services_running} services now on the internal bridge.`
+          : 'All running services are already attached.',
+      });
+    } catch (err: any) {
+      toast({
+        title: 'Failed to attach services',
+        description: err?.response?.data?.error || 'Could not attach services to the bridge.',
+        variant: 'destructive',
+      });
+    } finally {
+      setProvisioning(false);
+    }
+  };
 
   // Load ungrouped services for the add modal
   const loadUngrouped = useCallback(async () => {
@@ -548,6 +616,54 @@ function ProjectDetailContent() {
                   platform default. Applies to the scoped network on the next
                   ecosystem deploy.
                 </p>
+
+                {/* Network status + Generate button */}
+                <div className="mt-3 flex items-center justify-between p-3 bg-zinc-800/50 border border-zinc-700 rounded-lg">
+                  <div className="min-w-0 flex-1">
+                    {netStateLoading ? (
+                      <p className="text-xs text-zinc-500 flex items-center gap-2">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking network status...
+                      </p>
+                    ) : netState?.exists ? (
+                      <>
+                        <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                          <Check className="w-3.5 h-3.5" /> Network active
+                        </p>
+                        <p className="font-mono text-[10px] text-zinc-500 truncate mt-0.5">
+                          {netState.network_name} · {netState.subnet} · {netState.services_attached}/{netState.services_running} services attached
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-xs font-semibold text-amber-400 flex items-center gap-1.5">
+                          <X className="w-3.5 h-3.5" /> No internal network
+                        </p>
+                        <p className="text-[10px] text-zinc-500 mt-0.5">
+                          Services communicate via public DNS. Generate a bridge to keep traffic host-internal.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  {netState?.exists ? (
+                    <button
+                      onClick={backfillNetwork}
+                      disabled={netStateLoading || provisioning}
+                      className="ml-3 shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {provisioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                      {provisioning ? 'Attaching...' : 'Attach services'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={provisionNetwork}
+                      disabled={netStateLoading || provisioning}
+                      className="ml-3 shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {provisioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                      {provisioning ? 'Generating...' : 'Generate network'}
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Team */}

@@ -2047,6 +2047,30 @@ export const projectsApi = {
     const response = await api.post(`/projects/${id}/sync-envs/`);
     return response.data;
   },
+  getInternalNetwork: async (id: string): Promise<{
+    status: string;
+    exists: boolean;
+    network_name: string;
+    subnet: string;
+    isolated: boolean;
+    services_running: number;
+    services_attached: number;
+  }> => {
+    const response = await api.get(`/projects/${id}/internal-network/`);
+    return response.data;
+  },
+  provisionInternalNetwork: async (id: string): Promise<{
+    status: string;
+    exists: boolean;
+    network_name: string;
+    subnet: string;
+    isolated: boolean;
+    services_running: number;
+    services_attached: number;
+  }> => {
+    const response = await api.post(`/projects/${id}/internal-network/`);
+    return response.data;
+  },
 };
 
 export interface ProjectMember {
