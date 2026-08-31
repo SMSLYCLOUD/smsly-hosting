@@ -83,6 +83,10 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
             } catch (err) { console.error(err); }
             finally { setLoading(false); }
         })();
+    // Deliberately NOT depending on the full initialService object — the
+    // parent re-renders every 3s poll with a fresh reference and that
+    // must not re-run this effect (it would fight the user's edits).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [serviceId, initialService?.id]);
 
     const markDirty = () => { dirtyRef.current = true; };

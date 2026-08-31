@@ -39,7 +39,7 @@ export function AdvancedTab({ service }: { service: Service }) {
         try {
             const payload: Record<string, string> = {
                 start_command: config.start_command,
-                restart_policy: config.restart_policy as Service['restart_policy'],
+                restart_policy: config.restart_policy,
             };
             // Only send docker_image when the user actually changed it —
             // otherwise the auto-filled default would get persisted as if
