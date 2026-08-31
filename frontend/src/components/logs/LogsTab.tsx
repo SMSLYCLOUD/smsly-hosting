@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Zap, Clock, RefreshCw, Radio, Copy, Check } from 'lucide-react';
-import { Deployment, getDeployment } from '@/lib/api';
+import { Deployment } from '@/lib/api';
 import { getWsUrl } from '@/lib/websocket';
 import { PipelineVisualizer, PipelineStage } from '@/components/deployments/PipelineVisualizer';
 import { useToast } from '@/components/ui/use-toast';
