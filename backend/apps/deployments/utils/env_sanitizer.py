@@ -169,8 +169,13 @@ def _strip_wrappers(v: str) -> str:
     while prev != v:
         prev = v
         v = v.strip()
-        for ch in _WRAPPER_CHARS:
+        # Matching same-char pairs: `` `...` ``, '...', "..."
+        for ch in ("`", "'", '"'):
             if len(v) >= 2 and v[0] == ch and v[-1] == ch:
+                v = v[1:-1]
+        # Smart-quote pairs: U+201C...U+201D and U+2018...U+2019
+        for open_q, close_q in (("\u201c", "\u201d"), ("\u2018", "\u2019")):
+            if len(v) >= 2 and v[0] == open_q and v[-1] == close_q:
                 v = v[1:-1]
         v = v.strip()
     return v
