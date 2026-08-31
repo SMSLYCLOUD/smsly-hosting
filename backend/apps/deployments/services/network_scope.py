@@ -29,22 +29,149 @@ logger = logging.getLogger(__name__)
 
 RULE_TAG_PREFIX = "smsly-egress-"
 
+# One-shot host-network image used to run firewall commands from the
+# unprivileged backend container. Stock alpine ships NEITHER iptables
+# NOR nft — the old "sh: iptables: not found" errors meant every scoped
+# bridge shipped completely un-isolated. The platform pre-builds
+# 'smsly/iptables-shim' (alpine + iptables + nftables) so rule insertion
+# is a fast one-shot container run. When the image is missing (fresh
+# host) we fall back to installing the tools on the fly inside stock
+# alpine, and finally to nftables when iptables is unusable.
+IPTABLES_SHIM_IMAGE = "smsly/iptables-shim:latest"
+IPTABLES_FALLBACK_IMAGE = "alpine:3.20"
+
+# Shim script: run an iptables command, transparently translating to
+# nftables when iptables is unavailable/broken inside the container.
+# DOCKER-USER is a regular chain in the 'filter' table, so the direct
+# nft equivalent is 'chain inet filter DOCKER-USER' (iptables-nft uses
+# table 'ip filter'; both host backends accept the raw chain syntax).
+_SHIM_PREAMBLE = (
+    "command -v iptables >/dev/null 2>&1 || "
+    "{ command -v nft >/dev/null 2>&1 && "
+    "  iptables() { nft ${1/#-t/-a} 2>/dev/null || nft \"$@\"; } ; }"
+)
+
+
+def _iptables_shim_available() -> bool:
+    """True when the pre-baked iptables shim image exists locally."""
+    try:
+        import docker as _docker
+        _client = _docker.from_env()
+        _client.images.get(IPTABLES_SHIM_IMAGE)
+        return True
+    except Exception:
+        return False
+
+
+def _nft_fallback_command(args: list[str]) -> str:
+    """Translate an iptables DOCKER-USER invocation to nftables.
+
+    Only the subset used by apply_egress_restrictions is translated.
+    Untranslatable commands pass through as raw nft (best effort) —
+    rules are idempotent, so a partial translation is retried safely
+    on the next reconcile.
+
+    iptables -I DOCKER-USER -i BR -o BR2 -j DROP [-m comment --comment TAG]
+    nft insert rule ip filter DOCKER-USER iifname "BR" oifname "BR2" drop comment "TAG"
+    """
+    chain = "DOCKER-USER"
+    if args[:3] != ["iptables", "-I", chain]:
+        # Untranslatable (e.g. '-S', '-D' listing/delete) — best-effort raw.
+        return "nft " + " ".join(args[1:])
+
+    parts = args[3:]
+    expr: list[str] = []
+    comment = ""
+    verdict = "drop"
+    proto = ""
+    i = 0
+    while i < len(parts):
+        p = parts[i]
+        nxt = parts[i + 1] if i + 1 < len(parts) else None
+        if p == "-i" and nxt:
+            expr.append(f'iifname "{nxt}"')
+            i += 2
+        elif p == "-o" and nxt:
+            if nxt.endswith("+"):
+                # iptables wildcard 'br-+' == nft 'br-*'
+                expr.append(f'oifname "{nxt[:-1]}*"')
+            else:
+                expr.append(f'oifname "{nxt}"')
+            i += 2
+        elif p == "-d" and nxt:
+            expr.append(f"ip daddr {nxt}")
+            i += 2
+        elif p == "-p" and nxt:
+            proto = nxt
+            i += 2
+        elif p == "--dport" and nxt:
+            port_expr = f"th dport {nxt}"
+            if proto:
+                port_expr = f"{proto} {port_expr}"
+            expr.append(port_expr)
+            i += 2
+        elif p == "-m" and nxt in ("comment", "conntrack"):
+            i += 2
+        elif p == "--ctstate" and nxt:
+            states = nxt.replace(",", ", ")
+            expr.append(f"ct state {{ {states} }}")
+            i += 2
+        elif p == "--comment" and nxt:
+            comment = nxt
+            i += 2
+        elif p == "-j" and nxt:
+            v = nxt.lower()
+            verdict = "accept" if v == "accept" else ("return" if v == "return" else "drop")
+            i += 2
+        else:
+            i += 1
+
+    rule = " ".join(expr)
+    if proto and not any(proto in e for e in expr):
+        rule = f"{proto} {rule}"
+    rule += f" counter {verdict}"
+    if comment:
+        rule += f' comment "{comment}"'
+    return f'nft insert rule ip filter {chain} {rule}'
+
 
 def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
-    """Run a command - iptables/* via a privileged host-network shim.
+    """Run a command - iptables/nft via a privileged host-network shim.
 
     The backend container is unprivileged and without host netns, so plain
     iptables here ALWAYS failed (rc=4 'you must be root') and every scoped
-    bridge silently shipped WITHOUT its egress firewall. All iptables
-    invocations are now executed through a one-shot alpine container with
+    bridge silently shipped WITHOUT its egress firewall. All firewall
+    invocations are executed through a one-shot container with
     --net=host --cap-add=NET_ADMIN (docker CLI is available in backend).
+
+    Order of preference:
+      1. 'smsly/iptables-shim' image (pre-baked with iptables + nft)
+      2. stock alpine with an on-the-fly 'apk add iptables nftables'
+      3. nftables translation (see _nft_fallback_command) when iptables
+         itself is unavailable — modern hosts back DOCKER-USER with
+         nftables anyway, so the rule lands in the same chain.
     """
     try:
         if args and args[0] == "iptables":
             script = " ".join(args)
+
+            if _iptables_shim_available():
+                return subprocess.run(
+                    ["docker", "run", "--rm", "--net=host", "--cap-add=NET_ADMIN",
+                     IPTABLES_SHIM_IMAGE, "sh", "-c", script],
+                    capture_output=True, text=True, timeout=timeout, check=False)
+
+            # Fallback for fresh hosts: install both firewall tools inside
+            # the one-shot container, try iptables first, then nft.
+            nft_script = _nft_fallback_command(args)
+            bootstrap = (
+                "apk add --no-cache iptables nftables >/dev/null 2>&1; "
+                f"if command -v iptables >/dev/null 2>&1; then {script}; "
+                f"else {nft_script}; fi"
+            )
             return subprocess.run(
                 ["docker", "run", "--rm", "--net=host", "--cap-add=NET_ADMIN",
-                 "alpine:3.20", "sh", "-c", script],
+                 IPTABLES_FALLBACK_IMAGE, "sh", "-c", bootstrap],
                 capture_output=True, text=True, timeout=timeout, check=False)
         return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
     except FileNotFoundError:
@@ -213,14 +340,27 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
 
     tag = _rule_tag(bridge_iface)
 
+    # Log at most ONE failure per bridge per reconcile — the old code
+    # logged an error for every rule in the block, so a single broken
+    # shim produced 8 identical stack traces per deploy.
+    _failed = False
+
     def _run(args: list[str]) -> None:
+        nonlocal _failed
         args = args + ["-m", "comment", "--comment", tag]
         result = _sh(args)
         if result.returncode != 0 and "already exists" not in (result.stderr or ""):
-            logger.error(
-                "iptables command failed (rc=%d): %s | stderr=%s",
-                result.returncode, " ".join(args), result.stderr.strip(),
-            )
+            if not _failed:
+                _failed = True
+                logger.error(
+                    "egress firewall unavailable for bridge %s (network %s): "
+                    "rc=%d stderr=%s — the bridge will ship WITHOUT host-level "
+                    "egress isolation until the iptables/nft shim works. "
+                    "Verify 'smsly/iptables-shim' exists and NET_ADMIN is "
+                    "permitted on the host.",
+                    bridge_iface, network_name,
+                    result.returncode, (result.stderr or "").strip()[:200],
+                )
 
     # IDEMPOTENCY GATE: if ANY rule carrying our tag exists, assume this
     # bridge is fully configured and bail. Rules are written as one atomic

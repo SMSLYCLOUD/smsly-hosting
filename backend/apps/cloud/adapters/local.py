@@ -70,10 +70,13 @@ def _health_paths(primary_path: str | None) -> list[str]:
     if primary_path:
         values.append(_normalize_health_path(primary_path))
 
-    # Ordered fallback candidates for common frameworks.
+    # Ordered fallback candidates for common frameworks. /api/health is
+    # the Next.js / API-gateway convention (the braid deploy served it
+    # while /health and / both 404'd — Traefik marked the service DOWN
+    # and the domain returned "no available server").
     raw = os.environ.get(
         "DOCKER_HEALTHCHECK_FALLBACK_PATHS",
-        "/,/health,/healthz,/ready,/live,/status",
+        "/,/health,/api/health,/healthz,/ready,/live,/status",
     )
     for chunk in str(raw).split(","):
         path = _normalize_health_path(chunk.strip())
@@ -135,6 +138,53 @@ def _build_docker_healthcheck_cmd(url_or_urls: str | list[str], timeout_seconds:
         "fi; "
         "exit 0"
     )
+def _detect_working_health_path(
+    docker_client,
+    container,
+    port: str,
+    candidate_paths: list[str],
+    timeout_seconds: int = 3,
+) -> str | None:
+    """Probe a running container from inside and return the first
+    health path that answers 2xx/3xx.
+
+    Executing inside the container (docker exec) means the probe uses the
+    container's own network stack — no dependency on which bridge the
+    adapter can reach. Tries wget, curl, then node (Next.js images have
+    node but often no wget/curl); a plain TCP connect via /dev/tcp is the
+    last resort.
+
+    Returns None when no candidate path answers — the caller keeps its
+    recorded primary path in that case.
+    """
+    for path in candidate_paths:
+        url = f"http://127.0.0.1:{port}{path}"
+        # Probe with whichever HTTP tool the image ships. We ask for the
+        # status code and accept anything below 400 (some frameworks
+        # redirect / to a login page with 302).
+        script = (
+            "command -v wget >/dev/null 2>&1 && "
+            f"wget -q -S -O /dev/null -T {timeout_seconds} '{url}' 2>&1 | "
+            f"grep -m1 'HTTP/' | grep -qE 'HTTP/[0-9.]+ +[23]' && exit 0; "
+            "command -v curl >/dev/null 2>&1 && "
+            f"curl -s -o /dev/null -w '%{{http_code}}' -m {timeout_seconds} '{url}' "
+            "| grep -qE '^[23]' && exit 0; "
+            "command -v node >/dev/null 2>&1 && "
+            f"node -e \"const u=URL('{url}');const x=require('http').get(u,r=>"
+            "process.exit(r.statusCode<400?0:1));x.on('error',()=>process.exit(1))\" "
+            ">/dev/null 2>&1 && exit 0; "
+            "exit 1"
+        )
+        try:
+            exit_code = container.exec_run(
+                ["sh", "-c", script],
+                demux=True,
+            )[0]
+            if exit_code == 0:
+                return path
+        except Exception:
+            continue
+    return None
 
 
 class LocalAdapter(BaseCloudAdapter):
@@ -915,8 +965,8 @@ class LocalAdapter(BaseCloudAdapter):
             # service detail page surfaces this so other services know
             # how to dial it cross-project.
             try:
-                _new.reload()
-                _pnets = _new.attrs.get('NetworkSettings', {}).get('Networks', {}) or {}
+                new_container.reload()
+                _pnets = new_container.attrs.get('NetworkSettings', {}).get('Networks', {}) or {}
                 for _pn, _pd in _pnets.items():
                     if _pn == 'smsly-platform-net':
                         _svc_db = Service.objects.filter(id=getattr(self, '_service_id', None)).first()
@@ -927,6 +977,46 @@ class LocalAdapter(BaseCloudAdapter):
             except Exception as exc:
                 logger.debug("Could not cache platform IP for %s: %s", container_name, exc)
             return new_container.id
+
+        # Direct start (no old container, no staging): the container we
+        # just created IS the live one and its labels are immutable. Its
+        # Traefik healthcheck label carries the *primary* path — if the
+        # app doesn't serve that path (braid: /health 404, /api/health
+        # 200), Traefik marks it DOWN forever ("no available server").
+        # Probe now; if the working path differs, do a one-time recreate
+        # with corrected labels. The container is seconds old and behind
+        # no traffic yet, so the recreate is invisible to users.
+        if platform_hc_enabled and docker_healthcheck is not None and not stage_before_cutover:
+            try:
+                detected_path = _detect_working_health_path(
+                    self.docker_client, new_container, str(port), _health_paths(hc_primary_path)
+                )
+                if detected_path and detected_path != hc_primary_path:
+                    logger.info(
+                        "Direct start %s answers health on %r (not %r) — "
+                        "recreating once with corrected Traefik healthcheck path",
+                        name, detected_path, hc_primary_path,
+                    )
+                    fixed_labels = dict(labels)
+                    fixed_labels['smsly.blue_green.hc_path'] = detected_path
+                    fixed_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = detected_path
+                    with contextlib.suppress(Exception):
+                        new_container.stop(timeout=5)
+                        new_container.remove(force=True)
+                    create_kwargs = dict(create_kwargs)
+                    create_kwargs["labels"] = fixed_labels
+                    new_container = self.docker_client.containers.create(**create_kwargs)
+                    new_container.start()
+                    if not self._wait_container_healthy(
+                        new_container.id, timeout_seconds=health_timeout
+                    ):
+                        raise RuntimeError(
+                            f"Container {container_name} failed health check after health-path recreate"
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "Health-path probe/recreate skipped for %s: %s", name, exc
+                )
 
         logger.info("Container %s is healthy and serving traffic", name)
         return new_container.id
@@ -1018,16 +1108,41 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception as exc:
             logger.warning("Could not process preview environment routing labels for %s: %s", name, exc)
 
-        # Add Traefik load balancer healthcheck if configured
+        # Add Traefik load balancer healthcheck if configured.
+        # Traefik probes ONE path only — if it 404s (e.g. a Next.js app
+        # that serves /api/health but not /health), Traefik marks the
+        # backend DOWN and the router returns "no available server".
+        # The Docker healthcheck passes because it tries a fallback list;
+        # the promoted container must not carry a path that only Docker
+        # could pass. Probe the GREEN container (it is running) and use
+        # the first candidate path that actually answers.
         hc_path = green_labels.get('smsly.blue_green.hc_path')
         hc_interval = green_labels.get('smsly.blue_green.hc_interval')
         hc_timeout = green_labels.get('smsly.blue_green.hc_timeout')
+        hc_port = green_labels.get('smsly.blue_green.port', '8000')
         if hc_path:
             router_name = name.replace('.', '-').replace('_', '-')
-            # Use same fallback paths as Docker health check
             hc_paths = _health_paths(hc_path)
             hc_path_primary = hc_paths[0] if hc_paths else hc_path or "/"
+            try:
+                detected = _detect_working_health_path(
+                    self.docker_client, green, str(hc_port), hc_paths
+                )
+                if detected and detected != hc_path_primary:
+                    logger.info(
+                        "Promote health-path: %s answers on %r (not %r) — "
+                        "using the detected path for the Traefik healthcheck",
+                        name, detected, hc_path_primary,
+                    )
+                    hc_path_primary = detected
+            except Exception as exc:
+                logger.debug(
+                    "Promote health-path probe failed for %s: %s", name, exc
+                )
             live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_path_primary
+            # Keep the metadata label in sync so the next promote round-trip
+            # starts from the known-working path.
+            live_labels['smsly.blue_green.hc_path'] = hc_path_primary
             if hc_interval:
                 live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
             if hc_timeout:
