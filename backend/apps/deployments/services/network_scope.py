@@ -386,8 +386,15 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
         _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", "br-+", "-j", "DROP"])
         # Same-bridge RETURN â addon containers on this bridge are reachable.
         _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", bridge_iface, "-j", "RETURN"])
-        # Internet outbound via physical interfaces.
-        for phys in ("wl+", "enp+", "eth+"):
+        # Internet outbound via physical interfaces. The wildcard list must
+        # cover every NIC naming scheme or egress dies silently: OVH/SCS
+        # cloud VMs use 'ens3' (matched by ens+), Virtio uses 'enp0s*',
+        # AWS uses 'ens5'/'eth0', WiFi is 'wl*'. A host with 'ens3' and a
+        # rule list of only wl+/enp+/eth+ matched NO interface, so every
+        # packet fell through to the catch-all DROP and the platform's
+        # own infrastructure bridge lost all internet (GitHub clones,
+        # AI providers, registry pulls all timed out).
+        for phys in ("wl+", "enp+", "ens+", "eth+", "eno+"):
             _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", phys, "-j", "RETURN"])
         # ESTABLISHED,RELATED must come BEFORE the cross-bridge DROP so that
         # responses (e.g. from Traefik or internet) reach the container.
