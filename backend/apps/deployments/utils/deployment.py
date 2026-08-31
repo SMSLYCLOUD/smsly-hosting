@@ -64,8 +64,16 @@ def get_default_env_value(key: str, scan_result: dict, service_name: str) -> tup
     if key_upper in ('NODE_ENV', 'ENVIRONMENT'):
         return 'production', True
 
-    if key_upper in ('ALLOWED_HOSTS', 'CORS_ALLOWED_ORIGINS'):
-        return '*', True
+    # Wildcard host/CORS defaults are a security risk. Force the operator
+    # to supply an explicit allow-list at the Caddy / Traefik layer.
+    # The env value will end up as "" (empty) which every framework
+    # interprets as "same-origin only" (Django ALLOWED_HOSTS, DRF,
+    # django-cors-headers) — a safe default until the operator configures
+    # a real allow-list.
+    if key_upper in ('ALLOWED_HOSTS', 'DJANGO_ALLOWED_HOSTS', 'MARKETER_ALLOWED_HOSTS',
+                     'CORS_ALLOWED_ORIGINS', 'CORS_ORIGINS', 'CORS_DEV_ORIGINS',
+                     'ALLOWED_ORIGINS'):
+        return '', True
 
     if key_upper in ('LOG_LEVEL',):
         return 'info', True

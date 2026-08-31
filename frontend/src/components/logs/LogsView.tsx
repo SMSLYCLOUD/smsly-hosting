@@ -1,9 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Search, RefreshCcw, Loader2, Terminal, AlertCircle } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import {
+    LiveLogViewer,
+    LiveLogViewerHandle,
+    LogLine,
+} from '@/components/logs/LiveLogViewer';
 
 interface LokiEvent {
     timestamp: string;
@@ -26,6 +31,7 @@ const TIME_RANGES = [
 ];
 
 const DEFAULT_QUERY = '{compose_service=~".+"}';
+const POLL_INTERVAL_MS = 15000;
 
 export function LogsView({
     searchParams,
@@ -38,12 +44,23 @@ export function LogsView({
     const [query, setQuery] = useState(searchParams?.query || DEFAULT_QUERY);
     const [draftQuery, setDraftQuery] = useState(searchParams?.query || DEFAULT_QUERY);
     const [serviceFilter, setServiceFilter] = useState<string | undefined>(searchParams?.service);
-    const [events, setEvents] = useState<LokiEvent[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [range, setRange] = useState('now-24h');
     const [limit, setLimit] = useState(200);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+    const [eventCount, setEventCount] = useState(0);
+
+    const viewerRef = useRef<LiveLogViewerHandle>(null);
+    // Monotonic counter for line IDs.
+    const seqRef = useRef(0);
+    // We track the *last* Loki timestamp we rendered so we can fetch only
+    // new lines on subsequent polls. This keeps the append-only buffer
+    // stable and the user's scroll position intact.
+    const lastTsRef = useRef<number>(0);
+    // Stable signature of (query, range, limit) — when this changes we
+    // reset the buffer; otherwise we append.
+    const filterKeyRef = useRef<string>('');
 
     // Resolve service UUID (or name) from URL param to compose service name
     // and set the query accordingly so the query box reflects reality.
@@ -84,6 +101,10 @@ export function LogsView({
         setLoading(true);
         setError(null);
         try {
+            const filterKey = `${query}|${range}|${limit}`;
+            const isFreshFetch = filterKeyRef.current !== filterKey;
+            filterKeyRef.current = filterKey;
+
             const params = new URLSearchParams();
             params.set('query', query);
             params.set('start', range);
@@ -97,11 +118,58 @@ export function LogsView({
                 throw new Error(body?.error || `Loki query failed (${res.status})`);
             }
             const data = await res.json();
-            setEvents(data.events || []);
+            const events: LokiEvent[] = data.events || [];
             setLastUpdated(new Date());
+
+            if (isFreshFetch) {
+                // Hard reset: replace buffer with the full set, sorted
+                // ascending (oldest first) so the viewer renders top-down.
+                const sorted = events
+                    .slice()
+                    .sort((a, b) => lokiTsToMs(a.timestamp) - lokiTsToMs(b.timestamp));
+                const newLines: LogLine[] = sorted.map((e) => {
+                    seqRef.current += 1;
+                    return {
+                        id: `loki-${lokiTsToMs(e.timestamp)}-${seqRef.current}`,
+                        time: new Date(lokiTsToMs(e.timestamp)).toLocaleTimeString('en-US', { hour12: false }),
+                        source: e.labels?.compose_service
+                            || e.labels?.container_name
+                            || e.labels?.container?.slice(0, 12)
+                            || undefined,
+                        text: e.line,
+                    };
+                });
+                lastTsRef.current = newLines.length
+                    ? lokiTsToMs(events[events.length - 1]?.timestamp || '0')
+                    : 0;
+                viewerRef.current?.clear();
+                viewerRef.current?.append(newLines);
+                setEventCount(newLines.length);
+            } else {
+                // Append only the lines newer than what we last rendered.
+                const newOnes = events
+                    .filter((e) => lokiTsToMs(e.timestamp) > lastTsRef.current)
+                    .sort((a, b) => lokiTsToMs(a.timestamp) - lokiTsToMs(b.timestamp));
+                if (newOnes.length) {
+                    const lines: LogLine[] = newOnes.map((e) => {
+                        seqRef.current += 1;
+                        return {
+                            id: `loki-${lokiTsToMs(e.timestamp)}-${seqRef.current}`,
+                            time: new Date(lokiTsToMs(e.timestamp)).toLocaleTimeString('en-US', { hour12: false }),
+                            source: e.labels?.compose_service
+                                || e.labels?.container_name
+                                || e.labels?.container?.slice(0, 12)
+                                || undefined,
+                            text: e.line,
+                        };
+                    });
+                    lastTsRef.current = lokiTsToMs(newOnes[newOnes.length - 1].timestamp);
+                    viewerRef.current?.append(lines);
+                    setEventCount((c) => c + lines.length);
+                }
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load logs');
-            setEvents([]);
         } finally {
             setLoading(false);
         }
@@ -109,7 +177,7 @@ export function LogsView({
 
     useEffect(() => {
         fetchLogs();
-        const interval = setInterval(fetchLogs, 15000);
+        const interval = setInterval(fetchLogs, POLL_INTERVAL_MS);
         return () => clearInterval(interval);
     }, [fetchLogs]);
 
@@ -243,7 +311,7 @@ export function LogsView({
                             {loading && <Loader2 className="w-3 h-3 animate-spin" />}
                         </span>
                         <span className="text-xs text-muted-foreground font-normal">
-                            {events.length} events
+                            {eventCount} events
                             {lastUpdated && ` • updated ${lastUpdated.toLocaleTimeString()}`}
                         </span>
                     </CardTitle>
@@ -253,31 +321,18 @@ export function LogsView({
                         <div className="text-sm text-destructive flex items-center gap-2 py-8 justify-center">
                             <AlertCircle className="w-4 h-4" /> {error}
                         </div>
-                    ) : events.length === 0 ? (
-                        <div className="text-sm text-muted-foreground py-8 text-center">
-                            {loading ? 'Querying Loki…' : 'No log events match the current query.'}
-                        </div>
                     ) : (
-                        <div className="max-h-[60vh] overflow-y-auto rounded border border-border bg-zinc-950 text-zinc-200 font-mono text-xs">
-                            {events.map((event, idx) => (
-                                <div
-                                     key={`${lokiTsToMs(event.timestamp)}-${idx}`}
-                                    className="px-3 py-1 border-b border-zinc-900 hover:bg-zinc-900/60"
-                                >
-                                    <div className="flex items-center gap-3 text-zinc-500">
-                                         <span className="shrink-0 w-32 truncate">
-                                             {new Date(lokiTsToMs(event.timestamp)).toLocaleString()}
-                                         </span>
-                                        <span className="shrink-0 truncate">
-                                            {event.labels?.compose_service || event.labels?.container_name || event.labels?.container?.slice(0, 12) || '—'}
-                                        </span>
-                                    </div>
-                                    <pre className="whitespace-pre-wrap break-all text-zinc-200 mt-0.5">
-                                        {event.line}
-                                    </pre>
-                                </div>
-                            ))}
-                        </div>
+                        <LiveLogViewer
+                            ref={viewerRef}
+                            heightClass="h-[60vh]"
+                            emptyMessage={
+                                loading
+                                    ? 'Querying Loki…'
+                                    : 'No log events match the current query.'
+                            }
+                            shortcutsHint="Space: pause · End: jump live · c: clear"
+                            initialLines={[]}
+                        />
                     )}
                 </CardContent>
             </Card>

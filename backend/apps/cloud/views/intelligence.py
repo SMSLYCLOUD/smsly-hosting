@@ -590,6 +590,10 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             )
 
         from apps.deployments.models import EnvironmentVariable, Service
+        from apps.deployments.utils.env_sanitizer import (
+            sanitize_env_value,
+            is_placeholder,
+        )
 
         services = Service.objects.filter(id__in=service_ids, owner=request.user)
         if not services.exists():
@@ -598,13 +602,27 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Scrub every value once at the door so the loop below never has
+        # to reason about AI / template leakage per service.
+        sanitized_env_vars: dict[str, str] = {}
+        dropped_keys: list[str] = []
+        for key, value in env_vars.items():
+            key_upper = str(key).strip().upper()
+            if not key_upper:
+                continue
+            cleaned = sanitize_env_value(value, key=key_upper, allow_empty=True)
+            if cleaned is None or is_placeholder(cleaned):
+                logger.warning(
+                    "[ENV-SANITIZE] Dropping bulk placeholder value for %s",
+                    key_upper,
+                )
+                dropped_keys.append(key_upper)
+                continue
+            sanitized_env_vars[key_upper] = cleaned
+
         updated_count = 0
         for service in services:
-            for key, value in env_vars.items():
-                key_upper = str(key).strip().upper()
-                if not key_upper:
-                    continue
-
+            for key_upper, value in sanitized_env_vars.items():
                 from apps.cloud.services.build_constants import is_secret_env_var
                 is_secret = is_secret_env_var(key_upper)
 
@@ -618,7 +636,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         return Response({
             'status': 'success',
             'services_updated': updated_count,
-            'keys_set': len(env_vars)
+            'keys_set': len(sanitized_env_vars),
+            'dropped_keys': dropped_keys,
         })
 
     @action(detail=False, methods=['post'], throttle_classes=[UserRateThrottle])

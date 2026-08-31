@@ -41,26 +41,27 @@ _DELIBERATION_RE = re.compile(
 )
 
 
-def _sanitize_senate_value(val: str) -> str:
+def _sanitize_senate_value(val: str, key: str | None = None) -> str:
     """Strip AI deliberation text from a value (e.g. 'boolean => likely true ...' → 'true').
 
-    Also strips stray backticks, quotes, and markdown formatting that
-    the AI sometimes embeds in its answers — particularly Traefik
-    syntax like `` `https://app.example.com,https://api.example.com` ``
-    which is valid for a Traefik ``Host()`` label but crashes pydantic
-    JSON env parsers like ``cors_origins``.
+    Also strips stray backticks, quotes, smart quotes, ``{{...}}`` /
+    ``<...>`` template wrappers, trailing JS comments, and newlines that
+    the AI Senate sometimes embeds in its answers. Delegates to the
+    central :func:`apps.deployments.utils.env_sanitizer.sanitize_env_value`
+    so the AI Senate can never disagree with the serializer / runtime
+    build about what counts as a clean value.
     """
-    v = str(val).strip()
-    m = _DELIBERATION_RE.match(v)
+    from apps.deployments.utils.env_sanitizer import sanitize_env_value
+
+    raw = str(val) if val is not None else ""
+    m = _DELIBERATION_RE.match(raw.strip())
     if m:
         for g in m.groups():
             if g is not None:
-                v = g
+                raw = g
                 break
-    # Strip leading/trailing Traefik backticks (the AI sometimes wraps
-    # the value in `` `...` `` when it confuses env values with label syntax)
-    v = v.strip().strip('`').strip().strip('"').strip("'").strip()
-    return v
+    cleaned = sanitize_env_value(raw, key=key, allow_empty=True)
+    return cleaned if cleaned is not None else ""
 
 
 class EnvironmentIntelligenceService:
@@ -198,7 +199,7 @@ class EnvironmentIntelligenceService:
             }
             final_env = {}
             for var, val in suggestions.items():
-                val = _sanitize_senate_value(val)
+                val = _sanitize_senate_value(val, key=var)
                 var_upper = var.upper()
                 # Skip PORT entirely — platform manages it
                 if var_upper == "PORT" or var_upper.endswith("_PORT"):
@@ -331,7 +332,7 @@ class EnvironmentIntelligenceService:
                     _CONFIG_ECO = {"TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES", "MAX_", "MIN_", "LIMIT", "COUNT", "COOLDOWN", "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES"}
                     final_env = {}
                     for var, val in suggestions.items():
-                        val = _sanitize_senate_value(val)
+                        val = _sanitize_senate_value(val, key=var)
                         var_u = var.upper()
                         if var_u == "PORT" or var_u.endswith("_PORT"):
                             continue

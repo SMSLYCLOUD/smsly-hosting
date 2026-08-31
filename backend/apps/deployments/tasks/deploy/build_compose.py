@@ -227,7 +227,25 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
                 env.key, val, service.name,
             )
             continue
-        env_vars[env.key] = val
+        # Sanitize every value at the door: strip AI / template leakage
+        # (backticks, smart quotes, {{...}} wrappers, JS trailing comments,
+        # wildcards in ALLOWED_HOSTS, GENERATE placeholders, newlines that
+        # would break the .env file format). Centralized so the AI Senate
+        # path, the serializer path, and this runtime build path can never
+        # disagree about what counts as a clean value.
+        from apps.deployments.utils.env_sanitizer import (
+            sanitize_env_value,
+            is_placeholder,
+        )
+        cleaned = sanitize_env_value(val, key=env.key, allow_empty=False)
+        if cleaned is None or is_placeholder(cleaned):
+            logger.warning(
+                "[ENV-SANITIZE] Dropping placeholder/garbage value for %s on %s "
+                "(raw=%r). Operator must set this variable explicitly.",
+                env.key, service.name, val,
+            )
+            continue
+        env_vars[env.key] = cleaned
 
     try:
         from apps.deployments.services.env_resolver import resolve_shortcodes

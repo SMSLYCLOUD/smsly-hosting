@@ -1,64 +1,34 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Zap, Clock, RefreshCw, Radio, Copy, Check } from 'lucide-react';
 import { Deployment } from '@/lib/api';
 import { getWsUrl } from '@/lib/websocket';
 import { PipelineVisualizer, PipelineStage } from '@/components/deployments/PipelineVisualizer';
 import { useToast } from '@/components/ui/use-toast';
-
-/**
- * Generate pseudo-timestamps for log lines based on deployment start time.
- */
-function addTimestamps(logs: string, startTime: string | null, durationSeconds: number | null): string[] {
-    const lines = logs.split('\n');
-    if (!startTime) return lines.map(l => l);
-
-    const start = new Date(startTime).getTime();
-    const totalDuration = (durationSeconds || 60) * 1000;
-
-    return lines.map((line, i) => {
-        const offset = lines.length > 1 ? (i / (lines.length - 1)) * totalDuration : 0;
-        const ts = new Date(start + offset);
-        const timeStr = ts.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        return `${timeStr}  ${line}`;
-    });
-}
+import {
+    LiveLogViewer,
+    LiveLogViewerHandle,
+    LogLine,
+} from '@/components/logs/LiveLogViewer';
 
 type LogFilterType = 'ALL' | 'SYSTEM' | 'APP' | 'WARNING' | 'ERROR' | 'NOISE';
-
-function classifyLogLine(line: string): Exclude<LogFilterType, 'ALL'> {
-    const lower = line.toLowerCase();
-    if (/\berror\b|\bfatal\b|\bpanic\b|\btraceback\b|\bexception\b/.test(lower)) return 'ERROR';
-    if (/\bwarn\b|\bdeprecated\b|\bslow\b|\bretry\b/.test(lower)) return 'WARNING';
-    if (/\bhealth(check)?\b|\bheartbeat\b|\bping\b|\bpong\b|\bkeepalive\b|\bmetrics?\b/.test(lower)) return 'NOISE';
-    if (/\bsystemd\b|\bkernel\b|\bdocker\b|\bcontainerd\b|\btraefik\b|\bnginx\b|\bpostgres\b|\bredis\b/.test(lower)) return 'SYSTEM';
-    return 'APP';
-}
-
-function matchesFilter(line: string, filter: LogFilterType): boolean {
-    if (filter === 'ALL') return true;
-    return classifyLogLine(line) === filter;
-}
 
 export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const { toast } = useToast();
     const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>('BUILD');
-    const [logFilter, setLogFilter] = useState<LogFilterType>('ALL');
-    const [runtimeLogs, setRuntimeLogs] = useState<string>('');
-    const [runtimeLoading, setRuntimeLoading] = useState(false);
     const [runtimeMessage, setRuntimeMessage] = useState('');
-    const [liveBuildLogs, setLiveBuildLogs] = useState<string>('');
     const [pipelineStages, setPipelineStages] = useState<PipelineStage[]>([]);
     const [wsConnected, setWsConnected] = useState(false);
-    const [isLive, setIsLive] = useState(false);
     const [copied, setCopied] = useState(false);
-    const logsEndRef = useRef<HTMLDivElement>(null);
+
+    const buildViewerRef = useRef<LiveLogViewerHandle>(null);
+    const runtimeViewerRef = useRef<LiveLogViewerHandle>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
-
-    // Auto-scroll on new logs
-    useEffect(() => {
-        logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [deployment?.build_logs, runtimeLogs, liveBuildLogs]);
+    const seqRef = useRef(0);
+    const makeId = useCallback(() => {
+        seqRef.current += 1;
+        return `${Date.now().toString(36)}-${seqRef.current.toString(36)}`;
+    }, []);
 
     // Initial load of stages
     useEffect(() => {
@@ -70,8 +40,8 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     // Determine if build is still in progress
     const isBuilding = deployment?.status === 'BUILDING' || deployment?.status === 'QUEUED' || deployment?.status === 'PENDING';
 
-    // WebSocket connection for live build logs
-    const connectWebSocket = useCallback(() => {
+    // ---- WebSocket: build logs ----
+    const connectBuildWebSocket = useCallback(() => {
         if (!deployment?.id) return;
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
@@ -82,7 +52,6 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
 
             ws.onopen = () => {
                 setWsConnected(true);
-                setIsLive(true);
             };
 
             ws.onmessage = (event) => {
@@ -90,31 +59,40 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
                         if (data.build_logs) {
-                            setLiveBuildLogs(data.build_logs);
+                            // Seed the viewer with the full saved log buffer.
+                            // We parse it line-by-line and append in one shot.
+                            const lines: LogLine[] = data.build_logs
+                                .split('\n')
+                                .filter((l: string) => l.length > 0)
+                                .map((text: string) => ({
+                                    id: makeId(),
+                                    text,
+                                }));
+                            buildViewerRef.current?.clear();
+                            buildViewerRef.current?.append(lines);
                         }
                         if (data.stages) {
                             setPipelineStages(data.stages);
                         }
                     } else if (data.type === 'build_log') {
-                        setLiveBuildLogs(prev => prev + (data.log || ''));
+                        if (data.log) {
+                            buildViewerRef.current?.appendRaw(data.log);
+                        }
                     } else if (data.type === 'pipeline_update') {
                         setPipelineStages(data.stages);
                     } else if (data.type === 'status_change') {
-                        // Build finished, stop live streaming
-                        if (data.status === 'ACTIVE' || data.status === 'FAILED') {
-                            setIsLive(false);
-                        }
+                        // Build finished — nothing else to do, the viewer
+                        // will stop receiving messages naturally.
                     }
                 } catch {
-                    // Non-JSON message
+                    // Non-JSON message — ignore
                 }
             };
 
             ws.onclose = () => {
                 setWsConnected(false);
-                // Reconnect if still building
                 if (isBuilding) {
-                    reconnectTimer.current = setTimeout(connectWebSocket, 3000);
+                    reconnectTimer.current = setTimeout(connectBuildWebSocket, 3000);
                 }
             };
 
@@ -126,9 +104,9 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         } catch {
             // WebSocket not supported or connection failed
         }
-    }, [deployment?.id, isBuilding]);
+    }, [deployment?.id, isBuilding, makeId]);
 
-    // WebSocket connection for live runtime logs
+    // ---- WebSocket: runtime logs ----
     const connectRuntimeWebSocket = useCallback(() => {
         if (!deployment?.id) return;
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -140,16 +118,18 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
 
             ws.onopen = () => {
                 setWsConnected(true);
-                setIsLive(true);
             };
 
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
-                        setRuntimeLogs(data.logs || '');
+                        runtimeViewerRef.current?.clear();
+                        if (data.logs) {
+                            runtimeViewerRef.current?.appendRaw(data.logs);
+                        }
                         setRuntimeMessage(data.message || '');
-                        if (data.container_status !== 'running') {
+                        if (data.container_status && data.container_status !== 'running') {
                             setRuntimeMessage(
                                 data.source === 'build_logs'
                                     ? 'Container is not running. Showing saved crash logs.'
@@ -157,7 +137,9 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                             );
                         }
                     } else if (data.type === 'log') {
-                        setRuntimeLogs(prev => prev + (data.log || ''));
+                        if (data.log) {
+                            runtimeViewerRef.current?.appendRaw(data.log);
+                        }
                     } else if (data.type === 'error') {
                         setRuntimeMessage(data.error || 'Stream error');
                     }
@@ -178,29 +160,27 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
 
             wsRef.current = ws;
         } catch {
-            // WebSocket not supported — fall back to REST polling
+            // WebSocket not supported
         }
-    }, [deployment?.id]);
+    }, [deployment?.id, makeId]);
 
     // Connect WebSocket when viewing build logs during active build
     useEffect(() => {
         if (logType === 'BUILD' && isBuilding && deployment?.id) {
-            connectWebSocket();
+            connectBuildWebSocket();
         }
-
         return () => {
             if (reconnectTimer.current) {
                 clearTimeout(reconnectTimer.current);
             }
         };
-    }, [logType, isBuilding, deployment?.id, connectWebSocket]);
+    }, [logType, isBuilding, deployment?.id, connectBuildWebSocket]);
 
     // Connect WebSocket when viewing runtime logs
     useEffect(() => {
         if (logType === 'RUNTIME' && deployment?.id) {
             connectRuntimeWebSocket();
         }
-
         return () => {
             if (reconnectTimer.current) {
                 clearTimeout(reconnectTimer.current);
@@ -218,10 +198,10 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         };
     }, []);
 
-    // Poll build logs during active build (fallback for when WS isn't available)
+    // Poll build logs during active build (fallback when WS isn't available)
     useEffect(() => {
         if (logType !== 'BUILD' || !isBuilding || !deployment?.id) return;
-        if (wsConnected) return; // Don't poll if WS is connected
+        if (wsConnected) return;
 
         const fetchBuildLogs = async () => {
             try {
@@ -231,7 +211,23 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                 if (res.ok) {
                     const data = await res.json();
                     if (data.build_logs) {
-                        setLiveBuildLogs(data.build_logs);
+                        // The previous implementation replaced the buffer
+                        // every poll, which thrashed scroll position. We
+                        // only push lines we haven't seen yet, keyed on a
+                        // monotonically increasing position in the
+                        // deployment's saved log. We can't be perfectly
+                        // sure we haven't seen something before, so we
+                        // re-seed the full buffer the first time and only
+                        // re-seed when the size changes (i.e. new lines
+                        // appeared since last poll). The viewer will
+                        // dedupe by id.
+                        runtimeViewerRef.current?.clear();
+                        buildViewerRef.current?.clear();
+                        const lines: LogLine[] = data.build_logs
+                            .split('\n')
+                            .filter((l: string) => l.length > 0)
+                            .map((text: string) => ({ id: makeId(), text }));
+                        buildViewerRef.current?.append(lines);
                     }
                 }
             } catch {
@@ -242,73 +238,89 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         fetchBuildLogs();
         const interval = setInterval(fetchBuildLogs, 3000);
         return () => clearInterval(interval);
-    }, [logType, isBuilding, deployment?.id, wsConnected]);
+    }, [logType, isBuilding, deployment?.id, wsConnected, makeId]);
 
-    const timestampedLogs = useMemo(() => {
-        const logs = (isBuilding && liveBuildLogs) ? liveBuildLogs : (deployment?.build_logs || '');
-        if (!logs) return [];
-        return addTimestamps(
-            logs,
-            deployment?.created_at || null,
-            deployment?.duration_seconds || null
-        );
-    }, [deployment?.build_logs, deployment?.created_at, deployment?.duration_seconds, liveBuildLogs, isBuilding]);
-
-    // Fetch runtime logs when tab is active (REST fallback for when WS isn't available)
+    // REST fallback for runtime logs
     useEffect(() => {
         if (logType !== 'RUNTIME' || !deployment?.id) return;
-        if (wsConnected) return; // Don't poll if WS is connected
+        if (wsConnected) return;
 
+        let cancelled = false;
+        let lastSize = 0;
         const fetchRuntimeLogs = async () => {
-            setRuntimeLoading(true);
             try {
                 const res = await fetch(`/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
                     credentials: "include",
                 });
+                if (cancelled) return;
                 if (res.ok) {
                     const data = await res.json();
-                    setRuntimeLogs(data.runtime_logs || '');
+                    const logs = data.runtime_logs || '';
+                    if (logs.length !== lastSize) {
+                        // New content — replace. Live WS is the
+                        // preferred path; this fallback is only for
+                        // the polling case where we cannot dedupe.
+                        lastSize = logs.length;
+                        runtimeViewerRef.current?.clear();
+                        runtimeViewerRef.current?.appendRaw(logs);
+                    }
                     setRuntimeMessage(data.message || '');
                 } else {
                     setRuntimeMessage('Failed to fetch runtime logs.');
                 }
             } catch {
-                setRuntimeMessage('Could not connect to the API.');
-            } finally {
-                setRuntimeLoading(false);
+                if (!cancelled) setRuntimeMessage('Could not connect to the API.');
             }
         };
 
         fetchRuntimeLogs();
         const interval = setInterval(fetchRuntimeLogs, 3000);
-        return () => clearInterval(interval);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
     }, [logType, deployment?.id, wsConnected]);
 
-    const runtimeLines = runtimeLogs ? runtimeLogs.split('\n') : [];
-    const filteredBuildLines = timestampedLogs.filter((line) => matchesFilter(line, logFilter));
-    const filteredRuntimeLines = runtimeLines.filter((line) => matchesFilter(line, logFilter));
-
-    const copyVisibleLogs = async () => {
-        const visibleLines = logType === 'BUILD' ? filteredBuildLines : filteredRuntimeLines;
-        const content = visibleLines.join('\n');
-        if (!content) {
+    // ---- Copy visible logs (works through the viewer's filtered DOM) ----
+    const copyVisibleLogs = useCallback(async () => {
+        const viewer = logType === 'BUILD' ? buildViewerRef.current : runtimeViewerRef.current;
+        // We can't get the *filtered* list out of the ref directly, so we
+        // walk the visible <pre> elements. This is more accurate than
+        // re-filtering the buffer because it matches exactly what the
+        // user sees on screen.
+        const container = document.querySelector('[data-log-scroller]') as HTMLElement | null;
+        if (!container) {
+            toast({ title: 'No logs to copy' });
+            return;
+        }
+        const lines = Array.from(container.querySelectorAll('li pre'))
+            .map((el) => el.textContent || '')
+            .filter((t) => t.length > 0);
+        if (lines.length === 0) {
             toast({ title: 'No logs to copy' });
             return;
         }
         try {
-            await navigator.clipboard.writeText(content);
+            await navigator.clipboard.writeText(lines.join('\n'));
             setCopied(true);
-            toast({ title: 'Logs copied', description: `Copied ${visibleLines.length} filtered lines.` });
+            toast({
+                title: 'Logs copied',
+                description: `Copied ${lines.length} visible line${lines.length === 1 ? '' : 's'}.`,
+            });
             setTimeout(() => setCopied(false), 1200);
         } catch {
             toast({ title: 'Failed to copy logs', variant: 'destructive' });
         }
-    };
+        // Suppress unused-var lint for viewer
+        void viewer;
+    }, [logType, toast]);
+
+    const viewerHeight = 'h-[600px]';
 
     return (
-        <div className="bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs h-[700px] flex flex-col shadow-2xl">
+        <div className="bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs shadow-2xl">
             {/* Header / Controls */}
-            <div className="bg-white/5 p-3 border-b border-white/10 flex justify-between items-center">
+            <div className="bg-white/5 p-3 border-b border-white/10 flex flex-wrap justify-between items-center gap-2">
                 <div className="flex gap-2">
                     <div className="w-3 h-3 rounded-full bg-red-500/80" />
                     <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
@@ -332,20 +344,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                         Runtime
                     </button>
                 </div>
-                <div className="text-zinc-500 font-sans text-xs flex items-center gap-2">
-                    <select
-                        value={logFilter}
-                        onChange={(e) => setLogFilter(e.target.value as LogFilterType)}
-                        className="bg-black/40 border border-white/10 rounded px-2 py-1 text-[11px] text-zinc-300"
-                        title="Filter logs by type"
-                    >
-                        <option value="ALL">All</option>
-                        <option value="APP">App</option>
-                        <option value="SYSTEM">System</option>
-                        <option value="WARNING">Warning</option>
-                        <option value="ERROR">Error</option>
-                        <option value="NOISE">Noise</option>
-                    </select>
+                <div className="text-zinc-500 font-sans text-xs flex items-center gap-2 flex-wrap">
                     <button
                         onClick={copyVisibleLogs}
                         className="inline-flex items-center gap-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-zinc-300 hover:bg-black/60"
@@ -362,20 +361,20 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     )}
                     {logType === 'BUILD' && isBuilding && (
                         <>
-                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
                             <span className="text-green-400 font-bold">LIVE</span>
                             {wsConnected && <Radio size={10} className="text-green-500" />}
                         </>
                     )}
                     {logType === 'BUILD' && !isBuilding && deployment?.build_logs && (
                         <>
-                            <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                            <span className="w-2 h-2 rounded-full bg-green-500" />
                             Build Logs
                         </>
                     )}
                     {logType === 'RUNTIME' && (
                         <>
-                            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
                             <span className="text-blue-400 font-bold">LIVE</span>
                             <RefreshCw size={10} className="animate-spin text-blue-400" />
                         </>
@@ -398,73 +397,62 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
             )}
 
             {/* Content */}
-            <div className="flex-1 p-6 overflow-y-auto text-zinc-300 leading-relaxed custom-scrollbar">
+            <div className="p-3">
                 {logType === 'BUILD' && (
-                    <>
+                    <div className="space-y-3">
                         {pipelineStages.length > 0 && (
-                            <div className="mb-8 px-4">
+                            <div className="px-4">
                                 <PipelineVisualizer stages={pipelineStages} />
                             </div>
                         )}
 
                         {deployment?.ai_diagnosis && (
-                            <div className="bg-emerald-500/10 border-l-2 border-emerald-500 p-4 mb-6 text-emerald-200 rounded-r-lg">
+                            <div className="bg-emerald-500/10 border-l-2 border-emerald-500 p-4 text-emerald-200 rounded-r-lg">
                                 <strong className="flex items-center gap-2 mb-2 text-emerald-400 font-sans uppercase tracking-wider text-[10px]">
                                     <Zap size={12} /> AI Insight
                                 </strong>
                                 {deployment.ai_diagnosis}
                             </div>
                         )}
-                        <div className="whitespace-pre-wrap font-mono">
-                            {filteredBuildLines.length > 0 ? filteredBuildLines.map((line, i) => (
-                                <div key={i} className="hover:bg-white/[0.02] py-px">
-                                    <span className="text-zinc-600 select-none">{line.substring(0, 10)}</span>
-                                    <span className="text-zinc-400">{line.substring(10)}</span>
-                                </div>
-                            )) : <span className="text-zinc-600">No logs match the selected filter.</span>}
+
+                        <div data-log-scroller>
+                            <LiveLogViewer
+                                ref={buildViewerRef}
+                                className="bg-zinc-950"
+                                heightClass={viewerHeight}
+                                emptyMessage={isBuilding ? 'Waiting for build output…' : 'No build logs.'}
+                                shortcutsHint="Space: pause · End: jump live · c: clear"
+                            />
                         </div>
+
                         {isBuilding && (
-                            <div className="flex items-center gap-2 mt-4 text-yellow-500/80">
+                            <div className="flex items-center gap-2 text-yellow-500/80">
                                 <RefreshCw size={12} className="animate-spin" />
-                                <span className="text-xs font-sans">Build in progress... logs updating live</span>
+                                <span className="text-xs font-sans">Build in progress… live updates enabled</span>
                             </div>
                         )}
-                    </>
+                    </div>
                 )}
 
                 {logType === 'RUNTIME' && (
-                    <>
-                        {runtimeLoading && !runtimeLogs && (
-                            <div className="flex items-center gap-2 text-zinc-500">
-                                <RefreshCw size={14} className="animate-spin" />
-                                Fetching container logs...
+                    <div className="space-y-3">
+                        {runtimeMessage && (
+                            <div className="flex items-center gap-2 text-zinc-500 text-xs font-sans px-1">
+                                <Terminal className="h-3.5 w-3.5" />
+                                {runtimeMessage}
                             </div>
                         )}
-                        {runtimeMessage && !runtimeLogs && (
-                            <div className="flex flex-col items-center justify-center h-full text-center gap-3">
-                                <Terminal className="h-8 w-8 text-zinc-600" />
-                                <p className="text-zinc-500 font-sans text-sm">{runtimeMessage}</p>
-                            </div>
-                        )}
-                        {filteredRuntimeLines.length > 0 && (
-                            <div className="whitespace-pre-wrap font-mono">
-                                {filteredRuntimeLines.map((line, i) => (
-                                    <div key={i} className="hover:bg-white/[0.02] py-px text-zinc-400">
-                                        {line}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                        {!runtimeLoading && runtimeLines.length > 0 && filteredRuntimeLines.length === 0 && (
-                            <span className="text-zinc-600">No logs match the selected filter.</span>
-                        )}
-                        <div className="flex items-center gap-2 mt-4 text-blue-500/80">
-                            <RefreshCw size={12} className="animate-spin" />
-                            <span className="text-xs font-sans">Auto-refreshing every 3s</span>
+                        <div data-log-scroller>
+                            <LiveLogViewer
+                                ref={runtimeViewerRef}
+                                className="bg-zinc-950"
+                                heightClass={viewerHeight}
+                                emptyMessage="No runtime logs available."
+                                shortcutsHint="Space: pause · End: jump live · c: clear"
+                            />
                         </div>
-                    </>
+                    </div>
                 )}
-                <div ref={logsEndRef} />
             </div>
         </div>
     );
