@@ -653,21 +653,25 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 _scope_id = str(project.id).replace("-", "")[:8]
                 _network_name = f"smsly-net-{_scope_id}"
 
-                # Subnet comes from the project-level setting if set, else
-                # we use the platform-level default (PlatformConfig
-                # .default_internal_subnet, falls back to 172.30.224.0/24).
-                # The 172.30.0.0/16 CGNAT range doesn't collide with the
-                # default ``smsly-net`` (172.18.0.0/16) or any other
-                # bridge we already create.
-                if getattr(project, 'internal_subnet', '').strip():
-                    _subnet = project.internal_subnet.strip()
-                else:
-                    try:
-                        from apps.deployments.models.core import PlatformConfig
-                        _subnet = (PlatformConfig.load().default_internal_subnet or '').strip() \
-                            or '172.30.224.0/24'
-                    except Exception:
-                        _subnet = '172.30.224.0/24'
+                # Subnet: project override wins; otherwise allocate a
+                # collision-free /24 via the shared allocator (the platform
+                # default only if no existing bridge uses it). A blind
+                # default previously made the SECOND ecosystem project's
+                # bridge create fail with 'Pool overlaps with other one'.
+                try:
+                    from apps.deployments.services.network_scope import allocate_project_subnet
+                    _subnet = allocate_project_subnet(
+                        project=project,
+                        requested=(getattr(project, 'internal_subnet', '') or '').strip(),
+                    )
+                except Exception as _alloc_exc:
+                    logger.warning(
+                        "Subnet allocator unavailable (%s); falling back to "
+                        "project.internal_subnet or 172.30.224.0/24",
+                        _alloc_exc,
+                    )
+                    _subnet = (getattr(project, 'internal_subnet', '') or '').strip() \
+                        or '172.30.224.0/24'
 
                 # Actually create the Docker network so containers can
                 # attach immediately. Idempotent — re-runs on a

@@ -446,3 +446,87 @@ def attach_container_to_platform_bridge(container_id: str, service_name: str) ->
     except Exception as exc:
         logger.debug("attach_container_to_platform_bridge failed: %s", exc)
         return False
+
+
+# ── Project-scoped subnet allocation ────────────────────────────────────
+# Pool: 172.30.0.0/16 (IETF CGNAT range, deliberately outside Docker's
+# default 172.17-172.21 and our own 172.22 platform bridge). Each project
+# bridge gets a dedicated /24 carved out of this /16 — up to 256 isolated
+# projects before anyone has to set Project.internal_subnet manually.
+_SUBNET_POOL_PREFIX = '172.30.'
+_SUBNET_POOL_FIRST = 1     # first /24: 172.30.1.0/24
+_SUBNET_POOL_LAST = 255     # last /24: 172.30.255.0/24
+
+
+def _existing_docker_subnets() -> set[str]:
+    """All subnets currently allocated to any Docker network (host view)."""
+    subnets: set[str] = set()
+    try:
+        client = docker.from_env()
+        for net in client.networks.list():
+            try:
+                net.reload()
+                for cfg in (net.attrs.get('IPAM') or {}).get('Config') or []:
+                    subnet = (cfg or {}).get('Subnet') or ''
+                    if subnet:
+                        subnets.add(subnet.strip())
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.debug("Could not list Docker subnets: %s", exc)
+    return subnets
+
+
+def allocate_project_subnet(project=None, requested: str = '') -> str:
+    """Pick a collision-free /24 for a new project bridge.
+
+    Order of preference:
+      1. An explicit operator override (Project.internal_subnet or the
+         ``requested`` argument). Returned as-is — the caller's
+         networks.create will fail loudly if it actually overlaps, which
+         is the correct behavior for an explicit choice.
+      2. PlatformConfig.default_internal_subnet — BUT only if it is not
+         already in use by another Docker network. This was the original
+         bug: every project fell back to the same 172.30.224.0/24, and
+         the second project's bridge create died with 'Pool overlaps
+         with other one on this address space'.
+      3. First free /24 in the 172.30.0.0/16 CGNAT pool (skipping any
+         subnet already allocated to a Docker network).
+
+    ``project`` (when given) is only used for log context.
+    """
+    requested = (requested or '').strip()
+    if requested:
+        return requested
+
+    existing = _existing_docker_subnets()
+
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        default_subnet = (PlatformConfig.load().default_internal_subnet or '').strip()
+    except Exception:
+        default_subnet = ''
+    if default_subnet and default_subnet not in existing:
+        return default_subnet
+
+    # Default is taken (or unset) — scan the /16 pool for a free /24.
+    for third_octet in range(_SUBNET_POOL_FIRST, _SUBNET_POOL_LAST + 1):
+        candidate = f'{_SUBNET_POOL_PREFIX}{third_octet}.0/24'
+        if candidate not in existing:
+            logger.info(
+                "Allocated project subnet %s for project %s (default %s was in use)",
+                candidate,
+                getattr(project, 'id', None) or '(unknown)',
+                default_subnet or '(unset)',
+            )
+            return candidate
+
+    # Entire pool exhausted (256 projects with live bridges) — fall back to
+    # the default and let networks.create surface the overlap error.
+    logger.warning(
+        "Project subnet pool 172.30.0.0/16 exhausted; falling back to %s "
+        "for project %s — set Project.internal_subnet explicitly.",
+        default_subnet or '172.30.224.0/24',
+        getattr(project, 'id', None) or '(unknown)',
+    )
+    return default_subnet or '172.30.224.0/24'

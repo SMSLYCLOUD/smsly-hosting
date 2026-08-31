@@ -489,14 +489,20 @@ class ProjectViewSet(viewsets.ModelViewSet):
                     client.networks.get(scoped.network_name)
                 except docker_lib.errors.NotFound:
                     # DB record exists but the bridge was lost (host reboot,
-                    # docker prune) — recreate it.
-                    client.networks.create(
-                        scoped.network_name,
-                        driver=scoped.driver or 'bridge',
-                        internal=bool(scoped.internal),
-                        enable_ipv6=bool(scoped.enable_ipv6),
-                        **({'subnet': scoped.subnet} if scoped.subnet else {}),
-                    )
+                    # docker prune) — recreate it. docker-py takes the subnet
+                    # in an IPAM config, not as a top-level kwarg.
+                    _recreate_kwargs = {
+                        'driver': scoped.driver or 'bridge',
+                        'internal': bool(scoped.internal),
+                        'enable_ipv6': bool(scoped.enable_ipv6),
+                    }
+                    if scoped.subnet:
+                        import docker.types as _dt
+                        _recreate_kwargs['ipam'] = _dt.IPAMConfig(
+                            driver='default',
+                            pool_configs=[{'Subnet': scoped.subnet}],
+                        )
+                    client.networks.create(scoped.network_name, **_recreate_kwargs)
                     logger.info("Recreated missing Docker bridge %s for project %s",
                                 scoped.network_name, project.id)
                 net = client.networks.get(scoped.network_name)
@@ -576,21 +582,30 @@ class ProjectViewSet(viewsets.ModelViewSet):
             scope_id = str(project.id).replace('-', '')[:8]
             network_name = f"smsly-net-{scope_id}"
 
-            # Resolve subnet: project override → platform default → hardcoded
-            subnet = (getattr(project, 'internal_subnet', '') or '').strip()
-            if not subnet:
-                from apps.deployments.models.core import PlatformConfig
-                subnet = (PlatformConfig.load().default_internal_subnet or '').strip() \
-                    or '172.30.224.0/24'
+            # Resolve subnet: project override wins; otherwise allocate a
+            # collision-free /24 (the platform default only if unused — a
+            # blind default previously made the second project's bridge
+            # create fail with 'Pool overlaps with other one').
+            from apps.deployments.services.network_scope import allocate_project_subnet
+            subnet = allocate_project_subnet(
+                project=project,
+                requested=(getattr(project, 'internal_subnet', '') or '').strip(),
+            )
 
             import docker as docker_lib
+            import docker.types as _docker_types
             client = docker_lib.from_env()
-            # Create the bridge (tolerate a race)
+            # Create the bridge (tolerate a race). docker-py takes the
+            # subnet in an IPAM config, not as a top-level kwarg.
+            _ipam = _docker_types.IPAMConfig(
+                driver='default',
+                pool_configs=[{'Subnet': subnet}],
+            )
             try:
                 net = client.networks.create(
                     network_name,
                     driver='bridge',
-                    subnet=subnet,
+                    ipam=_ipam,
                     labels={
                         'smsly.scope': 'project',
                         'smsly.project_id': str(project.id),
