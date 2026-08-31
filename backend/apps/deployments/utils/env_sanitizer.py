@@ -69,14 +69,16 @@ _WRAPPER_CHARS = ("`", "'", '"', "\u2018", "\u2019", "\u201c", "\u201d")
 # 3. Trailing-comment leak: AI sometimes returns
 #        `https://app.example.com",  // production‑safe default`
 #    which is valid as a Traefik Host() label but crashes pydantic JSON.
-#    Detect and strip from the first ``",`` or ``//`` or ``/*`` onward.
+#
+#    IMPORTANT: a comment marker is only recognized when it is preceded
+#    by a closing double-quote (optionally + comma). URLs contain ``//``
+#    in their scheme (``https://``) — a bare ``//`` search would truncate
+#    every URL value. The quote anchor guarantees we only strip the
+#    ``value", // comment`` pattern the AI actually leaks.
 # ---------------------------------------------------------------------------
 _TRAILING_COMMENT_RE = re.compile(
-    r'"\s*,\s*//.*$|"//.*$|/\*.*\*/|"\s*#.*$', re.DOTALL,
-)
-# Detect a JS-style line comment that follows a closing quote
-_TRAILING_JS_COMMENT_RE = re.compile(
-    r'^(?P<v>.*?)(?:"\s*)?(?://|/\*).*$', re.DOTALL,
+    r'"\s*,?\s*(?://.*|/\*.*?\*/)\s*$',
+    re.DOTALL,
 )
 
 # Reject values that contain a literal newline (would break ``.env`` files
@@ -180,15 +182,15 @@ def _strip_trailing_comment(v: str) -> str:
     ``https://app.example.com",  // production‑safe default``
     becomes ``https://app.example.com``.
 
-    We do NOT strip ``#`` comments in general because legitimate values can
-    contain ``#`` — only the JS / C-style sequences the AI leaks.
+    The regex is anchored to a preceding ``"`` (optionally + ``,``, then
+    whitespace) so URL schemes like ``https://`` are never mistaken for
+    comment markers. Values that merely contain ``//`` or ``/*`` without
+    a preceding closing quote are returned untouched.
     """
     m = _TRAILING_COMMENT_RE.search(v)
     if m:
-        v = v[:m.start()].rstrip()
-    m = _TRAILING_JS_COMMENT_RE.match(v)
-    if m:
-        v = (m.group("v") or "").rstrip().rstrip('"').rstrip(",").rstrip()
+        # Cut at the closing quote, dropping the comma/comment tail.
+        v = v[:m.start()].rstrip().rstrip(',').rstrip().rstrip('"')
     return v
 
 
@@ -226,10 +228,10 @@ def sanitize_env_value(
 
     # 1. Empty
     if not v:
-        if allow_empty:
-            default = _default_for_key(key or "")
-            return default if default is not None else ""
-        return None
+        default = _default_for_key(key or "")
+        if default is not None:
+            return default
+        return "" if allow_empty else None
 
     # 2. Strip balanced wrappers
     v = _strip_wrappers(v)
@@ -245,6 +247,8 @@ def sanitize_env_value(
     # 4. Strip trailing comments
     v = _strip_trailing_comment(v)
     v = v.strip()
+    # Strip trailing comma artifacts (JSON / JS array leaks like ``"*",``)
+    v = v.rstrip(',').strip()
     v = _strip_wrappers(v)
 
     # 5. Collapse newlines (would break .env file format)
@@ -254,12 +258,16 @@ def sanitize_env_value(
     # 6. Literal placeholder
     if v in PLACEHOLDER_EXACT:
         default = _default_for_key(key or "")
-        return default if default is not None else ""
+        if default is not None:
+            return default
+        return "" if allow_empty else None
 
     # Anything still matching a placeholder prefix -> placeholder
     if v.startswith(PLACEHOLDER_PREFIXES):
         default = _default_for_key(key or "")
-        return default if default is not None else ""
+        if default is not None:
+            return default
+        return "" if allow_empty else None
 
     # Mock / dev patterns in production keys
     if v in _MOCK_PATTERNS:
