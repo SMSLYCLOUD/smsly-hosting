@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Zap, Clock, RefreshCw, Radio, Copy, Check } from 'lucide-react';
-import { Deployment } from '@/lib/api';
+import { Deployment, getDeployment } from '@/lib/api';
 import { getWsUrl } from '@/lib/websocket';
 import { PipelineVisualizer, PipelineStage } from '@/components/deployments/PipelineVisualizer';
 import { useToast } from '@/components/ui/use-toast';
@@ -10,45 +10,91 @@ import {
     LogLine,
 } from '@/components/logs/LiveLogViewer';
 
-type LogFilterType = 'ALL' | 'SYSTEM' | 'APP' | 'WARNING' | 'ERROR' | 'NOISE';
-
 export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const { toast } = useToast();
     const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>('BUILD');
     const [runtimeMessage, setRuntimeMessage] = useState('');
     const [pipelineStages, setPipelineStages] = useState<PipelineStage[]>([]);
     const [wsConnected, setWsConnected] = useState(false);
-    const [copied, setCopied] = useState(false);
 
     const buildViewerRef = useRef<LiveLogViewerHandle>(null);
     const runtimeViewerRef = useRef<LiveLogViewerHandle>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
     const seqRef = useRef(0);
-    const makeId = useCallback(() => {
+    const initialLoadDoneRef = useRef<{ build: boolean; runtime: boolean }>({ build: false, runtime: false });
+    const activeWsTypeRef = useRef<'BUILD' | 'RUNTIME' | null>(null);
+
+    const makeId = useCallback((prefix: string) => {
         seqRef.current += 1;
-        return `${Date.now().toString(36)}-${seqRef.current.toString(36)}`;
+        return `${prefix}-${Date.now().toString(36)}-${seqRef.current.toString(36)}`;
     }, []);
 
-    // Initial load of stages
+    // Initial load of pipeline stages from prop
     useEffect(() => {
         if (deployment?.pipeline_stages) {
             setPipelineStages(deployment.pipeline_stages);
         }
     }, [deployment?.pipeline_stages]);
 
-    // Determine if build is still in progress
-    const isBuilding = deployment?.status === 'BUILDING' || deployment?.status === 'QUEUED' || deployment?.status === 'PENDING';
+    const isBuilding = deployment?.status === 'BUILDING'
+        || deployment?.status === 'QUEUED'
+        || deployment?.status === 'PENDING';
+
+    // ---- REST fallback: load build_logs from the deployment object ----
+    // The deployment prop is refreshed every 3s by the parent, but on first
+    // mount it may be null. Fetch the deployment once explicitly so the
+    // build tab never shows empty just because the WS hasn't connected yet.
+    useEffect(() => {
+        if (!deployment?.id) return;
+        if (logType !== 'BUILD') return;
+        if (initialLoadDoneRef.current.build) return;
+        const logs = deployment.build_logs || '';
+        if (logs) {
+            const lines: LogLine[] = logs
+                .split('\n')
+                .filter((l) => l.length > 0)
+                .map((text) => ({
+                    // Use content-derived id so a subsequent WS initial_state
+                    // (which may send the same lines again) dedupes naturally.
+                    id: `bld-${text.length}-${text.slice(0, 80).replace(/\s+/g, '_')}`,
+                    text,
+                }));
+            buildViewerRef.current?.clear();
+            buildViewerRef.current?.append(lines);
+            initialLoadDoneRef.current.build = true;
+        } else {
+            // Even if empty, mark as done so we don't re-seed on every parent
+            // re-render. WS will populate it on connect.
+            initialLoadDoneRef.current.build = true;
+        }
+    }, [logType, deployment?.id, deployment?.build_logs]);
+
+    // Same for runtime logs on first open
+    useEffect(() => {
+        if (!deployment?.id) return;
+        if (logType !== 'RUNTIME') return;
+        if (initialLoadDoneRef.current.runtime) return;
+        // For runtime logs we can't preload from the deployment prop — the
+        // WS is the source of truth (it gives us live or crash logs).
+        // Mark as done so we don't re-init on every parent re-render.
+        initialLoadDoneRef.current.runtime = true;
+    }, [logType, deployment?.id]);
 
     // ---- WebSocket: build logs ----
     const connectBuildWebSocket = useCallback(() => {
         if (!deployment?.id) return;
-        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+        if (activeWsTypeRef.current === 'BUILD' && wsRef.current?.readyState === WebSocket.OPEN) return;
+        // Close any previous WS so we don't have two open
+        if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+            try { wsRef.current.close(); } catch { /* ignore */ }
+        }
 
         const wsUrl = getWsUrl(`/ws/build-logs/${deployment.id}/`);
 
         try {
             const ws = new WebSocket(wsUrl);
+            activeWsTypeRef.current = 'BUILD';
 
             ws.onopen = () => {
                 setWsConnected(true);
@@ -59,30 +105,28 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
                         if (data.build_logs) {
-                            // Seed the viewer with the full saved log buffer.
-                            // We parse it line-by-line and append in one shot.
+                            // MERGE: dedupe by line-content id so the
+                            // REST-seeded lines don't get re-painted, and
+                            // the buffer isn't wiped on every reconnect.
                             const lines: LogLine[] = data.build_logs
                                 .split('\n')
                                 .filter((l: string) => l.length > 0)
                                 .map((text: string) => ({
-                                    id: makeId(),
+                                    id: `bld-${text.length}-${text.slice(0, 80).replace(/\s+/g, '_')}`,
                                     text,
                                 }));
-                            buildViewerRef.current?.clear();
-                            buildViewerRef.current?.append(lines);
+                            buildViewerRef.current?.merge(lines);
                         }
                         if (data.stages) {
                             setPipelineStages(data.stages);
                         }
                     } else if (data.type === 'build_log') {
                         if (data.log) {
-                            buildViewerRef.current?.appendRaw(data.log);
+                            // Live log lines get a unique runtime id.
+                            buildViewerRef.current?.appendRaw(data.log, undefined, 'live');
                         }
                     } else if (data.type === 'pipeline_update') {
-                        setPipelineStages(data.stages);
-                    } else if (data.type === 'status_change') {
-                        // Build finished — nothing else to do, the viewer
-                        // will stop receiving messages naturally.
+                        if (data.stages) setPipelineStages(data.stages);
                     }
                 } catch {
                     // Non-JSON message — ignore
@@ -91,30 +135,39 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
 
             ws.onclose = () => {
                 setWsConnected(false);
-                if (isBuilding) {
+                activeWsTypeRef.current = null;
+                // Reconnect only if the build tab is still active AND we
+                // don't already have a fresh fetch. We always reconnect
+                // (even when the build is finished) so the user can come
+                // back to the tab and see the full build log.
+                if (logType === 'BUILD') {
                     reconnectTimer.current = setTimeout(connectBuildWebSocket, 3000);
                 }
             };
 
             ws.onerror = () => {
-                ws.close();
+                try { ws.close(); } catch { /* ignore */ }
             };
 
             wsRef.current = ws;
         } catch {
             // WebSocket not supported or connection failed
         }
-    }, [deployment?.id, isBuilding, makeId]);
+    }, [deployment?.id, logType]);
 
     // ---- WebSocket: runtime logs ----
     const connectRuntimeWebSocket = useCallback(() => {
         if (!deployment?.id) return;
-        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+        if (activeWsTypeRef.current === 'RUNTIME' && wsRef.current?.readyState === WebSocket.OPEN) return;
+        if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+            try { wsRef.current.close(); } catch { /* ignore */ }
+        }
 
         const wsUrl = getWsUrl(`/ws/runtime-logs/${deployment.id}/`);
 
         try {
             const ws = new WebSocket(wsUrl);
+            activeWsTypeRef.current = 'RUNTIME';
 
             ws.onopen = () => {
                 setWsConnected(true);
@@ -124,21 +177,21 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
-                        runtimeViewerRef.current?.clear();
+                        // MERGE: don't wipe existing lines.
                         if (data.logs) {
-                            runtimeViewerRef.current?.appendRaw(data.logs);
+                            runtimeViewerRef.current?.mergeRaw(data.logs, undefined, 'rt');
                         }
                         setRuntimeMessage(data.message || '');
                         if (data.container_status && data.container_status !== 'running') {
                             setRuntimeMessage(
                                 data.source === 'build_logs'
-                                    ? 'Container is not running. Showing saved crash logs.'
+                                    ? 'Container is not running. Showing saved crash logs from build.'
                                     : `Container status: ${data.container_status}`
                             );
                         }
                     } else if (data.type === 'log') {
                         if (data.log) {
-                            runtimeViewerRef.current?.appendRaw(data.log);
+                            runtimeViewerRef.current?.appendRaw(data.log, undefined, 'rt-live');
                         }
                     } else if (data.type === 'error') {
                         setRuntimeMessage(data.error || 'Stream error');
@@ -150,144 +203,117 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
 
             ws.onclose = () => {
                 setWsConnected(false);
-                // Auto-reconnect for runtime logs (container may restart)
-                reconnectTimer.current = setTimeout(connectRuntimeWebSocket, 5000);
+                activeWsTypeRef.current = null;
+                if (logType === 'RUNTIME') {
+                    reconnectTimer.current = setTimeout(connectRuntimeWebSocket, 5000);
+                }
             };
 
             ws.onerror = () => {
-                ws.close();
+                try { ws.close(); } catch { /* ignore */ }
             };
 
             wsRef.current = ws;
         } catch {
             // WebSocket not supported
         }
-    }, [deployment?.id, makeId]);
+    }, [deployment?.id, logType]);
 
-    // Connect WebSocket when viewing build logs during active build
+    // Connect WS for the active tab. NOTE: we no longer gate on isBuilding
+    // — the build tab needs the WS even for finished/failed deployments
+    // so it can show the persisted build_logs.
     useEffect(() => {
-        if (logType === 'BUILD' && isBuilding && deployment?.id) {
+        if (!deployment?.id) return;
+        if (logType === 'BUILD') {
             connectBuildWebSocket();
-        }
-        return () => {
-            if (reconnectTimer.current) {
-                clearTimeout(reconnectTimer.current);
-            }
-        };
-    }, [logType, isBuilding, deployment?.id, connectBuildWebSocket]);
-
-    // Connect WebSocket when viewing runtime logs
-    useEffect(() => {
-        if (logType === 'RUNTIME' && deployment?.id) {
+        } else if (logType === 'RUNTIME') {
             connectRuntimeWebSocket();
         }
         return () => {
             if (reconnectTimer.current) {
                 clearTimeout(reconnectTimer.current);
+                reconnectTimer.current = null;
             }
         };
-    }, [logType, deployment?.id, connectRuntimeWebSocket]);
+    }, [logType, deployment?.id, connectBuildWebSocket, connectRuntimeWebSocket]);
 
-    // Clean up WebSocket on unmount
+    // Clean up WS on unmount
     useEffect(() => {
         return () => {
-            wsRef.current?.close();
+            if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+                try { wsRef.current.close(); } catch { /* ignore */ }
+            }
             if (reconnectTimer.current) {
                 clearTimeout(reconnectTimer.current);
+                reconnectTimer.current = null;
             }
         };
     }, []);
 
-    // Poll build logs during active build (fallback when WS isn't available)
+    // REST polling fallback: only used when WS is unavailable (the WS
+    // endpoint itself didn't accept the connection). This does a merge
+    // with line-content-hash ids so identical content is deduped.
     useEffect(() => {
-        if (logType !== 'BUILD' || !isBuilding || !deployment?.id) return;
-        if (wsConnected) return;
-
-        const fetchBuildLogs = async () => {
-            try {
-                const res = await fetch(`/api/v1/deployments/${deployment.id}/`, {
-                    credentials: "include",
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.build_logs) {
-                        // The previous implementation replaced the buffer
-                        // every poll, which thrashed scroll position. We
-                        // only push lines we haven't seen yet, keyed on a
-                        // monotonically increasing position in the
-                        // deployment's saved log. We can't be perfectly
-                        // sure we haven't seen something before, so we
-                        // re-seed the full buffer the first time and only
-                        // re-seed when the size changes (i.e. new lines
-                        // appeared since last poll). The viewer will
-                        // dedupe by id.
-                        runtimeViewerRef.current?.clear();
-                        buildViewerRef.current?.clear();
-                        const lines: LogLine[] = data.build_logs
-                            .split('\n')
-                            .filter((l: string) => l.length > 0)
-                            .map((text: string) => ({ id: makeId(), text }));
-                        buildViewerRef.current?.append(lines);
+        if (!deployment?.id) return;
+        if (wsConnected) return; // WS is doing the work
+        if (logType === 'BUILD') {
+            let cancelled = false;
+            const fetchBuildLogs = async () => {
+                try {
+                    const res = await fetch(`/api/v1/deployments/${deployment.id}/`, {
+                        credentials: 'include',
+                    });
+                    if (cancelled) return;
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.build_logs) {
+                            const lines: LogLine[] = data.build_logs
+                                .split('\n')
+                                .filter((l: string) => l.length > 0)
+                                .map((text: string) => ({
+                                    id: `bld-${text.length}-${text.slice(0, 80).replace(/\s+/g, '_')}`,
+                                    text,
+                                }));
+                            buildViewerRef.current?.merge(lines);
+                        }
                     }
+                } catch {
+                    // Silently fail
                 }
-            } catch {
-                // Silently fail
-            }
-        };
-
-        fetchBuildLogs();
-        const interval = setInterval(fetchBuildLogs, 3000);
-        return () => clearInterval(interval);
-    }, [logType, isBuilding, deployment?.id, wsConnected, makeId]);
-
-    // REST fallback for runtime logs
-    useEffect(() => {
-        if (logType !== 'RUNTIME' || !deployment?.id) return;
-        if (wsConnected) return;
-
-        let cancelled = false;
-        let lastSize = 0;
-        const fetchRuntimeLogs = async () => {
-            try {
-                const res = await fetch(`/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
-                    credentials: "include",
-                });
-                if (cancelled) return;
-                if (res.ok) {
-                    const data = await res.json();
-                    const logs = data.runtime_logs || '';
-                    if (logs.length !== lastSize) {
-                        // New content — replace. Live WS is the
-                        // preferred path; this fallback is only for
-                        // the polling case where we cannot dedupe.
-                        lastSize = logs.length;
-                        runtimeViewerRef.current?.clear();
-                        runtimeViewerRef.current?.appendRaw(logs);
+            };
+            fetchBuildLogs();
+            const interval = setInterval(fetchBuildLogs, 3000);
+            return () => { cancelled = true; clearInterval(interval); };
+        }
+        if (logType === 'RUNTIME') {
+            let cancelled = false;
+            const fetchRuntimeLogs = async () => {
+                try {
+                    const res = await fetch(`/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
+                        credentials: 'include',
+                    });
+                    if (cancelled) return;
+                    if (res.ok) {
+                        const data = await res.json();
+                        const logs = data.runtime_logs || '';
+                        if (logs) {
+                            runtimeViewerRef.current?.mergeRaw(logs, undefined, 'rt-poll');
+                        }
+                        setRuntimeMessage(data.message || '');
                     }
-                    setRuntimeMessage(data.message || '');
-                } else {
-                    setRuntimeMessage('Failed to fetch runtime logs.');
+                } catch {
+                    if (!cancelled) setRuntimeMessage('Could not connect to the API.');
                 }
-            } catch {
-                if (!cancelled) setRuntimeMessage('Could not connect to the API.');
-            }
-        };
-
-        fetchRuntimeLogs();
-        const interval = setInterval(fetchRuntimeLogs, 3000);
-        return () => {
-            cancelled = true;
-            clearInterval(interval);
-        };
+            };
+            fetchRuntimeLogs();
+            const interval = setInterval(fetchRuntimeLogs, 3000);
+            return () => { cancelled = true; clearInterval(interval); };
+        }
+        return;
     }, [logType, deployment?.id, wsConnected]);
 
-    // ---- Copy visible logs (works through the viewer's filtered DOM) ----
+    // ---- copy visible logs (walks the rendered <pre> elements) ----
     const copyVisibleLogs = useCallback(async () => {
-        const viewer = logType === 'BUILD' ? buildViewerRef.current : runtimeViewerRef.current;
-        // We can't get the *filtered* list out of the ref directly, so we
-        // walk the visible <pre> elements. This is more accurate than
-        // re-filtering the buffer because it matches exactly what the
-        // user sees on screen.
         const container = document.querySelector('[data-log-scroller]') as HTMLElement | null;
         if (!container) {
             toast({ title: 'No logs to copy' });
@@ -302,18 +328,14 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         }
         try {
             await navigator.clipboard.writeText(lines.join('\n'));
-            setCopied(true);
             toast({
                 title: 'Logs copied',
                 description: `Copied ${lines.length} visible line${lines.length === 1 ? '' : 's'}.`,
             });
-            setTimeout(() => setCopied(false), 1200);
         } catch {
             toast({ title: 'Failed to copy logs', variant: 'destructive' });
         }
-        // Suppress unused-var lint for viewer
-        void viewer;
-    }, [logType, toast]);
+    }, [toast]);
 
     const viewerHeight = 'h-[600px]';
 
@@ -350,8 +372,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                         className="inline-flex items-center gap-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-zinc-300 hover:bg-black/60"
                         title="Copy visible logs"
                     >
-                        {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                        Copy
+                        <Copy size={12} /> Copy
                     </button>
                     {deployment?.created_at && (
                         <span className="flex items-center gap-1">
@@ -420,8 +441,8 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                                 ref={buildViewerRef}
                                 className="bg-zinc-950"
                                 heightClass={viewerHeight}
-                                emptyMessage={isBuilding ? 'Waiting for build output…' : 'No build logs.'}
-                                shortcutsHint="Space: pause · End: jump live · c: clear"
+                                emptyMessage={isBuilding ? 'Waiting for build output…' : 'No build logs recorded for this deployment.'}
+                                shortcutsHint="Space: pause · End: jump to latest · c: clear"
                             />
                         </div>
 
@@ -447,8 +468,8 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                                 ref={runtimeViewerRef}
                                 className="bg-zinc-950"
                                 heightClass={viewerHeight}
-                                emptyMessage="No runtime logs available."
-                                shortcutsHint="Space: pause · End: jump live · c: clear"
+                                emptyMessage="No runtime logs available. If the container is stopped, saved crash logs from the deployment will appear here when available."
+                                shortcutsHint="Space: pause · End: jump to latest · c: clear"
                             />
                         </div>
                     </div>

@@ -1,39 +1,42 @@
 'use client';
 
 /**
- * Stable live-log viewer.
+ * Stable, append-only live log viewer.
  *
- * Solves three problems with the previous implementation:
- *   1. Aggressive re-renders destroyed scroll position every poll tick
- *      (the user was scrolled up, the array re-keyed, the browser jumped
- *      to the new top instead of the user's anchor).
- *   2. No way to pause live updates or to filter visible lines.
- *   3. No way to clear the buffer.
+ * Design goals (after the previous version's bug report):
  *
- * Design:
- *   - `lines` is an append-only `string[]`. The component NEVER replaces
- *     the array on a fresh fetch — it only `push`es new entries. React
- *     re-renders only when the array reference changes (which is only on
- *     `clear()`).
- *   - Smart auto-scroll: a `stickToBottom` flag is computed by the
- *     `onScroll` handler. While the user is within 80px of the bottom we
- *     follow new lines; once they scroll up we stop following, show a
- *     "N new lines — jump to live" pill, and the only thing that breaks
- *     their reading is them clicking the pill (or pressing End).
- *   - `paused` is a hard freeze: incoming lines are still appended to
- *     the in-memory buffer but they do not paint. Pressing Pause again
- *     flushes them to screen.
- *   - Filtering happens in a memoized `visibleLines` so typing in the
- *     search box does not re-walk the whole history on every keystroke.
+ *  1. **Stable scroll.** The viewer NEVER auto-scrolls when new lines
+ *     arrive. New lines are appended to the bottom of the buffer; the
+ *     user's scroll position is the source of truth. If they want to
+ *     follow the stream they scroll down. The only time we ever move
+ *     the scroller is on the first mount (when there are pre-existing
+ *     initial lines, we scroll to bottom ONCE so they see the tail).
  *
- * The component is data-source agnostic — it just exposes an `append`
- * method via `onReady` so parents (Loki poller, runtime WS, build WS)
- * can push lines into it.
+ *  2. **No destructive re-renders.** `lines` is append-only. `clear()` is
+ *     only called from the explicit Clear button or the `c` keyboard
+ *     shortcut. Re-fetches (Loki poll, WS reconnect) MERGE new lines by
+ *     id, they never wipe existing lines.
+ *
+ *  3. **Dedupe by id.** Every line carries a stable `id` (set by the
+ *     caller — typically a timestamp + sequence). When the same id is
+ *     appended twice, the second append is dropped silently. This makes
+ *     Loki re-polls and WS reconnects idempotent.
+ *
+ *  4. **Pause is a real freeze.** Lines arriving while paused go into a
+ *     `bufferRef` (not React state) and are NOT rendered. The pause pill
+ *     shows the buffer count. Pressing Resume (or Space) flushes the
+ *     buffer into the visible list. Empty state shows a "PAUSED, N
+ *     lines buffered" message rather than the generic "no logs".
+ *
+ *  5. **No "new lines" pill.** A previous version popped a button onto
+ *     the scroller every time a new line arrived while the user was
+ *     scrolled up. That felt like the page was reloading. The new design
+ *     just lets the lines flow below the user's reading position — they
+ *     scroll down when they want to see them.
  */
 
 import {
     forwardRef,
-    memo,
     useCallback,
     useEffect,
     useImperativeHandle,
@@ -43,7 +46,6 @@ import {
     useState,
 } from 'react';
 import {
-    ChevronDown,
     Pause,
     Play,
     Trash2,
@@ -55,9 +57,9 @@ import { cn } from '@/lib/utils';
 export type LogSeverity = 'ALL' | 'ERROR' | 'WARNING' | 'SYSTEM' | 'NOISE' | 'APP';
 
 export interface LogLine {
-    /** Monotonically increasing key. UI uses this to dedupe. */
+    /** Stable id — caller-provided, used for dedupe. */
     id: string;
-    /** Optional human timestamp (any string the parent already formatted). */
+    /** Optional human timestamp (any pre-formatted string). */
     time?: string;
     /** Optional source label (container / compose project / service). */
     source?: string;
@@ -67,12 +69,19 @@ export interface LogLine {
 
 export interface LiveLogViewerHandle {
     append: (line: LogLine | LogLine[]) => void;
-    appendRaw: (raw: string, source?: string) => void;
+    appendRaw: (raw: string, source?: string, idPrefix?: string) => void;
+    /**
+     * Append lines, dropping any whose id already exists in the buffer.
+     * Use this when reconnecting to a stream (WS reconnect, REST poll) to
+     * avoid double-painting lines we already have.
+     */
+    merge: (lines: LogLine[]) => void;
+    mergeRaw: (raw: string, source?: string, idPrefix?: string) => void;
     clear: () => void;
-    getBufferedCount: () => number;
-    flushBuffer: () => void;
     setPaused: (paused: boolean) => void;
     isPaused: () => boolean;
+    getLineCount: () => number;
+    getBufferedCount: () => number;
 }
 
 export interface LiveLogViewerProps {
@@ -82,15 +91,17 @@ export interface LiveLogViewerProps {
     className?: string;
     /** Container height class. Default `h-[600px]`. */
     heightClass?: string;
-    /** When true, shows the source column even if empty. */
-    showSource?: boolean;
     /** Empty-state message. */
     emptyMessage?: string;
     /** Optional: keyboard shortcut hint shown in the toolbar. */
     shortcutsHint?: string;
+    /**
+     * If true (default), the viewer scrolls to the bottom ONCE on first
+     * mount when `initialLines` is non-empty. Subsequent appends never
+     * auto-scroll.
+     */
+    scrollToBottomOnMount?: boolean;
 }
-
-const STICK_THRESHOLD_PX = 80;
 
 const SEVERITY_PATTERNS: Array<{ sev: Exclude<LogSeverity, 'ALL'>; re: RegExp }> = [
     { sev: 'ERROR', re: /\berror\b|\bfatal\b|\bpanic\b|\btraceback\b|\bexception\b|\bcrash\b/i },
@@ -139,98 +150,119 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
             heightClass = 'h-[600px]',
             emptyMessage = 'No log lines yet.',
             shortcutsHint,
+            scrollToBottomOnMount = true,
         } = props;
 
-        // Append-only buffer. Replace ONLY on clear() or on initial mount.
+        // Append-only buffer. Replaced ONLY on clear(). The `lines` state
+        // is what the user actually sees.
         const [lines, setLines] = useState<LogLine[]>(initialLines);
-        // Lines that arrived while paused — flushed to `lines` on resume.
+        const idSetRef = useRef<Set<string>>(new Set(initialLines.map((l) => l.id)));
         const bufferRef = useRef<LogLine[]>([]);
         const [bufferCount, setBufferCount] = useState(0);
         const [paused, setPaused] = useState(false);
         const [textFilter, setTextFilter] = useState('');
         const [severityFilter, setSeverityFilter] = useState<LogSeverity>('ALL');
-        const [autoScroll, setAutoScroll] = useState(true);
-        const [pendingNew, setPendingNew] = useState(0);
         const [severityCounts, setSeverityCounts] = useState<Record<Exclude<LogSeverity, 'ALL'>, number>>({
             APP: 0, SYSTEM: 0, WARNING: 0, ERROR: 0, NOISE: 0,
         });
         const [totalRendered, setTotalRendered] = useState(initialLines.length);
 
         const scrollerRef = useRef<HTMLDivElement>(null);
-        const lastStickCheck = useRef(0);
         const counterSeqRef = useRef(0);
+        const didInitialScrollRef = useRef(false);
 
-        // ---- imperative handle for parents ----
-        const makeId = useCallback(() => {
+        const makeId = useCallback((prefix: string) => {
             counterSeqRef.current += 1;
-            return `${Date.now().toString(36)}-${counterSeqRef.current.toString(36)}`;
+            return `${prefix}-${Date.now().toString(36)}-${counterSeqRef.current.toString(36)}`;
         }, []);
 
-        const append = useCallback((incoming: LogLine | LogLine[]) => {
-            const arr = Array.isArray(incoming) ? incoming : [incoming];
-            if (arr.length === 0) return;
+        // ---- dedupe-aware append ----
+        const appendInternal = useCallback((incoming: LogLine[]) => {
+            if (incoming.length === 0) return;
 
-            // Normalize: every line gets an id and a severity bucket.
-            const normalized = arr.map((l) => {
+            // Filter out duplicates
+            const fresh: LogLine[] = [];
+            const newSevCounts: Record<Exclude<LogSeverity, 'ALL'>, number> = {
+                APP: 0, SYSTEM: 0, WARNING: 0, ERROR: 0, NOISE: 0,
+            };
+            for (const l of incoming) {
+                if (idSetRef.current.has(l.id)) continue;
+                idSetRef.current.add(l.id);
+                fresh.push(l);
                 const sev = classifyLogLine(l.text);
-                return { ...l, _sev: sev } as LogLine & { _sev: Exclude<LogSeverity, 'ALL'> };
-            });
-            // We need _sev at runtime but the public type doesn't carry it.
-            // Cast to any in the renderer.
-            (normalized as unknown as Array<LogLine & { _sev: Exclude<LogSeverity, 'ALL'> }>)
-                .forEach((l) => (l as { _sev: Exclude<LogSeverity, 'ALL'> })._sev);
+                newSevCounts[sev] += 1;
+            }
+            if (fresh.length === 0) return;
 
             if (paused) {
-                bufferRef.current.push(...normalized);
+                bufferRef.current.push(...fresh);
                 if (bufferRef.current.length > maxLines) {
-                    bufferRef.current.splice(0, bufferRef.current.length - maxLines);
+                    const drop = bufferRef.current.length - maxLines;
+                    const dropped = bufferRef.current.splice(0, drop);
+                    for (const d of dropped) idSetRef.current.delete(d.id);
                 }
                 setBufferCount(bufferRef.current.length);
-                setPendingNew((c) => c + normalized.length);
                 return;
             }
 
             setLines((prev) => {
-                const next = prev.concat(normalized);
+                const next = prev.concat(fresh);
                 if (next.length > maxLines) {
-                    next.splice(0, next.length - maxLines);
+                    const drop = next.length - maxLines;
+                    const dropped = next.splice(0, drop);
+                    for (const d of dropped) idSetRef.current.delete(d.id);
                 }
                 return next;
             });
-            setTotalRendered((t) => t + normalized.length);
-            // Update severity histogram
+            setTotalRendered((t) => t + fresh.length);
             setSeverityCounts((prev) => {
                 const next = { ...prev };
-                for (const l of normalized) {
-                    const s = (l as LogLine & { _sev: Exclude<LogSeverity, 'ALL'> })._sev;
-                    next[s] = (next[s] || 0) + 1;
+                for (const k of Object.keys(newSevCounts) as Array<keyof typeof newSevCounts>) {
+                    if (newSevCounts[k]) next[k] = (next[k] || 0) + newSevCounts[k];
                 }
                 return next;
             });
         }, [paused, maxLines]);
 
-        const appendRaw = useCallback((raw: string, source?: string) => {
+        const append = useCallback((incoming: LogLine | LogLine[]) => {
+            appendInternal(Array.isArray(incoming) ? incoming : [incoming]);
+        }, [appendInternal]);
+
+        const appendRaw = useCallback((raw: string, source?: string, idPrefix = 'raw') => {
             if (!raw) return;
-            // Split on newlines (one WebSocket / REST frame may carry many lines)
-            const chunks = raw.split(/\r?\n/).filter((c) => c.length > 0 || raw.endsWith('\n'));
+            const chunks = raw.split(/\r?\n/).filter((c) => c.length > 0);
             if (chunks.length === 0) return;
-            const now = new Date();
-            const ts = now.toLocaleTimeString('en-US', { hour12: false });
-            append(
-                chunks.map((text) => ({
-                    id: makeId(),
-                    time: ts,
-                    source,
-                    text,
-                })),
-            );
-        }, [append, makeId]);
+            appendInternal(chunks.map((text) => ({
+                id: makeId(idPrefix),
+                source,
+                text,
+            })));
+        }, [appendInternal, makeId]);
+
+        // ---- merge (deduping) helpers ----
+        const merge = useCallback((incoming: LogLine[]) => {
+            appendInternal(incoming);
+        }, [appendInternal]);
+
+        const mergeRaw = useCallback((raw: string, source?: string, idPrefix = 'raw') => {
+            if (!raw) return;
+            const chunks = raw.split(/\r?\n/).filter((c) => c.length > 0);
+            if (chunks.length === 0) return;
+            // For mergeRaw, use a hash of the line content as the id so
+            // re-polls of identical tail output don't double-paint.
+            const lines: LogLine[] = chunks.map((text, i) => ({
+                id: `${idPrefix}-${text.length}-${i}-${text.slice(0, 40)}`,
+                source,
+                text,
+            }));
+            appendInternal(lines);
+        }, [appendInternal]);
 
         const clear = useCallback(() => {
             bufferRef.current = [];
             setBufferCount(0);
-            setPendingNew(0);
             setLines([]);
+            idSetRef.current.clear();
             setTotalRendered(0);
             setSeverityCounts({ APP: 0, SYSTEM: 0, WARNING: 0, ERROR: 0, NOISE: 0 });
         }, []);
@@ -243,7 +275,9 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
             setLines((prev) => {
                 const next = prev.concat(drained);
                 if (next.length > maxLines) {
-                    next.splice(0, next.length - maxLines);
+                    const drop = next.length - maxLines;
+                    const dropped = next.splice(0, drop);
+                    for (const d of dropped) idSetRef.current.delete(d.id);
                 }
                 return next;
             });
@@ -253,10 +287,7 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
         const togglePaused = useCallback(() => {
             setPaused((prev) => {
                 const next = !prev;
-                if (!next) {
-                    // Resuming -> flush whatever was buffered
-                    flushBuffer();
-                }
+                if (!next) flushBuffer();
                 return next;
             });
         }, [flushBuffer]);
@@ -264,6 +295,8 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
         useImperativeHandle(ref, () => ({
             append,
             appendRaw,
+            merge,
+            mergeRaw,
             clear,
             flushBuffer,
             getBufferedCount: () => bufferRef.current.length,
@@ -272,38 +305,28 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
                 if (!p) flushBuffer();
             },
             isPaused: () => paused,
-        }), [append, appendRaw, clear, flushBuffer, paused]);
+            getLineCount: () => lines.length,
+        }), [append, appendRaw, merge, mergeRaw, clear, flushBuffer, paused, lines.length]);
 
-        // ---- sticky-bottom detection ----
-        const onScroll = useCallback(() => {
-            const el = scrollerRef.current;
-            if (!el) return;
-            const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-            const shouldStick = distFromBottom <= STICK_THRESHOLD_PX;
-            if (shouldStick !== autoScroll) {
-                setAutoScroll(shouldStick);
-            }
-            if (shouldStick) {
-                setPendingNew(0);
-            }
-            lastStickCheck.current = Date.now();
-        }, [autoScroll]);
-
-        // Auto-scroll to bottom whenever new lines arrive AND user is sticky.
+        // ---- scroll: ONLY on first mount with initial lines ----
         useLayoutEffect(() => {
-            if (!autoScroll) return;
+            if (didInitialScrollRef.current) return;
+            if (!scrollToBottomOnMount) return;
+            if (initialLines.length === 0) return;
             const el = scrollerRef.current;
             if (!el) return;
-            // Use a microtask to ensure the new lines have been painted.
+            // Defer to the next paint so the lines are mounted.
             requestAnimationFrame(() => {
-                el.scrollTop = el.scrollHeight;
+                if (scrollerRef.current) {
+                    scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
+                    didInitialScrollRef.current = true;
+                }
             });
-        }, [lines, autoScroll]);
+        }, [initialLines.length, scrollToBottomOnMount]);
 
         // ---- keyboard shortcuts ----
         useEffect(() => {
             const handler = (e: KeyboardEvent) => {
-                // Only when the viewer (or one of its inputs) has focus.
                 const target = e.target as HTMLElement | null;
                 if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
                     return;
@@ -314,18 +337,11 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
                 } else if (e.key === 'End') {
                     e.preventDefault();
                     const el = scrollerRef.current;
-                    if (el) {
-                        el.scrollTop = el.scrollHeight;
-                        setAutoScroll(true);
-                        setPendingNew(0);
-                    }
+                    if (el) el.scrollTop = el.scrollHeight;
                 } else if (e.key === 'Home') {
                     e.preventDefault();
                     const el = scrollerRef.current;
-                    if (el) {
-                        el.scrollTop = 0;
-                        setAutoScroll(false);
-                    }
+                    if (el) el.scrollTop = 0;
                 } else if ((e.key === 'c' || e.key === 'C') && !e.metaKey && !e.ctrlKey) {
                     e.preventDefault();
                     clear();
@@ -341,8 +357,7 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
             if (!txt && severityFilter === 'ALL') return lines;
             return lines.filter((l) => {
                 if (severityFilter !== 'ALL') {
-                    const sev = (l as LogLine & { _sev?: Exclude<LogSeverity, 'ALL'> })._sev
-                        ?? classifyLogLine(l.text);
+                    const sev = classifyLogLine(l.text);
                     if (sev !== severityFilter) return false;
                 }
                 if (txt) {
@@ -353,18 +368,9 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
             });
         }, [lines, textFilter, severityFilter]);
 
-        const jumpToLive = useCallback(() => {
-            const el = scrollerRef.current;
-            if (!el) return;
-            el.scrollTop = el.scrollHeight;
-            setAutoScroll(true);
-            setPendingNew(0);
-        }, []);
-
-        // Reset the "new lines" pill to 0 whenever the user manually re-anchors
-        useEffect(() => {
-            if (autoScroll) setPendingNew(0);
-        }, [autoScroll]);
+        // ---- rendering ----
+        const isEmpty = visibleLines.length === 0;
+        const totalAvailable = lines.length + bufferCount;
 
         return (
             <div className={cn(
@@ -435,28 +441,40 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
                             <span>showing {visibleLines.length} / {totalRendered}</span>
                         )}
                         {paused && (
-                            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">PAUSED</span>
+                            <span
+                                className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold"
+                                title="New lines are buffered; click Resume to view them"
+                            >
+                                PAUSED{bufferCount > 0 ? ` (${bufferCount} buffered)` : ''}
+                            </span>
                         )}
                         {shortcutsHint && <span className="hidden md:inline">{shortcutsHint}</span>}
                     </div>
                 </div>
 
-                {/* Scroller */}
+                {/* Scroller — completely passive. No auto-scroll, no "new lines" pill. */}
                 <div
                     ref={scrollerRef}
-                    onScroll={onScroll}
                     data-log-scroller
                     className={cn('relative overflow-y-auto font-mono text-[12px] leading-5', heightClass)}
                 >
-                    {visibleLines.length === 0 ? (
-                        <div className="p-6 text-center text-zinc-500 text-sm">
-                            {emptyMessage}
+                    {isEmpty ? (
+                        <div className="p-6 text-center text-zinc-500 text-sm space-y-2">
+                            {paused && bufferCount > 0 ? (
+                                <>
+                                    <p className="text-amber-300 font-medium">
+                                        {bufferCount} line{bufferCount === 1 ? '' : 's'} buffered (paused)
+                                    </p>
+                                    <p className="text-xs">Click Resume to view them, or press <kbd className="px-1 rounded bg-zinc-800">Space</kbd></p>
+                                </>
+                            ) : (
+                                <p>{emptyMessage}</p>
+                            )}
                         </div>
                     ) : (
                         <ul className="divide-y divide-zinc-900/60">
                             {visibleLines.map((line) => {
-                                const sev = (line as LogLine & { _sev?: Exclude<LogSeverity, 'ALL'> })._sev
-                                    ?? classifyLogLine(line.text);
+                                const sev = classifyLogLine(line.text);
                                 return (
                                     <li
                                         key={line.id}
@@ -487,23 +505,17 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
                             })}
                         </ul>
                     )}
-
-                    {/* "New lines" pill — only when not stuck to bottom */}
-                    {!autoScroll && pendingNew > 0 && (
-                        <button
-                            onClick={jumpToLive}
-                            className="sticky bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full bg-emerald-500 text-emerald-950 px-3 py-1.5 text-xs font-bold shadow-lg shadow-emerald-500/30 hover:bg-emerald-400 z-10"
-                        >
-                            <ChevronDown className="h-3.5 w-3.5" />
-                            {pendingNew} new line{pendingNew === 1 ? '' : 's'} — jump to live
-                        </button>
-                    )}
                 </div>
+
+                {/* Tiny footer with total so user always knows how many lines are in the buffer */}
+                {totalAvailable > 0 && !isEmpty && (
+                    <div className="px-3 py-1 text-[10px] text-zinc-600 font-mono border-t border-zinc-900">
+                        {totalAvailable} line{totalAvailable === 1 ? '' : 's'} • scroll to see more
+                    </div>
+                )}
             </div>
         );
     },
 );
 
-// Re-export the classifier so callers (like the deployment LogsTab) can
-// pre-classify or reuse the same severity buckets consistently.
 export { classifyLogLine, severityColor, severityDot };

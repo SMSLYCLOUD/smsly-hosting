@@ -122,15 +122,16 @@ export function LogsView({
             setLastUpdated(new Date());
 
             if (isFreshFetch) {
-                // Hard reset: replace buffer with the full set, sorted
-                // ascending (oldest first) so the viewer renders top-down.
+                // First fetch for this (query, range, limit) — replace the
+                // buffer. Subsequent fetches for the same key MERGE so the
+                // user's scroll position and reading context are preserved.
                 const sorted = events
                     .slice()
                     .sort((a, b) => lokiTsToMs(a.timestamp) - lokiTsToMs(b.timestamp));
                 const newLines: LogLine[] = sorted.map((e) => {
                     seqRef.current += 1;
                     return {
-                        id: `loki-${lokiTsToMs(e.timestamp)}-${seqRef.current}`,
+                        id: `loki-${lokiTsToMs(e.timestamp)}-${seqRef.current}-${(e.line || '').slice(0, 40).replace(/\s+/g, '_')}`,
                         time: new Date(lokiTsToMs(e.timestamp)).toLocaleTimeString('en-US', { hour12: false }),
                         source: e.labels?.compose_service
                             || e.labels?.container_name
@@ -147,6 +148,9 @@ export function LogsView({
                 setEventCount(newLines.length);
             } else {
                 // Append only the lines newer than what we last rendered.
+                // Use merge semantics: dedupe by id (which includes the
+                // first 40 chars of the line content) so identical lines
+                // are never painted twice.
                 const newOnes = events
                     .filter((e) => lokiTsToMs(e.timestamp) > lastTsRef.current)
                     .sort((a, b) => lokiTsToMs(a.timestamp) - lokiTsToMs(b.timestamp));
@@ -154,7 +158,7 @@ export function LogsView({
                     const lines: LogLine[] = newOnes.map((e) => {
                         seqRef.current += 1;
                         return {
-                            id: `loki-${lokiTsToMs(e.timestamp)}-${seqRef.current}`,
+                            id: `loki-${lokiTsToMs(e.timestamp)}-${seqRef.current}-${(e.line || '').slice(0, 40).replace(/\s+/g, '_')}`,
                             time: new Date(lokiTsToMs(e.timestamp)).toLocaleTimeString('en-US', { hour12: false }),
                             source: e.labels?.compose_service
                                 || e.labels?.container_name
@@ -164,7 +168,7 @@ export function LogsView({
                         };
                     });
                     lastTsRef.current = lokiTsToMs(newOnes[newOnes.length - 1].timestamp);
-                    viewerRef.current?.append(lines);
+                    viewerRef.current?.merge(lines);
                     setEventCount((c) => c + lines.length);
                 }
             }

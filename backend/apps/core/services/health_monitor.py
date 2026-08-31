@@ -141,9 +141,15 @@ def _candidate_health_paths(service) -> list[str]:
         paths.append(path)
 
     _add(service.health_check_path or "/")
+    # Ordered fallback candidates covering the common framework
+    # conventions: Django/DRF & Express (/health), Next.js & API
+    # gateways (/api/health), k8s probes (/healthz,/live,/ready),
+    # uptime pages (/status, /up — Rails 7.1+), and finally the
+    # root. /ping answers "app is alive" for many SPAs that have
+    # no dedicated health endpoint.
     raw = os.environ.get(
         "HEALTH_CHECK_FALLBACK_PATHS",
-        "/,/health,/healthz,/ready,/live,/status",
+        "/,/health,/api/health,/healthz,/ready,/live,/status,/up,/ping,/health/live,/health/ready",
     )
     for chunk in str(raw).split(","):
         chunk = chunk.strip()

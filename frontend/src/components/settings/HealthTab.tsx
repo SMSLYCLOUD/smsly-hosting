@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { servicesApi, Service } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -35,22 +35,19 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
     const [autoRestart, setAutoRestart] = useState(true);
     const [autoRollbackEnabled, setAutoRollbackEnabled] = useState(true);
     const [healthStatus, setHealthStatus] = useState('unknown');
+    // True once the user has modified any form field. While dirty, the
+    // 3-second parent poll (which passes a fresh `service` object each
+    // tick) must NOT overwrite what the user is typing — that was the
+    // "stubborn inputs" bug: every poll re-seeded the form and reverted
+    // edits mid-keystroke. Only the live status badge keeps updating.
+    const dirtyRef = useRef(false);
 
-    useEffect(() => {
-        if (initialService) {
-            applyService(initialService);
+    const applyService = (s: any, force = false) => {
+        if (!force && dirtyRef.current) {
+            // Keep the user's edits; only refresh the status badge.
+            setHealthStatus(s.health_status ?? 'unknown');
             return;
         }
-        (async () => {
-            try {
-                const s = await servicesApi.get(serviceId);
-                applyService(s);
-            } catch (err) { console.error(err); }
-            finally { setLoading(false); }
-        })();
-    }, [serviceId, initialService]);
-
-    const applyService = (s: any) => {
         setHealthPath(s.health_check_path ?? '/health');
         setHealthPort(s.health_check_port ?? '');
         setInterval_(s.health_check_interval ?? 30);
@@ -61,6 +58,34 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
         setHealthStatus(s.health_status ?? 'unknown');
         setLoading(false);
     };
+
+    // Seed the form ONCE on mount (or first time a service object arrives).
+    // The parent re-renders every poll tick with a new object reference —
+    // a `service` dep here would re-run this effect every 3 seconds and
+    // fight the user's keyboard. applyService's dirty-guard also protects
+    // the "fetch on mount" path for the rare case the prop arrives late.
+    const seededRef = useRef<string | null>(null);
+    useEffect(() => {
+        const key = initialService?.id || serviceId;
+        if (initialService && seededRef.current !== key) {
+            seededRef.current = key;
+            applyService(initialService, true);
+            return;
+        }
+        if (initialService) {
+            applyService(initialService);
+            return;
+        }
+        (async () => {
+            try {
+                const s = await servicesApi.get(serviceId);
+                applyService(s, true);
+            } catch (err) { console.error(err); }
+            finally { setLoading(false); }
+        })();
+    }, [serviceId, initialService?.id]);
+
+    const markDirty = () => { dirtyRef.current = true; };
 
     const handleSave = async () => {
         setSaving(true);
@@ -74,6 +99,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                 auto_restart: autoRestart,
                 auto_rollback_enabled: autoRollbackEnabled,
             } as any);
+            dirtyRef.current = false;
             toast({ title: '✓ Health check settings saved' });
         } catch (err) {
             toast({ title: 'Failed to save', variant: 'destructive' });
@@ -83,7 +109,8 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
     const handleRefresh = async () => {
         try {
             const s = await servicesApi.get(serviceId);
-            applyService(s);
+            applyService(s, true);
+            dirtyRef.current = false;
             toast({ title: 'Health status refreshed' });
         } catch (err) {
             toast({ title: 'Failed to refresh', variant: 'destructive' });
@@ -170,7 +197,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                         <label className="text-sm font-medium mb-2 block">Health Check Path</label>
                         <Input
                             value={healthPath}
-                            onChange={e => setHealthPath(e.target.value)}
+                            onChange={e => { markDirty(); setHealthPath(e.target.value); }}
                             placeholder="/health"
                             className="font-mono max-w-md"
                         />
@@ -186,7 +213,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                             min={1}
                             max={65535}
                             value={healthPort}
-                            onChange={e => setHealthPort(e.target.value ? parseInt(e.target.value) : '')}
+                            onChange={e => { markDirty(); setHealthPort(e.target.value ? parseInt(e.target.value) : ''); }}
                             placeholder="Auto-detect from PORT env var"
                             className="font-mono max-w-md"
                         />
@@ -201,7 +228,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                             <Input
                                 type="number" min={5} max={300}
                                 value={interval}
-                                onChange={e => setInterval_(parseInt(e.target.value) || 30)}
+                                onChange={e => { markDirty(); setInterval_(parseInt(e.target.value) || 30); }}
                             />
                             <p className="text-xs text-muted-foreground mt-1">Time between checks</p>
                         </div>
@@ -210,7 +237,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                             <Input
                                 type="number" min={1} max={30}
                                 value={timeout}
-                                onChange={e => setTimeout_(parseInt(e.target.value) || 5)}
+                                onChange={e => { markDirty(); setTimeout_(parseInt(e.target.value) || 5); }}
                             />
                             <p className="text-xs text-muted-foreground mt-1">Max response wait</p>
                         </div>
@@ -219,7 +246,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                             <Input
                                 type="number" min={1} max={10}
                                 value={retries}
-                                onChange={e => setRetries(parseInt(e.target.value) || 3)}
+                                onChange={e => { markDirty(); setRetries(parseInt(e.target.value) || 3); }}
                             />
                             <p className="text-xs text-muted-foreground mt-1">Failures before unhealthy</p>
                         </div>
@@ -234,7 +261,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                             </p>
                         </div>
                         <button
-                            onClick={() => setAutoRestart(!autoRestart)}
+                            onClick={() => { markDirty(); setAutoRestart(!autoRestart); }}
                             className={`relative w-12 h-6 rounded-full transition-colors ${
                                 autoRestart ? 'bg-emerald-500' : 'bg-muted-foreground/30'
                             }`}
@@ -254,7 +281,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                             </p>
                         </div>
                         <button
-                            onClick={() => setAutoRollbackEnabled(!autoRollbackEnabled)}
+                            onClick={() => { markDirty(); setAutoRollbackEnabled(!autoRollbackEnabled); }}
                             className={`relative w-12 h-6 rounded-full transition-colors ${
                                 autoRollbackEnabled ? 'bg-emerald-500' : 'bg-muted-foreground/30'
                             }`}

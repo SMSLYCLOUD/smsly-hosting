@@ -70,13 +70,16 @@ def _health_paths(primary_path: str | None) -> list[str]:
     if primary_path:
         values.append(_normalize_health_path(primary_path))
 
-    # Ordered fallback candidates for common frameworks. /api/health is
-    # the Next.js / API-gateway convention (the braid deploy served it
-    # while /health and / both 404'd — Traefik marked the service DOWN
-    # and the domain returned "no available server").
+    # Ordered fallback candidates covering the common framework
+    # conventions (kept in sync with health_monitor's
+    # HEALTH_CHECK_FALLBACK_PATHS and the Traefik label detection):
+    # /health (Django/Express), /api/health (Next.js/API gateways —
+    # the braid deploy served it while /health and / both 404'd and
+    # Traefik marked the backend DOWN), k8s probes, uptime pages,
+    # and finally the root.
     raw = os.environ.get(
         "DOCKER_HEALTHCHECK_FALLBACK_PATHS",
-        "/,/health,/api/health,/healthz,/ready,/live,/status",
+        "/,/health,/api/health,/healthz,/ready,/live,/status,/up,/ping,/health/live,/health/ready",
     )
     for chunk in str(raw).split(","):
         path = _normalize_health_path(chunk.strip())
@@ -138,6 +141,23 @@ def _build_docker_healthcheck_cmd(url_or_urls: str | list[str], timeout_seconds:
         "fi; "
         "exit 0"
     )
+def _health_status_range() -> tuple[int, int]:
+    """Configurable acceptable HTTP status range for health probes.
+
+    Traefik's own internal rule is 200 <= status < 400 — a health probe
+    answers "is the process serving HTTP?", which a redirect (302) or a
+    No Content (204) satisfies just as well as a 200. Forcing 200-only
+    would let a container pass OUR probe but still be marked DOWN by
+    Traefik, which is exactly the "no available server" class of bug.
+
+    Operators can tighten it (e.g. 200-299) with
+    HEALTH_CHECK_STATUS_MIN / HEALTH_CHECK_STATUS_MAX.
+    """
+    lo = _env_int("HEALTH_CHECK_STATUS_MIN", 200, minimum=100, maximum=599)
+    hi = _env_int("HEALTH_CHECK_STATUS_MAX", 399, minimum=lo, maximum=599)
+    return lo, hi
+
+
 def _detect_working_health_path(
     docker_client,
     container,
@@ -145,45 +165,74 @@ def _detect_working_health_path(
     candidate_paths: list[str],
     timeout_seconds: int = 3,
 ) -> str | None:
-    """Probe a running container from inside and return the first
-    health path that answers 2xx/3xx.
+    """Probe a running container from inside and return the first health
+    path that answers within the acceptable status range.
 
     Executing inside the container (docker exec) means the probe uses the
     container's own network stack — no dependency on which bridge the
     adapter can reach. Tries wget, curl, then node (Next.js images have
-    node but often no wget/curl); a plain TCP connect via /dev/tcp is the
-    last resort.
+    node but often no wget/curl).
 
-    Returns None when no candidate path answers — the caller keeps its
-    recorded primary path in that case.
+    Path verdicts:
+      * 2xx/3xx (configurable via HEALTH_CHECK_STATUS_MIN/MAX) — the
+        path is healthy, return it.
+      * 401/403 — the endpoint is AUTH-LOCKED. The app is alive but
+        pointing a probe at an auth-locked endpoint guarantees false
+        DOWNs, so this path is skipped like a 404. (If EVERY candidate
+        is auth-locked the caller should DROP the healthcheck label so
+        Traefik defaults the backend to UP.)
+      * 404 — wrong path, try the next candidate.
+      * 5xx — the app is genuinely broken; keep the primary path so the
+        instance gets pulled from rotation (we do not "hunt" for a
+        green path through a red app).
+
+    Returns None when no candidate path answers acceptably — the caller
+    keeps its recorded primary path in that case (or drops the
+    healthcheck when everything was auth-locked; see
+    _all_paths_auth_locked).
     """
+    lo, hi = _health_status_range()
     for path in candidate_paths:
         url = f"http://127.0.0.1:{port}{path}"
-        # Probe with whichever HTTP tool the image ships. We ask for the
-        # status code and accept anything below 400 (some frameworks
-        # redirect / to a login page with 302).
+        # Probe with whichever HTTP tool the image ships; capture the
+        # status code so we can apply the verdict rules above.
         script = (
-            "command -v wget >/dev/null 2>&1 && "
-            f"wget -q -S -O /dev/null -T {timeout_seconds} '{url}' 2>&1 | "
-            f"grep -m1 'HTTP/' | grep -qE 'HTTP/[0-9.]+ +[23]' && exit 0; "
-            "command -v curl >/dev/null 2>&1 && "
-            f"curl -s -o /dev/null -w '%{{http_code}}' -m {timeout_seconds} '{url}' "
-            "| grep -qE '^[23]' && exit 0; "
-            "command -v node >/dev/null 2>&1 && "
-            f"node -e \"const u=URL('{url}');const x=require('http').get(u,r=>"
-            "process.exit(r.statusCode<400?0:1));x.on('error',()=>process.exit(1))\" "
-            ">/dev/null 2>&1 && exit 0; "
-            "exit 1"
+            "code=000; "
+            "if command -v wget >/dev/null 2>&1; then "
+            f"code=$(wget -S -O /dev/null -T {timeout_seconds} '{url}' 2>&1 "
+            "| grep -m1 'HTTP/' | tail -1 | awk '{print $2}'); "
+            "elif command -v curl >/dev/null 2>&1; then "
+            f"code=$(curl -s -o /dev/null -w '%{{http_code}}' -m {timeout_seconds} '{url}'); "
+            "fi; "
+            "if [ \"$code\" = \"000\" ] && command -v node >/dev/null 2>&1; then "
+            "code=$(node -e \"const u=URL('{url}');const x=require('http').get(u,r=>"
+            "{console.log(r.statusCode);process.exit(0)});"
+            "x.on('error',()=>{console.log(0);process.exit(0)})\"); "
+            "fi; "
+            "echo $code"
         )
         try:
-            exit_code = container.exec_run(
-                ["sh", "-c", script],
-                demux=True,
-            )[0]
-            if exit_code == 0:
-                return path
+            exec_result = container.exec_run(["sh", "-c", script], demux=True)
+            raw = (exec_result[1] or b'').decode(errors='replace').strip()
+            # The last line is our echoed code (wget -S headers may precede).
+            code_str = raw.splitlines()[-1].strip() if raw else ''
+            code = int(code_str) if code_str.isdigit() else 0
         except Exception:
             continue
+
+        if code == 0:
+            # Probe tooling missing or connection failed — cannot judge.
+            continue
+        if lo <= code <= hi:
+            return path
+        # 401/403 (auth-locked) and 404 (missing) — wrong path for a
+        # probe; try the next candidate. 5xx and everything else: keep
+        # hunting only for 404-class; a 500-app stays on its primary.
+        # (The loop continues; the caller falls back to the primary.)
+        logger.debug(
+            "Health path probe: %s answered %d — trying next candidate",
+            path, code,
+        )
     return None
 
 

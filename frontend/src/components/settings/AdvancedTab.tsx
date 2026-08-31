@@ -14,8 +14,16 @@ import { Save, AlertTriangle, Check, Loader2, Search, FileText, Code2 } from 'lu
 
 export function AdvancedTab({ service }: { service: Service }) {
     const confirm = useConfirm();
+    // The effective registry comes from the backend (ScopedRegistry
+    // chain → platform config). Never fabricate a hardcoded registry
+    // domain here: the old fallback invented 'registry.Trulay.co/<name>'
+    // for every service and then PERSISTED that bogus image on save.
+    const effectiveRegistry = service.effective_registry || '';
+    const defaultImage = effectiveRegistry
+        ? `${effectiveRegistry}/${service.name}`
+        : (service.docker_image || '');
     const [config, setConfig] = useState<{ docker_image: string; start_command: string; restart_policy: string }>({
-        docker_image: service.docker_image || `registry.Trulay.co/${service.name}`,
+        docker_image: service.docker_image || defaultImage,
         start_command: service.start_command || '',
         restart_policy: service.restart_policy || 'unless-stopped',
     });
@@ -29,11 +37,17 @@ export function AdvancedTab({ service }: { service: Service }) {
         setError('');
         setSaved(false);
         try {
-            await servicesApi.update(service.id, {
-                docker_image: config.docker_image,
+            const payload: Record<string, string> = {
                 start_command: config.start_command,
                 restart_policy: config.restart_policy as Service['restart_policy'],
-            });
+            };
+            // Only send docker_image when the user actually changed it —
+            // otherwise the auto-filled default would get persisted as if
+            // it were an explicit override.
+            if (config.docker_image !== (service.docker_image || defaultImage)) {
+                payload.docker_image = config.docker_image;
+            }
+            await servicesApi.update(service.id, payload as any);
             setSaved(true);
             setTimeout(() => setSaved(false), 3000);
         } catch (err: any) {

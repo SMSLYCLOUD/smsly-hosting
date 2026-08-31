@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { servicesApi, systemApi, Service } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,6 +23,13 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
     const [minReplicas, setMinReplicas] = useState(1);
     const [maxReplicas, setMaxReplicas] = useState(1);
     const [cpuTarget, setCpuTarget] = useState(80);
+    // Dirty-form guard: the parent polls the service every 3s and passes
+    // a NEW object reference each tick. Re-seeding the form from that
+    // prop fought the user's keyboard ("stubborn inputs" — sliders and
+    // fields snapping back mid-edit). Seed once, then leave the form
+    // alone until Save or an explicit refresh lands.
+    const dirtyRef = useRef(false);
+    const seededRef = useRef<string | null>(null);
 
     useEffect(() => {
         (async () => {
@@ -31,19 +38,29 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                     initialService ? Promise.resolve(initialService) : servicesApi.get(serviceId),
                     systemApi.resources()
                 ]);
-                
+
                 if (!initialService) setService(s);
                 setHostResources(hr);
-                
-                setCpu(s.cpu_cores ?? 0.5);
-                setMemory(s.memory_mb ?? 512);
-                setMinReplicas((s as any).min_replicas ?? 1);
-                setMaxReplicas((s as any).max_replicas ?? 1);
-                setCpuTarget((s as any).autoscale_cpu_target ?? 80);
+
+                const key = s.id || serviceId;
+                const shouldSeed = seededRef.current !== key;
+                seededRef.current = key;
+                if (shouldSeed || !dirtyRef.current) {
+                    setCpu(s.cpu_cores ?? 0.5);
+                    setMemory(s.memory_mb ?? 512);
+                    setMinReplicas((s as any).min_replicas ?? 1);
+                    setMaxReplicas((s as any).max_replicas ?? 1);
+                    setCpuTarget((s as any).autoscale_cpu_target ?? 80);
+                }
             } catch (err) { console.error(err); }
             finally { setLoading(false); }
         })();
-    }, [serviceId, initialService]);
+    // Re-run on service id changes only — NOT on the polled object
+    // reference. hostResources is fetched once per mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [serviceId, initialService?.id]);
+
+    const markDirty = () => { dirtyRef.current = true; };
 
     const handleSave = async () => {
         setSaving(true);
@@ -55,6 +72,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                 max_replicas: maxReplicas,
                 autoscale_cpu_target: cpuTarget,
             } as any);
+            dirtyRef.current = false;
             toast({ title: '✓ Resources updated', description: 'Redeploy to apply changes.' });
         } catch (err) {
             toast({ title: 'Failed to save', variant: 'destructive' });
@@ -104,7 +122,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                             {cpuPresets.map(v => (
                                 <button
                                     key={v}
-                                    onClick={() => setCpu(v)}
+                                    onClick={() => { markDirty(); setCpu(v); }}
                                     className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${
                                         cpu === v
                                             ? 'bg-blue-500 text-white border-blue-500 shadow-sm'
@@ -117,7 +135,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                         </div>
                         <input
                             type="range" min="0.25" max={maxCpu} step="0.25"
-                            value={cpu} onChange={e => setCpu(parseFloat(e.target.value))}
+                            value={cpu} onChange={e => { markDirty(); setCpu(parseFloat(e.target.value)); }}
                             className="w-full mt-3 accent-blue-500"
                         />
                         <div className="flex justify-between text-xs text-muted-foreground mt-1">
@@ -135,7 +153,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                             {memPresets.map(v => (
                                 <button
                                     key={v}
-                                    onClick={() => setMemory(v)}
+                                    onClick={() => { markDirty(); setMemory(v); }}
                                     className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${
                                         memory === v
                                             ? 'bg-purple-500 text-white border-purple-500 shadow-sm'
@@ -148,7 +166,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                         </div>
                         <input
                             type="range" min="128" max={maxTotalMem} step="128"
-                            value={memory} onChange={e => setMemory(parseInt(e.target.value))}
+                            value={memory} onChange={e => { markDirty(); setMemory(parseInt(e.target.value)); }}
                             className={`w-full mt-3 ${isUsingSwap ? 'accent-amber-500' : 'accent-purple-500'}`}
                         />
                         <div className="flex justify-between text-xs text-muted-foreground mt-1">
@@ -192,7 +210,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                         <Input
                             type="number" min={1} max={10}
                             value={minReplicas}
-                            onChange={e => setMinReplicas(parseInt(e.target.value) || 1)}
+                            onChange={e => { markDirty(); setMinReplicas(parseInt(e.target.value) || 1); }}
                         />
                     </div>
                     <div>
@@ -203,7 +221,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                         <Input
                             type="number" min={1} max={50}
                             value={maxReplicas}
-                            onChange={e => setMaxReplicas(parseInt(e.target.value) || 1)}
+                            onChange={e => { markDirty(); setMaxReplicas(parseInt(e.target.value) || 1); }}
                         />
                     </div>
                     <div>
@@ -214,7 +232,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                         <Input
                             type="number" min={10} max={95}
                             value={cpuTarget}
-                            onChange={e => setCpuTarget(parseInt(e.target.value) || 80)}
+                            onChange={e => { markDirty(); setCpuTarget(parseInt(e.target.value) || 80); }}
                         />
                         <p className="text-xs text-muted-foreground mt-1">Scale up when CPU exceeds this</p>
                     </div>

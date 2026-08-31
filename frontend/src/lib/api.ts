@@ -351,6 +351,7 @@ export interface Service {
   function_code?: string;
   function_runtime?: string;
   docker_image?: string;
+  effective_registry?: string;
   start_command?: string;
   template_id?: string;
   provider?: string;  // Cloud provider: 'local', 'aws', 'gcp', 'azure', 'digitalocean', etc.
