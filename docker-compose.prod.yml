@@ -796,6 +796,10 @@ services:
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     - /opt/smsly-hosting/cosign-keys:/opt/smsly-hosting/cosign-keys:z
+    # Single-file mount so the mtls views can `docker compose -f` the
+    # SPIRE stack (up/down for spire-server / spire-agent) without
+    # exposing the whole host repo. Read-only: the backend never edits it.
+    - /opt/smsly-hosting/docker-compose.spire.yml:/opt/smsly-hosting/docker-compose.spire.yml:ro,z
     - backups_data:/app/backups
     - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
