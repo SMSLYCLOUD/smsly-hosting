@@ -356,6 +356,145 @@ duplicate.
 
 ---
 
+### 15. docker-py 7.x Silently Drops networking_config
+
+**What happened:** Deploys passed `containers.create(networking_config=<NetworkingConfig>)`
+with no `network` kwarg. docker-py 7.x's `_create_container_args` only honors
+`networking_config` **when `network` is also present**, and its
+`network not in networking_config` sanity check requires a **plain dict**
+(`{net: EndpointConfig}`) — a `NetworkingConfig` wrapper has only one top-level
+key (`"EndpointsConfig"`), so the check fails, the config is silently discarded,
+and the container lands on the default `bridge` (172.17.x.x) with **no aliases**.
+
+**Why it's bad:** Traefik labels pointed at the project-scoped bridge while the
+container was on the default bridge — every redeploy returned "no available
+server" and operators had to re-attach networks by hand from the project page.
+
+**The correct pattern** (verified live):
+```python
+networks = {
+    project_bridge: client.api.create_endpoint_config(aliases=[...]),
+    platform_bridge: client.api.create_endpoint_config(aliases=[...]),
+}
+client.containers.create(..., network=project_bridge, networking_config=networks)
+```
+`network` = the PRIMARY bridge (must be a key of the dict), `networking_config`
+= the plain dict with ALL bridges.
+
+**How to catch:** After any container-create change, immediately inspect the
+running container: `docker inspect <c> --format '{{json .NetworkSettings.Networks}}'`.
+If the container is on `bridge` only, this bug is live.
+
+---
+
+### 16. docker compose --remove-orphans With the Wrong Project Name Kills the Whole Stack
+
+**What happened:** The mTLS deploy ran
+`docker compose -f docker-compose.spire.yml up -d ... --remove-orphans` with
+`cwd=/opt/smsly-hosting`. Compose resolved the project name from that directory —
+the MAIN stack's project — so `--remove-orphans` classified every main-stack
+service (backend, celery, caddy, registry...) as orphans of the spire project
+and **SIGTERM'd them all. Full platform outage** (exit 143 across the board),
+including the DB connection of the request that triggered it.
+
+**Lesson:** When compose-ing a secondary stack that shares a directory (or
+networks) with the main stack, ALWAYS pass an explicit isolated project name
+(`-p smsly-spire`) and NEVER use `--remove-orphans` on it.
+
+**How to catch:** Any `docker compose` call in backend code must be reviewed
+for: explicit `-p`? no `--remove-orphans`? wrong `cwd`?
+
+---
+
+### 17. Egress Wildcards Must Match the Host's Real NIC Names
+
+**What happened:** The egress isolation rules RETURNed internet traffic via
+`-o wl+ / enp+ / eth+` only. The OVH host's NIC is **ens3** — matched by none
+of them — so every packet fell through to the catch-all DROP. The platform's
+infrastructure bridge (celery workers, backend) lost ALL internet: GitHub
+clones timed out, AI providers "Network is unreachable", deploys stuck QUEUED.
+
+**Lesson:** When writing iptables interface wildcards, cover every naming
+scheme (`wl+, enp+, ens+, eth+, eno+`) — or better, enumerate the host's
+actual default-route NICs. `scripts/verify_platform_integrity.sh` now guards
+this on a schedule.
+
+**How to catch:** After applying egress rules, from inside a worker:
+`docker exec smsly-hosting-celery-deploy-1 python -c "import socket; socket.create_connection(('api.github.com',443),timeout=6)"`.
+
+---
+
+### 18. Single-Use Secrets Can't Live in Compose Files
+
+**What happened:** The spire-agent compose service crashed with
+`nodeattestor(join_token): join token was not provided`. Join tokens are
+single-use, minted per boot — a compose `environment:` entry can't carry them.
+
+**Lesson:** For SPIRE agents (or anything with one-shot bootstrap secrets):
+compose-up only the server, then mint the token
+(`spire-server token generate`) and `docker run ... -joinToken <token>` the
+agent. Store the token nowhere. The mtls deploy endpoint
+(`apps/mtls/views.py::_start_agent_with_token`) implements this.
+
+---
+
+### 19. Traefik Healthcheck Labels Need a Path That Actually Answers
+
+**What happened:** A Next.js app served `/api/health` but not `/health`.
+The Docker healthcheck passed (it probes a fallback path list), but the
+Traefik service healthcheck label carried the single primary path `/health`
+→ Traefik marked the backend DOWN → the domain returned "no available server".
+
+**Lesson:** Before promoting, probe the running container for the first
+candidate path that answers within the acceptable status range (default
+200–399, matching Traefik's own rule — 401/403/404 are "wrong path", 5xx
+means keep the primary so the instance is pulled). Direct starts get a
+one-time invisible recreate with corrected labels.
+
+---
+
+### 20. Serializers: get_<field> Must Live on the Class That Declares the Field
+
+**What happened:** `effective_registry` (SerializerMethodField) was declared on
+`ServiceSerializer` (detail) but `get_effective_registry` was added to
+`ServiceListSerializer`. DRF resolves the method on the declaring class only →
+`AttributeError` → **every service detail page 500'd** until hot-fixed.
+
+**How to catch:** When adding a SerializerMethodField, grep the class you
+actually edited for `def get_<field_name>` — not a same-named method on a
+different class in the same file.
+
+---
+
+### 21. Parent Poll Re-seeds Forms and Fights the User's Keyboard
+
+**What happened:** The service detail page polls the service every 3s and passes
+a fresh object reference to tabs. Health/Resources tabs had
+`useEffect([serviceId, initialService])` that re-seeded form state each tick —
+the user's in-progress edits were reverted mid-keystroke ("stubborn inputs").
+
+**Lesson:** With a polled prop, seed form state once (keyed by id), keep a
+dirty-guard while editing, and re-seed only on explicit Save/Refresh. Depend on
+`initialService?.id`, never the object reference.
+
+**How to catch:** Any form component receiving a frequently-refreshed prop must
+use the `dirtyRef`/`seededRef` pattern (see HealthTab.tsx / ResourcesTab.tsx).
+
+---
+
+### 22. Crash Logs Belong in Their Own Field
+
+**What happened:** Runtime crash output was embedded into `build_logs` with
+`--- Runtime Crash Logs ---` markers; the Runtime tab regex-scraped it back out.
+The Build tab therefore showed runtime errors and the Runtime tab showed build
+pipeline text.
+
+**Lesson:** `Deployment.runtime_logs` (migration 0192) is the canonical home for
+runtime/crash output. Writers append there; readers prefer the field and only
+marker-scrape legacy rows. Never append runtime output to `build_logs`.
+
+---
+
 ## Pre-Commit Checklist
 
 Before committing changes to this codebase:
@@ -398,6 +537,20 @@ Before committing changes to this codebase:
     ```
     Any remaining literal values should be replaced with named constants
     (TASK_TIME_LIMIT_*, RETRY_DELAY_*).
+16. **After any container-create networking change:** Deploy one service and
+    run `docker inspect <container> --format '{{json .NetworkSettings.Networks}}'`.
+    The container must be on the project bridge + `smsly-platform-net`, never
+    default `bridge` only (AGENTS.md #15).
+17. **After any `docker compose` call in backend code:** Verify it passes an
+    explicit `-p` project name and NO `--remove-orphans` (AGENTS.md #16).
+18. **After adding a SerializerMethodField:** Grep the DECLARING class for
+    `def get_<field_name>` (AGENTS.md #20).
+19. **After writing iptables egress rules:** Verify the interface wildcards
+    include the host's actual NICs (`wl+, enp+, ens+, eth+, eno+`), then
+    test internet from a worker container (AGENTS.md #17).
+20. **After any form component receives a polled prop:** Verify it uses the
+    `dirtyRef`/`seededRef` pattern and depends on `prop?.id`, not the object
+    reference (AGENTS.md #21).
 
 ---
 
