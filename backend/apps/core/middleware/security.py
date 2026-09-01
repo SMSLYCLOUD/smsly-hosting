@@ -30,6 +30,14 @@ class SecurityMiddleware:
             '/api/v1/accounts/',  # allauth mounted under /api/v1/accounts/ alias
             '/api/v1/auth/',
             '/api/v1/webhooks/',  # Webhooks have their own signature verification
+            # Git provider webhook receivers (GitHub/GitLab/Bitbucket) —
+            # each verifies its provider-specific HMAC (X-Hub-Signature-256,
+            # X-Gitlab-Token, X-Signature) inside the view. The Zero-Trust
+            # gateway HMAC can never apply to them: GitHub does not know our
+            # GATEWAY_SECRET. Without this exemption every push event died
+            # here with "Invalid or missing signature" and push-to-deploy
+            # never fired even with the webhook secret correctly configured.
+            '/api/v1/services/webhook/',
             '/api/v1/system/route-recheck/',  # Public fallback-page recheck hook
             '/api/v1/auth/node-token-exchange',  # Node token exchange handles own auth
             '/api/v1/transfers/register-incoming/',  # Transfer sync verifies node auth in-view
