@@ -57,6 +57,88 @@ def _docker_compose_base() -> list[str]:
     return ["docker-compose"]
 
 
+# Distinct compose project name for the SPIRE stack. CRITICAL: running
+# the spire compose file under the MAIN project's name (the default when
+# cwd is /opt/smsly-hosting) plus --remove-orphans made compose treat the
+# whole main stack (backend, celery, caddy...) as orphans of the spire
+# project and SIGTERM them all — a full platform outage. A dedicated
+# project name scopes every compose operation to the spire services only.
+_SPIRE_COMPOSE_PROJECT = ["-p", "smsly-spire"]
+
+# Docker network the SPIRE containers attach to (matches the spire
+# compose file's external network).
+_SPIRE_NETWORK = os.getenv("SPIRE_NETWORK", "smsly-net")
+
+
+def _mint_join_token(server_container: str) -> str | None:
+    """Ask a running SPIRE server for a fresh join token."""
+    try:
+        r = subprocess.run(
+            ["docker", "exec", server_container,
+             "/opt/spire/bin/spire-server", "token", "generate",
+             "-socketPath", "/tmp/spire-server/private/api.sock"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0:
+            for line in (r.stdout or "").splitlines():
+                if "Token:" in line:
+                    return line.split("Token:", 1)[1].strip()
+    except Exception as exc:
+        logger.warning("join token mint failed on %s: %s", server_container, exc)
+    return None
+
+
+def _start_agent_with_token(
+    agent_container: str,
+    server_container: str,
+    agent_conf_path: str,
+    data_volume: str,
+    socket_volume: str,
+    svids_volume: str,
+) -> str:
+    """(Re)start a SPIRE agent with a freshly minted join token.
+
+    The compose file's spire-agent service can't carry the one-time token
+    (join tokens are single-use secrets minted per boot), so the agent is
+    started with docker run -joinToken. Idempotent: an already-running
+    agent is left alone.
+    """
+    if _container_running(agent_container):
+        return "already_running"
+
+    token = _mint_join_token(server_container)
+    if not token:
+        return "error: could not mint join token (is the server healthy?)"
+
+    subprocess.run(
+        ["docker", "rm", "-f", agent_container],
+        capture_output=True, text=True, timeout=15,
+    )
+    try:
+        r = subprocess.run(
+            [
+                "docker", "run", "-d",
+                "--name", agent_container,
+                "--hostname", agent_container,
+                "--network", _SPIRE_NETWORK,
+                "--restart", "unless-stopped",
+                "-v", f"{data_volume}:/opt/spire/data",
+                "-v", f"{socket_volume}:/opt/spire/run",
+                "-v", f"{svids_volume}:/opt/spire/svids",
+                "-v", f"{agent_conf_path}:/etc/spire/agent.conf:ro,z",
+                "ghcr.io/spiffe/spire-agent:1.9.6",
+                "-config", "/etc/spire/agent.conf",
+                "-joinToken", token,
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode == 0:
+            return "started"
+        return f"error: {r.stderr[:200]}"
+    except Exception as exc:
+        return f"error: {exc}"
+
+
 def _container_running(container_name: str) -> bool:
     """Check if a Docker container is running."""
     try:
@@ -264,14 +346,38 @@ def mtls_spire_deploy(request):
         else:
             try:
                 r = subprocess.run(
-                    [*_docker_compose_base(), "-f", spire_file,
-                     "up", "-d", "spire-server", "spire-agent", "--remove-orphans"],
-                    capture_output=True, text=True, timeout=120,
+                    [*_docker_compose_base(), *_SPIRE_COMPOSE_PROJECT, "-f", spire_file,
+                     "up", "-d", "spire-server"],
+                    capture_output=True, text=True, timeout=180,
                     cwd="/opt/smsly-hosting",
                 )
-                results["platform"] = "deployed" if r.returncode == 0 else f"error: {r.stderr[:300]}"
+                if r.returncode != 0:
+                    results["platform"] = f"error: {r.stderr[:300]}"
+                else:
+                    # Wait for the server healthcheck to pass so a join
+                    # token can be minted (server needs a few seconds).
+                    import time as _time
+                    for _ in range(30):
+                        if _container_running(PLATFORM_SPIRE_SERVER_CONTAINER):
+                            break
+                        _time.sleep(2)
+                    results["platform"] = "deployed"
             except Exception as e:
                 results["platform"] = f"error: {e}"
+
+        # The agent always gets a fresh join token — tokens are single-use.
+        if str(results.get("platform", "")).startswith(("deployed", "already")):
+            agent_result = _start_agent_with_token(
+                agent_container=PLATFORM_SPIRE_AGENT_CONTAINER,
+                server_container=PLATFORM_SPIRE_SERVER_CONTAINER,
+                agent_conf_path="/opt/smsly-hosting/infrastructure/spire/agent.conf",
+                data_volume="smsly-hosting_spire-agent-data",
+                socket_volume="smsly-hosting_spire-agent-socket",
+                svids_volume="smsly-hosting_spire-agent-svids",
+            )
+            results["platform_agent"] = agent_result
+            if str(agent_result).startswith("error"):
+                results["platform"] = f"server ok, agent error: {agent_result}"
 
     if scope in ("ecosystem", "both"):
         already = _container_running(ECOSYSTEM_SPIRE_SERVER_CONTAINER)
@@ -280,14 +386,35 @@ def mtls_spire_deploy(request):
         else:
             try:
                 r = subprocess.run(
-                    [*_docker_compose_base(), "-f", spire_file,
-                     "up", "-d", "spire-server-ecosystem", "spire-agent-ecosystem", "--remove-orphans"],
-                    capture_output=True, text=True, timeout=120,
+                    [*_docker_compose_base(), *_SPIRE_COMPOSE_PROJECT, "-f", spire_file,
+                     "up", "-d", "spire-server-ecosystem"],
+                    capture_output=True, text=True, timeout=180,
                     cwd="/opt/smsly-hosting",
                 )
-                results["ecosystem"] = "deployed" if r.returncode == 0 else f"error: {r.stderr[:300]}"
+                if r.returncode != 0:
+                    results["ecosystem"] = f"error: {r.stderr[:300]}"
+                else:
+                    import time as _time
+                    for _ in range(30):
+                        if _container_running(ECOSYSTEM_SPIRE_SERVER_CONTAINER):
+                            break
+                        _time.sleep(2)
+                    results["ecosystem"] = "deployed"
             except Exception as e:
                 results["ecosystem"] = f"error: {e}"
+
+        if str(results.get("ecosystem", "")).startswith(("deployed", "already")):
+            agent_result = _start_agent_with_token(
+                agent_container=ECOSYSTEM_SPIRE_AGENT_CONTAINER,
+                server_container=ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+                agent_conf_path="/opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf",
+                data_volume="smsly-hosting_spire-ecosystem-agent-data",
+                socket_volume="smsly-hosting_spire-ecosystem-agent-socket",
+                svids_volume="smsly-hosting_spire-ecosystem-agent-svids",
+            )
+            results["ecosystem_agent"] = agent_result
+            if str(agent_result).startswith("error"):
+                results["ecosystem"] = f"server ok, agent error: {agent_result}"
 
     # Update PlatformConfig flags
     if scope in ("platform", "both"):
@@ -327,8 +454,12 @@ def mtls_spire_undeploy(request):
     if scope in ("platform", "both"):
         try:
             subprocess.run(
-                [*_docker_compose_base(), "-f", spire_file,
-                 "rm", "-fsv", "spire-server", "spire-agent"],
+                ["docker", "rm", "-f", PLATFORM_SPIRE_AGENT_CONTAINER],
+                capture_output=True, text=True, timeout=30,
+            )
+            subprocess.run(
+                [*_docker_compose_base(), *_SPIRE_COMPOSE_PROJECT, "-f", spire_file,
+                 "rm", "-fsv", "spire-server"],
                 capture_output=True, text=True, timeout=60,
                 cwd="/opt/smsly-hosting",
             )
@@ -340,8 +471,12 @@ def mtls_spire_undeploy(request):
     if scope in ("ecosystem", "both"):
         try:
             subprocess.run(
-                [*_docker_compose_base(), "-f", spire_file,
-                 "rm", "-fsv", "spire-server-ecosystem", "spire-agent-ecosystem"],
+                ["docker", "rm", "-f", ECOSYSTEM_SPIRE_AGENT_CONTAINER],
+                capture_output=True, text=True, timeout=30,
+            )
+            subprocess.run(
+                [*_docker_compose_base(), *_SPIRE_COMPOSE_PROJECT, "-f", spire_file,
+                 "rm", "-fsv", "spire-server-ecosystem"],
                 capture_output=True, text=True, timeout=60,
                 cwd="/opt/smsly-hosting",
             )
