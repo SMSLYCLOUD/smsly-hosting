@@ -35,6 +35,28 @@ SPIRE_SERVER_SOCKET = "/tmp/spire-server/private/api.sock"
 SPIRE_AGENT_SOCKET = "/opt/spire/run/agent.sock"
 
 
+def _docker_compose_base() -> list[str]:
+    """Return the compose command prefix available in this container.
+
+    The backend image ships the docker CLI; compose support is either the
+    plugin (``docker compose``) or the standalone binary (``docker-compose``).
+    The old code hard-coded ``docker compose`` and, on images with the
+    plugin missing, docker parsed ``-f`` as its own shorthand flag and the
+    SPIRE deploy failed with "unknown shorthand flag: 'f' in -f" — leaving
+    mtls_enabled stuck False.
+    """
+    try:
+        probe = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if probe.returncode == 0:
+            return ["docker", "compose"]
+    except Exception:
+        pass
+    return ["docker-compose"]
+
+
 def _container_running(container_name: str) -> bool:
     """Check if a Docker container is running."""
     try:
@@ -242,7 +264,7 @@ def mtls_spire_deploy(request):
         else:
             try:
                 r = subprocess.run(
-                    ["docker", "compose", "-f", spire_file,
+                    [*_docker_compose_base(), "-f", spire_file,
                      "up", "-d", "spire-server", "spire-agent", "--remove-orphans"],
                     capture_output=True, text=True, timeout=120,
                     cwd="/opt/smsly-hosting",
@@ -258,7 +280,7 @@ def mtls_spire_deploy(request):
         else:
             try:
                 r = subprocess.run(
-                    ["docker", "compose", "-f", spire_file,
+                    [*_docker_compose_base(), "-f", spire_file,
                      "up", "-d", "spire-server-ecosystem", "spire-agent-ecosystem", "--remove-orphans"],
                     capture_output=True, text=True, timeout=120,
                     cwd="/opt/smsly-hosting",
@@ -305,7 +327,7 @@ def mtls_spire_undeploy(request):
     if scope in ("platform", "both"):
         try:
             subprocess.run(
-                ["docker", "compose", "-f", spire_file,
+                [*_docker_compose_base(), "-f", spire_file,
                  "rm", "-fsv", "spire-server", "spire-agent"],
                 capture_output=True, text=True, timeout=60,
                 cwd="/opt/smsly-hosting",
@@ -318,7 +340,7 @@ def mtls_spire_undeploy(request):
     if scope in ("ecosystem", "both"):
         try:
             subprocess.run(
-                ["docker", "compose", "-f", spire_file,
+                [*_docker_compose_base(), "-f", spire_file,
                  "rm", "-fsv", "spire-server-ecosystem", "spire-agent-ecosystem"],
                 capture_output=True, text=True, timeout=60,
                 cwd="/opt/smsly-hosting",

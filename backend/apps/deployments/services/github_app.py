@@ -285,15 +285,52 @@ class GitHubAppService:
     ) -> int | None:
         """Look up the numeric ID of a repo via the installation's repo list.
 
+        ``GET /installation/repositories`` requires an INSTALLATION token —
+        calling it with the App JWT returns 401 (exactly what the old code
+        did, so repo-scoped tokens silently degraded to bare installation
+        tokens). We mint a short-lived bare installation token here purely
+        for the listing, then the caller re-uses the JWT to mint the
+        repo-scoped token.
+
         Returns None if the repo isn't in this installation's accessible
         set — the caller will fall back to a bare installation token
         which still works for public repos and for "all repositories"
         installations.
         """
+        # Mint a listing token (JWT cannot call /installation/repositories).
+        try:
+            listing_resp = requests.post(
+                f"{_GH_API}/app/installations/{installation_id}/access_tokens",
+                headers=headers,
+                json={},
+                timeout=10,
+            )
+        except requests.Timeout:
+            logger.warning("GitHubAppService: timeout minting listing token")
+            return None
+        except Exception as exc:
+            logger.warning("GitHubAppService: minting listing token failed: %s", exc)
+            return None
+
+        if listing_resp.status_code != 201:
+            logger.warning(
+                "GitHubAppService: listing token creation returned status %s",
+                listing_resp.status_code,
+            )
+            return None
+        listing_token = listing_resp.json().get("token")
+        if not listing_token:
+            return None
+        listing_headers = {
+            "Authorization": f"token {listing_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
         try:
             resp = requests.get(
                 f"{_GH_API}/installation/repositories",
-                headers=headers,
+                headers=listing_headers,
                 params={"per_page": 100},
                 timeout=10,
             )
