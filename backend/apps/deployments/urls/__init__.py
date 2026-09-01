@@ -47,6 +47,11 @@ from ..views.github_app import (
     github_app_installation_repos,
     github_app_installations,
 )
+# One-click GitHub App creation (manifest flow) — no manual pasting.
+from apps.cloud.views.github_app_manifest import (
+    github_app_manifest_setup,
+    github_app_manifest_url,
+)
 from ..views.gitlab import gitlab_branches, gitlab_commits, gitlab_repos
 from ..views.health_webhook import ServiceHealthWebhookView
 from ..views.integrations import (
@@ -211,6 +216,13 @@ urlpatterns = [
     path('integrations/github/app/installations/', github_app_installations, name='github-app-installations'),
     path('integrations/github/app/installations/<int:installation_id>/repos/', github_app_installation_repos, name='github-app-installation-repos'),
     path('integrations/github/app/installations/<int:installation_id>/', github_app_installation_delete, name='github-app-installation-delete'),
+    # GitHub App MANIFEST flow (one-click App creation — Railway-style).
+    # github.com/settings/apps/new?manifest=<jwt> -> user clicks Create ->
+    # GitHub redirects to setup/ with a one-time code -> backend exchanges
+    # it and stores every credential (app id, client id/secret, private
+    # key, webhook secret). No manual pasting, ever.
+    path('integrations/github/app-manifest/url/', github_app_manifest_url, name='github-app-manifest-url'),
+    path('integrations/github/app-manifest/setup/', github_app_manifest_setup, name='github-app-manifest-setup'),
     # GitLab integration
     path('integrations/gitlab/', gitlab_connection, name='gitlab-connection'),
     path('integrations/gitlab/oauth-url/', gitlab_oauth_url, name='gitlab-oauth-url'),

@@ -107,9 +107,32 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
     } catch (e: any) {
       const message =
         e?.response?.data?.error || "Unable to start GitHub App installation.";
-      setConnectError(String(message));
+      setInstallError(String(message));
     } finally {
       setInstallLoading(false);
+    }
+  };
+
+  // One-click GitHub App creation via the manifest flow (like Railway):
+  // backend builds a signed manifest -> GitHub pre-fills the App form ->
+  // user clicks Create -> GitHub redirects back with a one-time code ->
+  // backend exchanges it and stores ALL credentials automatically.
+  // The user never pastes an App ID, secret, key, or webhook secret.
+  const [manifestLoading, setManifestLoading] = useState(false);
+  const startGitHubAppManifest = async () => {
+    setManifestLoading(true);
+    setInstallError(null);
+    try {
+      const res = await api.get("/integrations/github/app-manifest/url/");
+      const target = res.data?.url;
+      if (!target) throw new Error("No manifest URL returned");
+      window.location.assign(target);
+    } catch (e: any) {
+      const message =
+        e?.response?.data?.error || "Unable to start GitHub App creation.";
+      setInstallError(String(message));
+    } finally {
+      setManifestLoading(false);
     }
   };
 
@@ -309,12 +332,31 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                     </p>
                   )
                 ) : (
-                  <ol className="text-xs text-muted-foreground space-y-1.5 list-decimal list-inside">
-                    <li>Create a GitHub App at <a href="https://github.com/organizations/SMSLYCLOUD/settings/apps/new" target="_blank" rel="noreferrer" className="text-primary hover:underline">GitHub Apps</a></li>
-                    <li>Name: <code className="bg-muted px-1 rounded">smslycloud</code></li>
-                    <li>Webhook URL: <code className="bg-muted px-1 rounded">https://your-domain/webhooks/github/</code></li>
-                    <li>Run: <code className="bg-muted px-1 rounded">python manage.py setup_github --app-id ID --private-key key.pem</code></li>
-                  </ol>
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Create the platform&apos;s GitHub App in one click — GitHub
+                      pre-fills everything and the platform receives all
+                      credentials automatically. No manual setup, no pasting
+                      secrets.
+                    </p>
+                    <Button
+                      onClick={startGitHubAppManifest}
+                      disabled={manifestLoading}
+                      className="gap-2"
+                    >
+                      {manifestLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Github className="w-4 h-4" />
+                      )}
+                      Create &amp; Connect GitHub App
+                    </Button>
+                    <p className="text-[11px] text-muted-foreground">
+                      You&apos;ll be sent to GitHub to confirm — the App is
+                      created under your account with webhooks for
+                      push-to-deploy already wired.
+                    </p>
+                  </div>
                 )}
               </div>
             )}
