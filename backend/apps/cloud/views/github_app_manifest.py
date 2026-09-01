@@ -78,7 +78,11 @@ def _build_manifest(base_url: str, webhook_secret: str) -> dict:
         "name": "SMSLY Cloud",
         "url": base_url,
         "hook_attributes": {
-            "url": f"{base_url}/api/v1/services/webhook/github/",
+            # The REAL routed webhook receiver (URL conf: deployments.urls
+            # mounts 'webhooks/github/' under /api/v1/). An earlier
+            # revision pointed at /api/v1/services/webhook/github/ which
+            # does not exist — GitHub delivered every push to a 404.
+            "url": f"{base_url}/api/v1/webhooks/github/",
             # GitHub generates its own secret when empty; we instead
             # SUPPLY one so the webhook receiver's HMAC verification keys
             # already match — no paste, no drift.

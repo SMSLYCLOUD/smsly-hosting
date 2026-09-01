@@ -30,7 +30,7 @@ class GitWebhookExemptionTests(SimpleTestCase):
     @override_settings(DEBUG=False)
     def test_github_webhook_path_is_exempt(self):
         self.assertFalse(
-            self._is_enforced("/api/v1/services/webhook/github/"),
+            self._is_enforced("/api/v1/webhooks/github/"),
             "GitHub webhook receiver must be exempt from gateway HMAC — "
             "GitHub cannot know GATEWAY_SECRET and verifies its own "
             "X-Hub-Signature-256 inside the view.",
