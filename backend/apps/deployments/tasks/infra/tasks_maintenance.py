@@ -185,3 +185,31 @@ def reconcile_network_isolation_task():
     except Exception as e:
         logger.error("network isolation reconcile failed: %s", e)
         return {"status": "error", "reason": str(e)}
+
+
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.cleanup_orphaned_containers_task")
+def cleanup_orphaned_containers_task():
+    """Periodic orphan sweep: stale green candidates (stopped OR running),
+    expired rollback backups, containers for services/addons missing from
+    the DB, and unused image layers.
+
+    Before this was scheduled, orphaned greens from crashed promotes sat
+    "Up (unhealthy)" for DAYS — the old rule only ever collected STOPPED
+    containers, and nothing invoked the cleanup on a schedule at all.
+    Registered in celery.py beat_schedule every 30 minutes.
+    """
+    try:
+        details = _clear_orphaned_runtime_resources()
+        removed = details.get("removed", [])
+        if removed:
+            logger.info(
+                "orphan sweep removed %d container(s): %s",
+                len(removed),
+                ", ".join(r.get("name", "?") for r in removed[:10]),
+            )
+        else:
+            logger.info("orphan sweep: nothing to remove")
+        return {"status": "ok", **details}
+    except Exception as e:
+        logger.error("orphan sweep failed: %s", e)
+        return {"status": "error", "reason": str(e)}

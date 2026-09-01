@@ -86,19 +86,50 @@ def _is_stale_maintenance_container(
     active_service_ids: set,
     active_addon_ids: set,
     active_service_names: set,
+    live_container_ids: set | None = None,
+    live_container_names: set | None = None,
 ) -> tuple[bool, str]:
     name = str(getattr(container, "name", "") or "")
     labels = getattr(container, "labels", None) or {}
     status_value = str(getattr(container, "status", "") or "").lower()
-    if status_value not in {"exited", "created", "dead"}:
-        return False, "container is not stopped"
+    stopped = status_value in {"exited", "created", "dead"}
 
     service_id = str(labels.get("smsly.service_id") or "").strip()
     addon_id = str(labels.get("smsly.addon_id") or "").strip()
     canonical_name = str(labels.get("smsly.blue_green.canonical_name") or "").strip()
 
+    # ── Stale blue-green candidates ────────────────────────────────────
+    # A "-green-<hex>" container is a promote candidate. If it is the
+    # container a Deployment actually references (staged review) it must
+    # survive; otherwise — stopped OR running — it is an orphan from a
+    # crashed/superseded promote and wastes RAM indefinitely. The old
+    # code only considered STOPPED containers, so the "Up 42 hours
+    # (unhealthy)" greens from the pre-auto-promote era were never
+    # collected.
     if "-green-" in name:
-        return True, "stale blue-green candidate"
+        if live_container_ids and container.id in live_container_ids:
+            return False, "green is referenced by a live deployment (staged)"
+        if live_container_names and name in live_container_names:
+            return False, "green is referenced by a live deployment (staged)"
+        return True, "stale blue-green candidate (not referenced by any deployment)"
+
+    # ── Expired rollback backups ───────────────────────────────────────
+    # promote_container stamps smsly.rollback.ttl (epoch seconds) on the
+    # renamed backup. After the grace period it is collectable whether
+    # stopped or still running.
+    ttl_epoch = str(labels.get("smsly.rollback.ttl") or "").strip()
+    if ttl_epoch:
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            if _dt.fromtimestamp(float(ttl_epoch), _tz.utc) <= timezone.now():
+                return True, "rollback grace period expired"
+        except (ValueError, OSError):
+            pass
+        # TTL not yet expired — always keep, even if stopped.
+        return False, "rollback within grace period"
+
+    if not stopped:
+        return False, "container is not stopped"
 
     if addon_id:
         return addon_id not in active_addon_ids, "addon missing from DB"
@@ -135,12 +166,36 @@ def _clear_orphaned_runtime_resources() -> dict:
         for value in Addon.objects.exclude(status="DELETED").values_list("id", flat=True)
     }
 
+    # Containers that live deployments actually reference (container_id /
+    # green_container_id). A staged green awaiting promote is a REVIEW
+    # artifact — it must NOT be collected. Only greens referenced by NO
+    # deployment are orphans.
+    live_container_ids: set = set()
+    live_container_names: set = set()
+    try:
+        from apps.deployments.models import Deployment
+        for dep in (
+            Deployment.objects.exclude(status__in=["FAILED", "CANCELLED"])
+            .exclude(container_id__isnull=True)
+            .values_list("container_id", "green_container_id")
+        ):
+            for cid in dep:
+                cid = (cid or "").strip()
+                if cid:
+                    live_container_ids.add(cid)
+                    live_container_names.add(cid)  # container_id may be a name
+    except Exception as exc:
+        logger.warning("Could not build live-deployment reference set: %s", exc)
+
     removed = []
     skipped = []
     errors = []
     containers = client.containers.list(
         all=True,
-        filters={"status": ["exited", "created", "dead"]},
+        # Include RUNNING containers: stale greens and expired rollbacks
+        # can be Up for days while nothing references them. The per-rule
+        # checks below decide what is safe to remove.
+        filters={"status": ["running", "exited", "created", "dead"]},
     )
     for container in containers:
         should_remove, reason = _is_stale_maintenance_container(
@@ -148,6 +203,8 @@ def _clear_orphaned_runtime_resources() -> dict:
             active_service_ids=active_service_ids,
             active_addon_ids=active_addon_ids,
             active_service_names=active_service_names,
+            live_container_ids=live_container_ids,
+            live_container_names=live_container_names,
         )
         if not should_remove:
             skipped.append({"name": container.name, "reason": reason})

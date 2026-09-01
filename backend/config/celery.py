@@ -109,6 +109,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
+    'apps.deployments.tasks.cleanup_orphaned_containers_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_release_wave_task': {'queue': 'fast'},
@@ -248,6 +249,16 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.orphan_addon_gc_task',
         'schedule': 3600.0,
         'options': {'expires': 3600.0},
+    },
+    # Orphaned runtime-container sweep: stale green candidates (running
+    # OR stopped) not referenced by any deployment, expired rollback
+    # backups, and containers for DB-missing services/addons. Before this
+    # was scheduled, greens from crashed promotes stayed "Up (unhealthy)"
+    # for days — the old rule only ever collected STOPPED containers.
+    'cleanup-orphaned-containers-every-30m': {
+        'task': 'apps.deployments.tasks.cleanup_orphaned_containers_task',
+        'schedule': 1800.0,
+        'options': {'expires': 1800.0},
     },
     # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
     'recover-stalled-deletions-every-5m': {
