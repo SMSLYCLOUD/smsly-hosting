@@ -128,6 +128,33 @@ def _is_stale_maintenance_container(
         # TTL not yet expired — always keep, even if stopped.
         return False, "rollback within grace period"
 
+    # ── Rollback backups WITHOUT a TTL label ───────────────────────────
+    # Labels are immutable on running containers, so on some hosts the
+    # promote-time `update(labels=...)` silently fails and the backup has
+    # no smsly.rollback.ttl to expire. Fall back to the -rollback-<hex>
+    # name pattern + container age: past the configured grace it is
+    # collectable, running or stopped.
+    if "-rollback-" in name and labels.get("managed_by") == "smsly-hosting":
+        try:
+            grace_min = 10
+            try:
+                from apps.deployments.models import PlatformConfig
+                grace_min = int(PlatformConfig.load().rollback_grace_minutes or 10)
+            except Exception:
+                grace_min = 10
+            created = getattr(container, "attrs", {}).get("Created", "")
+            if created:
+                from datetime import datetime as _dt
+                # Docker timestamps are ISO-8601 with nanoseconds; trim.
+                created_dt = _dt.fromisoformat(str(created)[:26] + "+00:00")
+                age_min = (timezone.now() - created_dt).total_seconds() / 60
+                if age_min >= grace_min:
+                    return True, f"rollback backup older than {grace_min}m grace (no ttl label)"
+                return False, "rollback within grace period (no ttl label)"
+        except Exception:
+            pass
+        return False, "rollback (age unknown)"
+
     if not stopped:
         return False, "container is not stopped"
 
