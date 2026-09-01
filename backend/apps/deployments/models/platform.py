@@ -273,6 +273,38 @@ class PlatformConfig(models.Model):
     wildcard_subdomains = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="Enable wildcard SSL for *.domain deployed services")
+    # ── Edge Shield: BGP-hijack / route-hijack defense-in-depth ──────────
+    # Verified 2026-09-01: all DNS records resolve directly to the OVH
+    # origin IP (DNS-only on Cloudflare), the zone is not DNSSEC-signed,
+    # and 80/443 accept traffic from anywhere. A more-specific BGP
+    # announcement of the covering prefix redirects users to an
+    # attacker with zero detection. These fields drive the shield.
+    edge_proxy_records = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Edge Shield: route DNS records through the Cloudflare "
+                  "proxy (Anycast) instead of DNS-only to the origin IP. "
+                  "Absorbs BGP hijack of the origin prefix and L3-L4 DDoS.")
+    edge_origin_lockdown = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Edge Shield: firewall 80/443 on the host to accept "
+                  "only Cloudflare IP ranges so hijacked or direct traffic "
+                  "cannot bypass the edge. SSH and the OVH/WireGuard mesh "
+                  "are unaffected.")
+    edge_dnssec = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Edge Shield: enable DNSSEC on the Cloudflare zone and "
+                  "surface the DS record for the registrar (blocks "
+                  "DNS-response forgery, the other half of a BGP hijack).")
+    edge_shield_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Edge Shield master toggle — True once the "
+                  "deploy_edge_shield command has applied proxy + "
+                  "lockdown + DNSSEC successfully.")
+    edge_shield_ds_record = models.TextField(  # type: ignore[var-annotated]
+        blank=True, default='',
+        help_text="DS record (key, algo, digest) returned when DNSSEC was "
+                  "enabled — must be added at the registrar to complete "
+                  "the chain of trust.")
     server_ip = models.GenericIPAddressField(  # type: ignore[var-annotated]
         blank=True, null=True,
         help_text="Server public IP (auto-detected or manual)")

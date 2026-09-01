@@ -71,6 +71,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.ai.tasks_code_intelligence  # noqa: F401  # deep_scan_and_verify_task
     import apps.deployments.tasks.infra.tasks_health  # noqa: F401  # check_agent_heartbeats_task
     import apps.deployments.tasks.infra.tasks_maintenance  # noqa: F401  # run_maintenance, registry_gc, reconcile_network_isolation_task
+    import apps.deployments.tasks.edge_shield_watchdog  # noqa: F401  # BGP/DNS hijack symptom detection
     import apps.deployments.tasks.infra.tasks_container_hygiene  # noqa: F401  # restart-loop watchdog, orphan addon GC
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
@@ -110,6 +111,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
     'apps.deployments.tasks.cleanup_orphaned_containers_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.edge_shield_watchdog': {'queue': 'fast'},
     'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_release_wave_task': {'queue': 'fast'},
@@ -259,6 +261,15 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.cleanup_orphaned_containers_task',
         'schedule': 1800.0,
         'options': {'expires': 1800.0},
+    },
+    # Edge Shield watchdog: BGP/DNS hijack symptom detection — multi-
+    # vantage DNS (answers must be Cloudflare edges, never the origin
+    # IP), RPKI validity of the covering aggregate. Pages via the
+    # standard alert pipeline on the first anomaly.
+    'edge-shield-watchdog-every-5m': {
+        'task': 'apps.deployments.tasks.edge_shield_watchdog',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
     'recover-stalled-deletions-every-5m': {
