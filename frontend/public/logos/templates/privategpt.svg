@@ -1,11 +1,6 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#8b5cf6"/>
-      <stop offset="100%" stop-color="#6d28d9"/>
-    </linearGradient>
-  </defs>
-  <rect width="32" height="32" rx="6" fill="url(#grad)"/>
-  <text x="16" y="22" text-anchor="middle" fill="white" font-family="system-ui,sans-serif" font-size="16" font-weight="600">P</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="14" fill="#0A0E1A"/>
+  <path d="M32 14 L46 20 V32 C46 41 39 48 32 50 C25 48 18 41 18 32 V20 Z" stroke="#3B82F6" stroke-width="3" fill="#1E3A8A" fill-opacity="0.3" stroke-linejoin="round"/>
+  <rect x="27" y="30" width="10" height="9" rx="2" fill="#60A5FA"/>
+  <path d="M29 30 V27 C29 25.3 30.3 24 32 24 C33.7 24 35 25.3 35 27 V30" stroke="#60A5FA" stroke-width="2.5"/>
 </svg>
