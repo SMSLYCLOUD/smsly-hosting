@@ -132,13 +132,16 @@ def _zone_records(token: str, zone_id: str) -> list[dict]:
     return result if isinstance(result, list) else []
 
 
-def _proxy_dns_records(token: str, zone_id: str, report: EdgeShieldReport) -> None:
-    """Flip every A/AAAA record in the zone to proxied=True.
+def _proxy_dns_records(token: str, zone_id: str, report: EdgeShieldReport,
+                       *, proxy_wildcards: bool = False) -> None:
+    """Flip zone records to proxied=True (orange cloud).
 
-    Wildcards (*.grid.smsly.cloud) and apex records all become orange-
-    cloud. Proxied records hide the origin IP from DNS and route traffic
-    through Cloudflare's network. AAAA records pointing at the OVH host
-    do not exist today; any that appear are proxied too.
+    Wildcards (*.domain) are skipped unless *proxy_wildcards* — Cloudflare
+    Universal SSL only covers the zone + first-level wildcard; a proxied
+    third-level wildcard (*.grid.example.com) cannot present a matching
+    edge certificate and EVERY hostname under it fails with
+    ERR_SSL_VERSION_OR_CIPHER_MISMATCH (the 2026-09-02 outage). Wildcards
+    must stay DNS-only so origin on-demand TLS serves them.
     """
     records = _zone_records(token, zone_id)
     if not records:
@@ -150,8 +153,24 @@ def _proxy_dns_records(token: str, zone_id: str, report: EdgeShieldReport) -> No
         if record.get("type") not in ("A", "AAAA", "CNAME"):
             skipped.append(record.get("name"))
             continue
+        name = str(record.get("name") or "")
+        if name.startswith("*") and not proxy_wildcards:
+            # Wildcard: DNS-only by design (see docstring). If a previous
+            # run proxied it, un-proxy it back.
+            if record.get("proxied"):
+                result = _cf(
+                    requests.patch, "PATCH",
+                    f"/zones/{zone_id}/dns_records/{record['id']}",
+                    token,
+                    json={"proxied": False},
+                )
+                if result is not None:
+                    skipped.append(f"{name} (un-proxied back to DNS-only)")
+                    continue
+            skipped.append(f"{name} (wildcard — DNS-only)")
+            continue
         if record.get("proxied"):
-            already.append(record.get("name"))
+            already.append(name)
             continue
         # Some records are structurally un-proxyable BY DESIGN: e.g.
         # Zoho/Microsoft domain-ownership verification CNAMEs
@@ -161,7 +180,7 @@ def _proxy_dns_records(token: str, zone_id: str, report: EdgeShieldReport) -> No
         # DNS-only intentionally and are NOT an origin-exposure gap: they
         # point at third-party hosts, never at our origin IP.
         if record.get("proxiable") is False:
-            skipped.append(f"{record.get('name')} (proxiable=false)")
+            skipped.append(f"{name} (proxiable=false)")
             continue
         result = _cf(
             requests.patch, "PATCH",
@@ -170,11 +189,11 @@ def _proxy_dns_records(token: str, zone_id: str, report: EdgeShieldReport) -> No
             json={"proxied": True},
         )
         if result and result.get("proxied"):
-            flipped.append(record.get("name"))
+            flipped.append(name)
         else:
             report.step(
                 "proxy_record", "error",
-                f"{record.get('name')}: patch failed",
+                f"{name}: patch failed",
             )
 
     detail = f"proxied {len(flipped)} ({', '.join(flipped[:8])}), " \

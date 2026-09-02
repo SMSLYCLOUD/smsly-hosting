@@ -305,11 +305,25 @@ class PlatformConfig(models.Model):
         help_text="DS record (key, algo, digest) returned when DNSSEC was "
                   "enabled — must be added at the registrar to complete "
                   "the chain of trust.")
+    media_repo_url = models.CharField(  # type: ignore[var-annotated]
+        max_length=512, blank=True, default='',
+        help_text="URL of the Git repository containing media provisioning scripts/code (e.g. Github/Gitlab)")
+    media_repo_token = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="Custom scoped token to clone the media repo")
     preview_auth_required = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="Require basic-auth on all preview environment URLs. "
                   "Previews often carry cloned production databases and "
                   "must not be publicly browsable.")
+    edge_proxy_wildcards = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Edge Shield: ALSO proxy wildcard records (*.domain). "
+                  "DANGEROUS for third-level wildcards (*.grid.example.com) — "
+                  "Cloudflare Universal SSL does not cover them and every "
+                  "deployed service gets ERR_SSL_VERSION_OR_CIPHER_MISMATCH. "
+                  "Only enable if every wildcard is second-level under the "
+                  "zone apex AND you use Advanced Certificates.")
     server_ip = models.GenericIPAddressField(  # type: ignore[var-annotated]
         blank=True, null=True,
         help_text="Server public IP (auto-detected or manual)")
