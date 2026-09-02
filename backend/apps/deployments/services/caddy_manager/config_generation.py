@@ -390,42 +390,53 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     )
 
             from apps.domains.models import DomainStatus
-            for domain_obj in service.domain_instances.filter(
-                status__in=[
-                    DomainStatus.ACTIVE,
-                    DomainStatus.DNS_VERIFIED,
-                    DomainStatus.SSL_PROVISIONING,
-                ],
-                verified=True,
+            # VISIBILITY GATE: a Private service (is_public=False) or a
+            # Hidden default-domain (public_domain_hidden=True) must not
+            # keep custom domains publicly reachable — the toggle's
+            # promise is honored end to end (Railway behavior for
+            # private services). Skip the entire custom-domain loop.
+            if (
+                getattr(service, 'is_public', True) is False
+                or getattr(service, 'public_domain_hidden', False)
             ):
-                value = domain_obj.domain_name.strip()
-                if not value:
-                    continue
-                try:
-                    value = normalize_domain(value)
-                except ValueError:
-                    continue
-                if value in seen:
-                    continue
-                seen.add(value)
-                target_host = public_domain if (public_domain and not isHidden) else value
+                pass  # private/hidden: no public custom-domain routes
+            else:
+                for domain_obj in service.domain_instances.filter(
+                    status__in=[
+                        DomainStatus.ACTIVE,
+                        DomainStatus.DNS_VERIFIED,
+                        DomainStatus.SSL_PROVISIONING,
+                    ],
+                    verified=True,
+                ):
+                    value = domain_obj.domain_name.strip()
+                    if not value:
+                        continue
+                    try:
+                        value = normalize_domain(value)
+                    except ValueError:
+                        continue
+                    if value in seen:
+                        continue
+                    seen.add(value)
+                    target_host = public_domain if (public_domain and not isHidden) else value
 
-                lines = [f"{value} {{"]
-                lines.extend(_path_redirect_site_lines(_service_path_redirect_rules(service)))
-                lines.append("    tls {")
-                lines.append("        on_demand")
-                lines.append("    }")
+                    lines = [f"{value} {{"]
+                    lines.extend(_path_redirect_site_lines(_service_path_redirect_rules(service)))
+                    lines.append("    tls {")
+                    lines.append("        on_demand")
+                    lines.append("    }")
 
-                upstream_url = _remote_upstream_url_for_service(service)
-                if upstream_url:
-                    _append_reverse_proxy(lines, upstream_url, target_host or value)
-                elif target_host and target_host != value:
-                    _append_reverse_proxy(lines, _service_proxy_upstream(), target_host)
-                else:
-                    _append_reverse_proxy(lines, _service_proxy_upstream())
-                lines.append("    encode gzip")
-                lines.append("}")
-                blocks.append("\n".join(lines))
+                    upstream_url = _remote_upstream_url_for_service(service)
+                    if upstream_url:
+                        _append_reverse_proxy(lines, upstream_url, target_host or value)
+                    elif target_host and target_host != value:
+                        _append_reverse_proxy(lines, _service_proxy_upstream(), target_host)
+                    else:
+                        _append_reverse_proxy(lines, _service_proxy_upstream())
+                    lines.append("    encode gzip")
+                    lines.append("}")
+                    blocks.append("\n".join(lines))
 
             # Host aliases (accounts.google.com pattern): dedicated site
             # blocks that serve this app under extra hostnames. Exact host
