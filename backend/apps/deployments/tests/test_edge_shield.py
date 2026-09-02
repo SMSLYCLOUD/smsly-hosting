@@ -18,10 +18,10 @@ from django.test import SimpleTestCase, TestCase
 
 from apps.deployments.services.edge_shield import (
     EdgeShieldReport,
-    _is_cloudflare_ip,
     deploy_edge_shield,
     verify_edge_shield,
 )
+from apps.deployments.tasks.edge_shield_watchdog import _is_cloudflare_ip
 
 
 class CloudflareRangeTests(SimpleTestCase):
