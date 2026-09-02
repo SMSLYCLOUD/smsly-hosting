@@ -961,6 +961,37 @@ def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
     return dict(sorted(redirects.items()))
 
 
+def _preview_bcrypt_hash(p_service) -> str:
+    """Return a Caddy basic_auth bcrypt hash for a preview service.
+
+    Auto-generates + persists a per-service preview password on first
+    use. Caddy's basic_auth only accepts bcrypt hashes; we bcrypt the
+    stored plaintext with the platform's SECRET_KEY-derived salt... no —
+    bcrypt salts internally; we simply hash the stored password.
+    """
+    import secrets as _secrets
+
+    password = (getattr(p_service, "preview_password", "") or "").strip()
+    if not password:
+        # First preview deploy for this service: mint a password. 32 hex
+        # chars — strong enough for a preview gate, short enough for a
+        # human to read from the dashboard.
+        password = _secrets.token_hex(16)
+        try:
+            from apps.deployments.models import Service as _S
+            _S.objects.filter(pk=p_service.pk).update(preview_password=password)
+            p_service.preview_password = password
+        except Exception as exc:
+            logger.warning("Could not persist preview password for %s: %s",
+                           p_service.id, exc)
+    try:
+        import bcrypt as _bcrypt
+        return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+    except Exception as exc:
+        logger.warning("preview bcrypt failed for %s: %s", p_service.id, exc)
+        return ""
+
+
 def _get_wildcard_path_redirect_lines(wildcard_domain: str) -> list[str]:
     """Per-service path-redirect handles for wildcard-covered public domains.
 
@@ -1381,6 +1412,12 @@ def generate_caddyfile(config) -> str:
             wildcard_lines.append("    }")
 
             local_previews = []
+            preview_auth_on = True
+            try:
+                from apps.deployments.models import PlatformConfig as _PC
+                preview_auth_on = bool(getattr(_PC.load(), "preview_auth_required", True))
+            except Exception:
+                preview_auth_on = True
             try:
                 from apps.deployments.models import Service
                 if _table_exists(Service._meta.db_table):
@@ -1401,6 +1438,26 @@ def generate_caddyfile(config) -> str:
                 if p_domain.endswith(f".{domain}"):
                     matcher = f"@local_preview_{index}"
                     port = getattr(p_service, "internal_port", 8000) or 8000
+                    # PREVIEW ACCESS GATE: previews often run against full
+                    # clones of the production database. Without this
+                    # block anyone who scraped the PR hostname browsed the
+                    # clone. basic_auth with a per-service password
+                    # (username: preview) whenever the platform gate is on.
+                    if preview_auth_on:
+                        p_hash = _preview_bcrypt_hash(p_service)
+                        if p_hash:
+                            wildcard_lines.extend(
+                                [
+                                    f"    {matcher} host {p_domain}",
+                                    f"    handle {matcher} {{",
+                                    "        basic_auth {",
+                                    f"            preview {p_hash}",
+                                    "        }",
+                                    f"        reverse_proxy {p_service.name}:{port}",
+                                    "    }",
+                                ]
+                            )
+                            continue
                     wildcard_lines.extend(
                         [
                             f"    {matcher} host {p_domain}",

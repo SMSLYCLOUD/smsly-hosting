@@ -305,6 +305,11 @@ class PlatformConfig(models.Model):
         help_text="DS record (key, algo, digest) returned when DNSSEC was "
                   "enabled — must be added at the registrar to complete "
                   "the chain of trust.")
+    preview_auth_required = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text="Require basic-auth on all preview environment URLs. "
+                  "Previews often carry cloned production databases and "
+                  "must not be publicly browsable.")
     server_ip = models.GenericIPAddressField(  # type: ignore[var-annotated]
         blank=True, null=True,
         help_text="Server public IP (auto-detected or manual)")

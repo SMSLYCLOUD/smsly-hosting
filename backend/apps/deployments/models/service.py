@@ -331,6 +331,13 @@ class Service(TimeStampedModel):
         blank=True,
         related_name='previews')
     pr_number = models.IntegerField(null=True, blank=True)  # type: ignore[var-annotated]
+    # Basic-auth password for this service's PREVIEW hostnames (Caddy
+    # basic_auth). Previews often run against cloned production data and
+    # must never be publicly browsable. Auto-generated on first preview
+    # deploy when left empty; username is always "preview".
+    preview_password = models.CharField(  # type: ignore[var-annotated]
+        max_length=64, blank=True, default='',
+        help_text="Basic-auth password gating this service's preview URLs")
 
     # GitHub App — monorepo watch paths & bot PR handling
     watch_paths = models.JSONField(  # type: ignore[var-annotated]

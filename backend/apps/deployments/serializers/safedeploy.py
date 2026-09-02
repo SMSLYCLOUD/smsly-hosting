@@ -101,6 +101,12 @@ class PreviewEnvironmentSerializer(serializers.ModelSerializer):
     database_clone = DatabaseCloneSerializer(read_only=True)
     migration_validation = MigrationValidationSerializer(read_only=True)
     artifacts = DeploymentArtifactSerializer(many=True, read_only=True)
+    # Preview access credentials — visible only to the service
+    # owner/team (the viewset enforces CanManagePreviews). The preview
+    # URL is basic-auth gated; without these the preview (and its
+    # cloned production DB) is unreachable.
+    preview_username = serializers.SerializerMethodField()
+    preview_password = serializers.SerializerMethodField()
 
     class Meta:
         model = PreviewEnvironment
@@ -110,4 +116,21 @@ class PreviewEnvironmentSerializer(serializers.ModelSerializer):
             'expires_at', 'error_message',
             'created_at', 'updated_at',
             'database_clone', 'migration_validation', 'artifacts',
+            'preview_username', 'preview_password',
         ]
+
+    def get_preview_username(self, obj):
+        return 'preview'
+
+    def get_preview_password(self, obj):
+        svc = getattr(obj, 'service', None)
+        pw = (getattr(svc, 'preview_password', '') or '').strip()
+        if pw:
+            return pw
+        # Not yet minted — mint now so the first display shows the real
+        # credential the next Caddyfile generation will enforce.
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _preview_bcrypt_hash,
+        )
+        _preview_bcrypt_hash(svc)
+        return (getattr(svc, 'preview_password', '') or '').strip()
