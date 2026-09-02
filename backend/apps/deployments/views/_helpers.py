@@ -566,8 +566,18 @@ def _is_platform_owned_domain(domain: str) -> bool:
 
     # The platform's base domain and every subdomain of it.
     base = str(getattr(cfg, "domain", "") or "").strip().lower().rstrip(".")
-    if base and (d == base or d.endswith(f".{base}")):
-        return True
+    if base:
+        if d == base or d.endswith(f".{base}"):
+            return True
+        # The PARENT ZONE of the platform base is platform property too:
+        # config.domain is grid.smsly.cloud, but the operator owns the
+        # whole smsly.cloud zone (all services live under it). A tenant
+        # claiming the bare apex 'smsly.cloud' would otherwise pass the
+        # base check — verified live: claim returned 201 BEFORE this
+        # parent-zone rule existed.
+        parent_zone = ".".join(base.split(".")[-2:])
+        if parent_zone and (d == parent_zone or d.endswith(f".{parent_zone}")):
+            return True
 
     # Any service's grid-issued public domain is platform property —
     # but those are globally unique already (name slug collision

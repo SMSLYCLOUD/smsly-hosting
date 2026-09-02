@@ -51,6 +51,15 @@ class PlatformOwnedDomainTests(SimpleTestCase):
         with self._patch()[0], self._patch()[1]:
             self.assertTrue(_is_platform_owned_domain("grid.smsly.cloud"))
 
+    def test_platform_parent_zone_apex_is_owned(self):
+        # config.domain = grid.smsly.cloud → operator owns the whole
+        # smsly.cloud zone. The bare apex was claimable (live-verified
+        # 201) before this rule existed.
+        with self._patch()[0], self._patch()[1]:
+            self.assertTrue(_is_platform_owned_domain("smsly.cloud"))
+            self.assertTrue(_is_platform_owned_domain("www.smsly.cloud"))
+            self.assertTrue(_is_platform_owned_domain("dev.smsly.cloud"))
+
     def test_platform_subdomain_is_owned(self):
         with self._patch()[0], self._patch()[1]:
             self.assertTrue(_is_platform_owned_domain("api.grid.smsly.cloud"))
