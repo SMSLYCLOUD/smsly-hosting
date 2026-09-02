@@ -12,6 +12,32 @@ from .utils import normalize_domain
 DEFAULT_RESOLVER_TIMEOUT = 2.0
 MAX_CNAME_HOPS = 10
 
+# ── Anti-rebinding: verify via INDEPENDENT public resolvers ──────────────
+# The old code used a bare dns.resolver.Resolver() — the system resolver
+# inside the backend container (Docker embedded DNS -> host). Two attacks
+# worked against that:
+#   1. DNS REBINDING: an attacker's authoritative NS answers with the
+#      platform IP for our verification query, then serves a different
+#      IP to real users (or flips records right after verification —
+#      the sticky `verified` flag kept the cert + routing alive).
+#   2. FAKE-IP ROUND-ROBIN: the attacker's domain alternates the
+#      platform IP and their own server across queries; one lucky
+#      lookup passes verification.
+# Mitigation: every verification must hold through a QUORUM of
+# independent resolvers (Cloudflare, Google, Quad9) and the libc
+# fallback is removed from the verification path entirely (a
+# container-local /etc/hosts or search-domain can poison it).
+# When the platform is Edge-Shield-proxied, the ONLY acceptable direct
+# answer is a CNAME into the platform (proxied A records return
+# Cloudflare edge IPs — shared with every other Cloudflare customer,
+# so an A-match there would let anyone's proxied domain verify).
+PUBLIC_VERIFICATION_RESOLVERS: tuple[str, ...] = (
+    "1.1.1.1",
+    "8.8.8.8",
+    "9.9.9.9",
+)
+VERIFICATION_QUORUM = 2  # of len(PUBLIC_VERIFICATION_RESOLVERS)
+
 
 @dataclass(frozen=True)
 class DnsVerificationResult:
@@ -45,16 +71,26 @@ def _clean_ip(value: str) -> str:
         return ""
 
 
-def _resolver(timeout: float = DEFAULT_RESOLVER_TIMEOUT) -> dns.resolver.Resolver:
-    resolver = dns.resolver.Resolver()
+def _resolver(timeout: float = DEFAULT_RESOLVER_TIMEOUT,
+              nameservers: tuple[str, ...] | None = None) -> dns.resolver.Resolver:
+    resolver = dns.resolver.Resolver(configure=False)
     resolver.timeout = timeout
     resolver.lifetime = timeout
+    if nameservers:
+        resolver.nameservers = list(nameservers)
+    else:
+        # Verification path must NEVER use the system resolver — only
+        # the explicit public set. (Callers wanting local resolution
+        # pass nameservers explicitly.)
+        resolver.nameservers = list(PUBLIC_VERIFICATION_RESOLVERS)
     return resolver
 
 
-def _resolve_rrset(hostname: str, record_type: str, timeout: float = DEFAULT_RESOLVER_TIMEOUT):
+def _resolve_rrset(hostname: str, record_type: str,
+                    timeout: float = DEFAULT_RESOLVER_TIMEOUT,
+                    nameservers: tuple[str, ...] | None = None):
     try:
-        return _resolver(timeout).resolve(hostname, record_type)
+        return _resolver(timeout, nameservers).resolve(hostname, record_type)
     except (
         dns.resolver.NoAnswer,
         dns.resolver.NXDOMAIN,
@@ -65,43 +101,32 @@ def _resolve_rrset(hostname: str, record_type: str, timeout: float = DEFAULT_RES
         return []
 
 
-def resolve_host_ips(hostname: str, timeout: float = DEFAULT_RESOLVER_TIMEOUT) -> set[str]:
-    """Resolve A/AAAA records for a host. Falls back to libc resolution."""
+def resolve_host_ips(hostname: str, timeout: float = DEFAULT_RESOLVER_TIMEOUT,
+                     nameservers: tuple[str, ...] | None = None) -> set[str]:
+    """Resolve A/AAAA records for a host via the PUBLIC resolver set.
+
+    The old libc fallbacks (socket.getaddrinfo / gethostbyname) were the
+    rebinding vector — they consult /etc/hosts and the container's
+    DNS config, which an attacker with any foothold (or a poisoned
+    search domain) can steer. Verification now resolves only through
+    the explicit public resolvers.
+    """
     host = _clean_hostname(hostname)
     if not host:
         return set()
 
     ips: set[str] = set()
     for record_type in ("A", "AAAA"):
-        for answer in _resolve_rrset(host, record_type, timeout=timeout):
+        for answer in _resolve_rrset(host, record_type, timeout=timeout,
+                                     nameservers=nameservers):
             address = _clean_ip(getattr(answer, "address", ""))
             if address:
                 ips.add(address)
-
-    if ips:
-        return ips
-
-    try:
-        for row in socket.getaddrinfo(host, 443):
-            if row and len(row) >= 5 and row[4]:
-                address = _clean_ip(str(row[4][0]))
-                if address:
-                    ips.add(address)
-    except socket.gaierror:
-        pass
-
-    if not ips:
-        try:
-            address = _clean_ip(socket.gethostbyname(host))
-            if address:
-                ips.add(address)
-        except socket.gaierror:
-            pass
-
     return ips
 
 
-def resolve_cname_chain(hostname: str, timeout: float = DEFAULT_RESOLVER_TIMEOUT) -> list[str]:
+def resolve_cname_chain(hostname: str, timeout: float = DEFAULT_RESOLVER_TIMEOUT,
+                        nameservers: tuple[str, ...] | None = None) -> list[str]:
     """Return a CNAME chain for hostname, stopping on missing records or loops."""
     current = _clean_hostname(hostname)
     if not current:
@@ -110,7 +135,8 @@ def resolve_cname_chain(hostname: str, timeout: float = DEFAULT_RESOLVER_TIMEOUT
     chain: list[str] = []
     seen = {current}
     for _ in range(MAX_CNAME_HOPS):
-        answers = _resolve_rrset(current, "CNAME", timeout=timeout)
+        answers = _resolve_rrset(current, "CNAME", timeout=timeout,
+                                 nameservers=nameservers)
         if not answers:
             break
         target = _clean_hostname(str(getattr(answers[0], "target", answers[0])))
@@ -171,6 +197,20 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
 
     This intentionally does not call any DNS provider API. It validates the
     public DNS state needed for direct ACME HTTP/TLS-ALPN certificate issuance.
+
+    Anti-rebinding: the domain must verify through a QUORUM of independent
+    public resolvers. A single lying answer (rebind, round-robin fake IP)
+    cannot pass; the attacker would have to control the global resolution
+    of their domain for the duration — which is the same as controlling the
+    domain, the legitimate ownership model.
+
+    Edge-Shield interaction: when the platform's records are
+    Cloudflare-proxied, `resolve_host_ips(platform_domain)` returns CF
+    EDGE IPs — shared by every Cloudflare customer. Matching an
+    attacker's A record against those would let anyone's proxied domain
+    "verify" against us. So the IP-match only accepts the platform's
+    ORIGIN IP; CNAME matches (the recommended path) resolve through
+    the chain and are quorum-checked.
     """
     domain = _clean_hostname(getattr(domain_obj, "domain_name", "") or "")
     if not domain:
@@ -191,34 +231,68 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
             error="Set a service public domain, platform domain, or server IP before verifying custom domains.",
         )
 
-    cname_chain = resolve_cname_chain(domain)
-    actual_ips = resolve_host_ips(domain)
-    actual = _format_actual(cname_chain, actual_ips)
+    # Origin IP only — never the resolved edge IPs of a proxied platform
+    # domain (see docstring). _expected_targets may have resolved
+    # platform-domain A records into expected_ips when server_ip was
+    # unset; those are edge IPs when proxied and MUST NOT be accepted
+    # for a customer's A record.
+    origin_ip = _clean_ip(getattr(config, "server_ip", "") or "")
+    acceptable_ips = {origin_ip} if origin_ip else set()
 
-    cname_match = next(
-        (target for target in cname_chain if target in expected_cnames),
-        "",
-    )
-    if cname_match:
+    # ── Quorum verification across independent resolvers ──────────────
+    # For each public resolver, resolve the domain independently and
+    # evaluate the match. The domain verifies only if at least
+    # VERIFICATION_QUORUM resolvers agree it points at us.
+    agreeing = 0
+    first_match = ""
+    sample_chain: list[str] = []
+    sample_ips: set[str] = set()
+
+    for ns in PUBLIC_VERIFICATION_RESOLVERS:
+        chain = resolve_cname_chain(domain, nameservers=(ns,))
+        ips = resolve_host_ips(domain, nameservers=(ns,))
+        if not sample_chain and chain:
+            sample_chain = chain
+        sample_ips.update(ips)
+
+        matched = ""
+        for target in chain:
+            if target in expected_cnames:
+                matched = f"CNAME {target}"
+                break
+        if not matched and acceptable_ips:
+            ip_hits = ips & acceptable_ips
+            if ip_hits:
+                matched = f"IP {sorted(ip_hits)[0]}"
+        if matched:
+            agreeing += 1
+            if not first_match:
+                first_match = matched
+
+    actual = _format_actual(sample_chain, sample_ips)
+    if agreeing >= VERIFICATION_QUORUM:
         return DnsVerificationResult(
             verified=True,
             expected=expected,
             actual=actual,
-            matched_by=f"CNAME {cname_match}",
+            matched_by=f"{first_match} (verified via {agreeing}/{len(PUBLIC_VERIFICATION_RESOLVERS)} resolvers)",
         )
 
-    ip_matches = actual_ips & expected_ips
-    if ip_matches:
+    if agreeing == 1:
         return DnsVerificationResult(
-            verified=True,
+            verified=False,
             expected=expected,
             actual=actual,
-            matched_by=f"IP {sorted(ip_matches)[0]}",
+            error=(
+                "Domain points at this platform on only one resolver — "
+                "possible DNS rebinding or propagation lag. Point DNS "
+                "consistently and retry in a few minutes."
+            ),
         )
 
     return DnsVerificationResult(
         verified=False,
         expected=expected,
         actual=actual,
-        error=f"Expected {expected} but got {actual}.",
+        error=f"Expected {expected} but got {actual} (checked via {len(PUBLIC_VERIFICATION_RESOLVERS)} independent resolvers).",
     )

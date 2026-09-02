@@ -324,6 +324,17 @@ class ServiceSerializer(serializers.ModelSerializer):
                 )
             seen.add(dedup_key)
             normalized_aliases.append(normalized_entry)
+            # TENANT-HIJACK GUARD: aliasing the platform's own namespace
+            # (e.g. host 'grid.smsly.cloud' or 'api.grid.smsly.cloud')
+            # would route the platform hostname through the tenant's
+            # container via the Host() rule — sessions and admin API
+            # included. Same guard as add_domain.
+            from ..views._helpers import _is_platform_owned_domain
+            if _is_platform_owned_domain(host):
+                raise serializers.ValidationError(
+                    f"Host '{host}' belongs to the platform namespace and "
+                    "cannot be aliased to a tenant service."
+                )
             # Check global conflict (public_domain, custom_domains, other host_aliases)
             qs = Service.objects.exclude(id=getattr(self.instance, 'id', None) or 0)
             if qs.filter(public_domain=host).exists():

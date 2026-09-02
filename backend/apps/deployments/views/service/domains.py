@@ -11,7 +11,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from ...models import PlatformConfig
-from .._helpers import _check_tier_gates_disabled, _normalize_request_domain, _parse_bool
+from .._helpers import _check_tier_gates_disabled, _is_platform_owned_domain, _normalize_request_domain, _parse_bool
 from apps.teams.permissions import assert_can_write
 
 logger = logging.getLogger(__name__)
@@ -410,6 +410,15 @@ class DomainActionsMixin:
             return Response(
                 {'error': f'Invalid domain: {domain_error}'},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # TENANT-HIJACK GUARD: the platform's own namespace is never
+        # claimable as a tenant custom domain (see
+        # _is_platform_owned_domain for the full attack description).
+        if _is_platform_owned_domain(domain):
+            return Response(
+                {'error': 'This domain belongs to the platform and cannot be claimed as a custom domain.'},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         domains = [

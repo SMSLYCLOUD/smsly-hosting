@@ -76,6 +76,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
     import apps.mtls.tasks  # noqa: F401  # inject_mtls_task
+    import apps.domains.tasks.reverify  # noqa: F401  # reverify_custom_domains_task (anti-hijack demotion)
     # -- apps.core.tasks is an empty package (only submodules hold tasks),
     #    so autodiscovery has nothing to import. Load them explicitly. --
     import apps.core.tasks.metrics  # noqa: F401  # collect_metrics_task, cleanup_build_cache_task
@@ -112,6 +113,7 @@ app.conf.task_routes = {
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
     'apps.deployments.tasks.cleanup_orphaned_containers_task': {'queue': 'deploy'},
     'apps.deployments.tasks.edge_shield_watchdog': {'queue': 'fast'},
+    'apps.domains.tasks.reverify_custom_domains_task': {'queue': 'fast'},
     'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_release_wave_task': {'queue': 'fast'},
@@ -270,6 +272,17 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.edge_shield_watchdog',
         'schedule': 300.0,
         'options': {'expires': 300.0},
+    },
+    # Continuous custom-domain re-verification (anti-hijack): a domain
+    # that stops pointing at the platform loses routing + on-demand TLS
+    # eligibility. Verification was previously one-shot — a domain
+    # verified once kept its cert forever, even after the owner
+    # repointed DNS at an attacker (or an attacker flip-flopped DNS
+    # after passing the check once).
+    'reverify-custom-domains-hourly': {
+        'task': 'apps.domains.tasks.reverify_custom_domains_task',
+        'schedule': 3600.0,
+        'options': {'expires': 3600.0},
     },
     # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
     'recover-stalled-deletions-every-5m': {

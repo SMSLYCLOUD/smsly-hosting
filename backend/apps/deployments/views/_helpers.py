@@ -541,6 +541,52 @@ def _normalize_request_domain(raw_domain: str):
         return None, str(exc)
 
 
+def _is_platform_owned_domain(domain: str) -> bool:
+    """True if *domain* belongs to the PLATFORM namespace, not a tenant.
+
+    TENANT-HIJACK GUARD: nothing previously stopped a tenant from adding
+    the platform's own domain (or any subdomain of it — e.g.
+    ``api.grid.smsly.cloud``) as a *custom* domain of their service.
+    DNS verification would pass trivially (the platform domain points at
+    the platform!), Caddy would issue the certificate, and the tenant's
+    container would receive all traffic for the platform hostname —
+    session cookies, admin API, everything. This check also covers the
+    admin/staging node namespace (``gridN.`` nodes) and the platform's
+    staging endpoints.
+    """
+    from apps.deployments.models.core import PlatformConfig
+    try:
+        cfg = PlatformConfig.load()
+    except Exception:
+        return False
+
+    d = str(domain or "").strip().lower().rstrip(".")
+    if not d:
+        return False
+
+    # The platform's base domain and every subdomain of it.
+    base = str(getattr(cfg, "domain", "") or "").strip().lower().rstrip(".")
+    if base and (d == base or d.endswith(f".{base}")):
+        return True
+
+    # Any service's grid-issued public domain is platform property —
+    # but those are globally unique already (name slug collision
+    # checked at service creation). The remaining owned namespace is
+    # the node ingress pattern (gridN.<base>) — covered by the base
+    # rule above. Explicitly also guard any second-level platform
+    # domains stored on ManagedServers (mesh traffic hosts).
+    try:
+        from apps.deployments.models.core import ManagedServer
+        for host in ManagedServer.objects.exclude(host="").values_list("host", flat=True)[:200]:
+            host = str(host or "").strip().lower().rstrip(".")
+            if host and (d == host or d.endswith(f".{host}")):
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _rewrite_public_domain(current_domain: str, old_base_domain: str, new_base_domain: str) -> str | None:
     """Rewrite a service public domain from one Grid platform base domain to another."""
     current = str(current_domain or "").strip().lower().rstrip(".")
@@ -801,6 +847,7 @@ __all__ = [
     '_has_active_deployment',
     '_resolve_provider_for_service',
     '_normalize_request_domain',
+    '_is_platform_owned_domain',
     '_rewrite_public_domain',
     '_service_for_domain',
     '_parse_bool',
