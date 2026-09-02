@@ -52,9 +52,6 @@ dummy.tar.gz
 analysis/
 reports/
 
-# Ignoring downloaded svgs to clean up git diff
-*.svg
-
 # IDEs and OS
 .vscode/
 .idea/

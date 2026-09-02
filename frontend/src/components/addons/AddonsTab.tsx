@@ -34,6 +34,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const [credentials, setCredentials] = useState<Record<string, Record<string, string>>>({});
     const [revealedCreds, setRevealedCreds] = useState<Record<string, boolean>>({});
     const [copied, setCopied] = useState<string | null>(null);
+    const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
 
     const fetchAddons = useCallback(async () => {
         try {
@@ -221,11 +222,17 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                         : 'border-border hover:border-muted-foreground/30'
                                 }`}
                             >
-                                <span className="text-2xl block h-6 w-6 relative">
-                                    {type.logo ? (
-                                        <Image src={type.logo} alt={type.label} className="w-full h-full object-contain" unoptimized />
+                                <span className="text-2xl block h-6 w-6 relative flex items-center justify-center">
+                                    {type.logo && !failedImages[type.value] ? (
+                                        <Image 
+                                            src={type.logo} 
+                                            alt={type.label} 
+                                            className="w-full h-full object-contain" 
+                                            unoptimized 
+                                            onError={() => setFailedImages(prev => ({ ...prev, [type.value]: true }))}
+                                        />
                                     ) : (
-                                        <span className="text-sm font-mono text-muted-foreground">?</span>
+                                        <Database className="w-5 h-5 text-muted-foreground" />
                                     )}
                                 </span>
                                 <p className={`font-semibold mt-2 ${type.color}`}>{type.label}</p>
@@ -282,11 +289,17 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                     onClick={() => toggleExpand(addon.id)}
                                 >
                                     <div className="flex items-center gap-4">
-                                        <span className="text-3xl block h-8 w-8 relative">
-                                            {meta.logo ? (
-                                                <Image src={meta.logo} alt={meta.label} className="w-full h-full object-contain" unoptimized />
+                                        <span className="text-3xl block h-8 w-8 relative flex items-center justify-center">
+                                            {meta.logo && !failedImages[addon.id] ? (
+                                                <Image 
+                                                    src={meta.logo} 
+                                                    alt={meta.label} 
+                                                    className="w-full h-full object-contain" 
+                                                    unoptimized 
+                                                    onError={() => setFailedImages(prev => ({ ...prev, [addon.id]: true }))}
+                                                />
                                             ) : (
-                                                <span className="text-sm font-mono text-muted-foreground">?</span>
+                                                <Database className="w-6 h-6 text-muted-foreground" />
                                             )}
                                         </span>
                                         <div>

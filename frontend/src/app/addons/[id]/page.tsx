@@ -20,6 +20,7 @@ export default function AddonDetailPage() {
   const id = params.id as string;
   const [addon, setAddon] = useState<Addon | null>(null);
   const [loading, setLoading] = useState(true);
+  const [imgError, setImgError] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -97,9 +98,15 @@ export default function AddonDetailPage() {
             <Link href="/dashboard" className="p-2 hover:bg-muted rounded-full transition-colors text-muted-foreground hover:text-foreground">
               <ArrowLeft size={20} />
             </Link>
-            <span className="text-3xl block h-8 w-8 relative">
-              {meta?.logo ? (
-                <Image src={meta.logo} alt={meta?.label || ''} className="w-full h-full object-contain" unoptimized />
+            <span className="text-3xl block h-8 w-8 relative flex items-center justify-center">
+              {meta?.logo && !imgError ? (
+                <Image 
+                    src={meta.logo} 
+                    alt={meta?.label || ''} 
+                    className="w-full h-full object-contain" 
+                    unoptimized 
+                    onError={() => setImgError(true)}
+                />
               ) : (
                 <Database className="w-full h-full text-muted-foreground" />
               )}
