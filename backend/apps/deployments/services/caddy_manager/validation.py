@@ -183,3 +183,80 @@ def validate_service_routes_do_not_hit_control_plane(content: str) -> list[str]:
         )
 
     return errors
+
+
+def validate_control_plane_block_present(content: str, platform_domain: str) -> list[str]:
+    """Refuse to apply a Caddyfile that drops the control plane site block.
+
+    ROOT CAUSE GUARD (2026-09-02 outage): during a backend restart race,
+    a Caddyfile was generated + applied WITHOUT the platform's own site
+    block (grid.smsly.cloud). Every proxied API request then failed with
+    525 (CF -> origin TLS handshake had no cert), including the PATCHes
+    that would have fixed it — the operator was locked out of the UI.
+
+    This runs inside apply_caddyfile BEFORE the file is written. If the
+    platform domain block is missing, the apply is refused and the
+    previous good Caddyfile stays live.
+    """
+    if not platform_domain:
+        return []
+    platform_domain = str(platform_domain).strip().lower().rstrip(".")
+    if not platform_domain:
+        return []
+
+    for line in str(content or "").splitlines():
+        stripped = line.strip()
+        if not stripped.endswith("{"):
+            continue
+        labels = [
+            _normalize_caddy_site_label(label)
+            for label in stripped[:-1].strip().split()
+            if label.strip()
+        ]
+        if platform_domain in labels:
+            return []
+
+    return [
+        f"Platform control-plane site block for '{platform_domain}' is "
+        "MISSING from the generated Caddyfile. Refusing to apply — this "
+        "would lock the operator out of the API (525 on every proxied "
+        "request). Likely cause: PlatformConfig.domain/use_ssl were "
+        "unreadable during generation (backend restart race)."
+    ]
+
+        wildcard_service_hosts = False
+        if not is_service_site and any(label.startswith("*.") for label in labels):
+            for block_line in block_lines:
+                block_stripped = block_line.strip()
+                if not block_stripped.startswith("@") or " host " not in block_stripped:
+                    continue
+                _, _, host_list = block_stripped.partition(" host ")
+                wildcard_hosts = {
+                    _normalize_caddy_site_label(host)
+                    for host in host_list.split()
+                }
+                if wildcard_hosts & service_domains:
+                    wildcard_service_hosts = True
+                    break
+
+        if not is_service_site and not wildcard_service_hosts:
+            continue
+
+        # If the wildcard block has @host matchers that route service domains
+        # to non-control-plane upstreams (e.g. traefik:80), the catch-all
+        # ``handle { reverse_proxy frontend:3000 }`` never fires for those
+        # domains — the block is safe.
+        if wildcard_service_hosts and not is_service_site:
+            if _wildcard_has_safe_service_handlers(block_lines, service_domains):
+                continue
+
+        bad_lines = _block_reverse_proxies_to_control_plane(block)
+        if not bad_lines:
+            continue
+
+        route_name = ", ".join(label for label in labels if label) or f"block:{index + 1}"
+        errors.append(
+            f"{route_name} routes a service domain to the control plane: {bad_lines[0]}"
+        )
+
+    return errors

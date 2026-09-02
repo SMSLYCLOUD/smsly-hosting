@@ -123,6 +123,29 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             logger.error(result["message"])
             return result
 
+        # ROOT-CAUSE GUARD (2026-09-02 outage): a restart-race generated
+        # a Caddyfile without the platform's own site block; applying it
+        # served 525 on every proxied request and locked the operator out.
+        # Refuse to apply any Caddyfile that drops the control plane.
+        _platform_domain = ""
+        try:
+            from .tls import CADDY_CONFIG_DIR as _cd  # noqa: F401  (import guard)
+            from apps.deployments.models import PlatformConfig as _PC
+            _cfg = _PC.objects.first()
+            if _cfg:
+                _platform_domain = (_cfg.domain or "").strip().lower().rstrip(".")
+                if not _cfg.use_ssl:
+                    _platform_domain = ""  # HTTP mode: no TLS block expected
+        except Exception as _exc:
+            logger.debug("control-plane guard could not read PlatformConfig: %s", _exc)
+        if _platform_domain:
+            from .validation import validate_control_plane_block_present
+            cp_errors = validate_control_plane_block_present(content, _platform_domain)
+            if cp_errors:
+                result["message"] = cp_errors[0]
+                logger.error("apply_caddyfile refused: %s", result["message"])
+                return result
+
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
         try:
             os.chmod(CADDY_CONFIG_DIR, 0o775)
