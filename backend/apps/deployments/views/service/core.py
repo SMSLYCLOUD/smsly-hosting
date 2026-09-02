@@ -413,8 +413,14 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         assert_can_write(self.request.user, service)
         force_rebuild = _parse_bool(request.data.get('force_rebuild', False))
 
-        # Lock the service row to prevent concurrent restarts
-        service = Service.objects.select_for_update().get(id=service.id)
+        # Lock the service row to prevent concurrent restarts.
+        # select_for_update() REQUIRES an active transaction — without
+        # transaction.atomic() it raises TransactionManagementError
+        # ('select_for_update cannot be used outside a transaction'),
+        # which was the cause of the restart endpoint's 500 (ATOMIC_REQUESTS
+        # is not enabled globally in this project).
+        with transaction.atomic():
+            service = Service.objects.select_for_update().get(id=service.id)
 
         # Clear health monitor restart state (ends exponential backoff)
         from apps.core.services.health_monitor import reset_restart_state
