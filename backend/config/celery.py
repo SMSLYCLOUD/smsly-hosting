@@ -72,6 +72,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.infra.tasks_health  # noqa: F401  # check_agent_heartbeats_task
     import apps.deployments.tasks.infra.tasks_maintenance  # noqa: F401  # run_maintenance, registry_gc, reconcile_network_isolation_task
     import apps.deployments.tasks.edge_shield_watchdog  # noqa: F401  # BGP/DNS hijack symptom detection
+    import apps.deployments.tasks.recover_stale_ecosystem_plans  # noqa: F401  # ghost-plan unblocker (429 lockout fix)
     import apps.deployments.tasks.infra.tasks_container_hygiene  # noqa: F401  # restart-loop watchdog, orphan addon GC
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
@@ -113,6 +114,7 @@ app.conf.task_routes = {
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
     'apps.deployments.tasks.cleanup_orphaned_containers_task': {'queue': 'deploy'},
     'apps.deployments.tasks.edge_shield_watchdog': {'queue': 'fast'},
+    'apps.deployments.tasks.recover_stale_ecosystem_plans': {'queue': 'fast'},
     'apps.domains.tasks.reverify_custom_domains_task': {'queue': 'fast'},
     'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_deploy_task': {'queue': 'deploy'},
@@ -272,6 +274,14 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.edge_shield_watchdog',
         'schedule': 300.0,
         'options': {'expires': 300.0},
+    },
+    # Ghost EcosystemPlan unblocker: plans stuck in scanning/deploying
+    # with dead Celery tasks lock the ecosystem UI behind 429s forever
+    # (the scan guard sees them as "already in progress"). Clear them.
+    'recover-stale-ecosystem-plans-every-10m': {
+        'task': 'apps.deployments.tasks.recover_stale_ecosystem_plans',
+        'schedule': 600.0,
+        'options': {'expires': 600.0},
     },
     # Continuous custom-domain re-verification (anti-hijack): a domain
     # that stops pointing at the platform loses routing + on-demand TLS

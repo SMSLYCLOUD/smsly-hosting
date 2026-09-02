@@ -512,7 +512,30 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         from apps.deployments.models.ecosystem import EcosystemPlan
         from apps.deployments.tasks.ecosystem import ecosystem_scan_task
 
-        # Guard: no concurrent active scan or deploy
+        # Guard: no concurrent active scan or deploy — but only trust the
+        # flag for RECENT plans. A ghost task (worker lost the message)
+        # left plans stuck in 'deploying' for DAYS, returning 429 on every
+        # new scan and locking the operator out of the ecosystem UI
+        # entirely (2026-09-02 incident). Plans older than 30 minutes
+        # are auto-failed here rather than blocking; the beat task
+        # recover_stale_ecosystem_plans is the scheduled safety net.
+        from django.utils import timezone as _tz
+        from datetime import timedelta as _td
+        _recent_cutoff = _tz.now() - _td(minutes=30)
+        _stale = EcosystemPlan.objects.filter(
+            user=request.user,
+            status__in=['scanning', 'deploying'],
+            created_at__lt=_recent_cutoff,
+        )
+        for _ghost in _stale:
+            _ghost.status = 'failed'
+            _ghost.error_message = (
+                f"Auto-recovered at scan time: plan was stuck in "
+                f"'{_ghost.status}' since {_ghost.created_at.isoformat()} "
+                f"(>30 min). Cleared to unblock the ecosystem scan."
+            )
+            _ghost.save(update_fields=['status', 'error_message', 'updated_at'])
+
         if EcosystemPlan.objects.filter(
             user=request.user,
             status__in=['scanning', 'deploying'],
