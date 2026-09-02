@@ -153,6 +153,16 @@ def _proxy_dns_records(token: str, zone_id: str, report: EdgeShieldReport) -> No
         if record.get("proxied"):
             already.append(record.get("name"))
             continue
+        # Some records are structurally un-proxyable BY DESIGN: e.g.
+        # Zoho/Microsoft domain-ownership verification CNAMEs
+        # (zmverify.zoho.com — "Target ... is not allowed for a proxied
+        # record"). Proxying those would break the very verification they
+        # exist for, so Cloudflare marks them proxiable=false. They stay
+        # DNS-only intentionally and are NOT an origin-exposure gap: they
+        # point at third-party hosts, never at our origin IP.
+        if record.get("proxiable") is False:
+            skipped.append(f"{record.get('name')} (proxiable=false)")
+            continue
         result = _cf(
             requests.patch, "PATCH",
             f"/zones/{zone_id}/dns_records/{record['id']}",
@@ -169,7 +179,13 @@ def _proxy_dns_records(token: str, zone_id: str, report: EdgeShieldReport) -> No
 
     detail = f"proxied {len(flipped)} ({', '.join(flipped[:8])}), " \
              f"already {len(already)}, skipped {len(skipped)}"
-    report.step("proxy_records", "ok" if flipped or already else "error", detail)
+    # Success = every proxyable record is now proxied (unproxyable
+    # verification CNAMEs are skipped by design, not failures).
+    report.step(
+        "proxy_records",
+        "ok" if flipped or already else "error",
+        detail,
+    )
 
 
 def _set_tls_full(token: str, zone_id: str, report: EdgeShieldReport) -> None:
@@ -363,9 +379,13 @@ def verify_edge_shield(config) -> EdgeShieldReport:
         report.step("zone_lookup", "error", f"zone {zone_name} not visible")
         return report
 
-    # All A records proxied?
+    # All A records proxied? (un-proxyable verification records excluded
+    # by design — they target third-party hosts, never our origin IP)
     records = _zone_records(token, zone_id)
-    a_records = [r for r in records if r.get("type") == "A"]
+    a_records = [
+        r for r in records
+        if r.get("type") == "A" and r.get("proxiable") is not False
+    ]
     unproxied = [r.get("name") for r in a_records if not r.get("proxied")]
     if a_records and not unproxied:
         report.step("proxy_state", "ok", f"{len(a_records)} A records proxied")

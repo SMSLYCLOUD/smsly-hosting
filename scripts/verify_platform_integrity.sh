@@ -93,7 +93,24 @@ ensure_spire_running() {
     fi
 }
 
+# ── 4. Edge Shield lockdown must stay enforced ────────────────────────
+# The 80/443 Cloudflare-only firewall is the anti-bypass layer of the
+# BGP-hijack defense (deploy_edge_shield). If the rules vanish (reboot
+# without persistence, operator flush), re-apply them immediately.
+ensure_edge_lockdown() {
+    [ -x "$INSTALL_DIR/scripts/cf_origin_lockdown.sh" ] || { log "cf_origin_lockdown.sh missing — skipping"; return 0; }
+    if iptables -S INPUT 2>/dev/null | grep -q 'smsly-edge-shield'; then
+        log "edge lockdown rules present"
+    else
+        log "ALERT: edge lockdown rules MISSING — re-applying"
+        bash "$INSTALL_DIR/scripts/cf_origin_lockdown.sh" --on >> /dev/null 2>&1 \
+            && log "edge lockdown re-applied" \
+            || log "ALERT: edge lockdown re-apply FAILED"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
+ensure_edge_lockdown
 log "integrity check complete"
