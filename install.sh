@@ -28,6 +28,7 @@ fi
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
 MODE_AGENT_LITE=false
 MODE_NODE=false
+MODE_MEDIA_NODE=false
 INSTALL_MODE="master"
 _DETECTED_INSTALL_MODE=""
 _CLI_INSTALL_MODE=""
@@ -44,12 +45,14 @@ if [ -f "/opt/smsly-hosting/.env" ]; then
     case "${NODE_TYPE:-}" in
         agent-lite|agent) _DETECTED_INSTALL_MODE="agent-lite" ;;
         node) _DETECTED_INSTALL_MODE="node" ;;
+        media-node|media) _DETECTED_INSTALL_MODE="media-node" ;;
         master) _DETECTED_INSTALL_MODE="master" ;;
     esac
     if [ -z "$_DETECTED_INSTALL_MODE" ]; then
         case "${MODE:-}" in
             agent-lite|agent) _DETECTED_INSTALL_MODE="agent-lite" ;;
             node) _DETECTED_INSTALL_MODE="node" ;;
+            media-node|media) _DETECTED_INSTALL_MODE="media-node" ;;
             master) _DETECTED_INSTALL_MODE="master" ;;
         esac
     fi
@@ -77,9 +80,10 @@ set_cli_install_mode_from_value() {
   case "$requested_mode" in
     agent-lite|agent) set_cli_install_mode "agent-lite" ;;
     node) set_cli_install_mode "node" ;;
+    media-node) set_cli_install_mode "media-node" ;;
     master) set_cli_install_mode "master" ;;
     *)
-      echo -e "\033[0;31mERROR: Unknown --mode value: $requested_mode. Use agent-lite, node, or master.\033[0m"
+      echo -e "\033[0;31mERROR: Unknown --mode value: $requested_mode. Use agent-lite, node, media-node, or master.\033[0m"
       exit 1
       ;;
   esac
@@ -96,6 +100,7 @@ for arg in "$@"; do
     --non-interactive) NON_INTERACTIVE=true ;;
     --mode=agent-lite|--agent-lite) set_cli_install_mode_from_value "agent-lite" ;;
     --mode=node|--node) set_cli_install_mode_from_value "node" ;;
+    --mode=media-node|--media-node) set_cli_install_mode_from_value "media-node" ;;
     --mode=master|--master) set_cli_install_mode_from_value "master" ;;
     --mode=*)         set_cli_install_mode_from_value "${arg#--mode=}" ;;
     --mode)           _EXPECT_MODE_VALUE=true ;;
@@ -123,11 +128,13 @@ fi
 INSTALL_MODE="${_CLI_INSTALL_MODE:-${_DETECTED_INSTALL_MODE:-master}}"
 case "$INSTALL_MODE" in
   agent-lite)
-    MODE_AGENT_LITE=true; MODE_NODE=false; MODE="agent"; NODE_TYPE="agent-lite" ;;
+    MODE_AGENT_LITE=true; MODE_NODE=false; MODE_MEDIA_NODE=false; MODE="agent"; NODE_TYPE="agent-lite" ;;
   node)
-    MODE_AGENT_LITE=false; MODE_NODE=true; MODE="node"; NODE_TYPE="node" ;;
+    MODE_AGENT_LITE=false; MODE_NODE=true; MODE_MEDIA_NODE=false; MODE="node"; NODE_TYPE="node" ;;
+  media-node)
+    MODE_AGENT_LITE=false; MODE_NODE=false; MODE_MEDIA_NODE=true; MODE="media-node"; NODE_TYPE="media-node" ;;
   master)
-    MODE_AGENT_LITE=false; MODE_NODE=false; MODE="master"; NODE_TYPE="master" ;;
+    MODE_AGENT_LITE=false; MODE_NODE=false; MODE_MEDIA_NODE=false; MODE="master"; NODE_TYPE="master" ;;
   *)
     echo -e "\033[0;31mERROR: Unknown install mode: $INSTALL_MODE\033[0m"; exit 1 ;;
 esac
@@ -698,6 +705,11 @@ fi
 
 # ─── Update Mode ──────────────────────────────────────────────────────────────
 if [ -n "$UPDATE_MODE" ]; then
+    if [ "$MODE_MEDIA_NODE" = "true" ]; then
+        source "$LIB_DIR/media-node.sh"
+        update_media_node "$INSTALL_DIR"
+        exit 0
+    fi
     source "$LIB_DIR/update.sh"
     exit 0
 fi
@@ -711,6 +723,12 @@ fi
 # The basename guard prevents recursion: backend/install.sh is generated from
 # this file, so it carries the same delegation block — running from it must
 # fall through to the inlined fresh.sh below.
+if [ "$MODE_MEDIA_NODE" = "true" ]; then
+    source "$LIB_DIR/media-node.sh"
+    install_media_node "$INSTALL_DIR"
+    exit 0
+fi
+
 if [ -f "$SCRIPT_DIR/backend/install.sh" ] && [ "$(basename "$SCRIPT_PATH")" != "backend/install.sh" ]; then
     echo -e "${BLUE}  → Delegating fresh install to self-contained backend/install.sh${NC}"
     release_install_lock 2>/dev/null || true

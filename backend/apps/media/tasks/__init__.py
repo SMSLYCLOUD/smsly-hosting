@@ -120,3 +120,27 @@ def process_media_heartbeat(self, node_id: str, payload: dict):
         )
     except Exception:
         logger.exception("Failed to process heartbeat for node %s", node_id)
+
+
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], queue="deploy")
+def restart_media_node_services_task(self, node_id: str):
+    """Restart all services on a media node asynchronously."""
+    import requests as _req
+    from apps.media.models import MediaNodeProfile
+
+    try:
+        node = MediaNodeProfile.objects.get(server_id=node_id)
+    except MediaNodeProfile.DoesNotExist:
+        return
+
+    host = node.server.wg_address or node.server.host
+    services_to_restart = [
+        "kamailio", "freeswitch", "rtpengine", "livekit-server",
+        "coturn", "smsly-voice-api", "smsly-video", "openresty",
+    ]
+    for svc_name in services_to_restart:
+        url = f"http://{host}:9090/mgmt/service/{svc_name}/restart"
+        try:
+            _req.post(url, timeout=10)
+        except _req.RequestException as exc:
+            logger.warning("Failed to restart %s on node %s: %s", svc_name, node_id, exc)

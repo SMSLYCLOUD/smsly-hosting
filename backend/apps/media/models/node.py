@@ -22,6 +22,10 @@ class MediaNodeProfile(models.Model):
     livekit_host = models.CharField(max_length=255, default="127.0.0.1")  # type: ignore[var-annotated]
     livekit_port = models.PositiveIntegerField(default=7880)  # type: ignore[var-annotated]
 
+    # -- Provisioning configuration --
+    script_repo_url = models.CharField(max_length=255, blank=True, default="", help_text="GitHub or GitLab repo URL for proprietary media scripts")
+    script_repo_token = EncryptedCharField(max_length=255, blank=True, default="", help_text="Custom scoped token for cloning the scripts repo")
+
     # -- TURN configuration --
     turn_secret = EncryptedCharField(max_length=128, blank=True, default="")
     turn_realm = models.CharField(max_length=255, default="smsly.com")  # type: ignore[var-annotated]

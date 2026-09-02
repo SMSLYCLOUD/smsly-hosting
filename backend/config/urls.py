@@ -118,6 +118,17 @@ def bootstrap_view(request, token):
         env_lines.append(_env_line("MASTER_WG_ENDPOINT", master_wg_endpoint))
     if install_mode == "node" and compose_file:
         env_lines.append(_env_line("COMPOSE_FILE", compose_file))
+    if is_media_node:
+        try:
+            from apps.deployments.models.platform import PlatformConfig
+            pc = PlatformConfig.objects.first()
+            if pc:
+                if pc.media_repo_url:
+                    env_lines.append(_env_line("MEDIA_REPO_URL", pc.media_repo_url))
+                if pc.media_repo_token:
+                    env_lines.append(_env_line("MEDIA_REPO_TOKEN", str(pc.media_repo_token)))
+        except Exception:
+            pass
     if is_lite_agent:
         master_mesh_ip = os.environ.get("MASTER_MESH_IP", "")
         if not master_mesh_ip:
@@ -168,8 +179,10 @@ ENVEOF
 
 chmod 600 .env 2>/dev/null || true
 echo ""
-echo "=== Starting installer... ==="
-exec bash install.sh --mode={install_mode}
+echo "=== Starting installer in background... ==="
+echo "The installation will continue even if your SSH connection drops."
+echo "Tail logs with: tail -f /opt/smsly-hosting/install.log"
+nohup bash install.sh --mode={install_mode} </dev/null >/opt/smsly-hosting/install.log 2>&1 &
 """
     return HttpResponse(script, content_type="text/x-shellscript")
 

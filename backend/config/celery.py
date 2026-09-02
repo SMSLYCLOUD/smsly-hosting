@@ -588,6 +588,8 @@ if os.environ.get('SMSLY_ENABLE_MEDIA_NODES'):
         'apps.media.tasks.flush_telemetry_to_db': {'queue': 'media-telemetry'},
         'apps.media.tasks.rotate_media_node_keys': {'queue': 'deploy'},
         'apps.media.tasks.verify_federation_chains': {'queue': 'media-audit'},
+        'apps.media.tasks.process_media_heartbeat': {'queue': 'media-telemetry'},
+        'apps.media.tasks.restart_media_node_services_task': {'queue': 'deploy'},
     })
 
 

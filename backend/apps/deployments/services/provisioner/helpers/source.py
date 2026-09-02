@@ -19,15 +19,15 @@ def _build_local_source_bundle() -> str:
     return utils_build_bundle()
 
 
-def _load_install_script():
+def _load_install_script(script_name="install.sh"):
     required_sha = os.environ.get("SMSLY_INSTALL_SCRIPT_SHA256", "").strip()
 
     candidates = [
-        "/app/install.sh",
+        f"/app/{script_name}",
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../../../../install.sh")
+            os.path.join(os.path.dirname(__file__), f"../../../../../../{script_name}")
         ),
-        os.path.abspath(os.path.join(os.getcwd(), "install.sh")),
+        os.path.abspath(os.path.join(os.getcwd(), script_name)),
     ]
 
     if not required_sha:

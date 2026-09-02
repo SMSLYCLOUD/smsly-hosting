@@ -43,12 +43,16 @@ export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 UPDATE_MODE=false
 DEBUG_MODE=false
 RESUME_MODE=false
+REPO_URL="${MEDIA_REPO_URL:-}"
+REPO_TOKEN="${MEDIA_REPO_TOKEN:-}"
 
-for arg in "$@"; do
-    case "$arg" in
-        --update)    UPDATE_MODE=true ;;
-        --debug)     DEBUG_MODE=true ;;
-        --resume)    RESUME_MODE=true ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --update)    UPDATE_MODE=true; shift ;;
+        --debug)     DEBUG_MODE=true; shift ;;
+        --resume)    RESUME_MODE=true; shift ;;
+        --repo-url)  REPO_URL="$2"; shift 2 ;;
+        --repo-token) REPO_TOKEN="$2"; shift 2 ;;
         --help|-h)
             echo "Usage: sudo bash install-media-node.sh [OPTIONS]"
             echo ""
@@ -56,10 +60,28 @@ for arg in "$@"; do
             echo "  --update      Pull latest code, rebuild smsly-media-mgmt, restart services"
             echo "  --debug       Show system status and exit"
             echo "  --resume      Skip already-completed steps"
+            echo "  --repo-url    Git URL containing the proprietary media scripts"
+            echo "  --repo-token  Scoped token to authenticate the clone"
             exit 0
+            ;;
+        *)
+            shift
             ;;
     esac
 done
+
+if [ -n "$REPO_URL" ]; then
+    echo -e "${BLUE}Cloning proprietary media scripts from $REPO_URL...${NC}"
+    # Extract the domain to inject the token for HTTPS clones
+    if [[ "$REPO_URL" == https://* ]] && [ -n "$REPO_TOKEN" ]; then
+        AUTH_URL="${REPO_URL/https:\/\//https:\/\/oauth2:${REPO_TOKEN}@}"
+    else
+        AUTH_URL="$REPO_URL"
+    fi
+    rm -rf /opt/smsly-media-scripts
+    git clone "$AUTH_URL" /opt/smsly-media-scripts
+    SCRIPT_DIR="/opt/smsly-media-scripts"
+fi
 
 # ─── Source shared helpers ────────────────────────────────────────────────────
 LIB_DIR="$SCRIPT_DIR/lib"
@@ -123,7 +145,7 @@ if [ "$DEBUG_MODE" = "true" ]; then
     echo "    Public IP: $(detect_public_ip || echo 'unknown')"
 
     echo -e "\n${BLUE}  → Service status:${NC}"
-    for svc in postgresql redis-server wireguard kamailio freeswitch rtpengine coturn livekit-server smsly-voice-api smsly-video smsly-media-mgmt openresty; do
+    for svc in postgresql redis-server wireguard kamailio freeswitch rtpengine coturn smsly-voice-api smsly-video smsly-media-mgmt openresty; do
         if systemctl is-active "$svc"; then
             echo -e "    ${GREEN}✓${NC} $svc"
         elif systemctl is-enabled "$svc"; then
@@ -156,45 +178,8 @@ if [ "$UPDATE_MODE" = "true" ]; then
     echo -e "${BLUE}  SMSLY Media Node — Update${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
 
-    if [ ! -d "$SCRIPT_DIR" ]; then
-        echo -e "${RED}  ERROR: Script directory not found${NC}"
-        exit 1
-    fi
-
-    # Pull latest code
-    echo -e "${BLUE}  → Pulling latest code...${NC}"
-    cd "$SCRIPT_DIR" && git pull --ff-only || {
-        echo -e "${YELLOW}  ⚠ git pull failed — using local copy${NC}"
-    }
-
-    # Rebuild smsly-media-mgmt if Cargo.toml exists
-    if [ -f "$SCRIPT_DIR/../smsly-media-mgmt/Cargo.toml" ]; then
-        echo -e "${BLUE}  → Rebuilding smsly-media-mgmt...${NC}"
-        cd "$SCRIPT_DIR/../smsly-media-mgmt" && cargo build --release 2>&1 | tail -5
-        if [ -f target/release/smsly-media-mgmt ]; then
-            cp target/release/smsly-media-mgmt /usr/local/bin/smsly-media-mgmt
-            systemctl restart smsly-media-mgmt
-            echo -e "${GREEN}  ✓ smsly-media-mgmt updated${NC}"
-        fi
-    fi
-
-    # Update systemd units
-    echo -e "${BLUE}  → Updating systemd units...${NC}"
-    for unit in "$SCRIPT_DIR/scripts/systemd"/*.service; do
-        [ -f "$unit" ] || continue
-        cp -f "$unit" /etc/systemd/system/
-    done
-    systemctl daemon-reload
-
-    # Restart services
-    echo -e "${BLUE}  → Restarting media services...${NC}"
-    for svc in smsly-media-mgmt smsly-voice-api smsly-video livekit-server freeswitch kamailio rtpengine; do
-        systemctl restart "$svc" || true
-    done
-
-    echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  ✓ Update complete${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+    # Call the shared update function from lib/media-node.sh
+    update_media_node "$SCRIPT_DIR"
     exit 0
 fi
 

@@ -115,11 +115,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         _harden_node_ssh(ssh, server)
 
-        _append_log(server, "📦 Uploading install script...")
+        _append_log(server, "🚀 Uploading install script...")
         sftp = ssh.open_sftp()
 
-        install_script_content, install_script_source = _load_install_script()
-        _append_log(server, f"📥 Installer source: {install_script_source}")
+        script_name = "install-media-node.sh" if server_install_mode(server) == "media" else "install.sh"
+        install_script_content, install_script_source = _load_install_script(script_name=script_name)
+        _append_log(server, f"🚀 Installer source: {install_script_source}")
         if use_local_bundle:
             _append_log(
                 server,
@@ -220,11 +221,21 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             if node_db_user:
                 resources.track_db_user(node_db_user)
         elif install_mode == "media":
-            install_args.append("--mode=media-node")
-            _append_log(server, "📡 Media node: installing voice/video bare-metal stack")
+            # No --mode flag needed for install-media-node.sh
+            _append_log(server, "🚀 Media node: installing voice/video bare-metal stack")
             master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
             install_env["MASTER_IP"] = master_ip
             install_env["MASTER_MESH_IP"] = _get_master_mesh_ip()
+            
+            if hasattr(server, 'media_profile'):
+                repo_url = server.media_profile.script_repo_url
+                repo_token = server.media_profile.script_repo_token
+                if repo_url:
+                    install_env["MEDIA_REPO_URL"] = str(repo_url)
+                    install_args.extend(["--repo-url", str(repo_url)])
+                if repo_token:
+                    install_env["MEDIA_REPO_TOKEN"] = str(repo_token)
+                    install_args.extend(["--repo-token", str(repo_token)])
         elif install_mode == "node":
             install_args.append("--mode=node")
             install_env["COMPOSE_FILE"] = "infrastructure/docker/docker-compose.node.yml"
@@ -623,6 +634,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 server,
                 "Lite Agent install does not create a local admin token; "
                 "Master will manage the node through the shared agent channel.",
+            )
+        elif not api_token and install_mode == "media":
+            _append_log(
+                server,
+                "Media node does not run a Django backend; "
+                "Master manages the node via the smsly-media-mgmt agent heartbeat.",
             )
         elif not api_token:
             raise RuntimeError(

@@ -36,6 +36,8 @@ class MediaNodeProfileSerializer(serializers.ModelSerializer):
             "server_host",
             "server_status",
             "server_wg_address",
+            "script_repo_url",
+            "script_repo_token",
             "livekit_host",
             "livekit_port",
             "turn_realm",
@@ -70,6 +72,9 @@ class MediaNodeProfileSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "script_repo_token": {"write_only": True}
+        }
 
 
 class MediaRoomSerializer(serializers.ModelSerializer):

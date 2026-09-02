@@ -63,30 +63,18 @@ class MediaNodeProfileViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def restart(self, request, pk=None):
         """Restart all services on a media node via the management daemon."""
-        import requests as _req
+        from ..tasks import restart_media_node_services_task
 
         node = self.get_object()
-        host = node.server.wg_address or node.server.host
-        # The management daemon runs on port 9090 behind OpenResty
-        # at /media-mgmt/mgmt/service/{name}/restart
-        services_to_restart = [
-            "kamailio", "freeswitch", "rtpengine", "livekit-server",
-            "coturn", "smsly-voice-api", "smsly-video", "openresty",
-        ]
-        restarted = []
-        for svc_name in services_to_restart:
-            url = f"http://{host}:9090/mgmt/service/{svc_name}/restart"
-            try:
-                _req.post(url, timeout=10)
-                restarted.append(svc_name)
-            except _req.RequestException as exc:
-                logger.warning("Failed to restart %s on node %s: %s", svc_name, node.server_id, exc)
+        
+        # Offload the synchronous HTTP calls to a background task
+        # so we don't block the Django worker thread for 80s.
+        restart_media_node_services_task.delay(str(node.server_id))
 
         return Response({
             "status": "restart_queued",
             "node_id": str(node.server_id),
-            "services_restarted": restarted,
-        })
+        }, status=status.HTTP_202_ACCEPTED)
 
 
 class MediaRoomViewSet(viewsets.ModelViewSet):

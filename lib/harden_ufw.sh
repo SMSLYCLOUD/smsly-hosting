@@ -18,9 +18,15 @@ _harden_ufw_bootstrap() {
     fi
 
     # Inactive — configure and enable (INPUT default deny, FORWARD stays open for Docker)
-    ufw --force default deny incoming || echo -e "${YELLOW}    ⚠ ufw default deny incoming failed${NC}"
-    ufw --force default allow outgoing || echo -e "${YELLOW}    ⚠ ufw default allow outgoing failed${NC}"
-    ufw allow ssh || echo -e "${YELLOW}    ⚠ ufw allow ssh failed${NC}"
+    ufw --force default deny incoming || echo -e "${YELLOW}    s ufw default deny incoming failed${NC}"
+    ufw --force default allow outgoing || echo -e "${YELLOW}    s ufw default allow outgoing failed${NC}"
+
+    local ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
+    if [ -n "$ssh_port" ]; then
+        ufw allow "$ssh_port/tcp" || echo -e "${YELLOW}    s ufw allow ssh port $ssh_port failed${NC}"
+    else
+        ufw allow ssh || echo -e "${YELLOW}    s ufw allow ssh failed${NC}"
+    fi
     ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"

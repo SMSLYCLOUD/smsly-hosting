@@ -116,10 +116,6 @@ GATEWAY_SECRET=${gateway_secret}
 POSTGRES_PASSWORD=${postgres_password}
 REDIS_PASSWORD=${redis_password}
 
-# LiveKit
-LIVEKIT_API_KEY=${livekit_api_key}
-LIVEKIT_API_SECRET=${livekit_api_secret}
-
 # TURN
 TURN_SECRET=${turn_secret}
 
@@ -177,18 +173,6 @@ install_media_packages() {
         }
     fi
 
-    # Install LiveKit server (binary from GitHub releases)
-    if ! command -v livekit-server ; then
-        echo -e "${BLUE}  → Installing LiveKit server...${NC}"
-        local lk_arch
-        lk_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        local lk_version="1.8.4"
-        curl -fsSL "https://github.com/livekit/livekit/releases/download/v${lk_version}/livekit_${lk_version}_linux_${lk_arch}.tar.gz" \
-            | tar xz -C /usr/local/bin livekit-server  || {
-            echo -e "${YELLOW}  ⚠ LiveKit auto-install failed — install manually${NC}"
-        }
-    fi
-
     echo -e "${GREEN}  ✓ Packages installed${NC}"
 }
 
@@ -214,36 +198,6 @@ deploy_media_configs() {
     # RTPEngine
     [ -d /etc/rtpengine ] || mkdir -p /etc/rtpengine
     cp -f "$infra_dir/rtpengine/rtpengine.conf" /etc/rtpengine/  || true
-
-    # LiveKit
-    [ -d /etc/livekit ] || mkdir -p /etc/livekit
-    cp -f "$infra_dir/livekit/livekit.yaml" /etc/livekit/  || true
-
-    # coturn
-    [ -d /etc/coturn ] || mkdir -p /etc/coturn
-    cp -f "$infra_dir/coturn/turnserver.conf" /etc/coturn/  || true
-
-    # OpenResty
-    [ -d /usr/local/openresty/nginx/conf ] || mkdir -p /usr/local/openresty/nginx/conf
-    cp -f "$infra_dir/openresty/nginx.conf" /usr/local/openresty/nginx/conf/  || true
-
-    # Attestation + media-mgmt config
-    [ -d /etc/smsly ] || mkdir -p /etc/smsly
-    cp -f "$infra_dir/attestation/attestation.json" /etc/smsly/media-mgmt.json  || true
-
-    echo -e "${GREEN}  ✓ Configs deployed${NC}"
-}
-
-# ─── Deploy systemd units ───────────────────────────────────────────────────
-deploy_media_systemd_units() {
-    local script_dir="$1"
-    echo -e "${BLUE}  → Deploying systemd units...${NC}"
-
-    local systemd_dir="$script_dir/scripts/systemd"
-    if [ ! -d "$systemd_dir" ]; then
-        echo -e "${YELLOW}  ⚠ scripts/systemd/ not found — skipping systemd deployment${NC}"
-        return 0
-    fi
 
     for unit in "$systemd_dir"/*.service; do
         [ -f "$unit" ] || continue
@@ -276,18 +230,6 @@ template_media_configs() {
             /etc/kamailio/kamailio.cfg
     fi
 
-    # LiveKit
-    if [ -f /etc/livekit/livekit.yaml ]; then
-        sed -i \
-            -e "s|\${LIVEKIT_API_KEY}|${LIVEKIT_API_KEY}|g" \
-            -e "s|\${LIVEKIT_API_SECRET}|${LIVEKIT_API_SECRET}|g" \
-            -e "s|\${PUBLIC_IP}|${PUBLIC_IP}|g" \
-            -e "s|\${PRIVATE_IP}|${PRIVATE_IP:-127.0.0.1}|g" \
-            -e "s|\${TURN_SECRET}|${TURN_SECRET}|g" \
-            -e "s|\${MASTER_API_URL}|${MASTER_API_URL}|g" \
-            /etc/livekit/livekit.yaml
-    fi
-
     # coturn
     if [ -f /etc/coturn/turnserver.conf ]; then
         sed -i \
@@ -318,7 +260,7 @@ start_media_services() {
 
     local infra_services=(postgresql redis-server wireguard)
     local media_services=(kamailio rtpengine freeswitch coturn)
-    local app_services=(livekit-server smsly-voice-api smsly-video)
+    local app_services=(smsly-voice-api smsly-video)
     local mgmt_services=(smsly-media-mgmt openresty)
 
     for svc in "${infra_services[@]}"; do
@@ -374,6 +316,54 @@ verify_media_services() {
 }
 
 # ─── Full media node fresh install ───────────────────────────────────────────
+build_media_mgmt() {
+    local script_dir="$1"
+    echo -e "${BLUE}  -> Setting up smsly-media-mgmt...${NC}"
+    
+    if [ -n "${MEDIA_REPO_URL:-}" ]; then
+        local clone_url="${MEDIA_REPO_URL}"
+        if [ -n "${MEDIA_REPO_TOKEN:-}" ]; then
+            if [[ "$clone_url" =~ ^https:// ]]; then
+                clone_url="https://oauth2:${MEDIA_REPO_TOKEN}@${clone_url#https://}"
+            fi
+        fi
+        
+        local custom_mgmt_dir="/opt/smsly-media-mgmt"
+        if [ -d "$custom_mgmt_dir/.git" ]; then
+            cd "$custom_mgmt_dir" && git pull --ff-only || echo -e "${YELLOW}  [WARN] git pull failed - using local copy${NC}"
+        else
+            git clone "$clone_url" "$custom_mgmt_dir" || echo -e "${RED}  ERROR: Failed to clone custom media repo${NC}"
+        fi
+        local mgmt_dir="$custom_mgmt_dir"
+    else
+        local mgmt_dir="$script_dir/../smsly-media-mgmt"
+        if [ -d "$mgmt_dir/.git" ]; then
+            cd "$mgmt_dir" && git pull --ff-only  || {
+                echo -e "${YELLOW}  [WARN] git pull failed -- using local copy${NC}"
+            }
+        fi
+    fi
+
+    if [ -f "$mgmt_dir/Cargo.toml" ]; then
+        echo -e "${BLUE}  -> Rebuilding smsly-media-mgmt...${NC}"
+        
+        if ! command -v cargo >/dev/null; then
+            echo -e "${BLUE}  -> Installing Rust toolchain...${NC}"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y >/dev/null
+            export PATH="$HOME/.cargo/bin:$PATH"
+        fi
+
+        cd "$mgmt_dir" && cargo build --release 2>&1 | tail -5
+        if [ -f target/release/smsly-media-mgmt ]; then
+            cp target/release/smsly-media-mgmt /usr/local/bin/smsly-media-mgmt
+            systemctl restart smsly-media-mgmt 2>/dev/null || true
+            echo -e "${GREEN}  [OK] smsly-media-mgmt updated${NC}"
+        fi
+    else
+        echo -e "${YELLOW}  [WARN] smsly-media-mgmt not found or missing Cargo.toml at $mgmt_dir${NC}"
+    fi
+}
+
 install_media_node() {
     local script_dir="$1"
     echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
@@ -391,6 +381,9 @@ install_media_node() {
     # Phase 2: Create install dir + generate secrets
     mkdir -p "$MEDIA_NODE_INSTALL_DIR"
     generate_media_secrets "$MEDIA_NODE_ENV"
+
+    # Phase 2.5: Build custom Rust daemon
+    build_media_mgmt "$script_dir"
 
     # Phase 3: Deploy configs + systemd
     deploy_media_configs "$script_dir"
@@ -425,23 +418,8 @@ update_media_node() {
         exit 1
     fi
 
-    # Pull latest code
-    echo -e "${BLUE}  → Pulling latest code...${NC}"
-    cd "$script_dir" && git pull --ff-only  || {
-        echo -e "${YELLOW}  ⚠ git pull failed — using local copy${NC}"
-    }
-
-    # Rebuild smsly-media-mgmt if Cargo.toml exists
-    local mgmt_dir="$script_dir/../smsly-media-mgmt"
-    if [ -f "$mgmt_dir/Cargo.toml" ]; then
-        echo -e "${BLUE}  → Rebuilding smsly-media-mgmt...${NC}"
-        cd "$mgmt_dir" && cargo build --release 2>&1 | tail -5
-        if [ -f target/release/smsly-media-mgmt ]; then
-            cp target/release/smsly-media-mgmt /usr/local/bin/smsly-media-mgmt
-            systemctl restart smsly-media-mgmt
-            echo -e "${GREEN}  ✓ smsly-media-mgmt updated${NC}"
-        fi
-    fi
+    # Pull latest code and build Rust daemon
+    build_media_mgmt "$script_dir"
 
     # Redeploy configs
     echo -e "${BLUE}  → Updating configs...${NC}"
