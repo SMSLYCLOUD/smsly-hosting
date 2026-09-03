@@ -11,12 +11,27 @@ from .s3 import delete_cloud_backup_object
 logger = logging.getLogger(__name__)
 
 
-def _dump_container_database(container_name, image_tag, temp_dir):
-    """Run pg_dump/mysqldump/redis SAVE inside a DB container for consistent backups."""
-    client = _docker.from_env()
+def _dump_container_database(container_name, image_tag, temp_dir, docker_client=None):
+    """Run pg_dump/mysqldump/redis SAVE inside a DB container for consistent backups.
+
+    BUG FIX: the old code checked 'postgres' in (image_tag or '').lower()
+    where image_tag was the BACKUP COMMIT TAG (backup/{name}:{uuid}) — it
+    never contained 'postgres'/'mysql'/'redis', so the DB type detection
+    always failed and the dump was silently skipped for every service.
+    Now we inspect the CONTAINER's actual image instead.
+    """
+    if docker_client is not None:
+        client = docker_client
+    else:
+        client = _docker.from_env()
     try:
         ctr = client.containers.get(container_name)
-        image_lower = (image_tag or '').lower()
+        # BUG FIX: detect the DB type from the CONTAINER's actual image,
+        # not from the backup commit tag (which never contains db names)
+        container_image = (ctr.attrs.get('Config', {}).get('Image', '') or '').lower()
+        if not container_image:
+            container_image = (ctr.image.tags[0] if ctr.image.tags else '').lower()
+        image_lower = container_image
         dump_file = None
 
         if 'postgres' in image_lower:

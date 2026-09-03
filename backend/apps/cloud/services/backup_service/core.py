@@ -421,7 +421,7 @@ class BackupService:
                     raise RuntimeError(f"Failed to save image {image_tag}: {img_err}") from img_err
 
             container_name = service.name
-            _dump_container_database(container_name, image_tag, temp_dir)
+            _dump_container_database(container_name, image_tag, temp_dir, docker_client=self.docker_client)
 
             volumes = Volume.objects.filter(service=service)
             for vol in volumes:
@@ -467,11 +467,15 @@ class BackupService:
                     logger.error(f"Volume backup failed for {vol.name}: {ve}")
                     raise
 
-            if not backup.db_only:
-                env_backup_filename = "env_vars_backup.json"
-                env_backup_path = os.path.join(temp_dir, env_backup_filename)
-                with open(env_backup_path, 'w') as f:
-                    json.dump(metadata['env_vars'], f, indent=2)
+            # Always write the env vars file — even for db_only backups.
+            # The restore path looks for this file; skipping it means a
+            # db_only restore has no env context and silently restores
+            # nothing. (The metadata['env_vars'] list is in the .meta
+            # file, but the restore reads the JSON from the tarball.)
+            env_backup_filename = "env_vars_backup.json"
+            env_backup_path = os.path.join(temp_dir, env_backup_filename)
+            with open(env_backup_path, 'w') as f:
+                json.dump(metadata['env_vars'], f, indent=2)
 
             tarball_name = f"{slugify(service.name)}_{timezone.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
             if backup.db_only:
@@ -485,13 +489,25 @@ class BackupService:
                     tar.add(item_path, arcname=item)
 
             filepath = tarball_path
-            filepath = self._maybe_encrypt(filepath)
-
-            metadata['checksum_sha256'] = hashlib.sha256()
+            # Compute checksum on the UNENCRYPTED tarball first — this is
+            # the content checksum the restore uses to verify integrity
+            # before attempting decryption (a corrupt encrypted file
+            # would fail with a confusing InvalidToken error).
+            content_checksum = hashlib.sha256()
             with open(filepath, 'rb') as f:
                 for chunk in iter(lambda: f.read(8192), b''):
-                    metadata['checksum_sha256'].update(chunk)
-            metadata['checksum_sha256'] = metadata['checksum_sha256'].hexdigest()
+                    content_checksum.update(chunk)
+            metadata['content_checksum_sha256'] = content_checksum.hexdigest()
+
+            filepath = self._maybe_encrypt(filepath)
+
+            # Also compute the encrypted-file checksum for transport
+            # integrity (detects corruption in transit / at rest).
+            encrypted_checksum = hashlib.sha256()
+            with open(filepath, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b''):
+                    encrypted_checksum.update(chunk)
+            metadata['checksum_sha256'] = encrypted_checksum.hexdigest()
             metadata['size_bytes'] = os.path.getsize(filepath)
 
             BackupService.stamp_encryption_header_into_metadata(metadata, filepath)
@@ -642,33 +658,50 @@ class BackupService:
                     logger.error(f"Provider deploy failed for DB restore: {prov_err}")
                     raise
 
-                time.sleep(5)
-                try:
-                    ctr = self.docker_client.containers.get(container_name)
-                except docker.errors.NotFound:
-                    raise RuntimeError(f"Container {container_name} did not start after deployment for DB restore.")
+                # Wait for the container to be ready with a probe loop
+                # instead of a hardcoded sleep(5) — Java/large-image apps
+                # can take 30+ seconds to start.
+                _container_ready = False
+                for _wait_i in range(30):
+                    try:
+                        ctr = self.docker_client.containers.get(container_name)
+                        if ctr.status == 'running':
+                            _container_ready = True
+                            break
+                    except docker.errors.NotFound:
+                        pass
+                    time.sleep(2)
+                if not _container_ready:
+                    raise RuntimeError(
+                        f"Container {container_name} did not start after "
+                        f"deployment for DB restore (waited 60s)."
+                    )
 
                 db_dest = '/tmp/restore_dump.sql' if fname == 'db_dump.sql' else '/tmp/restore_dump.rdb'
                 _copy_file_to_container(self.docker_client, ctr.id, db_dump_path, db_dest)
 
                 if fname == 'db_dump.sql':
-                    ctr.exec_run([
-                        'pg_dump' if 'postgres' in (target_service.docker_image or '').lower() else 'mysql',
-                        '--version'
-                    ])
-                    if 'postgres' in (target_service.docker_image or '').lower():
-                        result = ctr.exec_run(
-                            ['pg_restore', '-U', target_service.name, '-d', target_service.name,
-                             '--clean', '--if-exists', db_dest],
-                            timeout=600,
-                        )
-                        logger.info(f"pg_restore exit: {result.exit_code}, output: {result.output[:200]}")
-                    else:
-                        result = ctr.exec_run(
-                            f"mysql -u root < {db_dest}",
-                            timeout=600,
-                        )
-                        logger.info(f"mysql restore exit: {result.exit_code}")
+                    # FIX: use the container's actual POSTGRES_USER and
+                    # POSTGRES_DB from its env, not the service name —
+                    # the backup used these creds, the restore must too.
+                    ctr_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                               for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                               if '=' in e}
+                    pg_user = ctr_env.get('POSTGRES_USER', 'postgres')
+                    pg_db = ctr_env.get('POSTGRES_DB', 'postgres')
+                    # Validate against the container env to prevent injection
+                    import re as _re
+                    if not _re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', pg_user):
+                        pg_user = 'postgres'
+                    if not _re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', pg_db):
+                        pg_db = 'postgres'
+
+                    result = ctr.exec_run(
+                        ['psql', '-U', pg_user, '-d', pg_db,
+                         '-f', db_dest],
+                        timeout=600,
+                    )
+                    logger.info(f"psql restore exit: {result.exit_code}, output: {result.output[:200] if result.output else '(none)'}")
                 elif fname == 'redis_dump.rdb':
                     ctr.exec_run(['redis-cli', 'FLUSHALL'], timeout=60)
                     with open(db_dump_path, 'rb') as f:
@@ -678,8 +711,13 @@ class BackupService:
             all_vols = list(Volume.objects.filter(service=target_service))
             for vol_file in vol_files:
                 vol_name_part = vol_file[len('volume_'):-len('.tar.gz')]
-                vol_name = vol_name_part.replace('_', '/', 1) if '/' in vol_name_part else vol_name_part
 
+                # FIX: the safe name replaced ALL '/' and '\' with '_', so
+                # we can't reconstruct the original by replacing one '_'
+                # back to '/'. Instead, match against the Volume records:
+                # find the volume whose safe-fied name equals the one in
+                # the tarball. This is always correct regardless of how
+                # many slashes the original had.
                 target_vol = None
                 for v in all_vols:
                     safe = v.name.replace('/', '_').replace('\\', '_').replace('..', '_')
