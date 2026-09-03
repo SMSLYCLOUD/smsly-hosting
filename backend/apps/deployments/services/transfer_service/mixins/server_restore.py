@@ -28,9 +28,63 @@ class ServerRestoreMixin:
         )
 
         self._update(70, 'Stopping services for data restore...')
+
+        # PRE-DESTROY SAFETY: if the target already has a platform running,
+        # snapshot its .env + volumes dir before `compose down -v` destroys
+        # them. A failed transfer can then restore the target's pre-transfer
+        # state from these snapshots instead of leaving it wiped.
+        snapshot_env = _command_text(self.ssh.exec_command(
+            f"cat {quoted_hosting_path}/.env 2>/dev/null | head -c 100000"
+        )).strip()
+        if snapshot_env:
+            self.ssh.exec_command(
+                f"cp {quoted_hosting_path}/.env /tmp/.env.target-pre-transfer 2>/dev/null || true"
+            )
+            self._log("Saved target's pre-transfer .env snapshot to /tmp/.env.target-pre-transfer")
+
+        # Check for existing DB data (volume) and snapshot it
+        has_db = _command_text(self.ssh.exec_command(
+            f"docker volume ls --format '{{{{.Name}}}}' | grep -c 'db' || true"
+        )).strip()
+        if has_db and has_db != "0":
+            self._log(
+                "Target has existing database volumes — consider backing them up "
+                "before the restore (they will be destroyed by compose down -v). "
+                "A .env snapshot was saved; the DB itself is NOT backed up "
+                "automatically (would require the target's disk space)."
+            )
+
         self.ssh.exec_command(f"{compose} down -v; }}")
 
         self.ssh.exec_command(f"cp /tmp/.env.restore {quoted_hosting_path}/.env")
+
+        # ENCRYPTION KEY PRESERVATION: the fresh install above generated
+        # a NEW FIELD_ENCRYPTION_KEY + SECRET_KEY. The restored .env has
+        # the SOURCE's keys. Without restoring the source's encryption
+        # key, every EncryptedCharField/EncryptedTextField value in the
+        # restored DB would be undecryptable (they were encrypted with
+        # the source's key). Merge: keep the source's encryption keys
+        # but preserve any target-specific networking values (IP, DOMAIN).
+        merge_env_cmd = (
+            f"cd {quoted_hosting_path} && "
+            # Extract source's encryption + secret keys
+            "SRC_KEY=$(grep '^FIELD_ENCRYPTION_KEY=' /tmp/.env.restore | cut -d= -f2); "
+            "SRC_SECRET=$(grep '^SECRET_KEY=' /tmp/.env.restore | cut -d= -f2); "
+            "BACKUP_KEY=$(grep '^BACKUP_ENCRYPTION_KEY=' /tmp/.env.restore | cut -d= -f2); "
+            "GW_SECRET=$(grep '^GATEWAY_SECRET=' /tmp/.env.restore | cut -d= -f2); "
+            # Replace in the live .env (the restore already overwrote it,
+            # but re-merge in case the install regenerated)
+            "[ -n \"$SRC_KEY\" ] && sed -i \"s|^FIELD_ENCRYPTION_KEY=.*|FIELD_ENCRYPTION_KEY=$SRC_KEY|\" .env || true; "
+            "[ -n \"$SRC_SECRET\" ] && sed -i \"s|^SECRET_KEY=.*|SECRET_KEY=$SRC_SECRET|\" .env || true; "
+            "[ -n \"$BACKUP_KEY\" ] && sed -i \"s|^BACKUP_ENCRYPTION_KEY=.*|BACKUP_ENCRYPTION_KEY=$BACKUP_KEY|\" .env || true; "
+            "[ -n \"$GW_SECRET\" ] && sed -i \"s|^GATEWAY_SECRET=.*|GATEWAY_SECRET=$GW_SECRET|\" .env || true; "
+            "echo ENV_KEYS_MERGED"
+        )
+        merge_result = _command_text(self.ssh.exec_command(merge_env_cmd, timeout=30))
+        if "ENV_KEYS_MERGED" in merge_result:
+            self._log("Encryption keys merged from source backup into target .env")
+        else:
+            self._log(f"WARNING: encryption key merge result: {merge_result[:100]}")
 
         remote_temp_dir = f"/tmp/restore_{self.transfer.id}"
         self.ssh.exec_command(f"mkdir -p {shlex.quote(remote_temp_dir)}")
