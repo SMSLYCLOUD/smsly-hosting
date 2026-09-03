@@ -648,6 +648,22 @@ class PlatformConfig(models.Model):
         verbose_name_plural = "Platform Configuration"
 
     def save(self, *args, **kwargs):
+        # GHOST GUARD: PlatformConfig.load() returns an env-only instance
+        # when the table/column doesn't exist yet (migration pending,
+        # backend restarting). Saving that instance would WIPE the real
+        # row's domain/server_ip — three production outages were caused
+        # by exactly this (the caller sets one field, calls save(), and
+        # the empty domain overwrites the real one). Refuse the save and
+        # log loudly; the caller's field change is lost (acceptable —
+        # the alternative is losing the platform's domain).
+        if getattr(self, '_is_ghost', False):
+            logger.warning(
+                "PlatformConfig.save() BLOCKED: attempt to save a ghost "
+                "(env-only) instance during schema/migration phase. This "
+                "would have wiped the real row. Re-run the operation "
+                "after migrations complete."
+            )
+            return
         self.pk = 1  # Enforce singleton
         # Auto-generate the GitHub App webhook secret on first save so the
         # webhook can actually verify signatures without manual setup. The
@@ -767,10 +783,19 @@ class PlatformConfig(models.Model):
         # Schema Guard: Check if the table exists before querying
         table_name = cls._meta.db_table
         if table_name not in connection.introspection.table_names():
-            # Return a default instance from ENV without saving to DB
+            # Return a default instance from ENV without saving to DB.
+            # CRITICAL: this is a GHOST instance — the real DB row may have
+            # a domain/server_ip that the .env doesn't (operators set domain
+            # via the Settings UI, not .env). If any caller .save()s this
+            # ghost, it WIPES the real values (three separate outages
+            # 2026-09-01→02 caused by this exact path during backend
+            # restart races: empty domain → Caddyfile lost the platform
+            # block → 525 on every proxied request → custom domains
+            # demoted by re-verification with empty expected targets).
+            # _is_ghost guards save() below.
             env_domain = os.environ.get('DOMAIN', '').strip()
             env_ssl = os.environ.get('USE_SSL', '').strip().lower()
-            return cls(
+            ghost = cls(
                 pk=1,
                 domain=env_domain,
                 use_ssl=env_ssl in ('true', '1', 'yes'),
@@ -778,6 +803,8 @@ class PlatformConfig(models.Model):
                 wildcard_subdomains=os.environ.get('WILDCARD_SUBDOMAINS', 'true').lower() in ('true', '1', 'yes'),
                 server_ip=os.environ.get('PUBLIC_IP', '').strip(),
             )
+            ghost._is_ghost = True  # type: ignore[attr-defined]
+            return ghost
 
         # Return cached config if available
         cached = cache.get(cls._CACHE_KEY)
@@ -793,9 +820,11 @@ class PlatformConfig(models.Model):
         except (ProgrammingError, OperationalError):
             # Column may not exist yet if a migration is pending.
             # Return a default instance from ENV so the app can start.
+            # Same ghost-guard as the schema guard above — never let this
+            # instance overwrite the real row.
             env_domain = os.environ.get('DOMAIN', '').strip()
             env_ssl = os.environ.get('USE_SSL', '').strip().lower()
-            return cls(
+            ghost = cls(
                 pk=1,
                 domain=env_domain,
                 use_ssl=env_ssl in ('true', '1', 'yes'),
@@ -803,6 +832,8 @@ class PlatformConfig(models.Model):
                 wildcard_subdomains=os.environ.get('WILDCARD_SUBDOMAINS', 'true').lower() in ('true', '1', 'yes'),
                 server_ip=os.environ.get('PUBLIC_IP', '').strip(),
             )
+            ghost._is_ghost = True  # type: ignore[attr-defined]
+            return ghost
 
         env_domain = os.environ.get('DOMAIN', '').strip()
         env_ssl = os.environ.get('USE_SSL', '').strip().lower()
