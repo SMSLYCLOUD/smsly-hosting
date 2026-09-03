@@ -44,6 +44,15 @@ class SingleServiceRestoreMixin:
         name = self.transfer.service.name
         port = self.transfer.service.internal_port
         domain = self.transfer.service.public_domain
+
+        # HEALTHCHECK PATH DETECTION: Traefik needs a path the app
+        # actually answers. The braid incident showed a service whose
+        # /health 404'd but /api/health 200'd — without probing, Traefik
+        # marks the backend DOWN ("no available server") and the
+        # transferred service is unreachable. Probe the running container
+        # for the first working path from the fallback list.
+        health_check_path = self._detect_transferred_health_path(name, port)
+
         labels = {
             'traefik.enable': 'true',
             'traefik.docker.network': scoped_net,
@@ -52,15 +61,66 @@ class SingleServiceRestoreMixin:
             f'traefik.http.services.{name}.loadbalancer.server.port': str(port),
             'managed_by': 'smsly-hosting',
         }
+        # Only add the healthcheck label when we found a working path —
+        # a wrong path is worse than none (Traefik defaults to UP).
+        if health_check_path:
+            labels[f'traefik.http.services.{name}.loadbalancer.healthcheck.path'] = health_check_path
+            labels[f'traefik.http.services.{name}.loadbalancer.healthcheck.interval'] = '30s'
 
-        self._node_api_request('incoming/deploy', body={
+        # DUAL-HOMING: connect to BOTH the project-scoped bridge and the
+        # platform-wide bridge (smsly-platform-net). Transferred services
+        # need cross-project reachability on the target just like they
+        # had on the source (AGENTS.md #15 — docker-py networking_config
+        # is not used here because this is a raw REST API call to the
+        # incoming node; the incoming/deploy endpoint handles multi-network
+        # attach on the target side).
+        deploy_body = {
             'image': image,
             'container_name': name,
             'env': env_dict,
             'labels': labels,
             'network': scoped_net,
-        })
+        }
+        # Request dual-homing if the service opted into the internal network
+        if getattr(self.transfer.service, 'use_internal_network', True):
+            deploy_body['dual_home'] = True
+
+        self._node_api_request('incoming/deploy', body=deploy_body)
         self._seed_target_deployment_record(metadata)
+
+    def _detect_transferred_health_path(self, container_name, port):
+        """Probe the target's running container for a health path that answers.
+
+        Uses the incoming/exec endpoint to run a probe inside the container
+        (same technique as _detect_working_health_path in local.py). Returns
+        the first path from the fallback list that answers 2xx/3xx, or None.
+        """
+        candidate_paths = ['/', '/health', '/api/health', '/healthz', '/ready', '/live', '/status', '/up']
+        probe_script = "\n".join([
+            f"for p in {' '.join(candidate_paths)}; do",
+            f"  if command -v curl >/dev/null 2>&1; then",
+            f"    code=$(curl -s -o /dev/null -w '%{{http_code}}' -m 3 http://127.0.0.1:{port}$p 2>/dev/null || echo 000)",
+            f"    if [ \"$code\" -ge 200 ] && [ \"$code\" -lt 400 ]; then echo \"$p\"; exit 0; fi",
+            f"  elif command -v wget >/dev/null 2>&1; then",
+            f"    if wget -q -O /dev/null --timeout=3 http://127.0.0.1:{port}$p 2>/dev/null; then echo \"$p\"; exit 0; fi",
+            f"  elif command -v python3 >/dev/null 2>&1; then",
+            f"    python3 -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:{port}'+__import__('sys').argv[1], timeout=3); exit(0 if r.status < 400 else 1)\" \"$p\" 2>/dev/null && echo \"$p\" && exit 0",
+            f"  fi",
+            f"done",
+            f"exit 1"
+        ])
+        try:
+            result = self._node_api_request('incoming/exec', body={
+                'script': probe_script,
+                'container': container_name,
+            }, timeout=30)
+            if result.get('exit_code') == 0:
+                path = (result.get('stdout') or '').strip().splitlines()[-1].strip()
+                if path.startswith('/'):
+                    return path
+        except Exception as exc:
+            logger.debug("Health path probe failed for %s: %s", container_name, exc)
+        return None
 
     def _restore_single_service_lite(self, remote_backup_path):
         self._update(65, 'Restoring service on lite agent target...')

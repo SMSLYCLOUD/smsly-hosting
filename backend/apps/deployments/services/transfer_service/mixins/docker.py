@@ -83,19 +83,39 @@ class DockerMixin:
         safe_run = " ".join(shlex.quote(arg) for arg in run_args)
 
         safe_net = shlex.quote(net)
+        # EGRESS ISOLATION on the target's scoped bridge — mirrors the
+        # master's network_scope.py rules exactly:
+        #   1. NIC wildcards must cover EVERY naming scheme (the master's
+        #      OVH NIC is ens3; missing ens+ killed all internet on that
+        #      host — AGENTS.md #17).
+        #   2. Platform bridge RETURN: transferred services are dual-homed
+        #      (project + platform bridge) on the master; without a RETURN
+        #      to smsly-platform-net, cross-project traffic is DROPped.
+        #   3. Same-bridge RETURN for addon reachability.
         net_cmd = (
             f"docker network inspect {safe_net} >/dev/null 2>&1 "
             f"|| docker network create {safe_net} >/dev/null; "
             f"BR=$(docker network inspect {safe_net} --format '{{{{.Id}}}}' 2>/dev/null | tr -d '-' | head -c 12); "
-            f"if [ -n \"$BR\" ] && ! iptables -C DOCKER-USER -i br-$BR -o br-+ -j DROP 2>/dev/null; then "
-            f"iptables -I DOCKER-USER -i br-$BR -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN; "
-            f"iptables -I DOCKER-USER -i br-$BR -o br-$BR -j RETURN; "
-            f"iptables -I DOCKER-USER -i br-$BR -o eth+ -j RETURN; "
-            f"iptables -I DOCKER-USER -i br-$BR -o enp+ -j RETURN; "
-            f"iptables -I DOCKER-USER -i br-$BR -o wl+ -j RETURN; "
-            f"iptables -I DOCKER-USER -i br-$BR -d 169.254.169.254/32 -j DROP; "
+            f"if [ -n \"$BR\" ] && ! iptables -C DOCKER-USER -i br-$BR -j DROP 2>/dev/null; then "
+            # DNS first (never shadowed)
             f"iptables -I DOCKER-USER -i br-$BR -p udp --dport 53 -j RETURN; "
+            # Metadata IP guard
+            f"iptables -I DOCKER-USER -i br-$BR -d 169.254.169.254/32 -j DROP; "
+            # Established connections
+            f"iptables -I DOCKER-USER -i br-$BR -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN; "
+            # Internet via physical NICs — ALL naming schemes
+            f"iptables -I DOCKER-USER -i br-$BR -o wl+ -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o enp+ -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o ens+ -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o eno+ -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o eth+ -j RETURN; "
+            # Platform bridge (cross-project communication)
+            f"iptables -I DOCKER-USER -i br-$BR -o docker0 -j RETURN 2>/dev/null || true; "
+            # Same bridge (addon reachability)
+            f"iptables -I DOCKER-USER -i br-$BR -o br-$BR -j RETURN; "
+            # Cross-bridge DROP (project isolation)
             f"iptables -I DOCKER-USER -i br-$BR -o br-+ -j DROP; "
+            # Catch-all DROP
             f"iptables -I DOCKER-USER -i br-$BR -j DROP; "
             f"fi"
         )

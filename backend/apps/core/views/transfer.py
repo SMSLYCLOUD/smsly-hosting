@@ -479,6 +479,36 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         else:
             existing = existing.filter(service__isnull=True)
         existing = existing.first()
+
+        # STALE-TRANSFER AUTO-RECOVERY: same pattern as the ecosystem
+        # 429 ghost-plan lockout. A transfer whose celery task died
+        # (worker restart, OOM kill, ghost message) stays in an ACTIVE
+        # status forever, returning 409 on every new attempt with no
+        # UI recovery path. Auto-fail any active transfer older than
+        # 2 hours (transfers should finish in minutes; the deadline
+        # only catches true ghosts).
+        from django.utils import timezone as _tz
+        from datetime import timedelta as _td
+        _stale_cutoff = _tz.now() - _td(hours=2)
+        stale_transfers = list(existing.__class__.objects.filter(
+            owner=request.user,
+            status__in=ACTIVE_TRANSFER_STATUSES,
+            created_at__lt=_stale_cutoff,
+        ).exclude(status__in=['COMPLETED', 'FAILED', 'ROLLED_BACK', 'CANCELLED'])) if existing else []
+
+        # Re-check with the time filter applied to the actual queryset
+        if existing and existing.created_at and existing.created_at < _stale_cutoff:
+            existing.status = 'FAILED'
+            existing.error_message = (
+                f"Auto-recovered at create time: transfer was stuck in "
+                f"'{existing.status}' since {existing.created_at.isoformat()} "
+                f"(>2 hours). Celery task was a ghost. Cleared to unblock."
+            )
+            existing.save(update_fields=['status', 'error_message', 'updated_at'])
+            logger.warning("Auto-failed stale transfer %s (was %s, %s old)",
+                           existing.id, existing.status, existing.created_at.isoformat())
+            existing = None  # unblocked — fall through to create
+
         if existing:
             return Response(
                 {
@@ -644,7 +674,13 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='incoming/deploy')
     def incoming_deploy(self, request, pk=None):
-        """Start a service container on this node using pre-configured params."""
+        """Start a service container on this node using pre-configured params.
+
+        SECURITY: the env dict contains the service's FULL secrets
+        (DATABASE_URL, REDIS_URL, API keys). Never log the request
+        body — the transfer.logs field would persist those secrets
+        on the target node's dashboard.
+        """
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
             return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
@@ -654,6 +690,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         labels = request.data.get('labels', {})
         network = request.data.get('network', 'smsly-net')
         restart_policy = request.data.get('restart_policy', 'unless-stopped')
+        dual_home = request.data.get('dual_home', False)
         if not image or not container_name:
             return Response({'error': 'image and container_name required'}, status=status.HTTP_400_BAD_REQUEST)
         if not _validate_transfer_image(image):
@@ -661,30 +698,68 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 {'error': 'Image name rejected: must match platform registry or be a valid Docker Hub library image.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Log ONLY the container name + image — never the env dict
+        logger.info(
+            "Transfer incoming/deploy: transfer=%s container=%s image=%s network=%s dual_home=%s",
+            transfer.id, container_name, image, network, dual_home,
+        )
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
-            container = client.containers.run(
-                image=image,
-                name=container_name,
-                environment=env,
-                labels=labels,
-                network=network,
-                restart_policy={"Name": restart_policy, "MaximumRetryCount": 0},
-                detach=True,
-                security_opt=["no-new-privileges:true"],
-                cap_drop=["ALL"],
-                cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
-                pids_limit=1024,
-            )
+
+            # DUAL-HOMING: when requested, attach to BOTH the project
+            # bridge and smsly-platform-net (AGENTS.md #15 — docker-py
+            # 7.x requires network= + plain-dict networking_config).
+            networking_config = None
+            if dual_home:
+                try:
+                    from apps.deployments.services.network_scope import ensure_platform_bridge
+                    platform_bridge = ensure_platform_bridge()
+                    networks_dict = {
+                        network: client.api.create_endpoint_config(
+                            aliases=[container_name, f"{container_name}.default.internal"]
+                        ),
+                        platform_bridge: client.api.create_endpoint_config(
+                            aliases=[container_name],
+                        ),
+                    }
+                    networking_config = networks_dict  # plain dict (not wrapped)
+                except Exception as exc:
+                    logger.warning("Transfer incoming/deploy: dual-homing setup failed: %s", exc)
+
+            run_kwargs = {
+                'image': image,
+                'name': container_name,
+                'environment': env,
+                'labels': labels,
+                'restart_policy': {"Name": restart_policy, "MaximumRetryCount": 0},
+                'detach': True,
+                'security_opt': ["no-new-privileges:true"],
+                'cap_drop': ["ALL"],
+                'cap_add': ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+                'pids_limit': 1024,
+            }
+            if networking_config:
+                run_kwargs['network'] = network
+                run_kwargs['networking_config'] = networking_config
+            else:
+                run_kwargs['network'] = network
+
+            container = client.containers.run(**run_kwargs)
             return Response({'container_id': container.id, 'status': 'running'})
         except Exception:
-            logger.exception("Transfer operation failed")
+            logger.exception("Transfer operation failed for %s (container=%s)", transfer.id, container_name)
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'], url_path='incoming/exec')
     def incoming_exec(self, request, pk=None):
-        """Execute a Python script in this node's backend container (or shell command)."""
+        """Execute a Python script in this node's backend container (or shell command).
+
+        SECURITY: scripts can print secrets (env vars, DB URLs). The stdout
+        response may contain them, but the transfer LOGS on this node must
+        not — never log the script content or the output body here. The
+        transfer source's _log() already redacts via _redact_transfer_text.
+        """
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
             return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
@@ -693,6 +768,11 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         container = request.data.get('container', '')
         if not script:
             return Response({'error': 'script required'}, status=status.HTTP_400_BAD_REQUEST)
+        # Log only a fingerprint, never the content
+        logger.info(
+            "Transfer incoming/exec: transfer=%s container=%s shell=%s script_len=%d",
+            transfer.id, container or '(backend)', shell, len(script),
+        )
         try:
             if shell:
                 import subprocess

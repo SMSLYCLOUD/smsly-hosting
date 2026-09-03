@@ -22,7 +22,7 @@ import socket
 from urllib.parse import urlparse
 from apps.deployments.models import Service, EnvironmentVariable
 
-payload = json.loads(%r)
+payload = json.loads(__PAYLOAD_JSON__)
 svc = Service.objects.filter(name=payload["service_name"]).first()
 platform_database_url = os.environ.get("DATABASE_URL", "").strip()
 platform_redis_url = os.environ.get("REDIS_URL", "").strip()
@@ -86,7 +86,7 @@ if svc:
 print("PRE_TRANSFER_ENV_JSON_BEGIN")
 print(json.dumps(pre_transfer))
 print("PRE_TRANSFER_ENV_JSON_END")
-""".strip() % json.dumps(payload)
+""".strip().replace("__PAYLOAD_JSON__", json.dumps(payload))
 
         pre_transfer: dict = {}
         try:

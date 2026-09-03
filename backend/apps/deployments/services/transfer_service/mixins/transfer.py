@@ -29,6 +29,13 @@ class TransferMixin:
     def _stop_source_service(self):
         if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
             return
+        # Skip stopping when the target IS the local node — a local
+        # "transfer" is a redeploy from backup, and stopping the source
+        # container first creates unnecessary downtime for a transfer
+        # that doesn't actually move anything.
+        if self._target_is_local():
+            self._log("Target is local — skipping source container stop (no-op transfer).")
+            return
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
