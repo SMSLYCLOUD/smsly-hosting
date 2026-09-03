@@ -168,9 +168,14 @@ class GitHubWebhookHandler:
                 service.provider.id) if service.provider else None
 
             if provider_id:
-                skip = bool(getattr(service, 'can_auto_deploy', False))
+                # Webhook pushes skip the REVIEW gate and go straight to
+                # the STAGED (blue-green) pipeline. The old code respected
+                # service.can_auto_deploy (default False) — every push
+                # paused at REVIEW and waited for manual approval, making
+                # push-to-deploy useless. Webhooks are already an explicit
+                # deployment intent from the operator's git push.
                 smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id,
-                                       skip_review=skip)
+                                       skip_review=True)
                 triggered_count += 1
             else:
                 logger.warning(
@@ -283,10 +288,10 @@ class GitHubWebhookHandler:
         provider_id = str(
             preview_service.provider.id) if preview_service.provider else None
         if provider_id:
-            # For previews, we also respect the parent's auto deploy setting
-            skip = getattr(preview_service.parent_service, 'can_auto_deploy', False) if preview_service.parent_service else False
+            # Preview deployments skip the REVIEW gate too — a PR push is
+            # an explicit deployment trigger (same reasoning as push).
             smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id,
-                                   skip_review=skip)
+                                   skip_review=True)
 
             # Post/update PR comment with preview info
             try:
