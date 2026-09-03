@@ -965,8 +965,19 @@ rm -rf {remote_tmp}
             return parts[0], parts[1]
         return image_ref, 'latest'
 
-    def backup_server(self, backup_id=None, db_only=False):
+    def backup_server(self, backup_id=None, db_only=False, backup_type='SERVER'):
         from apps.deployments.models import Service as Svc
+
+        # TRANSFER backups include real secret values (the target node
+        # needs them to hydrate the service). Non-transfer backups mask
+        # secrets for safety. The caller (transfer._prepare) passes
+        # backup_type='SERVER_TRANSFER'.
+        include_secret_values = str(backup_type or '').upper() in {
+            'TRANSFER',
+            'SERVER_TRANSFER',
+            'FULL_TRANSFER',
+            'PRE_TRANSFER',
+        }
 
         if backup_id:
             try:
@@ -1013,7 +1024,7 @@ rm -rf {remote_tmp}
                 for ev in env_vars:
                     svc_meta['env_vars'].append({
                         'key': ev.key,
-                        'value': '********' if ev.is_secret else ev.value,
+                        'value': '********' if (ev.is_secret and not include_secret_values) else ev.value,
                         'is_secret': ev.is_secret,
                     })
 

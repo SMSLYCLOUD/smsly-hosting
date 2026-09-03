@@ -306,6 +306,25 @@ class CoreMixin:
             if not result.get('docker_available'):
                 self._log("Docker not detected on target — will be installed by the platform.")
 
+        # PRE-TRANSFER SAFETY BACKUP: create a non-transfer safety backup
+        # of the service's current state BEFORE the transfer backup. If the
+        # transfer fails mid-way (source container stopped, DNS cut over,
+        # restore crashed), this backup is the rollback point. The transfer
+        # backup itself is a separate artifact that may be partially
+        # uploaded/extracted on the target.
+        if self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
+            try:
+                safety = backup_svc = BackupService().backup_service(
+                    self.transfer.service.id,
+                    backup_type='PRE_TRANSFER',
+                )
+                self.transfer.metadata = self.transfer.metadata or {}
+                self.transfer.metadata['safety_backup_id'] = str(safety.id)
+                self.transfer.save(update_fields=['metadata'])
+                self._log(f"Safety backup created: {safety.id}")
+            except Exception as exc:
+                self._log(f"Safety backup failed (non-fatal, continuing): {exc}")
+
         self._update(10, 'Creating backup on source server...')
 
         backup_svc = BackupService()
@@ -319,7 +338,13 @@ class CoreMixin:
             self.transfer.source_backup = backup
             self.transfer.save(update_fields=['source_backup'])
         else:
-            backup = backup_svc.backup_server()
+            # FULL server transfer: pass backup_type='SERVER_TRANSFER'
+            # so secrets are included in the backup (the target needs
+            # real values to hydrate services — masked '********' values
+            # would break every restored service's DB/Redis/API keys).
+            backup = backup_svc.backup_server(
+                backup_type='SERVER_TRANSFER',
+            )
             self.transfer.source_server_backup = backup
             self.transfer.save(update_fields=['source_server_backup'])
 

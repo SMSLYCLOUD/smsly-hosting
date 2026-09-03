@@ -40,9 +40,38 @@ class ServerRestoreMixin:
         db_dump = f"{remote_temp_dir}/db_dump.sql"
 
         self.ssh.exec_command(f"{compose} up -d db; }}")
-        time.sleep(20)
 
-        self.ssh.exec_command(f"docker cp {shlex.quote(db_dump)} smsly-db:/tmp/dump.sql")
+        # Wait for DB readiness with a health probe instead of a
+        # hardcoded sleep(20) — if the DB takes longer, the restore
+        # silently fails with a connection refused error.
+        db_ready_cmd = (
+            f"for i in $(seq 1 60); do "
+            f"docker exec smsly-hosting-db-1 pg_isready -U postgres >/dev/null 2>&1 "
+            f"&& echo DB_READY && exit 0; "
+            f"docker exec smsly-db pg_isready -U postgres >/dev/null 2>&1 "
+            f"&& echo DB_READY && exit 0; "
+            f"sleep 2; "
+            f"done; echo DB_NOT_READY; exit 1"
+        )
+        db_ready = _command_text(self.ssh.exec_command(db_ready_cmd, timeout=150))
+        if "DB_READY" not in db_ready:
+            raise RuntimeError(
+                "Target database did not become ready before restore "
+                "(waited 120s with pg_isready probe)."
+            )
+
+        # Detect the CORRECT database container (the PLATFORM's DB, not
+        # a tenant service named 'smsly-db'). The old fallback blindly
+        # tried 'smsly-db' which could be a completely different DB.
+        db_container = _command_text(self.ssh.exec_command(
+            f"docker ps --filter name=smsly-hosting-db --format '{{{{.Names}}}}' | head -1"
+        )).strip() or "smsly-hosting-db-1"
+
+        # Validate: must be a platform DB container, not a tenant's
+        if "hosting" not in db_container:
+            db_container = "smsly-hosting-db-1"
+
+        self.ssh.exec_command(f"docker cp {shlex.quote(db_dump)} {shlex.quote(db_container)}:/tmp/dump.sql")
 
         db_user = _command_text(self.ssh.exec_command(
             f"grep POSTGRES_USER {quoted_hosting_path}/.env | cut -d= -f2"
@@ -75,15 +104,17 @@ class ServerRestoreMixin:
                 f'CREATE DATABASE "{escaped}";'
             )
 
+        # Use the validated db_container for all psql operations —
+        # no blind fallback to 'smsly-db' (a tenant service name).
         drop_cmd = (
-            f"{compose} exec -T db psql -U {shlex.quote(db_user)} postgres "
+            f"{compose} exec -T {shlex.quote(db_container)} psql -U {shlex.quote(db_user)} postgres "
             f"-c {shlex.quote(drop_sql_str)}"
             "; }"
         )
         self.ssh.exec_command(drop_cmd)
 
         restore_cmd = (
-            f"{compose} exec -T db sh -c "
+            f"{compose} exec -T {shlex.quote(db_container)} sh -c "
             + shlex.quote(
                 f"psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} < /tmp/dump.sql"
             )
@@ -269,34 +300,44 @@ else:
                 elif line.startswith("POSTGRES_DB="):
                     db_name = line.split("=", 1)[1].strip().strip('"').strip("'")
 
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{{0,62}}", db_user):
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", db_user):
         db_user = "smsly"
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{{0,62}}", db_name):
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", db_name):
         db_name = "smsly"
 
-    drop_sql = f'DROP DATABASE IF EXISTS "{{db_name}}"; CREATE DATABASE "{{db_name}}";'
-    try:
-        subprocess.run(
-            ["docker", "exec", "smsly-hosting-db-1", "psql", "-U", db_user, "-d", "postgres", "-c", drop_sql],
-            check=True, capture_output=True, text=True
-        )
-    except Exception:
-        subprocess.run(
-            ["docker", "exec", "smsly-db", "psql", "-U", db_user, "-d", "postgres", "-c", drop_sql],
-            check=True, capture_output=True, text=True
-        )
+    # SQL-injection-safe DROP + CREATE using shell-safe quoting.
+    # The f-string `{{db_name}}` bug is gone: use explicit variable
+    # interpolation AFTER regex validation.
+    drop_sql = 'DROP DATABASE IF EXISTS "%s"; CREATE DATABASE "%s";' % (db_name, db_name)
 
-    subprocess.run(["docker", "cp", db_dump, "smsly-hosting-db-1:/tmp/dump.sql"], check=True)
+    # Detect the platform's DB container — NEVER fall back to 'smsly-db'
+    # (that's a tenant service with a completely different database).
+    import subprocess as _sp
+    db_container = "smsly-hosting-db-1"
+    try:
+        ps = _sp.run(
+            ["docker", "ps", "--filter", "name=smsly-hosting-db",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=15
+        )
+        first = (ps.stdout or "").strip().splitlines()
+        if first and "hosting" in first[0]:
+            db_container = first[0]
+    except Exception:
+        pass
+
+    subprocess.run(
+        ["docker", "exec", db_container, "psql", "-U", db_user, "-d", "postgres", "-c", drop_sql],
+        check=True, capture_output=True, text=True, timeout=120
+    )
+
+    subprocess.run(["docker", "cp", db_dump, f"{db_container}:/tmp/dump.sql"], check=True)
     restore_result = subprocess.run(
-        ["docker", "exec", "smsly-hosting-db-1", "psql", "-U", db_user, "-d", db_name, "-f", "/tmp/dump.sql"],
-        capture_output=True, text=True
+        ["docker", "exec", db_container, "psql", "-U", db_user, "-d", db_name, "-f", "/tmp/dump.sql"],
+        capture_output=True, text=True, timeout=600
     )
     if restore_result.returncode != 0:
-        subprocess.run(["docker", "cp", db_dump, "smsly-db:/tmp/dump.sql"], check=True)
-        subprocess.run(
-            ["docker", "exec", "smsly-db", "psql", "-U", db_user, "-d", db_name, "-f", "/tmp/dump.sql"],
-            check=True
-        )
+        raise RuntimeError(f"DB restore failed on {db_container}: " + (restore_result.stderr or "")[-300:])
     print("DB_RESTORED")
 """
         db_result = self._exec_on_target(restore_db_script)
@@ -354,6 +395,11 @@ else:
 
         self._update(88, 'Starting platform on target...')
 
+        # Fix: create BOTH the standard networks AND the platform bridge
+        # (smsly-platform-net) so restored services get dual-homed
+        # (project + platform bridge) for cross-project communication.
+        # Also use check=True on network creation failures — capture_output
+        # swallows errors.
         start_script = """
 import subprocess, os
 
@@ -363,10 +409,17 @@ os.chdir(hosting_path)
 os.makedirs("caddy-config", exist_ok=True)
 os.makedirs("/opt/smsly-cache", exist_ok=True)
 
-subprocess.run(["docker", "network", "inspect", "smsly-net"], capture_output=True)
-subprocess.run(["docker", "network", "create", "smsly-net"], capture_output=True)
-subprocess.run(["docker", "network", "inspect", "smsly-proxy"], capture_output=True)
-subprocess.run(["docker", "network", "create", "smsly-proxy"], capture_output=True)
+# Create platform networks (idempotent — ignore 'already exists')
+for net in ("smsly-net", "smsly-proxy", "smsly-platform-net"):
+    r = subprocess.run(
+        ["docker", "network", "inspect", net],
+        capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        subprocess.run(
+            ["docker", "network", "create", net],
+            capture_output=True, text=True, check=True
+        )
 
 compose_file = None
 for candidate in [
