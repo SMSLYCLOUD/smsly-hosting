@@ -19,7 +19,7 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
-logger = logging(__name__)
+logger = logging.getLogger(__name__)
 
 TRANSFER_STALE_HOURS = 2
 ACTIVE_STATUSES = ['PREPARING', 'UPLOADING', 'RESTORING', 'DNS_CUTOVER', 'VERIFYING']
