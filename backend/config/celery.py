@@ -74,6 +74,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.edge_shield_watchdog  # noqa: F401  # BGP/DNS hijack symptom detection
     import apps.deployments.tasks.recover_stale_ecosystem_plans  # noqa: F401  # ghost-plan unblocker (429 lockout fix)
     import apps.deployments.tasks.recover_stale_transfers  # noqa: F401  # ghost-transfer unblocker (409 lockout fix)
+    import apps.deployments.tasks.build_recovery  # noqa: F401  # corrupt Docker state + pending migration auto-recovery
     import apps.deployments.tasks.infra.tasks_container_hygiene  # noqa: F401  # restart-loop watchdog, orphan addon GC
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
@@ -117,6 +118,8 @@ app.conf.task_routes = {
     'apps.deployments.tasks.edge_shield_watchdog': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_ecosystem_plans': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_transfers': {'queue': 'fast'},
+    'apps.deployments.tasks.recover_corrupt_docker_state': {'queue': 'deploy'},
+    'apps.deployments.tasks.ensure_migrations_applied': {'queue': 'deploy'},
     'apps.domains.tasks.reverify_custom_domains_task': {'queue': 'fast'},
     'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_deploy_task': {'queue': 'deploy'},
@@ -291,6 +294,18 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.recover_stale_transfers',
         'schedule': 900.0,
         'options': {'expires': 900.0},
+    },
+    # AUTO-RECOVERY for missing migrations: the 2026-09-02 multi-outage
+    # was caused by migration 0196 never being applied on the VPS — the
+    # PlatformConfig table was missing a column, every ORM query hit
+    # ProgrammingError, the config loader fell to its ghost path with an
+    # empty domain, and the Caddyfile lost the platform block (525 +
+    # custom domains demoted). This beat task detects and applies pending
+    # migrations automatically — cheap no-op when up to date.
+    'ensure-migrations-applied-every-5m': {
+        'task': 'apps.deployments.tasks.ensure_migrations_applied',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Continuous custom-domain re-verification (anti-hijack): a domain
     # that stops pointing at the platform loses routing + on-demand TLS

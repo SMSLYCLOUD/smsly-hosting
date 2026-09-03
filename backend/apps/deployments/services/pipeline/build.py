@@ -164,6 +164,25 @@ class BuildMixin:
 
         except Exception as e:
             update_stage(self.deployment, 'Build', 'failed')
+            # AUTO-RECOVERY: detect containerd/cache corruption and trigger
+            # an automatic Docker state cleanup so the NEXT build succeeds
+            # instead of hitting the same corrupted layer repeatedly.
+            try:
+                from apps.deployments.tasks.build_recovery import (
+                    is_build_corruption_error,
+                    recover_corrupt_docker_state,
+                )
+                if is_build_corruption_error(str(e)):
+                    append_log(
+                        self.deployment,
+                        "⚠ Docker layer corruption detected — auto-recovery: "
+                        "pruning build cache + restarting Docker daemon...\n",
+                    )
+                    recover_corrupt_docker_state.delay(deployment_id=str(self.deployment.id))
+            except ImportError:
+                pass  # recovery task not available — just fail normally
+            except Exception as recovery_exc:
+                logger.debug("Corruption recovery dispatch failed: %s", recovery_exc)
             raise BuildError(f"Build failed: {e!s}") from e
 
 

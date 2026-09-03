@@ -109,8 +109,35 @@ ensure_edge_lockdown() {
     fi
 }
 
+# ── 5. Pending-migration check (2026-09-02 root cause) ───────────────
+# Migration 0196 was never applied on the VPS → PlatformConfig missing
+# a column → ProgrammingError on every ORM query → config loader fell
+# to its ghost path → empty domain → Caddyfile lost the platform block.
+# This check catches it at the shell level (beat task covers in-process).
+ensure_migrations() {
+    local backend_container="smsly-hosting-backend-1"
+    if ! docker inspect "$backend_container" >/dev/null 2>&1; then
+        log "backend container not running — skipping migration check"
+        return 0
+    fi
+    local check_output
+    check_output=$(docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
+        -w /app "$backend_container" \
+        python manage.py migrate --check --noinput 2>&1) || true
+    if echo "$check_output" | grep -q "Your models have changes"; then
+        log "ALERT: pending migrations detected — applying now"
+        docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
+            -w /app "$backend_container" \
+            python manage.py migrate --noinput 2>&1 | tail -3
+        log "migrations applied"
+    else
+        log "migrations up to date"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
 ensure_edge_lockdown
+ensure_migrations
 log "integrity check complete"
