@@ -379,7 +379,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'is_preview', 'parent_service', 'pr_number',
             'health_check_path', 'health_check_port',
             'health_check_interval', 'health_check_timeout',
-            'health_check_retries', 'auto_restart', 'health_status',
+            'health_check_retries', 'auto_restart', 'health_status', 'ha_mode',
             'restart_policy',
             'deploy_mode', 'compose_file', 'compose_main_service',
             'is_public',

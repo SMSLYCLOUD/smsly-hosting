@@ -316,6 +316,13 @@ class PlatformConfig(models.Model):
         help_text="Require basic-auth on all preview environment URLs. "
                   "Previews often carry cloned production databases and "
                   "must not be publicly browsable.")
+    service_ha_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Master toggle for the Service HA manager (beat task, "
+                  "60s). When enabled, services with ha_mode != 'none' "
+                  "get automated replica/node failover. Individual "
+                  "services opt in via their ha_mode field: 'local' = "
+                  "same-node replicas, 'remote' = cross-node failover.")
     edge_proxy_wildcards = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="Edge Shield: ALSO proxy wildcard records (*.domain). "

@@ -765,6 +765,34 @@ export default function ServiceDetailPage() {
                                     {service.auto_rollback_enabled !== false ? 'Enabled' : 'Disabled'}
                                 </span>
                             </div>
+                            <div className="flex justify-between items-center border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">HA Mode</span>
+                                <select
+                                    value={service.ha_mode || 'none'}
+                                    onChange={async (e) => {
+                                        const newVal = e.target.value as 'none' | 'local' | 'remote';
+                                        try {
+                                            const updated = await servicesApi.update(service.id, { ha_mode: newVal });
+                                            setService(prev => ({ ...prev, ...updated }));
+                                            toast({
+                                                title: newVal === 'none' ? 'HA Disabled' : `HA: ${newVal === 'local' ? 'Local Replicas' : 'Remote Failover'}`,
+                                                description: newVal === 'none'
+                                                    ? 'Service runs without automated failover.'
+                                                    : newVal === 'local'
+                                                      ? 'Multiple replicas on this node. Survives container crashes.'
+                                                      : 'Replica on a different node. Survives node failure.',
+                                            });
+                                        } catch (err) {
+                                            toast({ title: 'Failed to update HA mode', variant: 'destructive' });
+                                        }
+                                    }}
+                                    className="px-2 py-1 rounded-md border border-border bg-background text-xs font-semibold"
+                                >
+                                    <option value="none">None</option>
+                                    <option value="local">Local (same-node)</option>
+                                    <option value="remote">Remote (cross-node)</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
 

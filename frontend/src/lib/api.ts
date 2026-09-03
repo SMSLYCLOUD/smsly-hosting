@@ -384,6 +384,7 @@ export interface Service {
   compose_main_service?: string;
   // Auto recovery
   auto_restart?: boolean;
+  ha_mode?: 'none' | 'local' | 'remote';
   auto_rollback_enabled?: boolean;
   auto_rollback_threshold?: number | null;
   // Domain visibility

@@ -485,6 +485,24 @@ class Service(TimeStampedModel):
         ),
     )
 
+    # ── Service HA Mode ────────────────────────────────────────────────
+    # The ServiceHAManager (beat task, every 60s) reads this field to
+    # decide the failover strategy. See service_ha.py for the full logic.
+    HA_MODE_CHOICES = [
+        ('none', 'No HA'),
+        ('local', 'Local HA (same-node replicas)'),
+        ('remote', 'Remote HA (cross-node failover)'),
+    ]
+    ha_mode = models.CharField(  # type: ignore[var-annotated]
+        max_length=20, choices=HA_MODE_CHOICES, default='none',
+        help_text=(
+            "High-availability mode. none = no HA. local = multiple "
+            "replicas on the same node (fast failover, survives container "
+            "crashes). remote = replica on a different node (survives node "
+            "failure — disk, kernel, network, power)."
+        ),
+    )
+
     # Deploy Mode (single container vs docker-compose)
     DEPLOY_MODE_CHOICES = [
         ('SINGLE', 'Single Container'),
