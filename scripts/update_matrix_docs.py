@@ -161,8 +161,9 @@ def update_asset_sources():
 
     new_matrix = []
     for line in matrix_lines:
-        if line.startswith('| Addon') or line.startswith('| Template'):
-            parts = [p.strip() for p in line.split('|')]
+        trimmed = line.strip()
+        if trimmed.startswith('| Addon') or trimmed.startswith('| Template'):
+            parts = [p.strip() for p in trimmed.split('|')]
             if len(parts) > 9:
                 logo_path = parts[5]
                 mapping = SOURCE_MAPPINGS.get(logo_path, "Official Brand Asset | Verified Vector SVG")
