@@ -201,8 +201,12 @@ class TestEcosystemRobustFixes(TestCase):
             plan_id="plan-123",
         )
 
+        # Since the fail-fast cascade removal (fb249554), a failure with
+        # cancel_others_on_failure=False does NOT cancel downstream
+        # dependents — independent branches continue deploying and only
+        # cancel_others_on_failure=True cancels everything.
         self.assertEqual(res["status"], "released")
-        self.assertEqual(res["cancelled_dependents"], 1)
-        mock_cancel_dep.assert_called_once()
+        self.assertEqual(res["cancelled_dependents"], 0)
+        mock_cancel_dep.assert_not_called()
 
 

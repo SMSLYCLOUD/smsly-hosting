@@ -368,7 +368,7 @@ class EcosystemScanTaskTests(TestCase):
         )
 
     @patch("apps.deployments.services.ecosystem.scan_and_analyze", side_effect=SoftTimeLimitExceeded())
-    @patch("apps.deployments.views.github._get_github_token", return_value="gh-token")
+    @patch("apps.deployments.utils.github.get_github_token_for_user", return_value="gh-token")
     def test_scan_timeout_returns_actionable_error(self, _token_mock, _scan_mock):
         result = ecosystem_scan_task.run(str(self.user.id), 30)
 
@@ -379,7 +379,7 @@ class EcosystemScanTaskTests(TestCase):
     @patch("apps.deployments.services.ecosystem.fetch_all_repos")
     @patch("apps.deployments.services.ecosystem.fetch_repo_tree")
     @patch("apps.deployments.services.ecosystem.analyze_ecosystem_chunked")
-    @patch("apps.deployments.views.github._get_github_token", return_value="gh-token")
+    @patch("apps.deployments.utils.github.get_github_token_for_user", return_value="gh-token")
     def test_scan_and_analyze_auto_skips_deployed_services(self, _token_mock, mock_analyze, mock_tree, mock_repos):
         """Verify that scan_and_analyze sets skip=True for already deployed services."""
         mock_repos.return_value = [
@@ -454,7 +454,10 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(service.repository_url, "https://github.com/owner/api")
 
     @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
-    def test_existing_service_is_reassigned_to_selected_node_and_deployment_targets_it(self, _queue_wave):
+    def test_existing_service_without_server_deploys_local_not_auto_selected(self, _queue_wave):
+        """Since d8df73a2, a plan without server_id defaults to LOCAL deployment
+        (no auto-selection of remote nodes). The service keeps server=None and
+        the deployment targets the local master."""
         server = ManagedServer.objects.create(
             owner=self.user,
             name="Worker",
@@ -487,9 +490,11 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(result["failed"], 0)
         service.refresh_from_db()
         deployment = Deployment.objects.get(service=service)
-        self.assertEqual(service.server, server)
-        self.assertEqual(deployment.target_server, server)
-        self.assertFalse(deployment.target_is_local)
+        # No auto-selection: the service stays on local (server=None) and
+        # the deployment targets the local master, not the Worker node.
+        self.assertIsNone(service.server)
+        self.assertIsNone(deployment.target_server)
+        self.assertTrue(deployment.target_is_local)
 
     @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/app"))
     @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
@@ -611,7 +616,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(port, 8080)
 
     @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
-    @patch("apps.addons.services.addon_provisioner.provision", return_value=("mock-cid", "postgresql://new-user:new-pass@new-db:5432/app"))
+    @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("mock-cid", "postgresql://new-user:new-pass@new-db:5432/app"))
     def test_addon_no_reuse_user_wide(self, _provision, _queue_wave):
         """Verify that deploying new ecosystem services does NOT reuse unrelated existing user-wide addons."""
         from apps.deployments.models.addons import Addon

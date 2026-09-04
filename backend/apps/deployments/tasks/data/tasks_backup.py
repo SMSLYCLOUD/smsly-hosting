@@ -111,6 +111,9 @@ def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_si
       1. File exists and is readable.
       2. SHA-256 checksum matches ``metadata.checksum_sha256`` (if present).
       3. Archive is a valid gzipped tar file (test-open with ``r:gz``).
+         Encrypted backups (``.enc``) are transparently decrypted to a
+         temp file first — the encrypted blob is AES-GCM chunks, NOT
+         gzip, so opening it raw always fails.
 
     Emits an ``AuditLog`` entry per verification run with pass/fail counts.
     """
@@ -147,6 +150,7 @@ def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_si
 
     for backup in candidates:
         filepath = backup.file_path
+        _decrypted_tmp = None
         try:
             if not filepath or not os.path.exists(filepath):
                 raise FileNotFoundError(f"Backup file not found: {filepath}")
@@ -160,7 +164,18 @@ def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_si
                 if sha.hexdigest() != expected_hash:
                     raise ValueError("Checksum mismatch — backup may be corrupted")
 
-            with _tarfile.open(filepath, 'r:gz') as tar:
+            # Encrypted backups must be decrypted before the tar test-open:
+            # the .enc blob is chunked AES-GCM, not gzip.
+            _archive_to_check = filepath
+            if filepath.endswith('.enc'):
+                from apps.deployments.services.backup_service import BackupService
+                _key = BackupService._get_encryption_key()
+                if not _key:
+                    raise ValueError("Backup is encrypted but BACKUP_ENCRYPTION_KEY is unavailable")
+                _decrypted_tmp = BackupService.decrypt_backup(filepath, _key)
+                _archive_to_check = _decrypted_tmp
+
+            with _tarfile.open(_archive_to_check, 'r:gz') as tar:
                 members = tar.getmembers()
                 if not members:
                     raise ValueError("Archive is empty")
@@ -171,6 +186,12 @@ def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_si
             failed += 1
             results.append({'id': str(backup.id), 'status': 'failed', 'path': filepath, 'error': str(exc)})
             logger.error("Integrity check FAILED for backup %s (%s): %s", backup.id, filepath, exc)
+        finally:
+            if _decrypted_tmp:
+                try:
+                    os.remove(_decrypted_tmp)
+                except OSError:
+                    pass
 
     try:
         AuditLog.objects.create(

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import struct
@@ -752,7 +753,15 @@ class BackupService:
                     exit_result = helper.wait(timeout=120)
                     if exit_result['StatusCode'] != 0:
                         logs = helper.logs(stdout=True, stderr=True)
-                        logger.error(f"Volume restore failed: {logs}")
+                        # A failed volume extraction means the restored
+                        # volume is PARTIALLY WRITTEN or empty — previously
+                        # this was only logged and the restore continued,
+                        # silently producing a broken state marked success.
+                        raise RuntimeError(
+                            f"Volume restore failed for {target_vol.name} "
+                            f"(exit {exit_result['StatusCode']}): "
+                            f"{(logs or b'')[:500]!r}"
+                        )
                 finally:
                     helper.remove(force=True)
 
@@ -843,14 +852,23 @@ cd "$BACKUP_DIR"
 
 SERVICE_NAME={shlex.quote(service.name)}
 
-# Dump env vars
-echo "=== ENV_VARS ==="
+# Dump env vars — MASK secret-looking keys. The local backup path masks
+# secrets (********) unless the backup_type is a transfer; the remote
+# path previously dumped raw `docker inspect Config.Env`, writing
+# plaintext credentials into the (unencrypted) artifact.
+# Heuristic: mask keys that look like secrets (token/password/secret/key).
 docker inspect "$SERVICE_NAME" 2>/dev/null | python3 -c "
-import json,sys
+import json,sys,re
 data = json.load(sys.stdin)
 env = data[0]['Config']['Env'] if data else []
+mask_re = re.compile(r'(token|password|passwd|secret|key|credential|api)[a-z0-9_]*$', re.I)
 for e in env:
-    print(e)
+    if '=' not in e:
+        continue
+    k, v = e.split('=', 1)
+    if mask_re.search(k):
+        v = '********'
+    print(f'{k}={v}')
 " > env_vars.txt 2>/dev/null || echo "env_vars_skipped"
 
 # Save image
@@ -902,16 +920,51 @@ echo "BACKUP_PATH=/tmp/backup_artifact.tar.gz"
         ssh.exec_command("rm -rf /tmp/smsly_backup_*", raise_on_error=False)
         ssh.close()
 
-        backup.file_path = local_path
+        # SECURITY: the local backup path always encrypts via
+        # _maybe_encrypt; the remote path previously saved the raw
+        # tarball unencrypted. Encrypt the downloaded artifact with the
+        # same chunked AES-GCM scheme so remote backups are protected
+        # at rest too. Checksums are computed by _maybe_encrypt's caller
+        # in the local path; here we record the encrypted-file checksum.
+        try:
+            encrypted_path = self._maybe_encrypt(local_path)
+            if encrypted_path != local_path:
+                enc_checksum = hashlib.sha256()
+                with open(encrypted_path, 'rb') as f:
+                    for chunk in iter(lambda: f.read(8192), b''):
+                        enc_checksum.update(chunk)
+                backup.file_path = encrypted_path
+                backup.size_bytes = os.path.getsize(encrypted_path)
+                metadata_enc = {
+                    'checksum_sha256': enc_checksum.hexdigest(),
+                    'size_bytes': backup.size_bytes,
+                }
+            else:
+                backup.file_path = local_path
+                backup.size_bytes = os.path.getsize(local_path)
+                metadata_enc = {}
+        except Exception as enc_exc:
+            # If encryption fails, fail the backup entirely rather than
+            # leaving an unencrypted artifact with (masked) secrets on
+            # disk and a COMPLETED row.
+            logger.error("Remote backup encryption failed for %s: %s", service.name, enc_exc)
+            if os.path.exists(local_path):
+                os.remove(local_path)
+            backup.status = 'FAILED'
+            backup.error_message = f"Encryption failed: {enc_exc}"
+            backup.save(update_fields=['status', 'error_message'])
+            raise
+
         backup.status = 'COMPLETED'
         backup.completed_at = timezone.now()
-        backup.save(update_fields=['file_path', 'status', 'completed_at'])
+        backup.save(update_fields=['file_path', 'size_bytes', 'status', 'completed_at'])
 
         metadata = {
             'service_name': service.name,
             'service_id': str(service.id),
             'remote_server': server.host,
             'remote_backup': True,
+            **metadata_enc,
         }
         backup.metadata = metadata
         backup.save(update_fields=['metadata'])
@@ -1410,10 +1463,20 @@ rm -rf {remote_tmp}
 
     @staticmethod
     def _make_private_decrypted_path(suffix: str = ".tar.gz") -> tuple:
+        # 0o700 dir / 0o600 file: decrypted backups contain full service
+        # state (DB dumps, env vars) and must not be readable by other
+        # users on the host. Matches the design the cleanup tests assert.
         decrypted_dir = os.path.join('/app', 'backups', 'decrypted')
-        os.makedirs(decrypted_dir, exist_ok=True)
+        os.makedirs(decrypted_dir, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(decrypted_dir, 0o700)
+        except OSError:
+            pass
         fname = f"{uuid.uuid4().hex}{suffix}"
         path = os.path.join(decrypted_dir, fname)
+        with open(path, 'wb'):
+            pass
+        os.chmod(path, 0o600)
         return path, path
 
     @staticmethod

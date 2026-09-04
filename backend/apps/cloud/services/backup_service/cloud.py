@@ -126,6 +126,27 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
             backup.cloud_key = result["key"]
             backup.save(update_fields=['cloud_uploaded', 'cloud_bucket', 'cloud_key'])
             result["uploaded"] = True
+
+            # Also upload the .meta sidecar (content checksum + key_id +
+            # fingerprint). Without it, a cloud-only restore (local file
+            # deleted, object re-downloaded) has no integrity-checksum
+            # or key-lookup metadata — _prepare_archive_for_restore's
+            # size/checksum verification and cross-master key resolution
+            # both depend on it. Best-effort: a missing sidecar degrades
+            # verification, it must not fail the upload.
+            meta_path = filepath + '.meta'
+            if os.path.exists(meta_path):
+                try:
+                    upload_backup_to_s3(
+                        meta_path, s3_bucket, result["key"] + '.meta',
+                        endpoint=s3_endpoint, region=s3_region,
+                        access_key=s3_access_key, secret_key=s3_secret_key,
+                    )
+                except Exception as meta_exc:
+                    logger.warning(
+                        "Meta sidecar upload failed for %s: %s (verification will degrade)",
+                        result["key"], meta_exc,
+                    )
         else:
             result["reason"] = "S3 upload returned failure — check credentials, network, or bucket permissions"
         return result
@@ -230,12 +251,26 @@ def _download_backup_from_cloud(backup, local_path) -> bool:
                 message=f'Downloading from cloud... {self.transferred // (1024 * 1024)} MB',
                 bytes_transferred=self.transferred, total_bytes=total_size,
             )
-    return download_from_s3(
+    ok = download_from_s3(
         bucket, key, local_path,
         endpoint=endpoint, region=region,
         access_key=access_key, secret_key=secret_key,
         progress_callback=_S3DownloadProgress(),
     )
+    if ok:
+        # Also fetch the .meta sidecar (content checksum + key_id) so
+        # _prepare_archive_for_restore can verify integrity and resolve
+        # the encryption key on cloud-only restores. Best-effort —
+        # older objects may not have a sidecar.
+        try:
+            download_from_s3(
+                bucket, key + '.meta', local_path + '.meta',
+                endpoint=endpoint, region=region,
+                access_key=access_key, secret_key=secret_key,
+            )
+        except Exception as meta_exc:
+            logger.debug("Meta sidecar not available for %s: %s", key, meta_exc)
+    return ok
 
 
 def _delete_backup_cloud_object(backup) -> bool:
@@ -252,6 +287,15 @@ def _delete_backup_cloud_object(backup) -> bool:
         access_key=access_key, secret_key=secret_key,
     )
     if ok:
+        # Best-effort sidecar cleanup (prune must not orphan .meta files).
+        try:
+            delete_cloud_backup_object(
+                bucket, key + '.meta',
+                endpoint=endpoint, region=region,
+                access_key=access_key, secret_key=secret_key,
+            )
+        except Exception:
+            pass
         logger.info("Deleted cloud object s3://%s/%s for backup %s", bucket, key, backup.id)
     else:
         logger.warning("Failed to delete cloud object s3://%s/%s for backup %s", bucket, key, backup.id)

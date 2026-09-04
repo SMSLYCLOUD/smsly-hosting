@@ -70,6 +70,13 @@ class ServiceBackup(models.Model):
     error_message = models.TextField(blank=True)  # type: ignore[var-annotated]
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    # ── Restore bookkeeping ───────────────────────────────────────────
+    # Written by _restore_service_inner / restore_server on every
+    # successful restore. Previously the code wrote these via
+    # update_fields without the fields existing → FieldError on every
+    # successful restore.
+    restored_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    restore_count = models.PositiveIntegerField(default=0)  # type: ignore[var-annotated]
     # ── Cloud/object storage tracking ────────────────────────────────────
     cloud_uploaded = models.BooleanField(default=False)  # type: ignore[var-annotated]
     cloud_destination = models.ForeignKey('cloud.CloudStorageDestination', on_delete=models.SET_NULL, null=True, blank=True)  # type: ignore[var-annotated]
@@ -91,6 +98,12 @@ class ServerBackup(models.Model):
                              help_text='Human-readable label for quick identification')
     status = models.CharField(max_length=20, default='PENDING')  # type: ignore[var-annotated]
     db_only = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    # SERVER = normal scheduled/manual server backup
+    # SERVER_TRANSFER = includes real secret values (for hydrating a
+    #   target master during full-server transfer)
+    backup_type = models.CharField(choices=[  # type: ignore[var-annotated]
+        ('SERVER', 'Server'), ('SERVER_TRANSFER', 'Server Transfer'),
+    ], default='SERVER', max_length=20)
     file_path = models.CharField(max_length=500, blank=True)  # type: ignore[var-annotated]
     size_bytes = models.BigIntegerField(default=0)  # type: ignore[var-annotated]
     services_included = models.JSONField(default=list)  # type: ignore[var-annotated]
@@ -98,6 +111,9 @@ class ServerBackup(models.Model):
     error_message = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    # ── Restore bookkeeping (see ServiceBackup.restored_at) ──────────
+    restored_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    restore_count = models.PositiveIntegerField(default=0)  # type: ignore[var-annotated]
     # ── Cloud/object storage tracking ────────────────────────────────────
     cloud_uploaded = models.BooleanField(default=False)  # type: ignore[var-annotated]
     cloud_destination = models.ForeignKey('cloud.CloudStorageDestination', on_delete=models.SET_NULL, null=True, blank=True)  # type: ignore[var-annotated]

@@ -25,19 +25,22 @@ class DownloadActionsMixin:
     """DownloadActions actions for the viewset."""
 
 
-    @action(detail=True, methods=['get'], url_path='header')
+    @action(detail=True, methods=['get'], url_path='header', permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
     def header(self, request, pk=None):
         """Return the V2 backup header (key_id, fingerprint) so the
         operator can copy the key_id to a different master for the
         ``import-key`` flow. Returns 404 if the backup is not in V2
-        format. This endpoint is intentionally public — the returned
-        data (key_id + fingerprint) is not secret material, and the
-        backup is already accessible via a signed download link that
-        the operator can share. Requiring auth here would force the
-        download-key UI to handle a second auth flow alongside the
-        signed download.
+        format.
+
+        Requires authentication (owner of the backup's service or
+        superuser). An earlier draft documented this as intentionally
+        public, but key_id + fingerprint is reconnaissance material
+        for an attacker targeting encrypted backups — it must not be
+        anonymously enumerable.
         """
         backup = self.get_object()
+        if not self._user_can_access_service(request.user, getattr(backup, 'service', None)):
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         if not backup.file_path or not os.path.exists(backup.file_path):
             return Response({'error': 'Backup file not found'}, status=status.HTTP_404_NOT_FOUND)
         try:
@@ -62,6 +65,10 @@ class DownloadActionsMixin:
         out-of-band exchange).
         """
         backup = self.get_object()
+        # Ownership gate — without it any authenticated user could read
+        # the backup's key_id/fingerprint by UUID probing.
+        if not self._user_can_access_service(request.user, getattr(backup, 'service', None)):
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         if not backup.file_path or not os.path.exists(backup.file_path):
             return Response({'error': 'Backup file not found'}, status=status.HTTP_404_NOT_FOUND)
         try:
@@ -232,6 +239,7 @@ class DownloadActionsMixin:
         filepath = backup.file_path
         errors = []
         passed = False
+        _decrypted_tmp = None
 
         try:
             if not filepath or not _os.path.exists(filepath):
@@ -246,7 +254,18 @@ class DownloadActionsMixin:
                 if sha.hexdigest() != expected_hash:
                     raise ValueError("Checksum mismatch — backup may be corrupted")
 
-            with _tarfile.open(filepath, 'r:gz') as tar:
+            # Encrypted backups are AES-GCM chunks, not gzip — decrypt to
+            # a temp file before the tar test-open (same as the integrity
+            # beat task).
+            archive_to_check = filepath
+            if filepath.endswith('.enc'):
+                key = BackupService._get_encryption_key()
+                if not key:
+                    raise ValueError("Backup is encrypted but BACKUP_ENCRYPTION_KEY is unavailable")
+                _decrypted_tmp = BackupService.decrypt_backup(filepath, key)
+                archive_to_check = _decrypted_tmp
+
+            with _tarfile.open(archive_to_check, 'r:gz') as tar:
                 members = tar.getmembers()
                 if not members:
                     raise ValueError("Archive is empty")
@@ -254,6 +273,12 @@ class DownloadActionsMixin:
             passed = True
         except Exception as exc:
             errors.append(str(exc))
+        finally:
+            if _decrypted_tmp:
+                try:
+                    os.remove(_decrypted_tmp)
+                except OSError:
+                    pass
 
         return Response({
             'status': 'completed',
