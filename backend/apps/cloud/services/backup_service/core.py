@@ -652,10 +652,9 @@ class BackupService:
                     pass
 
                 try:
-                    from apps.deployments.utils.target import resolve_provider_for_service
-                    target_provider = resolve_provider_for_service(target_service)
-                    target_provider_result = target_provider.deploy_service(target_service, None)
-                    logger.info(f"Provider deployed service {target_service.name} for DB restore: {target_provider_result}")
+                    from .operations import _redeploy_restored_service_container
+                    _redeploy_restored_service_container(target_service)
+                    logger.info(f"Provider redeployed service {target_service.name} for DB restore")
                 except Exception as prov_err:
                     logger.error(f"Provider deploy failed for DB restore: {prov_err}")
                     raise
@@ -794,10 +793,9 @@ class BackupService:
             _remap_domain_on_restore(target_service, backup.metadata)
 
             try:
-                from apps.deployments.utils.target import resolve_provider_for_service
-                provider = resolve_provider_for_service(target_service)
-                result = provider.deploy_service(target_service, None)
-                logger.info(f"Restore deploy result: {result}")
+                from .operations import _redeploy_restored_service_container
+                _redeploy_restored_service_container(target_service)
+                logger.info(f"Restore redeploy complete for {target_service.name}")
             except Exception as deploy_err:
                 logger.error(f"Restore deploy failed: {deploy_err}")
                 from .operations import _emergency_restart_container

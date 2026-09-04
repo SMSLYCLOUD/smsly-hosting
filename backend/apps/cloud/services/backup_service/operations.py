@@ -162,6 +162,83 @@ def _emergency_restart_container(service):
         logger.warning("Emergency restart failed for %s: %s", container_name, exc)
 
 
+def _redeploy_restored_service_container(service):
+    """Bring a restored service back up after archive extraction.
+
+    The restore path previously called a non-existent
+    `resolve_provider_for_service(...).deploy_service(...)` (ghost import
+    introduced in d4aa419e) — every restore crashed with ImportError at
+    the final redeploy step, after all the restore work was done.
+
+    This helper does the pragmatic thing directly against Docker:
+      1. If the container still exists (image-only/env-only restores),
+         start it.
+      2. If it does not exist (DB restores remove it), recreate it from
+         the service's docker_image (set during image restore) with the
+         service's env vars attached. Full re-provisioning (Traefik
+         labels, networks) happens on the next deployment — a restore is
+         an emergency recovery primitive, not a full deploy pipeline.
+
+    Raises RuntimeError when neither can bring the container up.
+    """
+    container_name = service.name
+    try:
+        client = _docker.from_env()
+    except Exception as exc:
+        raise RuntimeError(f"Docker unavailable for restore redeploy: {exc}") from exc
+
+    # 1. Existing container — just start it.
+    try:
+        ctr = client.containers.get(container_name)
+        if ctr.status != 'running':
+            ctr.start()
+        logger.info("Restore redeploy: container %s is running", container_name)
+        return
+    except _docker.errors.NotFound:
+        pass
+    except Exception as exc:
+        raise RuntimeError(f"Failed to inspect container {container_name}: {exc}") from exc
+
+    # 2. Recreate from the restored image.
+    image = str(getattr(service, 'docker_image', '') or '').strip()
+    if not image:
+        raise RuntimeError(
+            f"Container {container_name} missing after restore and service "
+            f"has no docker_image to recreate from"
+        )
+
+    from apps.deployments.models import EnvironmentVariable
+    env_list = [
+        f"{ev.key}={ev.value}"
+        for ev in EnvironmentVariable.objects.filter(service=service)
+        .exclude(key='').only('key', 'value')
+    ]
+
+    internal_port = int(getattr(service, 'internal_port', 0) or 3000)
+    try:
+        client.containers.run(
+            image,
+            name=container_name,
+            environment=env_list,
+            detach=True,
+            restart_policy={"Name": "unless-stopped"},
+            labels={
+                "com.smsly.service": service.name,
+                "smsly.service_id": str(service.id),
+                "smsly.restored": "true",
+            },
+            ports={f"{internal_port}/tcp": None},
+        )
+        logger.info(
+            "Restore redeploy: recreated container %s from image %s",
+            container_name, image,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to recreate container {container_name} from {image}: {exc}"
+        ) from exc
+
+
 def _emergency_restart_remote_container(service, server):
     """Last-resort restart of a stopped container on a remote server after restore."""
     container_name = service.name
