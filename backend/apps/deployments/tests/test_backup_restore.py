@@ -156,8 +156,14 @@ class BackupRestoreTest(TestCase):
             metadata_path = os.path.join(backup_dir, "metadata.json")
             with open(metadata_path, "w", encoding="utf-8") as fh:
                 json.dump(metadata, fh)
+            # The restore reads env vars from env_vars_backup.json (the
+            # current backup archive format), not from metadata.json.
+            env_vars_path = os.path.join(backup_dir, "env_vars_backup.json")
+            with open(env_vars_path, "w", encoding="utf-8") as fh:
+                json.dump(metadata["env_vars"], fh)
             with tarfile.open(archive_path, "w:gz") as tar:
                 tar.add(metadata_path, arcname="metadata.json")
+                tar.add(env_vars_path, arcname="env_vars_backup.json")
 
             with patch.dict(os.environ, {"BACKUP_ENCRYPTION_KEY": key}):
                 encrypted_path = BackupService()._maybe_encrypt(archive_path)

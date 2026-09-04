@@ -83,6 +83,6 @@ class RestoreSnapshotRequiredTest(TestCase):
             )
 
         self.assertEqual(response.status_code, 422)
-        self.assertIn("Pre-restore safety snapshot failed", response.data["error"])
+        self.assertIn("Pre-restore safety snapshot could not be created", response.data["error"])
         self.assertEqual(response.data["snapshot_error"], "docker down")
         mock_delay.assert_not_called()
