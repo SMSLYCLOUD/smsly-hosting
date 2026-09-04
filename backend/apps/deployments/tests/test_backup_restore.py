@@ -40,8 +40,16 @@ class BackupRestoreTest(TestCase):
         self.assertIn("Explicit confirmation required", str(response.data))
         mock_task.assert_not_called()
 
-        # Request with confirm=true
+        # Request with confirm=true — the view also attempts a synchronous
+        # pre-restore safety snapshot; with no Docker available in tests it
+        # fails and the view returns 422 unless force=true. Test both paths.
         response = self.client.post(url, {"confirm": True}, format='json')
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("safety snapshot", str(response.data).lower())
+        mock_task.assert_not_called()
+
+        # force=true proceeds without the safety snapshot
+        response = self.client.post(url, {"confirm": True, "force": True}, format='json')
         self.assertEqual(response.status_code, 200)
         mock_task.assert_called_once()
 

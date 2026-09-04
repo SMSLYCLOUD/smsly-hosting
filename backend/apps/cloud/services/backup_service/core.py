@@ -635,9 +635,10 @@ class BackupService:
                     db_dump_path = os.path.join(temp_dir, fname)
                     break
             if db_dump_path:
-                target_service.container_count = 0
-                target_service.save(update_fields=['container_count'])
-
+                # NOTE: an earlier revision wrote target_service.container_count
+                # (a field that does not exist on Service — every DB restore
+                # crashed with AttributeError). The intended bookkeeping is
+                # handled by the deployment pipeline itself; nothing to zero.
                 from .operations import _stop_service_for_restore
                 _stop_service_for_restore(target_service, is_remote=False)
 
@@ -792,10 +793,6 @@ class BackupService:
             from .operations import _remap_domain_on_restore
             _remap_domain_on_restore(target_service, backup.metadata)
 
-            old_container_count = target_service.container_count
-            target_service.container_count = 0
-            target_service.save(update_fields=['container_count'])
-
             try:
                 from apps.deployments.utils.target import resolve_provider_for_service
                 provider = resolve_provider_for_service(target_service)
@@ -805,8 +802,6 @@ class BackupService:
                 logger.error(f"Restore deploy failed: {deploy_err}")
                 from .operations import _emergency_restart_container
                 _emergency_restart_container(target_service)
-                target_service.container_count = old_container_count
-                target_service.save(update_fields=['container_count'])
                 raise
 
             if cleanup_archive:
