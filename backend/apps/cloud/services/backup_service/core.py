@@ -797,10 +797,18 @@ class BackupService:
                 _redeploy_restored_service_container(target_service)
                 logger.info(f"Restore redeploy complete for {target_service.name}")
             except Exception as deploy_err:
-                logger.error(f"Restore deploy failed: {deploy_err}")
+                # The archive is restored (image loaded, env vars written,
+                # volumes replaced). A failed container restart must NOT
+                # fail the whole restore — the service row is already in
+                # its restored state and the operator can start the
+                # container. Log loudly + record on the backup row.
+                logger.error(f"Restore redeploy failed for {target_service.name}: {deploy_err}")
                 from .operations import _emergency_restart_container
                 _emergency_restart_container(target_service)
-                raise
+                try:
+                    backup.redeploy_error = str(deploy_err)[:500]
+                except AttributeError:
+                    pass
 
             if cleanup_archive:
                 try:

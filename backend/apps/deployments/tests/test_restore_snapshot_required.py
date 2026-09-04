@@ -32,17 +32,21 @@ class RestoreSnapshotRequiredTest(TestCase):
         )
 
     def test_restore_service_raises_when_snapshot_fails_and_flag_set(self):
+        """The pre-restore snapshot is enforced by the VIEW (422), not by
+        BackupService.restore_service — the service-level snapshot block and
+        raise_on_snapshot_failure kwarg were removed when the gate moved into
+        the viewset. The view-level behavior is covered by
+        test_service_backup_viewset_returns_422_on_snapshot_failure; here we
+        verify the service no longer takes a snapshot itself and proceeds
+        straight to archive preparation (which raises for a missing file)."""
         with patch.object(
             BackupService, "backup_service",
             side_effect=RuntimeError("docker down"),
-        ):
-            with self.assertRaises(RuntimeError) as ctx:
-                BackupService().restore_service(
-                    self.backup.id,
-                    requesting_user_id=self.user.id,
-                    raise_on_snapshot_failure=True,
-                )
-            self.assertIn("Pre-restore snapshot failed", str(ctx.exception))
+        ), self.assertRaises(FileNotFoundError):
+            BackupService().restore_service(
+                self.backup.id,
+                requesting_user_id=self.user.id,
+            )
 
     def test_restore_service_continues_when_snapshot_fails_by_default(self):
         with patch.object(
@@ -69,7 +73,10 @@ class RestoreSnapshotRequiredTest(TestCase):
             BackupService, "backup_service",
             side_effect=RuntimeError("docker down"),
         ), patch(
-            "apps.deployments.views.restore_service_backup_task.delay",
+            # The view binds the task name into its own module namespace
+            # (from ...tasks import restore_service_backup_task), so patch
+            # it where the view looks it up.
+            "apps.deployments.views.backup.restore.restore_service_backup_task.delay",
         ) as mock_delay:
             response = client.post(
                 url, {"confirm": "true"}, format="json",
