@@ -1,5 +1,7 @@
 # Generated migration: backup restore bookkeeping + ServerBackup type.
 
+# NOTE: ServiceBackup / ServerBackup / BackupSchedule live in the
+# 'cloud' app since migration 0003 (tables keep deployments_* names).
 # Fixes two crash bugs found in the cloud-storage/backup review:
 #
 # 1. core.py wrote backup.restored_at / backup.restore_count via
@@ -18,7 +20,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('deployments', '0197_service_ha_mode'),
+        ('cloud', '0008_alter_cloudprovider_scope'),
     ]
 
     operations = [
@@ -41,10 +43,10 @@ class Migration(migrations.Migration):
                 ('SERVER', 'Server'),
                 ('SERVER_TRANSFER', 'Server Transfer'),
             ], default='SERVER', max_length=20,
-            help_text='SERVER = normal backup (secrets masked). '
-                      'SERVER_TRANSFER = includes real secret values '
-                      'for hydrating a target master during full-server '
-                      'transfer.'),
+                help_text='SERVER = normal backup (secrets masked). '
+                          'SERVER_TRANSFER = includes real secret values '
+                          'for hydrating a target master during full-server '
+                          'transfer.'),
         ),
         migrations.AddField(
             model_name='serverbackup',
