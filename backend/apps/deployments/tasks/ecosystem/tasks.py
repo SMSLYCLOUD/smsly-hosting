@@ -6,6 +6,7 @@ from typing import Any
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
+from django.utils import timezone
 from apps.addons.services.addon_provisioner import addon_provisioner
 from apps.deployments.constants import (
     RETRY_DELAY_FAST,
@@ -94,6 +95,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
 
     token = get_github_token_for_user(user)
     if not token:
+        _fail_plan_record(plan_id, "GitHub not connected. Link your GitHub account first.")
         return {"error": "GitHub not connected. Please link your GitHub account first."}
 
     try:
@@ -125,6 +127,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         return result
     except SoftTimeLimitExceeded:
         logger.warning("Ecosystem scan timed out for user %s", user_id, exc_info=True)
+        _fail_plan_record(plan_id, "Ecosystem scan timed out. Retry the scan; large accounts may take several minutes.")
         return {
             "error": (
                 "Ecosystem scan timed out before the full GitHub inventory finished. "
@@ -139,6 +142,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         }
     except Exception as exc:
         logger.exception("Ecosystem scan failed unexpectedly for user %s: %s", user_id, exc)
+        _fail_plan_record(plan_id, f"Scan failed: {exc!s}")
         return {"error": f"Scan failed: {exc!s}"}
 
 
@@ -187,7 +191,7 @@ def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wa
     return {"status": "dispatched", "deployment_id": deployment_id}
 
 
-@shared_task(bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_release_wave_task", queue='fast', soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], max_retries=3, default_retry_delay=RETRY_DELAY_STANDARD, autoretry_for=(Exception,))
+@shared_task(bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_release_wave_task", queue='fast', soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], max_retries=0)
 def ecosystem_release_wave_task(
     self,
     provider_id: str,
@@ -258,6 +262,12 @@ def ecosystem_release_wave_task(
         Deployment.Status.BACKUP_FAILED,
         Deployment.Status.MIGRATION_FAILED,
         Deployment.Status.CANCELLED,
+        # A deployment that failed its health check must block dependents
+        # and count as a failure for the plan — previously it fell through
+        # both sets, dependents deployed against a dead service, and the
+        # plan was finalized COMPLETED with a failed service.
+        Deployment.Status.HEALTH_CHECK_FAILED,
+        Deployment.Status.ROLLED_BACK,
     }
     in_progress_states = {
         Deployment.Status.QUEUED,
@@ -269,7 +279,6 @@ def ecosystem_release_wave_task(
         Deployment.Status.MIGRATION_RUNNING,
         Deployment.Status.DEPLOYING,
         Deployment.Status.HEALTH_CHECK,
-        "STARTING",
     }
 
     # Bug 5 Fix: Retry failed deployments once before permanently failing them.
@@ -385,7 +394,6 @@ def ecosystem_release_wave_task(
     bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_deploy_task", queue='deploy',
     soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1],
     max_retries=3, default_retry_delay=RETRY_DELAY_STANDARD,
-    autoretry_for=(Exception,),
 )
 def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = None, project_id: str | None = None) -> dict:
     """
@@ -397,8 +405,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
     This creates Service + Deployment records for each repo and triggers
     smart_deploy_task with skip_review=True as each wave becomes eligible.
+
+    IDEMPOTENCY: This task is NOT autoretried on Exception — it creates
+    records unconditionally, so a blind retry would duplicate every
+    Service/Deployment and fork the wave chain. Recoverable errors are
+    re-raised explicitly via self.retry() ONLY before any records exist;
+    after creation begins, failures finalize the plan instead. A
+    SoftTimeLimitExceeded after creation hands off to the wave engine
+    (deployments are already queued) rather than replaying creation.
     """
+    from celery.exceptions import SoftTimeLimitExceeded
     from django.contrib.auth import get_user_model
+    from django.db import transaction
 
     user_model = get_user_model()
     try:
@@ -409,10 +427,60 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if not isinstance(plan, dict):
         return {"error": "Invalid plan payload"}
 
+    # ── Idempotency guard (re-dispatch / double-click protection) ──────
+    # If this plan already has ecosystem deployments, do NOT re-run the
+    # creation phase. Either a previous attempt is mid-flight (return
+    # its status) or it finished (the wave engine owns the rest).
+    if plan_id:
+        from apps.deployments.models import EcosystemPlan
+        try:
+            existing_plan = EcosystemPlan.objects.get(id=plan_id)
+        except EcosystemPlan.DoesNotExist:
+            existing_plan = None
+        if existing_plan:
+            existing_dps = Deployment.objects.filter(
+                service__project=existing_plan.project,
+                commit_hash="ecosystem-deploy",
+            ) if existing_plan.project else Deployment.objects.none()
+            if existing_dps.exists():
+                _active = existing_dps.exclude(
+                    status__in=[
+                        Deployment.Status.COMPLETED,
+                        Deployment.Status.FAILED,
+                        Deployment.Status.CANCELLED,
+                        Deployment.Status.STAGED,
+                        Deployment.Status.HEALTH_CHECK_FAILED,
+                        Deployment.Status.ROLLED_BACK,
+                    ],
+                )
+                if _active.exists():
+                    logger.info(
+                        "Ecosystem plan %s already has %d in-flight "
+                        "deployments — skipping duplicate creation phase",
+                        plan_id, _active.count(),
+                    )
+                    return {
+                        "status": "already_in_progress",
+                        "plan_id": str(plan_id),
+                        "in_flight": _active.count(),
+                    }
+                logger.info(
+                    "Ecosystem plan %s already has terminal deployments — "
+                    "not re-creating (use plan retry instead)",
+                    plan_id,
+                )
+                return {
+                    "status": "already_deployed",
+                    "plan_id": str(plan_id),
+                }
+
     # SEC-ZT-007: Validate plan structure before creating any records
     schema_errors = _validate_plan_structure(plan)
     if schema_errors:
         logger.error("Plan schema validation failed: %s", schema_errors)
+        _fail_plan_record(
+            plan_id, "Plan validation failed: %s" % schema_errors[:5],
+        )
         return {
             "error": "Plan validation failed",
             "details": schema_errors,
@@ -425,6 +493,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     mtls_config: dict = plan.get("mtls_config", {})
     communication_rules: dict = plan.get("communication_rules", {})
     if not isinstance(services_plan, list) or not services_plan:
+        _fail_plan_record(plan_id, "No services in deploy plan")
         return {"error": "No services in deploy plan"}
 
     # SEC-ECO-001: Always pick (or create) a provider whose scope == 'ecosystem'.
@@ -459,6 +528,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 or CloudProvider.objects.first()
             )
     if not provider:
+        _fail_plan_record(
+            plan_id,
+            "No cloud provider configured. Add one in Settings -> Cloud Providers.",
+        )
         return {"error": "No cloud provider configured. Add one in Settings -> Cloud Providers."}
 
     # Track created resources for potential rollback
@@ -504,13 +577,27 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         if not raw_name:
             raw_name = "Ecosystem Cluster"
         proj_name = _ecosystem_project_name(raw_name)[:100]
-        project = Project.objects.create(
-            owner=user,
-            name=proj_name,
-            description="Auto-created by zero-config ecosystem deployment.",
-            is_ephemeral=True,
-        )
-        logger.info("Auto-created ecosystem project '%s' (%s)", project.name, project.id)
+        # get_or_create keyed on the plan: a re-dispatched deploy task
+        # (double-click, worker redelivery) must reuse the ephemeral
+        # project rather than accumulating a new one per attempt.
+        if plan_id:
+            from apps.deployments.models.ecosystem import EcosystemPlan
+            _linked = EcosystemPlan.objects.filter(
+                id=plan_id, project__isnull=False,
+            ).values_list('project_id', flat=True).first()
+            if _linked:
+                project = Project.objects.filter(id=_linked).first()
+        if not project:
+            project, _created = Project.objects.get_or_create(
+                owner=user,
+                name=proj_name,
+                defaults={
+                    "description": "Auto-created by zero-config ecosystem deployment.",
+                    "is_ephemeral": True,
+                },
+            )
+            if _created:
+                logger.info("Auto-created ecosystem project '%s' (%s)", project.name, project.id)
 
     if plan_id:
         from apps.deployments.models.ecosystem import EcosystemPlan
@@ -636,14 +723,20 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             _has_network = ScopedNetwork.objects.filter(
                 content_type=_ct, object_id=project.id,
             ).exists()
-            # The internal network is per-service now. If a project
-            # has ANY service with use_internal_network=True we
+            # The internal network is per-service now. If the plan
+            # includes ANY service with use_internal_network=True we
             # provision the scoped bridge. If all services opt out
             # we fall back to the shared 'smsly-net' bridge and the
             # service-to-service traffic uses public DNS / Traefik.
+            # NOTE: services don't exist yet at this point — evaluate
+            # the plan dicts, not Service objects (a previous version
+            # referenced an undefined `target_services` here, which
+            # raised NameError and silently skipped network creation).
             any_wants_internal = any(
-                getattr(svc, 'use_internal_network', True)
-                for svc in target_services
+                (svc.get('use_internal_network', True)
+                 if isinstance(svc, dict)
+                 else getattr(svc, 'use_internal_network', True))
+                for svc in services_plan
             )
             if not _has_network and any_wants_internal:
                 # Network name is derived from the project UUID so it's
@@ -744,8 +837,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             resolver = EcosystemEnvResolver(graph)
             success, _, errors = resolver.validate_and_resolve()
             if not success:
+                _fail_plan_record(plan_id, f"Environment validation failed: {errors[:5]}")
                 return {"error": "Environment validation failed", "details": errors}
         except Exception as e:
+            _fail_plan_record(plan_id, f"Invalid manifest: {e}")
             return {"error": f"Invalid manifest: {e}"}
 
     entries_by_key: dict[str, dict[str, Any]] = {}
@@ -776,6 +871,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         entries_by_key[repo_key] = entry
 
     if not entries_by_key:
+        _fail_plan_record(plan_id, "No deployable services in plan (all skipped or missing repos)")
         return {"error": "No deployable services in plan"}
 
     dependencies = _resolve_dependency_map(entries_by_key)
@@ -1143,9 +1239,28 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # If the service already exists but was NOT created by ecosystem,
             # create a new service with a unique name instead of overwriting
             # the user's manually-deployed service.
-            if service is not None and not Deployment.objects.filter(
-                service=service, commit_hash="ecosystem-deploy",
-            ).exists():
+            # ANCHOR EXCEPTION: the shared-addon anchor service is created
+            # pre-loop WITHOUT a deployment (deployments are created later
+            # in this loop) — the ecosystem-ownership check below would
+            # misclassify it as "not ecosystem" and duplicate it. Treat
+            # membership in created_services aliases as ecosystem-owned.
+            _is_ecosystem_owned = (
+                service is not None
+                and addon_anchor_service is not None
+                and service.id == addon_anchor_service.id
+            ) or (
+                service is not None
+                and any(
+                    (getattr(s, 'id', None) == service.id)
+                    for s in created_service_records
+                )
+            ) or (
+                service is not None
+                and Deployment.objects.filter(
+                    service=service, commit_hash="ecosystem-deploy",
+                ).exists()
+            )
+            if service is not None and not _is_ecosystem_owned:
                 final_name = _next_available_service_name(Service, requested_name)
                 service = Service.objects.create(
                     name=final_name,
@@ -1358,21 +1473,27 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     defaults={"value": value_text, "is_secret": is_secret},
                 )
 
-            deployment = Deployment.objects.create(
+            # IDEMPOTENCY: get_or_create keyed on (service, commit_hash)
+            # so a re-dispatched task (worker redelivery, idempotency-guard
+            # miss) reuses the existing deployment instead of stacking a
+            # second one per repo.
+            deployment, _dep_created = Deployment.objects.get_or_create(
                 service=service,
                 commit_hash="ecosystem-deploy",
-                commit_message=f"Zero-config ecosystem deploy ({stack})",
-                branch=service.branch or "",
-                status=Deployment.Status.QUEUED,
-                target_server=target_server,
-                target_is_local=target_is_local,
-                build_logs=(
-                    f"Ecosystem deploy: {repo} ({stack})\n"
-                    f"Port: {port} | Build strategy: {build_method}\n"
-                    f"Env vars: {len(resolved_env)} configured"
-                    f"{' | mTLS enabled (config: ' + mtls_config.get('config_source', 'default') + ')' if mtls_config.get('enabled') else ''}\n"
-                    f"Depends on: {', '.join(_extract_dependencies(entry['depends_on'])) or '(none)'}\n\n"
-                ),
+                defaults={
+                    "commit_message": f"Zero-config ecosystem deploy ({stack})",
+                    "branch": service.branch or "",
+                    "status": Deployment.Status.QUEUED,
+                    "target_server": target_server,
+                    "target_is_local": target_is_local,
+                    "build_logs": (
+                        f"Ecosystem deploy: {repo} ({stack})\n"
+                        f"Port: {port} | Build strategy: {build_method}\n"
+                        f"Env vars: {len(resolved_env)} configured"
+                        f"{' | mTLS enabled (config: ' + mtls_config.get('config_source', 'default') + ')' if mtls_config.get('enabled') else ''}\n"
+                        f"Depends on: {', '.join(_extract_dependencies(entry['depends_on'])) or '(none)'}\n\n"
+                    ),
+                },
             )
             _rollback_deployments.append(str(deployment.id))
 
@@ -1421,6 +1542,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     status=Deployment.Status.FAILED,
                     build_logs=f"Failed to persist valid environment variables: {msg}"
                 )
+            _fail_plan_record(plan_id, f"Env validation failed: {msg}")
             return {"error": f"Env validation failed: {msg}"}
 
     waves: list[list[str]] = []
@@ -1518,6 +1640,26 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         logger.debug("Failed to update ecosystem plan deployment status: %s", exc)
 
     return deploy_result
+
+
+def _fail_plan_record(plan_id: str | None, error_message: str) -> None:
+    """Mark an EcosystemPlan FAILED on an early-return failure path.
+
+    Without this, the plan row stays in SCANNING/DEPLOYING and the user
+    is 429-locked out of ecosystem features until the 30-minute stale-plan
+    beat task clears it.
+    """
+    if not plan_id:
+        return
+    try:
+        from apps.deployments.models.ecosystem import EcosystemPlan
+        EcosystemPlan.objects.filter(id=plan_id).update(
+            status=EcosystemPlan.Status.FAILED,
+            error_message=error_message[:2000],
+            updated_at=timezone.now(),
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("Failed to mark plan %s as failed: %s", plan_id, exc)
 
 
 def _rollback_ecosystem_deploy(

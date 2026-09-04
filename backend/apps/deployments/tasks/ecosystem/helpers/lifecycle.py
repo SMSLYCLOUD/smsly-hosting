@@ -379,11 +379,17 @@ def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: in
         _increment_active_ecosystem_builds()
 
         countdown = i * stagger
+        # IDEMPOTENCY: flip to REVIEW ("dispatched, awaiting smart_deploy_task
+        # pickup") at dispatch time. A re-invoked _queue_wave (wave task
+        # re-send, worker redelivery) skips REVIEW rows — without this
+        # marker, a dispatched-but-not-yet-started deployment stayed QUEUED
+        # and every re-send double-dispatched smart_deploy_task.
+        deployment.status = Deployment.Status.REVIEW
         deployment.build_logs = (
             f"{deployment.build_logs or ''}"
             f"\n[Ecosystem] Queued in wave {wave_index + 1} (stagger +{countdown}s).\n"
         )
-        deployment.save(update_fields=["build_logs"])
+        deployment.save(update_fields=["build_logs", "status"])
 
         app.send_task(
             "apps.deployments.tasks.smart_deploy_task",
@@ -560,6 +566,11 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
             Deployment.Status.BACKUP_FAILED,
             Deployment.Status.MIGRATION_FAILED,
             Deployment.Status.CANCELLED,
+            # A deployment that failed its health check is a FAILURE for
+            # the plan — previously it fell through both sets and the
+            # plan could be marked COMPLETED with a dead service.
+            Deployment.Status.HEALTH_CHECK_FAILED,
+            Deployment.Status.ROLLED_BACK,
         }
         in_progress_states = {
             Deployment.Status.QUEUED,
@@ -571,7 +582,6 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
             Deployment.Status.MIGRATION_RUNNING,
             Deployment.Status.DEPLOYING,
             Deployment.Status.HEALTH_CHECK,
-            "STARTING",
         }
         if any(st in in_progress_states for st in statuses):
             return  # Still running

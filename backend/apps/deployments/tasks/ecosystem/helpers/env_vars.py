@@ -577,15 +577,23 @@ def _resolve_env_placeholders(
 
 
 def _validate_resolved_env(resolved_env: dict[str, str]) -> None:
-    """Ensure no unresolved placeholders remain in resolved env vars."""
+    """Ensure no unresolved placeholders remain in resolved env vars.
+
+    SECURITY: error text must NEVER include the env VALUE — a
+    partially-resolved string can embed real secret fragments
+    (e.g. postgres://user:realpass@{{HOST}}). This message flows into
+    per-repo results, plan.services_created (served by the API), and
+    logs. Report KEY NAMES ONLY.
+    """
     unresolved_keys = []
     for key, value in resolved_env.items():
         if isinstance(value, str) and re.search(r"\{\{.*?\}\}", value):
-            unresolved_keys.append(f"{key}={value}")
+            unresolved_keys.append(str(key))
     if unresolved_keys:
         raise ValueError(
             "Unresolved placeholders in env vars: "
-            + "; ".join(unresolved_keys)
+            + ", ".join(unresolved_keys)
+            + " — set concrete values (or lock them) before deploying"
         )
 
 

@@ -125,6 +125,18 @@ def sync_ecosystem_envs(project_id: str) -> dict:
                         # app's own default value.
                         continue
 
+                    # LOCKED vars are never overridden by platform
+                    # auto-injection — the user explicitly pinned them.
+                    # Skip instead of stomping with fresh AI Senate output.
+                    if EnvironmentVariable.objects.filter(
+                        service=service, key=key_upper, is_locked=True,
+                    ).exists():
+                        logger.debug(
+                            "Sync: skipping locked %s for %s — user-pinned value",
+                            key_upper, service.name,
+                        )
+                        continue
+
                     EnvironmentVariable.objects.update_or_create(
                         service=service,
                         key=key_upper,

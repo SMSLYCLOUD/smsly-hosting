@@ -528,10 +528,14 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             created_at__lt=_recent_cutoff,
         )
         for _ghost in _stale:
+            # Capture the ORIGINAL status before mutating — otherwise the
+            # audit message always says "stuck in 'failed'" (the value we
+            # just wrote), losing the forensic record of what it was doing.
+            _ghost_old_status = _ghost.status
             _ghost.status = 'failed'
             _ghost.error_message = (
                 f"Auto-recovered at scan time: plan was stuck in "
-                f"'{_ghost.status}' since {_ghost.created_at.isoformat()} "
+                f"'{_ghost_old_status}' since {_ghost.created_at.isoformat()} "
                 f"(>30 min). Cleared to unblock the ecosystem scan."
             )
             _ghost.save(update_fields=['status', 'error_message', 'updated_at'])
@@ -692,6 +696,30 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         if env_scan_depth in ('shallow', 'standard', 'deep'):
             plan['env_scan_depth'] = env_scan_depth
 
+        # ── Concurrent-deploy guard (mirror of the scan view's 429) ────
+        # Without this, a double-click or retry-after-timeout dispatches
+        # two ecosystem_deploy_task instances that race through service
+        # and deployment creation. The task has its own idempotency guard,
+        # but rejecting at the view is cheaper and gives the user a clear
+        # message instead of a silently-duplicated deploy.
+        if EcosystemPlan.objects.filter(
+            user=request.user,
+            status__in=[
+                EcosystemPlan.Status.SCANNING,
+                EcosystemPlan.Status.DEPLOYING,
+            ],
+        ).exclude(id=plan_id).exists():
+            return Response(
+                {
+                    'error': (
+                        'Another ecosystem scan or deploy is already in '
+                        'progress. Wait for it to finish or cancel it '
+                        'before starting a new one.'
+                    )
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         # Resolve project — from explicit param, or from existing plan
         project = None
         if project_id:
@@ -746,7 +774,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             plan_record.use_shared_addons = use_shared_addons
             plan_record.cancel_others_on_failure = cancel_others_on_failure
             plan_record.shared_addon_config = shared_addon_config
-            plan_record.save(update_fields=['plan', 'status', 'use_shared_addons', 'cancel_others_on_failure', 'shared_addon_config', 'updated_at'])
+            plan_record.save(update_fields=['plan', 'status', 'use_shared_addons', 'cancel_others_on_failure', 'shared_addon_config', 'project', 'updated_at'])
         else:
             plan_record = EcosystemPlan.objects.create(
                 user=request.user,
