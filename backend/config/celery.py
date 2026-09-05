@@ -73,6 +73,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.infra.tasks_maintenance  # noqa: F401  # run_maintenance, registry_gc, reconcile_network_isolation_task
     import apps.deployments.tasks.edge_shield_watchdog  # noqa: F401  # BGP/DNS hijack symptom detection
     import apps.deployments.tasks.recover_stale_ecosystem_plans  # noqa: F401  # ghost-plan unblocker (429 lockout fix)
+    import apps.deployments.tasks.recover_stalled_deployments  # noqa: F401  # ghost-worker deployment sweeper
     import apps.deployments.tasks.recover_stale_transfers  # noqa: F401  # ghost-transfer unblocker (409 lockout fix)
     import apps.deployments.tasks.build_recovery  # noqa: F401  # corrupt Docker state + pending migration auto-recovery
     import apps.deployments.tasks.service_ha  # noqa: F401  # Service HA pass (local + remote failover)
@@ -119,6 +120,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.cleanup_orphaned_containers_task': {'queue': 'deploy'},
     'apps.deployments.tasks.edge_shield_watchdog': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_ecosystem_plans': {'queue': 'fast'},
+    'apps.deployments.tasks.recover_stalled_deployments': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_transfers': {'queue': 'fast'},
     'apps.deployments.tasks.recover_corrupt_docker_state': {'queue': 'deploy'},
     'apps.deployments.tasks.ensure_migrations_applied': {'queue': 'deploy'},
@@ -342,6 +344,14 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.recover_stalled_deletions',
         'schedule': 300.0,
         'options': {'expires': 300.0},
+    },
+    # Cancel deployments stalled with no live worker (ghost worker, lost
+    # message, timed-out wave that moved on). Never touches rows owned by
+    # a deploying ecosystem plan, human-gated AWAITING_APPROVAL, or STAGED.
+    'recover-stalled-deployments-every-15m': {
+        'task': 'apps.deployments.tasks.recover_stalled_deployments',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
     },
     # Clean up replicas stuck in SPAWNING for > 5 minutes (failed spawn)
     'cleanup-stuck-spawning-every-5m': {

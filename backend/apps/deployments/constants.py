@@ -60,6 +60,11 @@ RETRY_DELAY_BACKUP = 600   # seconds — server backup creation
 STALL_RECOVERY_THRESHOLD_MINUTES = 10  # how long before a deletion is considered stalled
 STALL_RECOVERY_BATCH_SIZE = 20         # max stalled deletions to re-queue per cycle
 
+# ── Stalled deployment sweeper ────────────────────────────────────────────
+STALLED_DEPLOYMENT_AGE_MINUTES = 60   # row created longer ago than this...
+STALLED_DEPLOYMENT_IDLE_MINUTES = 30  # ...and untouched for this long = stalled
+STALLED_DEPLOYMENT_BATCH_SIZE = 20    # max stalled deployments to cancel per cycle
+
 # ── Blue-green rollback grace period ────────────────────────────────────────
 # Rollback containers younger than this are ignored by the stale scanner.
 DEFAULT_ROLLBACK_GRACE_MINUTES = 10
