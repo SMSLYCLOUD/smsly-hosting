@@ -181,6 +181,9 @@ class BackupRestoreTest(TestCase):
                 if path and os.path.exists(path):
                     os.remove(path)
             if os.path.exists(backup_dir):
+                # _maybe_encrypt/decrypt leave a .meta sidecar (and the
+                # extracted env_vars fixture) in the dir — clean the whole
+                # dir, not just metadata.json.
                 with contextlib.suppress(OSError):
-                    os.remove(os.path.join(backup_dir, "metadata.json"))
-                os.rmdir(backup_dir)
+                    import shutil
+                    shutil.rmtree(backup_dir, ignore_errors=True)
