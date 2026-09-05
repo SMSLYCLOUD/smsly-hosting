@@ -20,15 +20,16 @@ class DeploymentMixin:
             "skip_review": skip_review,
         }
         if image_name:
-            internal_registry_markers = ["registry:5000", "localhost:5000", "127.0.0.1:5000"]
-            if any(marker in image_name for marker in internal_registry_markers):
-                from apps.deployments.services.provisioner import _get_master_mesh_ip
-                master_ip = _get_master_mesh_ip() or os.environ.get("PUBLIC_IP") or "127.0.0.1"
-
-                for marker in internal_registry_markers:
-                    image_name = image_name.replace(marker, f"{master_ip}:5000")
-
-                logger.info(f"Rewrote registry image for remote node: {image_name} (via {master_ip})")
+            # Rewrite master-INTERNAL registry refs (registry:5000 /
+            # loopback) to the node-routable address. Centralised in
+            # registry_routing — resolves PlatformConfig override >
+            # WG mesh IP > public IP, and is a no-op when no routable
+            # address is configured (single-host installs).
+            from apps.deployments.services.registry_routing import image_ref_for_node
+            _rewritten = image_ref_for_node(image_name)
+            if _rewritten != image_name:
+                logger.info(f"Rewrote registry image for remote node: {image_name} -> {_rewritten}")
+                image_name = _rewritten
 
             payload["image_name"] = image_name
 

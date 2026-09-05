@@ -160,6 +160,14 @@ class SpawningService:
         if not image:
             raise ValueError(f"Service {service.name} has no docker_image set — deploy once first or set docker_image manually")
 
+        # MULTI-NODE REGISTRY: the stored docker_image is qualified with
+        # the master-INTERNAL registry address (registry:5000 / loopback)
+        # which does not resolve on the remote node. Rewrite to the
+        # node-routable address (WG mesh IP, or public IP fallback) so
+        # the `docker pull` below actually reaches the registry.
+        from .registry_routing import image_ref_for_node
+        pull_image = image_ref_for_node(image)
+
         port = str(service.internal_port or 8000)
         domain = service.public_domain or f"{name}.localhost"
         scoped_net = _scoped_network_for(service)
@@ -272,7 +280,7 @@ class SpawningService:
 
         cmd = (
             f"{login_cmd}"
-            f"docker pull {shlex.quote(image)} 2>/dev/null; "
+            f"docker pull {shlex.quote(pull_image)} 2>/dev/null; "
             f"docker rm -f {shlex.quote(name)} 2>/dev/null; "
             f"docker run -d --name {shlex.quote(name)} "
             f"{sec_flags}"
@@ -280,7 +288,7 @@ class SpawningService:
             f"--restart unless-stopped --network {shlex.quote(net)} "
             f"{mtls_volumes}"
             f"{label_args} {env_args} "
-            f"{shlex.quote(image)}; "
+            f"{shlex.quote(pull_image)}; "
         )
 
         _out, err, exit_code = ssh.exec_command(cmd, raise_on_error=False, timeout=300)

@@ -252,6 +252,15 @@ class RecoveryMixin:
 
         # If compose failed, try pulling image from local registry and running directly
         docker_image = getattr(deployment.service, "docker_image", "") or ""
+        if docker_image:
+            # The stored ref is qualified with the master-INTERNAL
+            # registry address (registry:5000 / loopback) which does NOT
+            # resolve on a remote node. Rewrite to the node-routable
+            # address (WG mesh IP / public IP) — on the master itself
+            # the rewrite is a no-op when no routable address is
+            # configured (single-host installs).
+            from apps.deployments.services.registry_routing import image_ref_for_node
+            docker_image = image_ref_for_node(docker_image)
         if not docker_image:
             # Construct image name from the platform's configured
             # CONTAINER_REGISTRY_URL via the centralised registry

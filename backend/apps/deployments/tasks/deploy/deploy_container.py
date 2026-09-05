@@ -181,9 +181,26 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     _client.images.get(image_name)
                     image_available_after_pull_failure = True
                 except docker.errors.ImageNotFound:
-                    registry_prefix = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
-                    if registry_prefix and image_name.startswith(registry_prefix):
-                        local_tag = image_name[len(registry_prefix) + 1:]
+                    # The image may exist in the local cache under ANY of
+                    # the master registry's addresses (internal
+                    # registry:5000 form, node-routable mesh/public form,
+                    # or the bare unqualified tag). Try each prefix.
+                    from apps.deployments.services.registry_routing import (
+                        image_ref_for_internal,
+                        is_master_registry_ref,
+                        master_registry_node_url,
+                    )
+                    registry_prefixes = [p for p in (
+                        getattr(settings, 'CONTAINER_REGISTRY_URL', None),
+                        'registry:5000',
+                        master_registry_node_url(),
+                    ) if p]
+                    _matched_prefix = next(
+                        (p for p in registry_prefixes if p and image_name.startswith(p + "/")),
+                        None,
+                    )
+                    if _matched_prefix and is_master_registry_ref(image_name):
+                        local_tag = image_name[len(_matched_prefix) + 1:]
                         try:
                             local_img = _client.images.get(local_tag)
                             local_img.tag(image_name)

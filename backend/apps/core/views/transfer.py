@@ -68,6 +68,17 @@ def _validate_transfer_image(image: str) -> bool:
         return True
     # Normalize: strip scheme for comparison
     registry_host = registry_url.replace('https://', '').replace('http://', '').rstrip('/')
+    # The platform registry is reachable under several addresses —
+    # Docker DNS (registry:5000), loopback, the master's WG mesh IP,
+    # and the public bind IP. A transfer can arrive with ANY of them
+    # depending on how the sending master resolved the routable URL;
+    # accept them all (registry_routing knows the full list).
+    try:
+        from apps.deployments.services.registry_routing import is_master_registry_ref
+        if is_master_registry_ref(image):
+            return True
+    except Exception:
+        pass
     # If the image has a registry component, it must match the platform registry
     if '/' in image:
         image_host = image.split('/')[0]

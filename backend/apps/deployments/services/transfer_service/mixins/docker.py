@@ -16,6 +16,11 @@ class DockerMixin:
                 f"No Docker image was available in the backup for service {service.name}. "
                 "Use remote Git deployment or provide service.docker_image for this service."
             )
+        # The stored ref may be qualified with the SOURCE master's
+        # internal registry address (registry:5000 / loopback) which does
+        # not resolve on the target node — rewrite to the routable form.
+        from ...registry_routing import image_ref_for_node
+        image = image_ref_for_node(image)
 
         config = PlatformConfig.load()
 

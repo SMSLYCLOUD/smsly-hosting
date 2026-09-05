@@ -1,6 +1,37 @@
 import logging
 
 logger = logging.getLogger(__name__)
+
+ECOSYSTEM_TRUST_DOMAIN = "ecosystem.local"
+
+
+def _configure_ecosystem_mtls(service, enabled: bool) -> None:
+    """Normalize an ecosystem service to the ecosystem SPIRE trust domain.
+
+    Service creation signals default every service to platform.local. An
+    ecosystem deploy can reuse an existing Service row, so only updating new
+    rows leaves reused services on the platform trust domain. Use the same
+    canonical domain for both new and existing rows; the deployment adapter
+    then mounts the ecosystem SPIRE volumes.
+    """
+    try:
+        from apps.mtls.models import MtlsConfig
+
+        config, _created = MtlsConfig.objects.get_or_create(
+            service=service,
+            defaults={"enabled": enabled, "trust_domain": ECOSYSTEM_TRUST_DOMAIN},
+        )
+        changed = []
+        if config.enabled != enabled:
+            config.enabled = enabled
+            changed.append("enabled")
+        if config.trust_domain != ECOSYSTEM_TRUST_DOMAIN:
+            config.trust_domain = ECOSYSTEM_TRUST_DOMAIN
+            changed.extend(["trust_domain", "spiffe_id"])
+        if changed:
+            config.save(update_fields=sorted(set(changed + ["updated_at"])))
+    except Exception:
+        logger.exception("Failed to configure ecosystem mTLS for %s", service.name)
 import re
 from typing import Any
 
@@ -720,11 +751,31 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     except Exception as login_exc:
                         logger.warning("Registry login check errored: %s", login_exc)
 
+                # Node-routable address for the platform registry (WG
+                # mesh IP or public IP) — remote nodes pulling this
+                # project's images use this host. Resolves to '' on
+                # single-host installs; then the URL stays internal.
+                from apps.deployments.services.registry_routing import master_registry_node_url
+                _node_url = master_registry_node_url()
+
+                _scoped_hosts = ["registry:5000"]
+                if _node_url and _node_url not in _scoped_hosts:
+                    _scoped_hosts.append(_node_url)
+
                 ScopedRegistry.objects.create(
                     content_type=_ct,
                     object_id=project.id,
                     username=_reg_user,
                     password=_reg_pass,
+                    # registry_url stays EMPTY when the project should use
+                    # the platform-global registry (is_internal=True +
+                    # empty URL falls back to PlatformConfig URL in
+                    # resolve_registry_credentials). The ecosystem's
+                    # isolation boundary is the ScopedNetwork, not the
+                    # registry — but allowed_registry_hosts must list
+                    # every address of the platform registry so remote
+                    # node pulls pass registry validation.
+                    allowed_registry_hosts=_scoped_hosts,
                     is_internal=True,
                     is_active=True,
                 )
@@ -1006,16 +1057,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     provider=provider,
                     env_scan_depth=_env_scan_depth,
                 )
-                # Ecosystem services use ecosystem.local trust domain
-                if mtls_config.get("enabled"):
-                    try:
-                        from apps.mtls.models import MtlsConfig
-                        eco_td = mtls_config.get("trust_domain", "ecosystem.local")
-                        MtlsConfig.objects.filter(service=addon_anchor_service).update(
-                            trust_domain=eco_td,
-                        )
-                    except Exception:
-                        pass
+                _configure_ecosystem_mtls(
+                    addon_anchor_service, bool(mtls_config.get("enabled")),
+                )
                 _rollback_services.append(str(addon_anchor_service.id))
                 _apply_service_profile(addon_anchor_service, {**svc_plan, "repo": repo}, provider, anchor_port)
 
@@ -1143,7 +1187,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
     # ── Write communication rules to SPIRE config if mTLS is enabled ──
     if mtls_config.get("enabled") and communication_rules:
-        trust_domain = mtls_config.get("trust_domain", "trulay.co")
+        trust_domain = ECOSYSTEM_TRUST_DOMAIN
         try:
             import json as _json
             from pathlib import Path
@@ -1317,15 +1361,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     server=server,
                     env_scan_depth=_env_scan_depth,
                 )
-                if mtls_config.get("enabled"):
-                    try:
-                        from apps.mtls.models import MtlsConfig
-                        eco_td = mtls_config.get("trust_domain", "ecosystem.local")
-                        MtlsConfig.objects.filter(service=service).update(
-                            trust_domain=eco_td,
-                        )
-                    except Exception:
-                        pass
+                _configure_ecosystem_mtls(
+                    service, bool(mtls_config.get("enabled")),
+                )
                 _rollback_services.append(str(service.id))
             elif service is None:
                 final_name = _next_available_service_name(Service, requested_name)
@@ -1344,16 +1382,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     server=server,
                     env_scan_depth=_env_scan_depth,
                 )
-                # Ecosystem services use ecosystem.local trust domain
-                if mtls_config.get("enabled"):
-                    try:
-                        from apps.mtls.models import MtlsConfig
-                        eco_td = mtls_config.get("trust_domain", "ecosystem.local")
-                        MtlsConfig.objects.filter(service=service).update(
-                            trust_domain=eco_td,
-                        )
-                    except Exception:
-                        pass
+                _configure_ecosystem_mtls(
+                    service, bool(mtls_config.get("enabled")),
+                )
                 _rollback_services.append(str(service.id))
             elif project and service.project != project:
                 service.project = project
@@ -1362,6 +1393,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             service_profile = {**svc_plan, "repo": repo}
             if target_is_local and server is None:
                 service_profile["force_local_target"] = True
+            # Normalize reused Service rows too. The post-save signal creates
+            # platform.local by default, but ecosystem workloads belong to
+            # the isolated ecosystem SPIRE trust domain.
+            _configure_ecosystem_mtls(
+                service, bool(mtls_config.get("enabled")),
+            )
             _apply_service_profile(service, service_profile, provider, port, server=server)
 
             if all(getattr(existing, "id", None) != getattr(service, "id", None) for existing in created_service_records):
@@ -1475,7 +1512,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
             # ── Inject SPIFFE/mTLS env vars if mTLS is enabled ──
             if mtls_config.get("enabled"):
-                trust_domain = mtls_config.get("trust_domain", "trulay.co")
+                # Ecosystem services must use the ecosystem SPIRE server;
+                # never inherit platform or plan-specific trust domains.
+                trust_domain = ECOSYSTEM_TRUST_DOMAIN
                 strict_mode = mtls_config.get("strict_mode", True)
                 caller_validation = mtls_config.get("caller_validation", True)
                 config_source = mtls_config.get("config_source", "none")

@@ -606,8 +606,18 @@ services:
     image: registry:2.8.3
     restart: unless-stopped
     ports:
-    # Localhost by default; set REGISTRY_BIND_IP=0.0.0.0 or 10.100.0.1 in .env for multi-node mesh
+    # Multi-node registry access: the registry must be reachable from
+    # remote nodes to pull platform-built images.
+    #   - 127.0.0.1:5000 — master-local (host tools, docker CLI)
+    #   - ${REGISTRY_MESH_BIND_IP:-10.100.0.1}:5000 — WireGuard mesh
+    #     (preferred for nodes; TLS cert SAN includes 10.100.0.1)
+    #   - ${REGISTRY_PUBLIC_BIND_IP:-176.31.201.181}:5000 — public IP
+    #     fallback for nodes without WG (firewall should restrict to
+    #     node IPs; TLS cert via registry.smsly.cloud + certs.d trust).
+    # REGISTRY_BIND_IP=0.0.0.0 overrides everything (single-address mode).
     - "${REGISTRY_BIND_IP:-127.0.0.1}:5000:5000"
+    - "${REGISTRY_MESH_BIND_IP:-10.100.0.1}:5000:5000"
+    - "${REGISTRY_PUBLIC_BIND_IP:-176.31.201.181}:5000:5000"
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
       REGISTRY_STORAGE_DELETE_ENABLED: "true"

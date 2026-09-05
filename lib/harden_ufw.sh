@@ -9,6 +9,21 @@ _harden_ufw_bootstrap() {
         for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
+        # Multi-node registry access (see the inactive branch below for
+        # the security rationale — wg0 mesh or explicit node IPs only).
+        if ip link show wg0 >/dev/null 2>&1; then
+            ufw status verbose | grep -q "5000/tcp.*ALLOW" \
+                || ufw allow in on wg0 to any port 5000 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        fi
+        if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
+            local _nip
+            for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
+                [ -n "$_nip" ] || continue
+                ufw allow from "$_nip" to any port 5000 proto tcp \
+                    || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
+            done
+        fi
         # Whitelist Docker bridges
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
@@ -31,6 +46,28 @@ _harden_ufw_bootstrap() {
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
+
+    # ── Multi-node registry access (port 5000) ─────────────────────────
+    # NEVER open 5000 to the world. The registry holds every tenant's
+    # images. Two secure paths:
+    #   1. WireGuard mesh (preferred): wg0 interface allow — encrypted,
+    #      firewalled to configured peers.
+    #   2. NODE_REGISTRY_ALLOW_IPS (optional): explicit per-node public
+    #      IPs when WireGuard is unavailable.
+    # The public bind IP remains BLOCKED for everything else.
+    if ip link show wg0 >/dev/null 2>&1; then
+        ufw allow in on wg0 to any port 5000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+    fi
+    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
+        local _nip
+        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
+            [ -n "$_nip" ] || continue
+            ufw allow from "$_nip" to any port 5000 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
+        done
+    fi
+
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
         ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"

@@ -31,7 +31,14 @@ class SingleServiceRestoreMixin:
         image = metadata.get('docker_image') or self.transfer.service.docker_image
         if image:
             self._update(85, 'Pulling service image on target...')
-            self._node_api_request('incoming/pull-image', body={'image': image})
+            # The stored ref is qualified with the SOURCE master's
+            # internal registry address (registry:5000 / loopback) which
+            # does not resolve on the target node. Rewrite to the
+            # routable master-registry address. If the transfer already
+            # docker-loaded + retagged the image locally (FULL transfers),
+            # the pull is a no-op verification either way.
+            from ...registry_routing import image_ref_for_node
+            self._node_api_request('incoming/pull-image', body={'image': image_ref_for_node(image)})
 
         self._remap_target_platform_env()
 
@@ -130,7 +137,10 @@ class SingleServiceRestoreMixin:
 
         if image:
             self._update(75, 'Pulling service image on lite agent...')
-            self._node_api_request('incoming/pull-image', body={'image': image})
+            # Same internal-registry rewrite as the FULL target path —
+            # registry:5000 does not resolve on a lite-agent node.
+            from ...registry_routing import image_ref_for_node
+            self._node_api_request('incoming/pull-image', body={'image': image_ref_for_node(image)})
 
         from ....models.network_scope import ScopedNetwork
         scoped_net = ScopedNetwork.resolve_network_name(self.transfer.service.project) if self.transfer.service.project else 'smsly-net'

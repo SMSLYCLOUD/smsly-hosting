@@ -29,8 +29,24 @@ class SigningMixin:
         return env
 
     def _is_local_registry(self) -> bool:
-        """Return True if CONTAINER_REGISTRY_URL points to a local registry."""
+        """True if the target image reference points at the platform's
+        own registry (any of its addresses: registry:5000, loopback, WG
+        mesh IP, or the configured public bind IP).
+
+        Previously this only inspected CONTAINER_REGISTRY_URL's host —
+        with multi-node deployments the image can be qualified with the
+        node-routable address (10.100.0.1:5000 / public IP:5000), which
+        serve the same SELF-SIGNED TLS cert and need the same
+        --allow-insecure-registry (or certs.d trust) handling.
+        """
         try:
+            from apps.deployments.services.registry_routing import (
+                is_master_registry_ref,
+            )
+            if self.image_name and is_master_registry_ref(self.image_name):
+                return True
+            # Fall back to the env-var host check (covers registry URLs
+            # that are not image-qualified, e.g. keyless verify targets).
             raw = os.environ.get("CONTAINER_REGISTRY_URL", "")
             for scheme in ("https://", "http://"):
                 if raw.startswith(scheme):

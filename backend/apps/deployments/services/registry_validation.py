@@ -59,6 +59,16 @@ def all_allowed_registry_hosts() -> list[str]:
     """
     hosts = list(ALLOWED_IMAGE_REGISTRY_HOSTS)
     try:
+        # The master registry's ROUTABLE addresses (WG mesh IP, public
+        # IP) — remote nodes pull platform images via these; they must
+        # pass validation like the internal registry:5000 form does.
+        from apps.deployments.services.registry_routing import master_registry_node_url
+        _node_url = master_registry_node_url()
+        if _node_url and _node_url not in hosts:
+            hosts.append(_node_url)
+    except Exception as exc:
+        logger.debug("Failed to resolve node-routable registry host: %s", exc)
+    try:
         from urllib.parse import urlparse
 
         from django.conf import settings
