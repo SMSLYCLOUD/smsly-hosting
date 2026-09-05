@@ -415,11 +415,18 @@ class EcosystemScanTaskTests(TestCase):
         services = result.get("services", [])
         self.assertEqual(len(services), 2)
 
-        existing_svc_plan = next(s for s in services if s["name"] == "existing-svc")
-        new_svc_plan = next(s for s in services if s["name"] == "new-svc")
-
-        self.assertTrue(existing_svc_plan["skip"])
-        self.assertFalse(new_svc_plan["skip"])
+        # The skip flag is set by analyze_ecosystem_chunked (it compares
+        # against existing_services). With the analyzer mocked we can't
+        # assert on skip — instead assert the scan passed the user's
+        # existing services to the analyzer, which is the contract that
+        # enables skip marking in the real flow.
+        _svc_args = mock_analyze.call_args
+        self.assertIsNotNone(_svc_args, "analyze_ecosystem_chunked must be called")
+        passed_existing = _svc_args.kwargs.get("existing_services") or (
+            _svc_args.args[3] if len(_svc_args.args) > 3 else None
+        )
+        passed_names = {s.get("name") for s in (passed_existing or [])}
+        self.assertIn("existing-svc", passed_names)
 
 
 class EcosystemDeployTaskTests(TestCase):
