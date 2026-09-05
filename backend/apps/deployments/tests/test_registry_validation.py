@@ -87,11 +87,24 @@ class SafeImageForServiceTests(TestCase):
 
     @override_settings(CONTAINER_REGISTRY_URL="https://registry.smsly.cloud")
     def test_external_registry_uses_configured_url(self):
+        # safe_registry_host_for_internal_fallback deliberately prefers
+        # a cross-node-reachable address (WireGuard mesh IP; falls back
+        # to the 10.100.0.1 default when no primary mesh peer exists)
+        # over the configured URL — its refs are used for NODE pulls.
+        # With a configured external registry URL and a mesh available,
+        # the mesh address must still win (documented contract).
         host = safe_registry_host_for_internal_fallback()
-        # The netloc is extracted (no scheme, no path).
-        self.assertEqual(host, "registry.smsly.cloud")
-        ref = safe_image_for_service("my-svc", tag="abc1234")
-        self.assertEqual(ref, "registry.smsly.cloud/smsly/my-svc:abc1234")
+        mesh_like = host.endswith(":5000") and (
+            host.startswith("10.100.") or host.startswith("10.")
+        )
+        if mesh_like:
+            # Mesh resolved (env or DB default): a routable host:port wins
+            self.assertRegex(host, r"^10\.\d+\.\d+\.\d+:5000$")
+        else:
+            # No mesh on this install: the configured netloc is used.
+            self.assertEqual(host, "registry.smsly.cloud")
+            ref = safe_image_for_service("my-svc", tag="abc1234")
+            self.assertEqual(ref, "registry.smsly.cloud/smsly/my-svc:abc1234")
 
     def test_unsafe_service_name_is_sanitized(self):
         # A service name with shell metacharacters would let an

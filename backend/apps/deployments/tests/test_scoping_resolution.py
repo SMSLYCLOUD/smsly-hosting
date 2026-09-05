@@ -1,3 +1,4 @@
+import os
 from unittest.mock import patch
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
@@ -64,7 +65,10 @@ class ScopingResolutionTests(TestCase):
         # Without explicit override, falls back to per-service short ID network
         net_default = _scoped_network_for(self.service)
         short_id = str(self.service.id).replace("-", "")[:12]
-        self.assertEqual(net_default, f"smsly-svc-{short_id}")
+        # Default prefix is PAAS_NETWORK_PREFIX (paas-svc since 146d5387;
+        # overridable per install).
+        net_prefix = os.getenv("PAAS_NETWORK_PREFIX", "paas-svc")
+        self.assertEqual(net_default, f"{net_prefix}-{short_id}")
 
         # Add explicit ScopedNetwork override to project
         proj_ct = ContentType.objects.get_for_model(Project)
