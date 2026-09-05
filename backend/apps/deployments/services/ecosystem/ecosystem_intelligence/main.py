@@ -638,10 +638,13 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 env_map[key] = _generate_pool[key]
         svc["env_vars"] = env_map
 
+    # Host-scaled floor for non-heavy services (never 1 core).
+    from apps.deployments.models.service import default_service_resources
+    _base_cpu, _base_mem = default_service_resources()
     for svc in deployable:
         if svc.get("_is_heavy"):
-            svc["cpu_cores"] = 2.0
-            svc["memory_mb"] = 4096
+            svc["cpu_cores"] = 3.0
+            svc["memory_mb"] = 6144
         else:
-            svc["cpu_cores"] = 1.0
-            svc["memory_mb"] = 1024
+            svc["cpu_cores"] = _base_cpu
+            svc["memory_mb"] = _base_mem

@@ -112,6 +112,27 @@ def broadcast_service_status_change(sender, instance, created, **kwargs):
             )
 
 
+@receiver(post_save, sender=Service)
+def apply_resource_limits_live(sender, instance, created, **kwargs):
+    """Apply CPU/RAM limit changes to running containers without a redeploy.
+
+    Only fires when cpu_cores/memory_mb were part of the save (or on a
+    full save where the fields can't be ruled out). Dispatches a celery
+    task — never blocks the save on Docker. New services are skipped:
+    their containers don't exist yet and the deploy applies limits.
+    """
+    if created:
+        return
+    update_fields = kwargs.get('update_fields')
+    if update_fields is not None and 'cpu_cores' not in update_fields and 'memory_mb' not in update_fields:
+        return
+    try:
+        from apps.deployments.tasks.resource_limits import apply_service_resource_limits_task
+        apply_service_resource_limits_task.delay(str(instance.id))
+    except Exception as exc:
+        logger.warning("Could not dispatch live limit apply for service %s: %s", instance.id, exc)
+
+
 @receiver(post_delete, sender=Service)
 def regenerate_caddyfile_on_service_deletion(sender, instance, **kwargs):
     logger = logging.getLogger(__name__)

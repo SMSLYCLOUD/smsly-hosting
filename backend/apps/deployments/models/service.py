@@ -16,6 +16,43 @@ from .core import TimeStampedModel
 logger = logging.getLogger(__name__)
 
 
+# ── Host-scaled service defaults ──────────────────────────────────────
+# Defined here (not in utils/) so the model-field ``default=`` callables
+# don't pull the whole utils package (which imports models) into a
+# circular import. Every new service gets at least 2 CPU cores; bigger
+# hosts grant more. Tiers are deliberately coarse so defaults stay
+# predictable. Other modules should import these instead of hardcoding.
+def default_service_resources() -> tuple:
+    """Return (cpu_cores, memory_mb) defaults scaled to this host."""
+    import os
+
+    try:
+        cores = os.cpu_count() or 2
+    except Exception:
+        cores = 2
+    try:
+        import psutil
+        mem_gb = psutil.virtual_memory().total / (1024 ** 3)
+    except Exception:
+        mem_gb = 4.0
+    if cores >= 8 and mem_gb >= 16:
+        return 3.0, 6144
+    if cores >= 4 and mem_gb >= 8:
+        return 2.0, 4096
+    return 2.0, 2048
+
+
+def default_service_cpu_cores():
+    """Model-field default callable for Service.cpu_cores."""
+    from decimal import Decimal
+    return Decimal(str(default_service_resources()[0]))
+
+
+def default_service_memory_mb() -> int:
+    """Model-field default callable for Service.memory_mb."""
+    return int(default_service_resources()[1])
+
+
 class Region(models.Model):
     """
     Physical deployment regions (e.g. us-east-1, eu-central-1).
@@ -228,8 +265,8 @@ class Service(TimeStampedModel):
 
     # Resource Limits (Simulated for now)
     cpu_cores = models.DecimalField(  # type: ignore[var-annotated]
-        max_digits=6, decimal_places=2, default=1.0)
-    memory_mb = models.IntegerField(default=2048)  # type: ignore[var-annotated]
+        max_digits=6, decimal_places=2, default=default_service_cpu_cores)
+    memory_mb = models.IntegerField(default=default_service_memory_mb)  # type: ignore[var-annotated]
 
     # Auto-Scaling
     autoscale_enabled = models.BooleanField(  # type: ignore[var-annotated]

@@ -110,7 +110,7 @@ class ReviewActionsMixin:
         Approve a deployment review and continue to build.
         POST /api/v1/deployments/{id}/approve/
         Body (all optional):
-          { "cpu_cores": 1.0, "memory_mb": 1024,
+          { "cpu_cores": 2.0, "memory_mb": 2048,
             "env_overrides": {"KEY": "value"} }
         """
         deployment = self.get_object()

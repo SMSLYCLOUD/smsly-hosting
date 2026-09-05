@@ -52,6 +52,11 @@ from apps.deployments.tasks.data.tasks_backup import (  # noqa: F401
     restore_service_backup_task,
 )
 
+# ── Re-exports from resource_limits ───────────────────────────────
+from apps.deployments.tasks.resource_limits import (  # noqa: F401
+    apply_service_resource_limits_task,
+)
+
 # ── Re-exports from tasks_health ──────────────────────────────────
 from apps.deployments.tasks.infra.tasks_health import (
     auto_authenticate_nodes_task,

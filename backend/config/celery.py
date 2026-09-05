@@ -121,6 +121,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.edge_shield_watchdog': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_ecosystem_plans': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stalled_deployments': {'queue': 'fast'},
+    'apps.deployments.tasks.apply_service_resource_limits': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_transfers': {'queue': 'fast'},
     'apps.deployments.tasks.recover_corrupt_docker_state': {'queue': 'deploy'},
     'apps.deployments.tasks.ensure_migrations_applied': {'queue': 'deploy'},
