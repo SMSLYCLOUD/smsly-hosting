@@ -132,6 +132,7 @@ const PROXY_BYPASS_PREFIXES = [
   '/platform-updates/',
   '/deployments/',
   '/addons/',
+  '/mcp/',
 ];
 
 // Sub-paths under /services/ that must always hit the local controller
@@ -2617,6 +2618,34 @@ export const scopedRegistryApi = {
   }
 };
 
+export interface ProjectRegistryAuth {
+  username: string;
+  password: string;
+  per_project: boolean;
+  urls: string[];
+  node_url: string;
+}
+
+export interface ProjectRegistryInfo {
+  effective_url: string;
+  has_username: boolean;
+  has_password: boolean;
+  is_scoped: boolean;
+  hierarchy: string[];
+  auth?: ProjectRegistryAuth;
+}
+
+export const projectRegistryApi = {
+  get: async (projectId: string): Promise<ProjectRegistryInfo> => {
+    const response = await api.get(`/projects/${projectId}/registry/`);
+    return response.data;
+  },
+  rotate: async (projectId: string) => {
+    const response = await api.post(`/projects/${projectId}/registry/rotate/`);
+    return response.data;
+  },
+};
+
 export const networkScopesApi = {
   list: async () => {
     const res = (await api.get('/network-scopes/')).data;
@@ -2706,6 +2735,56 @@ export const alertsApi = {
   // SMTP
   testSmtp: async (toEmail: string): Promise<{ status: string; message?: string; error?: string }> => {
     const res = await api.post('/notifications/test-smtp/', { to_email: toEmail });
+    return res.data;
+  },
+};
+
+// ─── MCP Server API ─────────────────────────────────────────────────────────
+
+export interface McpStatus {
+  exists: boolean;
+  running: boolean;
+  status?: string;
+  container_id?: string;
+  image?: string;
+  started_at?: string;
+  endpoint?: string;
+  port?: number;
+  networks?: string[];
+  tools_count?: number;
+  fastmcp_available?: boolean;
+  sdk_available?: boolean;
+  error?: string;
+}
+
+export interface McpToolParam {
+  name: string;
+  type: string;
+  required: boolean;
+  default?: unknown;
+}
+
+export interface McpTool {
+  name: string;
+  description: string;
+  params: McpToolParam[];
+}
+
+export const mcpApi = {
+  status: async (): Promise<McpStatus> => {
+    const res = await api.get('/mcp/status/');
+    return res.data;
+  },
+  control: async (action: 'start' | 'stop' | 'restart'): Promise<McpStatus> => {
+    const res = await api.post('/mcp/control/', { action });
+    return res.data;
+  },
+  tools: async (): Promise<{ tools: McpTool[]; count: number }> => {
+    const res = await api.get('/mcp/tools/');
+    return res.data;
+  },
+  callTool: async (name: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; error?: string }> => {
+    const res = await api.post(`/mcp/tools/${encodeURIComponent(name)}/call/`, { args });
     return res.data;
   },
 };

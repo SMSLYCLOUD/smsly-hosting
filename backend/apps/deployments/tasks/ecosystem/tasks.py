@@ -678,112 +678,22 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             _env_scan_depth = 'shallow'
 
     # Ensure the ecosystem project always has its own ScopedRegistry.
-    # Use .env credentials (which match the registry container's htpasswd) and
-    # verify with docker login before saving. PlatformConfig DB values may be
-    # stale if signals failed to sync htpasswd.
+    # Per-project credentials are auto-generated (username proj-<id8>,
+    # bcrypt password installed into the registry's htpasswd) by the
+    # shared credential service — the same one that displays them on
+    # the project page. Falls back to PlatformConfig creds when the
+    # htpasswd mount is not writable.
     if project:
         try:
-            import subprocess
-
-            from django.conf import settings
-            from django.contrib.contenttypes.models import ContentType
-
-            from apps.deployments.models.core import PlatformConfig
-            from apps.deployments.models.network_scope import ScopedNetwork
-            from apps.deployments.models.registry_scope import ScopedRegistry
-
-            _ct = ContentType.objects.get_for_model(Project)
-            _has_registry = ScopedRegistry.objects.filter(
-                content_type=_ct, object_id=project.id,
-            ).exists()
-            if not _has_registry:
-                # Prefer .env credentials (source of truth for htpasswd),
-                # fall back to PlatformConfig DB if .env is empty.
-                _reg_user = getattr(settings, 'REGISTRY_USER', '') or PlatformConfig.get_config_value("registry_user") or "smsly-registry"
-                _reg_pass = getattr(settings, 'REGISTRY_PASSWORD', '') or PlatformConfig.get_config_value("registry_password") or ""
-                _reg_url = getattr(settings, 'CONTAINER_REGISTRY_URL', '') or PlatformConfig.get_config_value("container_registry_url") or "registry:5000"
-
-                # Auto-generate a registry password if none is configured anywhere.
-                # This ensures ecosystem projects always have valid credentials
-                # for the platform's own internal registry.
-                if not _reg_pass:
-                    import secrets
-                    _reg_pass = secrets.token_urlsafe(18)
-                    logger.info(
-                        "Auto-generated registry password for ecosystem project %s "
-                        "(no REGISTRY_PASSWORD was configured)",
-                        project.id,
-                    )
-                    try:
-                        _cfg = PlatformConfig.load()
-                        _cfg.registry_password = _reg_pass
-                        _cfg.save(update_fields=['registry_password'])
-                        logger.info("Persisted auto-generated registry password to PlatformConfig")
-                    except Exception as _pw_exc:
-                        logger.warning(
-                            "Could not persist auto-generated registry password "
-                            "to PlatformConfig: %s. Password is set on ScopedRegistry "
-                            "but htpasswd may need manual sync.",
-                            _pw_exc,
-                        )
-
-                # Verify credentials with docker login before saving
-                _login_ok = False
-                if _reg_user and _reg_pass:
-                    try:
-                        _login_proc = subprocess.run(
-                            ['docker', 'login', _reg_url, '-u', _reg_user, '--password-stdin'],
-                            input=_reg_pass, capture_output=True, text=True, timeout=15,
-                        )
-                        _login_ok = _login_proc.returncode == 0
-                        if _login_ok:
-                            logger.info(
-                                "Registry login verified for %s (user=%s) — creating scoped registry",
-                                _reg_url, _reg_user,
-                            )
-                        else:
-                            logger.warning(
-                                "Registry login failed for %s (user=%s, exit=%d). "
-                                "ScopedRegistry will be created with .env credentials anyway — "
-                                "push may fail if htpasswd is out of sync.",
-                                _reg_url, _reg_user, _login_proc.returncode,
-                            )
-                    except Exception as login_exc:
-                        logger.warning("Registry login check errored: %s", login_exc)
-
-                # Node-routable address for the platform registry (WG
-                # mesh IP or public IP) — remote nodes pulling this
-                # project's images use this host. Resolves to '' on
-                # single-host installs; then the URL stays internal.
-                from apps.deployments.services.registry_routing import master_registry_node_url
-                _node_url = master_registry_node_url()
-
-                _scoped_hosts = ["registry:5000"]
-                if _node_url and _node_url not in _scoped_hosts:
-                    _scoped_hosts.append(_node_url)
-
-                ScopedRegistry.objects.create(
-                    content_type=_ct,
-                    object_id=project.id,
-                    username=_reg_user,
-                    password=_reg_pass,
-                    # registry_url stays EMPTY when the project should use
-                    # the platform-global registry (is_internal=True +
-                    # empty URL falls back to PlatformConfig URL in
-                    # resolve_registry_credentials). The ecosystem's
-                    # isolation boundary is the ScopedNetwork, not the
-                    # registry — but allowed_registry_hosts must list
-                    # every address of the platform registry so remote
-                    # node pulls pass registry validation.
-                    allowed_registry_hosts=_scoped_hosts,
-                    is_internal=True,
-                    is_active=True,
-                )
-                logger.info(
-                    "Auto-created scoped registry for ecosystem project %s "
-                    "(user=%s, url=%s, login_verified=%s)",
-                    project.id, _reg_user, _reg_url, _login_ok,
-                )
+            from apps.deployments.services.registry_credentials import (
+                ensure_project_registry_credentials,
+            )
+            _creds = ensure_project_registry_credentials(project)
+            logger.info(
+                "Ecosystem project %s registry credentials ensured "
+                "(user=%s, per_project=%s)",
+                project.id, _creds['username'], _creds['per_project'],
+            )
         except Exception as exc:
             logger.warning("Failed to ensure scoped registry for ecosystem project: %s", exc)
 

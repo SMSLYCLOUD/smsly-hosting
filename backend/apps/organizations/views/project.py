@@ -356,19 +356,64 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 return Response({'status': 'created', 'id': str(instance.id)},
                                 status=status.HTTP_201_CREATED)
 
-        # GET: return effective registry config (walks hierarchy)
+        # GET: auto-provision per-project credentials (backwards-compatible
+        # fallback to the platform credential when htpasswd is not writable),
+        # then return the full effective config for display on the project page.
+        from apps.deployments.services.registry_credentials import (
+            ensure_project_registry_credentials,
+        )
+
+        try:
+            creds_display = ensure_project_registry_credentials(project)
+        except Exception as exc:
+            logger.exception("Auto-provisioning registry credentials failed for %s", project.id)
+            creds_display = None
+
         creds = ScopedRegistry.resolve_registry_credentials(project)
         scoped = ScopedRegistry.get_for_object(project)
         read_ser = ScopedRegistryReadSerializer(scoped) if scoped else None
 
-        return Response({
+        resp = {
             'effective_url': creds.get('url', ''),
             'has_username': bool(creds.get('username')),
             'has_password': bool(creds.get('password')),
             'is_scoped': scoped is not None,
             'scoped_config': read_ser.data if read_ser else None,
             'hierarchy': ['project', 'team', 'organization', 'platform'],
-        })
+        }
+        if creds_display:
+            # Auth details for the project page. SECURITY: this is the
+            # project-scoped (or platform-fallback) credential — visible
+            # ONLY to the project owner/members (this viewset's queryset
+            # already restricts access).
+            resp['auth'] = {
+                'username': creds_display['username'],
+                'password': creds_display['password'],
+                'per_project': creds_display['per_project'],
+                'urls': creds_display['urls'],
+                'node_url': creds_display['node_url'],
+            }
+        return Response(resp)
+
+    @action(detail=True, methods=['post'], url_path='registry/rotate')
+    def registry_rotate(self, request, pk=None):
+        """POST /api/v1/projects/{id}/registry/rotate/
+
+        Rotates the project's registry credential: generates a new
+        password, persists it (encrypted) on the ScopedRegistry row, and
+        atomically updates the registry's htpasswd. Nodes using the old
+        credential must re-login (re-provision or manual docker login).
+        """
+        from apps.deployments.services.registry_credentials import (
+            rotate_project_registry_credentials,
+        )
+
+        project = self.get_object()
+        result = rotate_project_registry_credentials(project)
+        if not result.get('ok'):
+            return Response({'error': result.get('error', 'rotation failed')},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response({'status': 'rotated', 'username': result['username']})
 
     @action(detail=True, methods=['get', 'post'], url_path='internal-network')
     def internal_network(self, request, pk=None):

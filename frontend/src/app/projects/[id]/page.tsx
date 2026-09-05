@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { ScopedRegistryTab } from '@/components/settings/ScopedRegistryTab';
+import { RegistryCredentialsCard } from '@/components/settings/RegistryCredentialsCard';
 
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: '#10b981',
@@ -521,12 +522,20 @@ function ProjectDetailContent() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
           >
-            <ScopedRegistryTab
-              scopeType="project"
-              scopeId={projectId}
-              title="Project Registry"
-              description="Configure where this project's built images are pushed."
-            />
+            <motion.div
+              key="registry"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="space-y-6"
+            >
+              <RegistryCredentialsCard projectId={projectId} />
+              <ScopedRegistryTab
+                scopeType="project"
+                scopeId={projectId}
+                title="Project Registry"
+                description="Configure where this project's built images are pushed."
+              />
+            </motion.div>
           </motion.div>
         )}
 
