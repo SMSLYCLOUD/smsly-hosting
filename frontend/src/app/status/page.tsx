@@ -5,8 +5,8 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 import { systemApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Server, Loader2, CheckCircle2, AlertTriangle, RefreshCw, Shield, Activity, HardDrive, Cpu } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { Server, Loader2, CheckCircle2, AlertTriangle, RefreshCw, Shield } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const SERVICE_GROUPS = [
   { label: "Core", keys: ["backend", "frontend", "celery", "celery-beat", "celery-fast", "celery-deploy"] },
@@ -63,21 +63,35 @@ function MetricCard({ label, value, subtext, color }: { label: string; value: st
 export default function StatusPage() {
   const [systemConfig, setSystemConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const fetchConfig = useCallback(async () => {
+  const fetchConfig = useCallback(async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
+      else setRefreshing(true);
       const config = await systemApi.getConfig();
       setSystemConfig(config);
     } catch (err) {
       console.error("Failed to fetch system config", err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
     fetchConfig();
+  }, [fetchConfig]);
+
+  // Auto-refresh silently every 30s so the banner reflects recovery
+  // without user action. Skipped while the initial load is in flight.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => fetchConfig(true), 30000);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, [fetchConfig]);
 
   if (loading) {
@@ -96,7 +110,7 @@ export default function StatusPage() {
         <div className="container mx-auto max-w-6xl px-4 py-8">
           <div className="flex flex-col items-center justify-center py-16 gap-4">
             <p className="text-muted-foreground">Unable to load system status.</p>
-            <button onClick={fetchConfig} className="text-sm text-emerald-400 hover:underline">Retry</button>
+            <button onClick={() => fetchConfig()} className="text-sm text-emerald-400 hover:underline">Retry</button>
           </div>
         </div>
       </DashboardShell>
@@ -111,7 +125,10 @@ export default function StatusPage() {
   const hostSecurity = systemConfig.host_security as Record<string, { installed: boolean; active: boolean }> | undefined;
 
   const coreOffline = services
-    ? Array.from(CORE_REQUIRED_SERVICES).filter(s => services[s] && !services[s].running)
+    // A required service missing from the response entirely is also
+    // treated as offline — otherwise a backend inventory gap would
+    // silently render a green "Operational" banner.
+    ? Array.from(CORE_REQUIRED_SERVICES).filter(s => !services[s] || !services[s].running)
     : [];
   const isHealthy = coreOffline.length === 0;
 
@@ -131,8 +148,9 @@ export default function StatusPage() {
               variant="outline"
               size="sm"
               onClick={() => fetchConfig()}
+              disabled={refreshing}
             >
-              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+              <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
           </div>

@@ -46,6 +46,49 @@ class AddonMixin:
         'minio': 'MINIO',
     }
 
+    def _is_ecosystem_deployment(self) -> bool:
+        """Return True only for deployments released by the ecosystem wave engine."""
+        return str(getattr(self.deployment, "commit_hash", "") or "") == "ecosystem-deploy"
+
+    def _get_ecosystem_shared_addon(self, addon_type: str):
+        """Find an active project-shared addon without provisioning it."""
+        if not self._is_ecosystem_deployment():
+            return None
+        project = getattr(self.service, "project", None)
+        if not project:
+            return None
+        return Addon.objects.filter(
+            service__project=project,
+            addon_type=addon_type,
+            status=Addon.Status.ACTIVE,
+            name=f"{addon_type.lower()}-shared",
+        ).exclude(service=self.service).select_related("service").first()
+
+    def _reuse_ecosystem_shared_addon(self, addon_type: str, addon_urls: dict) -> bool:
+        """Point this service at an existing shared addon, without reprovisioning."""
+        shared = self._get_ecosystem_shared_addon(addon_type)
+        if not shared or not shared.connection_url:
+            return False
+        from apps.addons.services.addon_provisioner import addon_provisioner
+
+        addon_urls[addon_type.lower()] = shared.connection_url
+        env_key = addon_provisioner.ENV_KEY_MAP.get(addon_type, f"{addon_type}_URL")
+        EnvironmentVariable.objects.update_or_create(
+            service=self.service,
+            key=env_key,
+            defaults={
+                "value": shared.connection_url,
+                "is_secret": True,
+                "source": "ADDON",
+            },
+        )
+        append_log(
+            self.deployment,
+            f"  ✅ Reusing ecosystem shared {addon_type} addon "
+            f"({shared.name}); no addon reprovisioning\n",
+        )
+        return True
+
     def _provision_from_grid_addons(self):
         """Detect and process ``grid.addons`` manifest if present.
 
@@ -106,6 +149,9 @@ class AddonMixin:
 
             for addon_decl in manifest.addons:
                 addon_type = addon_decl.addon_type
+                if self._reuse_ecosystem_shared_addon(addon_type, addon_urls):
+                    addon_urls[addon_decl.name] = addon_urls[addon_type.lower()]
+                    continue
                 if addon_type in existing_addons:
                     addon = existing_addons[addon_type]
                     if addon.status == Addon.Status.ACTIVE and addon.connection_url:
@@ -570,6 +616,8 @@ class AddonMixin:
                 status__in=['ACTIVE', 'PROVISIONING']
             )
             for addon in existing_addons:
+                if self._reuse_ecosystem_shared_addon(addon.addon_type, addon_urls):
+                    continue
                 try:
                     _, url = addon_provisioner.provision_dispatch(addon)
                     if url and addon.connection_url != url:
@@ -675,4 +723,3 @@ class AddonMixin:
             log_exhaustive_addon_provisioning_diagnostics(self.deployment, sorted(detected_types))
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("Auto-addon provisioning failed: %s", e)
-

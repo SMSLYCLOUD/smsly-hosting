@@ -92,28 +92,83 @@ class DomainActionsMixin:
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # ── Platform-assigned hostnames need no DNS proof ──────────
+        # The platform itself issued this exact hostname to this service
+        # (generated public_domain or staging_domain), so ownership is
+        # established by the DB record — not by DNS propagation. Without
+        # this, ecosystem deploys flap: verification runs before DNS
+        # propagates (or when the record is Cloudflare-proxied, whose edge
+        # IPs are deliberately rejected by the quorum check), fails, and
+        # actively CLEARS the verified flag below. Custom (user-owned)
+        # domains still go through full DNS quorum verification.
+        assigned_domains = {
+            (service.public_domain or '').strip().lower(),
+            (service.staging_domain or '').strip().lower(),
+        } - {''}
+        if domain in assigned_domains:
+            is_staging = bool(service.staging_domain) and domain == service.staging_domain
+            if is_staging:
+                if not service.staging_domain_verified:
+                    service.staging_domain_verified = True
+                    service.save(update_fields=['staging_domain_verified'])
+            else:
+                if not service.domain_verified:
+                    service.domain_verified = True
+                    service.save(update_fields=['domain_verified'])
+            from ...utils import log_event as _log_event_assigned
+            _log_event_assigned(
+                actor=getattr(request.user, 'username', None) or 'system',
+                action='DOMAIN_VERIFY',
+                target=f'Service: {service.name}',
+                metadata={
+                    'service_id': str(service.id),
+                    'domain': domain,
+                    'result': 'success',
+                    'method': 'platform_assigned',
+                },
+            )
+            return Response({
+                'domain': domain,
+                'verified': True,
+                'cname_target': service.public_domain or '',
+                'dns_expected': 'platform-assigned hostname',
+                'dns_actual': 'platform-assigned hostname',
+                'message': 'Domain verified! Platform-assigned hostname.',
+            })
+
         # ── Per-apex daily cert issuance cap ────────────────────────
         # Mirrors the cap on check_domain so a single apex cannot exhaust
         # Let's Encrypt's rate-limit through repeated verifications.
+        # Bucketed per-FQDN (not per-apex): all platform-issued
+        # *.grid.smsly.cloud hostnames share one apex, and a shared bucket
+        # meant one busy ecosystem host could 429 every sibling subdomain.
+        # The apex bucket remains as a high DoS backstop.
         raw_domain_for_cap = domain.strip().lower()
         apex = (
             raw_domain_for_cap.split('.', 1)[-1]
             if '.' in raw_domain_for_cap
             else raw_domain_for_cap
         )
-        if apex:
-            cap_key = f"certs_issued:{apex}:{timezone.now().strftime('%Y%m%d')}"
+        cap_limit = int(getattr(settings, 'CADDY_DAILY_CERT_CAP', 20))
+        apex_cap_limit = int(getattr(settings, 'CADDY_DAILY_APEX_CAP', 200))
+        for cap_key, limit, scope in (
+            (f"certs_issued:{raw_domain_for_cap}:{timezone.now().strftime('%Y%m%d')}",
+             cap_limit, raw_domain_for_cap),
+            (f"certs_issued_apex:{apex}:{timezone.now().strftime('%Y%m%d')}",
+             apex_cap_limit, apex),
+        ):
+            if not scope:
+                continue
             cap_value = cache.get(cap_key, 0)
-            cap_limit = int(getattr(settings, 'CADDY_DAILY_CERT_CAP', 20))
-            if cap_value >= cap_limit:
+            if cap_value >= limit:
                 logger.warning(
-                    "verify_domain: daily cert cap reached for apex %s (%d)",
-                    apex, cap_value,
+                    "verify_domain: daily cert cap reached for %s (%d)",
+                    scope, cap_value,
                 )
                 return Response(
                     {
                         'error': (
-                            f"Daily cert issuance cap reached for {apex}. "
+                            f"Daily cert issuance cap reached for {scope}. "
                             "Try again tomorrow."
                         )
                     },
@@ -667,20 +722,10 @@ class DomainActionsMixin:
 
     def _enforce_custom_domain_quota(self, service: Service, new_total: int):
         """
-        Enforce billing plan limit for custom domains.
-        (Disabled for self-hosted instances).
+        Historically enforced the billing plan's max_custom_domains limit.
+        Custom domains are now unlimited for deployed services: uniqueness
+        across services is still enforced by _find_domain_conflict, and
+        DNS ownership is still proven by verification before routing/certs.
+        Kept as a no-op so the add-domain flow is unchanged.
         """
-        if _check_tier_gates_disabled():
-            return None
-        try:
-            from apps.billing.models import UserSubscription
-            sub = UserSubscription.objects.filter(user=service.owner, status='ACTIVE').first()
-            limit = sub.plan.max_custom_domains if sub and sub.plan else 1
-            if new_total > limit:
-                return Response(
-                    {'error': f'Custom domain limit reached ({limit}). Please upgrade your plan.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        except ImportError:
-            pass
         return None

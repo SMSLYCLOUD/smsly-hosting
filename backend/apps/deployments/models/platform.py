@@ -353,8 +353,8 @@ class PlatformConfig(models.Model):
         default=10,
         help_text="Default number of services per ecosystem deploy wave")
     ecosystem_wave_recheck_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
-        default=15,
-        help_text="Seconds between wave completion rechecks")
+        default=1800,
+        help_text="Seconds to wait before checking whether the previous ecosystem wave finished")
     blue_green_auto_promote = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text=(

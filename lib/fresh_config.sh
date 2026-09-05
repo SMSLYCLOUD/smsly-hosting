@@ -204,7 +204,7 @@ else
     [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
     [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(48))"  || true)"
     [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))"  || openssl rand -base64 30 | tr -d '+/=' )"
-    [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || openssl rand -base64 32)"
+    [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || python3 -c "import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())")"
     [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${REGISTRY_HTTP_SECRET:-}" ] || REGISTRY_HTTP_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${CADDY_ASK_SECRET:-}" ] || CADDY_ASK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
@@ -220,7 +220,9 @@ else
     [ -n "${SENTINEL_PASSWORD:-}" ] || SENTINEL_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${DB_REPLICA_HOSTS:-}" ] || DB_REPLICA_HOSTS=""
 
-    # Validate Fernet key format
+    # Validate Fernet key format (both keys must be 32 url-safe base64 bytes;
+    # plain `openssl rand -base64` output is NOT url-safe and fails ~75% of
+    # the time — never use it for Fernet keys).
     if ! echo "$FIELD_ENCRYPTION_KEY" | python3 -c "
 import sys
 from cryptography.fernet import Fernet
@@ -231,6 +233,20 @@ except Exception:
     print('invalid')
 "  | grep -q valid; then
         echo -e "${RED}  ✗ CRITICAL: Failed to generate a valid Fernet encryption key.${NC}"
+        echo -e "${RED}    Ensure the 'cryptography' package is installed and retry.${NC}"
+        echo -e "${RED}    pip3 install cryptography${NC}"
+        exit 1
+    fi
+    if ! echo "$BACKUP_ENCRYPTION_KEY" | python3 -c "
+import sys
+from cryptography.fernet import Fernet
+try:
+    Fernet(sys.stdin.read().strip().encode())
+    print('valid')
+except Exception:
+    print('invalid')
+"  | grep -q valid; then
+        echo -e "${RED}  ✗ CRITICAL: Failed to generate a valid backup Fernet encryption key.${NC}"
         echo -e "${RED}    Ensure the 'cryptography' package is installed and retry.${NC}"
         echo -e "${RED}    pip3 install cryptography${NC}"
         exit 1
@@ -342,7 +358,17 @@ DATABASE_CONNECT_TIMEOUT=5
 # Docker Compose natively honors COMPOSE_PROFILES from this file, so
 # every `docker compose` call picks the right DB stack with no flags.
 DB_HA_ENABLED=${DB_HA_ENABLED:-local-ha}
+# Observability (Loki/Promtail/Grafana/cAdvisor/docker-labels/alertmanager)
+# is `medium`-gated in docker-compose.prod.yml. Fresh installs previously
+# defaulted to profiles=local-ha only, so the entire monitoring stack
+# silently never started (Grafana embeds 502'd, Loki blackouts went
+# unnoticed, autoscaler Prometheus targets stayed incomplete). Always
+# include `medium`; `full` (Falco, SPIRE, Verdaccio) stays opt-in.
 COMPOSE_PROFILES=${DB_HA_ENABLED:-local-ha}
+case ",${COMPOSE_PROFILES}," in
+    *,medium,*) ;;
+    *) COMPOSE_PROFILES="${COMPOSE_PROFILES},medium" ;;
+esac
 # PgCat upstream. patroni mode routes through HAProxy write/read ports.
 PGCAT_DB_HOST=${PGCAT_DB_HOST:-postgres-primary}
 PGCAT_DB_PORT=${PGCAT_DB_PORT:-5432}

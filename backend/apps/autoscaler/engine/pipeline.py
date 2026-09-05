@@ -271,10 +271,38 @@ def analyze_only(service, *, now=None) -> dict:
         **({'cooldown_down_min': int(cooldown_down)} if cooldown_down is not None else {}),
     )
     rec = engine.decide()
+    # Legacy-compatible keys expected by the service Insights tab
+    # (previously produced by ScalingAnalyzer.analyze). The unified
+    # pipeline is the single source of truth; these are projections of
+    # the same metrics/recommendation objects, not a second decision.
+    try:
+        from apps.autoscaler.services.scaling_ai import _is_ai_configured
+        ai_configured = bool(_is_ai_configured())
+    except Exception:
+        ai_configured = False
+    max_replicas = service.max_replicas or 0
+    metrics_dict = metrics.to_dict()
+    # Frontend alias: it reads metrics.memory_trend.
+    metrics_dict.setdefault('memory_trend', metrics_dict.get('memory_trend_mb_per_min'))
     return {
         'service': str(service.id),
         'service_name': service.compose_main_service or service.name,
-        'metrics': metrics.to_dict(),
+        'metrics': metrics_dict,
         'recommendation': rec.to_dict(),
         'timestamp': now.isoformat(),
+        'engine': 'ai_enhanced' if ai_configured else 'deterministic',
+        'ai_configured': ai_configured,
+        'docker_fallback_used': metrics.source == 'docker',
+        'error_analysis': {
+            'error_count_1h': metrics.error_count_1h,
+            'oom_detected': metrics.oom_detected,
+            'crash_loop': metrics.crash_loop,
+            'has_errors': metrics.has_errors,
+        },
+        'guardrails': {
+            'running_replicas': running,
+            'max_replicas': max_replicas,
+            'at_capacity': running >= max_replicas,
+            'spawning_in_progress': spawning,
+        },
     }

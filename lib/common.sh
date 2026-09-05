@@ -35,6 +35,31 @@ LOCK_FILE="/tmp/smsly-install.lock"
 ROLLBACK_NEEDED=false
 CADDY_LAST_GOOD="$INSTALL_DIR/caddy-config/Caddyfile.smsly-last-good"
 
+# Ensure COMPOSE_PROFILES is exported from the install .env so every
+# `docker compose` invocation — regardless of cwd — enables the same
+# service profiles. Compose derives the project from cwd when no -p flag
+# is given, but profiles ONLY come from the environment (or --profile
+# flags): an invocation from another directory silently drops
+# profile-gated services (medium/full: loki, grafana, promtail...), and
+# `up --remove-orphans` then treats their running containers as orphans
+# and DELETES them. That is how Grafana vanished on a healthy host.
+ensure_compose_profiles() {
+    if [ -n "${COMPOSE_PROFILES:-}" ]; then
+        export COMPOSE_PROFILES
+        return 0
+    fi
+    local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    if [ -f "$env_file" ]; then
+        local val
+        val="$(grep -E '^COMPOSE_PROFILES=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+        if [ -n "$val" ]; then
+            export COMPOSE_PROFILES="$val"
+            return 0
+        fi
+    fi
+    export COMPOSE_PROFILES="local-ha,medium"
+}
+
 acquire_install_lock() {
     if command -v flock ; then
         exec 9<>"$LOCK_FILE"

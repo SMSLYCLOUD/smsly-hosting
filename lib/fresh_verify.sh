@@ -137,6 +137,27 @@ else
     echo -e "${RED}  ✗ Only $RUNNING_COUNT/$TOTAL_COUNT containers running${NC}"
 fi
 
+# ─── Check 3: Observability stack present ─────────────────────────────
+# loki/promtail/grafana/cadvisor/docker-labels/alertmanager are
+# profile-gated (medium/full). Fresh installs used to default to profiles
+# without them, finishing "green" while blind. Warn loudly (non-blocking:
+# tiny hosts may intentionally skip them).
+echo -e "${BLUE}  → [3/4] Checking observability stack...${NC}"
+OBS_MISSING=""
+for _obs in smsly-loki smsly-promtail smsly-grafana smsly-cadvisor smsly-docker-labels smsly-prometheus smsly-alertmanager; do
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_obs"; then
+        OBS_MISSING="${OBS_MISSING} ${_obs}"
+    fi
+done
+if [ -z "$OBS_MISSING" ]; then
+    echo -e "${GREEN}  ✓ Observability stack present (loki/promtail/grafana/cadvisor/docker-labels/prometheus/alertmanager)${NC}"
+else
+    echo -e "${YELLOW}  ⚠ Observability services missing:${OBS_MISSING}${NC}"
+    echo -e "${YELLOW}    Grafana embeds will 502, Loki stays empty, and autoscaler targets stay incomplete.${NC}"
+    echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'medium', then:${NC}"
+    echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d loki promtail grafana cadvisor docker-labels alertmanager${NC}"
+fi
+
 # ─── Check 4: Swap is sufficient ──────────────────────────────────────────
 echo -e "${BLUE}  → [3/4] Checking swap...${NC}"
 SWAP_TOTAL=$(free -m | awk '/^Swap:/{print $2}')

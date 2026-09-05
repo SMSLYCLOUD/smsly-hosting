@@ -179,9 +179,13 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         sync_agent_lite_rabbitmq_password
     else
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
-        # Ensure scripts mounted into containers are executable (git may not preserve +x)
+        # Ensure entrypoint.sh has execute permissions (git may not preserve +x)
         chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
         chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh  || true
+        # Profiles (medium/full) must be active or this `up` silently skips
+        # loki/promtail/grafana — and a later `up --remove-orphans` from a
+        # narrower profile set would delete them as orphans.
+        ensure_compose_profiles
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
             docker compose -f infrastructure/docker/docker-compose.observability.yml pull --ignore-pull-failures || \
                 echo -e "${YELLOW}  ⚠ Observability stack pull failed (non-fatal)${NC}"

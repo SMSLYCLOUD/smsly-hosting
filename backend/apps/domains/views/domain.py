@@ -204,7 +204,7 @@ class DomainConfigView(GenericAPIView):
                     pass
             if 'ecosystem_wave_recheck_seconds' in data:
                 try:
-                    config.ecosystem_wave_recheck_seconds = max(5, min(300, int(data['ecosystem_wave_recheck_seconds'])))
+                    config.ecosystem_wave_recheck_seconds = max(60, min(3600, int(data['ecosystem_wave_recheck_seconds'])))
                 except (TypeError, ValueError):
                     pass
             # Billing

@@ -63,14 +63,17 @@ export function EcosystemPipelineCard({ config, onChange }: PipelineCardProps) {
           />
         </div>
         <div className="space-y-2">
-          <Label>Wave Recheck Seconds (5-300)</Label>
+          <Label>Wait Between Wave Checks (1-60 minutes)</Label>
           <Input
             type="number"
-            min="5"
-            max="300"
-            value={config.ecosystem_wave_recheck_seconds || 15}
+            min="60"
+            max="3600"
+            value={config.ecosystem_wave_recheck_seconds || 1800}
             onChange={(e) => onChange("ecosystem_wave_recheck_seconds", parseInt(e.target.value))}
           />
+          <p className="text-xs text-muted-foreground">
+            After starting a group of services, the system waits this long before checking if that group is finished. The default is 30 minutes. The wave can wait up to about 2 hours.
+          </p>
         </div>
       </CardContent>
     </Card>

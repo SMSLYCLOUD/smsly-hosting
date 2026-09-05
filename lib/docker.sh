@@ -250,6 +250,7 @@ prune_stopped_conflicting() {
 
 cleanup_stale_containers() {
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    ensure_compose_profiles
     timeout -k 5 30 docker compose -f "$compose_f" down --remove-orphans  || true
     prune_stopped_conflicting "smsly-hosting"
     prune_stopped_conflicting "smsly-"
@@ -270,6 +271,7 @@ compose_stack_build() {
 
 compose_stack_up() {
     local services=""
+    ensure_compose_profiles
     if is_node_mode; then
         stop_node_excluded_services
         services="$(compose_stack_service_args)"

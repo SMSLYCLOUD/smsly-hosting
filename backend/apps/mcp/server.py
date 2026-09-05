@@ -99,6 +99,51 @@ if _MCP_AVAILABLE:
     def deploy_from_local_archive(service_id: str, file_path: str, user_id: str | None = None, user_email: str | None = None):
         """Deploy a service directly from a local source code archive (.zip, .tar.gz, .tgz)."""
         return tools.deploy_from_local_archive(service_id, file_path, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def search_services(query: str, status: str | None = None, user_id: str | None = None, user_email: str | None = None):
+        """Search services by name, slug, or repository URL, optionally filtered by status."""
+        return tools.search_services(query, status=status, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def get_service_details(service_id: str, user_id: str | None = None, user_email: str | None = None):
+        """Get full service detail: config, resources, HA mode, domains, and recent deployments."""
+        return tools.get_service_details(service_id, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def list_service_deployments(service_id: str, limit: int = 10, user_id: str | None = None, user_email: str | None = None):
+        """List deployment history for a service, newest first."""
+        return tools.list_service_deployments(service_id, limit=limit, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def cancel_deployment(deployment_id: str, user_id: str | None = None, user_email: str | None = None):
+        """Cancel a QUEUED, REVIEW, BUILDING, AWAITING_APPROVAL, or STAGED deployment (team admin only)."""
+        return tools.cancel_deployment(deployment_id, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def retry_deployment(deployment_id: str, user_id: str | None = None, user_email: str | None = None):
+        """Re-queue a FAILED or CANCELLED deployment (team admin only)."""
+        return tools.retry_deployment(deployment_id, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def get_failed_deployments(limit: int = 10, user_id: str | None = None, user_email: str | None = None):
+        """List recent failed deployments across services with a log excerpt for triage."""
+        return tools.get_failed_deployments(limit=limit, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def list_all_addons(status: str | None = None, user_id: str | None = None, user_email: str | None = None):
+        """List all addons across services, optionally filtered by status."""
+        return tools.list_all_addons(status=status, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def get_addon_details(addon_id: str, user_id: str | None = None, user_email: str | None = None):
+        """Get addon detail including HA state and connection info with the password masked."""
+        return tools.get_addon_details(addon_id, user_id=user_id, user_email=user_email)
+
+    @mcp_server.tool()
+    def get_service_domains(service_id: str, user_id: str | None = None, user_email: str | None = None):
+        """Get platform, staging, custom, and managed domains for a service with SSL/verification state."""
+        return tools.get_service_domains(service_id, user_id=user_id, user_email=user_email)
 else:
     mcp_server = None
     logger.warning("mcp.server.fastmcp not available — MCP server disabled (SDK v2 removed FastMCP)")

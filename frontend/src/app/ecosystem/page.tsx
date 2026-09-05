@@ -35,6 +35,8 @@ interface ServicePlan {
     deploy_order: number;
     skip?: boolean;
     server_id?: string;
+    cpu_cores?: number;
+    memory_mb?: number;
 }
 
 interface Addon {
@@ -1402,10 +1404,49 @@ export default function EcosystemPage() {
                                                                         {Object.keys(svc.env_vars).length} env vars {expandedEnv === idx ? '▲' : '▼'}
                                                                     </button>
                                                                 )}
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    {svc.cpu_cores || 1} CPU · {svc.memory_mb || 2048} MB
+                                                                </span>
                                                             </div>
                                                         </div>
                                                     </div>
                                                     <div className="flex flex-col gap-2 items-end">
+                                                        {!svc.skip && (
+                                                            <div className="flex items-center gap-2 text-xs" title="Resources used by this service container">
+                                                                <label className="text-muted-foreground">CPU</label>
+                                                                <input
+                                                                    type="number"
+                                                                    min="0.1"
+                                                                    max="32"
+                                                                    step="0.1"
+                                                                    value={svc.cpu_cores ?? 1}
+                                                                    onChange={(e) => {
+                                                                        const value = Math.max(0.1, Number(e.target.value) || 1);
+                                                                        setPlan((current) => current ? {
+                                                                            ...current,
+                                                                            services: current.services.map((item) => item.repo === svc.repo ? { ...item, cpu_cores: value } : item),
+                                                                        } : current);
+                                                                    }}
+                                                                    className="w-16 px-1.5 py-1 rounded border border-border bg-background text-right"
+                                                                />
+                                                                <label className="text-muted-foreground">RAM MB</label>
+                                                                <input
+                                                                    type="number"
+                                                                    min="128"
+                                                                    max="131072"
+                                                                    step="128"
+                                                                    value={svc.memory_mb ?? 2048}
+                                                                    onChange={(e) => {
+                                                                        const value = Math.max(128, Number(e.target.value) || 2048);
+                                                                        setPlan((current) => current ? {
+                                                                            ...current,
+                                                                            services: current.services.map((item) => item.repo === svc.repo ? { ...item, memory_mb: value } : item),
+                                                                        } : current);
+                                                                    }}
+                                                                    className="w-20 px-1.5 py-1 rounded border border-border bg-background text-right"
+                                                                />
+                                                            </div>
+                                                        )}
                                                         <div className="flex items-center gap-2">
                                                             <Server size={12} className="text-muted-foreground" />
                                                             <select
@@ -1825,6 +1866,34 @@ export default function EcosystemPage() {
                                     )}
                                 </div>
                             )}
+
+                            {/* Deploy disclaimer — AI plans must be reviewed */}
+                            <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm">
+                                <div className="flex items-start gap-3">
+                                    <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                                    <div className="space-y-1.5">
+                                        <p className="font-bold text-amber-500">Review everything before deploying</p>
+                                        <p className="text-muted-foreground">
+                                            This plan was generated automatically — treat it as a
+                                            development draft, not a trusted result. Do not deploy
+                                            to production without reviewing each item below.
+                                        </p>
+                                        <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+                                            <li>Service list, build strategy, ports, and deploy order</li>
+                                            <li>Environment variables and generated secrets</li>
+                                            <li>CPU / RAM per service and wave concurrency</li>
+                                            <li>Addons and which services share them</li>
+                                            <li>Public domains, staging URLs, and mTLS trust settings</li>
+                                            <li>Expected cloud/compute cost of running all services</li>
+                                        </ul>
+                                        <p className="text-muted-foreground">
+                                            The planner can misdetect stacks, invent env vars, attach
+                                            the wrong database, or over-provision resources. Ensure
+                                            backups exist and start with a non-production project.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
 
                             {/* Deploy Button */}
                             <div className="flex justify-center pt-4">

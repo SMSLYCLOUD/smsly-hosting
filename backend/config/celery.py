@@ -77,6 +77,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.build_recovery  # noqa: F401  # corrupt Docker state + pending migration auto-recovery
     import apps.deployments.tasks.service_ha  # noqa: F401  # Service HA pass (local + remote failover)
     import apps.deployments.tasks.infra.tasks_container_hygiene  # noqa: F401  # restart-loop watchdog, orphan addon GC
+    import apps.deployments.tasks.tasks_network  # noqa: F401  # scoped Docker network cleanup
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
     import apps.mtls.tasks  # noqa: F401  # inject_mtls_task
@@ -242,6 +243,13 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.services.provisioner.cleanup_stale_server_provisioning',
         'schedule': 300.0,
         'options': {'expires': 300.0},
+    },
+    # Remove empty project/ecosystem bridges left by failed or timed-out
+    # deploys. The task never removes networks with containers or DB scopes.
+    'cleanup-scoped-networks-every-30m': {
+        'task': 'apps.deployments.tasks.cleanup_scoped_networks_task',
+        'schedule': 1800.0,
+        'options': {'expires': 1800.0},
     },
     # Self-heal scoped-network isolation (stale iptables rules, recreated
     # bridges missing egress, Traefik bridge membership) every 10 minutes

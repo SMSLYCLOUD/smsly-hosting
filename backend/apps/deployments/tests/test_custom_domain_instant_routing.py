@@ -388,7 +388,7 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertIn('already assigned', response.data.get('error', ''))
 
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
-    def test_add_domain_enforces_plan_quota(self, verify_mock):
+    def test_add_domain_has_no_plan_quota(self, verify_mock):
         plan = PricingPlan.objects.create(
             name='Starter',
             slug='starter',
@@ -413,8 +413,7 @@ class InstantCustomDomainApiTests(APITestCase):
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertIn('limit reached', response.data.get('error', ''))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_caddy_ask_rejects_pending_custom_domain(self):
         from apps.domains.models import Domain, DomainStatus

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import {
   Brain, Sparkles, AlertTriangle, CheckCircle2, Loader2, GitBranch, Clock, Wrench,
-  XCircle, TrendingUp, Cpu, Gauge, BarChart3, Shield, Activity, Server, Zap, Siren, Terminal
+  XCircle, TrendingUp, Cpu, Gauge, BarChart3, Shield, Activity, Server, Zap, Siren, Terminal, RefreshCw
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,7 @@ interface ScalingAnalysis {
 export function AIInsightsTab({ serviceId }: { serviceId: string }) {
   const [julesData, setJulesData] = useState<{ entries: JulesEntry[] } | null>(null);
   const [scaleAnalysis, setScaleAnalysis] = useState<ScalingAnalysis | null>(null);
+  const [scaleError, setScaleError] = useState<string | null>(null);
   const [anomalies, setAnomalies] = useState<any[]>([]);
   const [platformReport, setPlatformReport] = useState<any>(null);
   const [serviceInfo, setServiceInfo] = useState<any>(null);
@@ -58,7 +59,19 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
         api.get(`/services/${serviceId}/`),
       ]);
       if (julesRes.status === "fulfilled") setJulesData(julesRes.value.data);
-      if (scaleRes.status === "fulfilled") setScaleAnalysis(scaleRes.value.data);
+      if (scaleRes.status === "fulfilled") {
+        setScaleAnalysis(scaleRes.value.data);
+        setScaleError(null);
+      } else {
+        setScaleAnalysis(null);
+        const reason = (scaleRes as PromiseRejectedResult).reason as any;
+        setScaleError(
+          reason?.response?.data?.error ||
+          reason?.response?.data?.detail ||
+          reason?.message ||
+          "Scaling analysis is unavailable for this service."
+        );
+      }
       if (anomalyRes.status === "fulfilled") {
         const data = anomalyRes.value.data;
         setAnomalies(Array.isArray(data) ? data : (data?.anomalies || data?.results || []));
@@ -116,6 +129,18 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
         <TabsContent value="ai" className="space-y-6 mt-6">
 
           {/* Live Scaling Analysis */}
+          {!scaleAnalysis && scaleError && (
+            <Card className="p-6 border-border shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <BarChart3 className="w-4 h-4 text-muted-foreground" />
+                <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider">Live Scaling Analysis</h4>
+              </div>
+              <p className="text-xs text-muted-foreground">{scaleError}</p>
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => fetchData()}>
+                <RefreshCw className="w-3 h-3 mr-1" /> Retry
+              </Button>
+            </Card>
+          )}
           {scaleAnalysis && (
             <Card className="p-6 border-border shadow-sm">
               <div className="flex items-center gap-2 mb-4">

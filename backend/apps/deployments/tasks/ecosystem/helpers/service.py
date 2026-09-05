@@ -219,23 +219,20 @@ def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: in
         except Exception as exc:
             logger.debug("Failed to resolve deployment server: %s", exc)
 
-    # Only set cpu_cores/memory_mb from plan if still at model defaults.
-    cpu_cores = getattr(service, "cpu_cores", None)
-    if not cpu_cores or float(cpu_cores) == 1.0:
-        cpu = svc_plan.get("cpu_cores")
-        if cpu:
-            try:
-                service.cpu_cores = Decimal(str(cpu))
-            except Exception as exc:
-                logger.debug("Failed to set cpu_cores from plan: %s", exc)
-    memory_mb = getattr(service, "memory_mb", None)
-    if not memory_mb or memory_mb == 2048:
-        mem = svc_plan.get("memory_mb")
-        if mem:
-            try:
-                service.memory_mb = int(mem)
-            except Exception as exc:
-                logger.debug("Failed to set memory_mb from plan: %s", exc)
+    # Resource values explicitly selected in the ecosystem review step win.
+    # If absent, preserve values configured elsewhere for the service.
+    cpu = svc_plan.get("cpu_cores")
+    if cpu is not None:
+        try:
+            service.cpu_cores = Decimal(str(cpu))
+        except Exception as exc:
+            logger.debug("Failed to set cpu_cores from plan: %s", exc)
+    mem = svc_plan.get("memory_mb")
+    if mem is not None:
+        try:
+            service.memory_mb = int(mem)
+        except Exception as exc:
+            logger.debug("Failed to set memory_mb from plan: %s", exc)
 
     service.save()
 

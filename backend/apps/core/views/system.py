@@ -346,10 +346,15 @@ class SystemConfigView(GenericAPIView):
             pass
 
         def _find_container(svc_name):
+            # Prefer the shortest matching name: e.g. 'socket-proxy' must
+            # match smsly-hosting-socket-proxy-1, not the longer
+            # smsly-hosting-traefik-socket-proxy-1.
+            best = None
             for container_name, info in running_map.items():
                 if _match_container_name(container_name, svc_name):
-                    return info
-            return None
+                    if best is None or len(container_name) < len(best[0]):
+                        best = (container_name, info)
+            return best[1] if best else None
 
         # ── Service health probes ─────────────────────────────────
         db_ok = False
@@ -394,13 +399,20 @@ class SystemConfigView(GenericAPIView):
         except Exception as exc:
             logger.debug("Celery health probe failed: %s", exc)
 
+        # NOTE: these probes run INSIDE the backend container, so they must
+        # use in-network DNS names — never localhost (localhost here is the
+        # backend container itself, not the host). RabbitMQ's management API
+        # needs auth and pgcat speaks the Postgres wire protocol, so those
+        # two are TCP-level checks instead of HTTP.
         HTTP_PROBES = {
-            'grafana': 'http://localhost:3001/api/health',
-            'prometheus': 'http://localhost:9090/-/healthy',
-            'loki': 'http://localhost:3100/ready',
-            'rabbitmq': 'http://localhost:15672/api/health/checks/alarms',
-            'pgcat': 'http://localhost:6432/pool',
-            'alertmanager': 'http://localhost:9093/-/healthy',
+            'grafana': 'http://smsly-grafana:3000/api/health',
+            'prometheus': 'http://smsly-prometheus:9090/-/healthy',
+            'loki': 'http://smsly-loki:3100/ready',
+            'alertmanager': 'http://smsly-alertmanager:9093/-/healthy',
+        }
+        TCP_PROBES = {
+            'rabbitmq': ('smsly-hosting-rabbitmq-1', 5672),
+            'pgcat': ('smsly-hosting-pgcat-1', 6432),
         }
 
         def _http_probe(url: str) -> bool:
@@ -412,9 +424,21 @@ class SystemConfigView(GenericAPIView):
             except Exception:
                 return False
 
+        def _tcp_probe(host: str, port: int) -> bool:
+            try:
+                import socket
+                with socket.create_connection((host, port), timeout=2):
+                    return True
+            except Exception:
+                return False
+
         http_results = {}
-        with ThreadPoolExecutor(max_workers=len(HTTP_PROBES)) as pool:
+        with ThreadPoolExecutor(max_workers=len(HTTP_PROBES) + len(TCP_PROBES)) as pool:
             futures = {pool.submit(_http_probe, url): svc for svc, url in HTTP_PROBES.items()}
+            futures.update({
+                pool.submit(_tcp_probe, host, port): svc
+                for svc, (host, port) in TCP_PROBES.items()
+            })
             for future in as_completed(futures):
                 http_results[futures[future]] = future.result()
 

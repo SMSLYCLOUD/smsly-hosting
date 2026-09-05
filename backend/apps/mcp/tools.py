@@ -33,7 +33,7 @@ def _resolve_user(user_id: str | None = None, user_email: str | None = None):
     if user_id:
         try:
             return User.objects.get(id=user_id)
-        except ObjectDoesNotExist:
+        except (ObjectDoesNotExist, ValueError):
             raise PermissionDenied(f"User with ID '{user_id}' not found.")
     if user_email:
         try:
@@ -526,4 +526,350 @@ def deploy_from_local_archive(service_id: str, file_path: str, user_id: str | No
         return {"error": f"Service {service_id} not found."}
     except Exception as e:
         return {"error": f"Failed to deploy from local archive: {e!s}"}
+
+
+def search_services(query: str, status: str | None = None, user_id: str | None = None, user_email: str | None = None) -> list[dict[str, Any]]:
+    """Search services by name, slug, or repository URL, optionally filtered by status."""
+    try:
+        from django.db.models import Q
+        user = _resolve_user(user_id, user_email)
+        services = Service.objects.filter(
+            Q(name__icontains=query) | Q(slug__icontains=query) | Q(repository_url__icontains=query)
+        )
+        if status:
+            services = services.filter(status=status.upper())
+        if user:
+            services = services.filter(get_team_q_filter(user))
+
+        results = []
+        for svc in services[:50]:
+            latest_deploy = svc.deployments.order_by('-created_at').first()
+            results.append({
+                "id": str(svc.id),
+                "name": svc.name,
+                "buildpack": getattr(svc, "buildpack", "DOCKER"),
+                "status": getattr(svc, "status", "UNKNOWN"),
+                "latest_deployment_id": str(latest_deploy.id) if latest_deploy else None,
+                "repository_url": getattr(svc, "repository_url", None),
+            })
+        return results
+    except Exception as e:
+        return [{"error": f"Failed to search services: {e!s}"}]
+
+
+def get_service_details(service_id: str, user_id: str | None = None, user_email: str | None = None) -> dict[str, Any]:
+    """Get full service detail: config, resources, HA mode, domains, and recent deployments."""
+    try:
+        user = _resolve_user(user_id, user_email)
+        svc = Service.objects.get(id=service_id)
+        if user and not user_can_read(user, svc):
+            return {"error": "Permission denied: You do not have read access to this service."}
+
+        recent = []
+        for deploy in svc.deployments.order_by('-created_at')[:5]:
+            recent.append({
+                "id": str(deploy.id),
+                "status": deploy.status,
+                "commit_hash": getattr(deploy, "commit_hash", ""),
+                "branch": getattr(deploy, "branch", ""),
+                "created_at": str(deploy.created_at),
+            })
+        return {
+            "id": str(svc.id),
+            "name": svc.name,
+            "slug": getattr(svc, "slug", ""),
+            "status": getattr(svc, "status", "UNKNOWN"),
+            "buildpack": getattr(svc, "buildpack", "DOCKER"),
+            "deploy_type": getattr(svc, "deploy_type", "GIT"),
+            "repository_url": getattr(svc, "repository_url", None),
+            "branch": getattr(svc, "branch", "main"),
+            "docker_image": getattr(svc, "docker_image", None),
+            "internal_port": getattr(svc, "internal_port", 8000),
+            "public_domain": getattr(svc, "public_domain", None),
+            "staging_domain": getattr(svc, "staging_domain", None),
+            "cpu_cores": float(getattr(svc, "cpu_cores", 1.0) or 1.0),
+            "memory_mb": getattr(svc, "memory_mb", 2048),
+            "min_replicas": getattr(svc, "min_replicas", 1),
+            "max_replicas": getattr(svc, "max_replicas", 1),
+            "running_replicas": getattr(svc, "running_replicas", 0),
+            "ha_mode": getattr(svc, "ha_mode", "none"),
+            "project": svc.project.name if getattr(svc, "project", None) else None,
+            "server": svc.server.name if getattr(svc, "server", None) else None,
+            "domains_count": svc.domain_instances.count() if hasattr(svc, "domain_instances") else 0,
+            "addons_count": svc.addons.count(),
+            "env_vars_count": svc.env_vars.count(),
+            "recent_deployments": recent,
+        }
+    except ObjectDoesNotExist:
+        return {"error": f"Service {service_id} not found."}
+    except Exception as e:
+        return {"error": f"Error: {e!s}"}
+
+
+def list_service_deployments(service_id: str, limit: int = 10, user_id: str | None = None, user_email: str | None = None) -> list[dict[str, Any]]:
+    """List deployment history for a service, newest first."""
+    try:
+        user = _resolve_user(user_id, user_email)
+        svc = Service.objects.get(id=service_id)
+        if user and not user_can_read(user, svc):
+            return [{"error": "Permission denied: You do not have read access to this service."}]
+
+        limit = max(1, min(int(limit), 50))
+        results = []
+        for deploy in svc.deployments.order_by('-created_at')[:limit]:
+            duration = None
+            if getattr(deploy, "started_at", None) and getattr(deploy, "finished_at", None):
+                duration = (deploy.finished_at - deploy.started_at).total_seconds()
+            results.append({
+                "id": str(deploy.id),
+                "status": deploy.status,
+                "commit_hash": getattr(deploy, "commit_hash", ""),
+                "commit_message": (getattr(deploy, "commit_message", "") or "")[:200],
+                "branch": getattr(deploy, "branch", ""),
+                "is_rollback": getattr(deploy, "is_rollback", False),
+                "created_at": str(deploy.created_at),
+                "duration_seconds": duration,
+            })
+        return results
+    except ObjectDoesNotExist:
+        return [{"error": f"Service {service_id} not found."}]
+    except Exception as e:
+        return [{"error": f"Error: {e!s}"}]
+
+
+def cancel_deployment(deployment_id: str, user_id: str | None = None, user_email: str | None = None) -> dict[str, Any]:
+    """Cancel a QUEUED, REVIEW, BUILDING, AWAITING_APPROVAL, or STAGED deployment (team admin only)."""
+    try:
+        from django.utils import timezone
+        user = _resolve_user(user_id, user_email)
+        deploy = Deployment.objects.get(id=deployment_id)
+        if user:
+            if not deploy.service:
+                return {"error": "Deployment has no service; cannot check permissions."}
+            assert_can_write(user, deploy.service, action='cancel deployment')
+            if not user_is_team_admin(user, deploy.service):
+                return {"error": "Only team admins can cancel deployments."}
+
+        if deploy.status not in (
+            Deployment.Status.QUEUED,
+            Deployment.Status.REVIEW,
+            Deployment.Status.BUILDING,
+            Deployment.Status.AWAITING_APPROVAL,
+            Deployment.Status.STAGED,
+        ):
+            return {"error": f"Cannot cancel deployment in {deploy.status} status. Only QUEUED, REVIEW, BUILDING, AWAITING_APPROVAL, or STAGED deployments can be cancelled."}
+
+        deploy.status = Deployment.Status.CANCELLED
+        deploy.finished_at = timezone.now()
+        deploy.build_logs = f"{deploy.build_logs or ''}\n\n[Cancelled] Deployment cancelled via MCP."
+        try:
+            if deploy.green_container_id or deploy.container_id:
+                import docker
+                client = docker.from_env()
+                for c_id in {deploy.green_container_id, deploy.container_id} - {None, ""}:
+                    try:
+                        client.containers.get(c_id).remove(force=True)
+                    except Exception:
+                        pass
+                deploy.build_logs += "\nCleaned up container resources."
+        except Exception as exc:
+            logger.warning("MCP cancel docker cleanup failed for %s: %s", deployment_id, exc)
+        try:
+            from apps.deployments.tasks.deploy.helpers import _regenerate_caddyfile
+            _regenerate_caddyfile()
+        except Exception as exc:
+            logger.warning("MCP cancel caddy regen failed for %s: %s", deployment_id, exc)
+        deploy.save()
+        return {"status": "cancelled", "deployment_id": str(deploy.id)}
+    except ObjectDoesNotExist:
+        return {"error": f"Deployment {deployment_id} not found."}
+    except Exception as e:
+        return {"error": f"Permission denied or error: {e!s}"}
+
+
+def retry_deployment(deployment_id: str, user_id: str | None = None, user_email: str | None = None) -> dict[str, Any]:
+    """Re-queue a FAILED or CANCELLED deployment (team admin only)."""
+    try:
+        from django.utils import timezone
+        user = _resolve_user(user_id, user_email)
+        deploy = Deployment.objects.get(id=deployment_id)
+        if user:
+            if not deploy.service:
+                return {"error": "Deployment has no service; cannot check permissions."}
+            assert_can_write(user, deploy.service, action='retry deployment')
+            if not user_is_team_admin(user, deploy.service):
+                return {"error": "Only team admins can retry deployments."}
+
+        if deploy.status not in (Deployment.Status.FAILED, Deployment.Status.CANCELLED):
+            return {"error": f"Cannot retry deployment in {deploy.status} status. Only FAILED or CANCELLED deployments can be retried."}
+
+        deploy.status = Deployment.Status.QUEUED
+        deploy.build_logs = (
+            f"{deploy.build_logs or ''}"
+            f"\n[MCP] Re-queued by user retry at {timezone.now().isoformat()}.\n"
+        )
+        deploy.save(update_fields=['status', 'build_logs', 'updated_at'])
+        provider_id = getattr(deploy.service, "provider_id", "local") if deploy.service else "local"
+        smart_deploy_task.delay(str(deploy.id), str(provider_id), skip_review=True)
+        return {"status": "retry_queued", "deployment_id": str(deploy.id)}
+    except ObjectDoesNotExist:
+        return {"error": f"Deployment {deployment_id} not found."}
+    except Exception as e:
+        return {"error": f"Permission denied or error: {e!s}"}
+
+
+def get_failed_deployments(limit: int = 10, user_id: str | None = None, user_email: str | None = None) -> list[dict[str, Any]]:
+    """List recent failed deployments across services with a log excerpt for triage."""
+    try:
+        user = _resolve_user(user_id, user_email)
+        failed_statuses = [
+            Deployment.Status.FAILED,
+            Deployment.Status.BUILD_FAILED,
+            Deployment.Status.BACKUP_FAILED,
+            Deployment.Status.MIGRATION_FAILED,
+            Deployment.Status.HEALTH_CHECK_FAILED,
+        ]
+        deploys = Deployment.objects.filter(status__in=failed_statuses).order_by('-created_at')
+        if user:
+            deploys = deploys.filter(service__in=Service.objects.filter(get_team_q_filter(user)))
+
+        limit = max(1, min(int(limit), 50))
+        results = []
+        for deploy in deploys[:limit]:
+            if user and deploy.service and not user_can_read(user, deploy.service):
+                continue
+            logs = getattr(deploy, "build_logs", "") or getattr(deploy, "runtime_logs", "") or ""
+            excerpt_lines = [ln for ln in logs.splitlines() if ln.strip()][-3:]
+            results.append({
+                "deployment_id": str(deploy.id),
+                "service_id": str(deploy.service.id) if deploy.service else None,
+                "service_name": deploy.service.name if deploy.service else "Unknown",
+                "status": deploy.status,
+                "commit_hash": getattr(deploy, "commit_hash", ""),
+                "created_at": str(deploy.created_at),
+                "ai_diagnosis": (getattr(deploy, "ai_diagnosis", "") or "")[:500] or None,
+                "log_excerpt": "\n".join(excerpt_lines)[-1500:],
+            })
+        return results
+    except Exception as e:
+        return [{"error": f"Failed to list failed deployments: {e!s}"}]
+
+
+def list_all_addons(status: str | None = None, user_id: str | None = None, user_email: str | None = None) -> list[dict[str, Any]]:
+    """List all addons across services, optionally filtered by status."""
+    try:
+        user = _resolve_user(user_id, user_email)
+        addons = Addon.objects.select_related("service").all()
+        if status:
+            addons = addons.filter(status=status.upper())
+        if user:
+            addons = addons.filter(service__in=Service.objects.filter(get_team_q_filter(user)))
+
+        results = []
+        for addon in addons[:100]:
+            if user and addon.service and not user_can_read(user, addon.service):
+                continue
+            results.append({
+                "id": str(addon.id),
+                "name": addon.name,
+                "addon_type": addon.addon_type,
+                "status": addon.status,
+                "service_id": str(addon.service.id) if addon.service else None,
+                "service_name": addon.service.name if addon.service else None,
+                "ha_enabled": getattr(addon, "ha_enabled", False),
+                "ha_status": getattr(addon, "ha_status", "DISABLED"),
+                "has_connection_url": bool(addon.connection_url),
+            })
+        return results
+    except Exception as e:
+        return [{"error": f"Failed to list addons: {e!s}"}]
+
+
+def get_addon_details(addon_id: str, user_id: str | None = None, user_email: str | None = None) -> dict[str, Any]:
+    """Get addon detail including HA state and connection info with the password masked."""
+    try:
+        from urllib.parse import urlparse
+        user = _resolve_user(user_id, user_email)
+        addon = Addon.objects.select_related("service").get(id=addon_id)
+        if user and addon.service and not user_can_read(user, addon.service):
+            return {"error": "Permission denied: You do not have read access to this addon's service."}
+
+        masked_url, scheme, host, port, database, has_password = None, None, None, None, None, False
+        raw_url = addon.connection_url or ""
+        if raw_url:
+            try:
+                parsed = urlparse(raw_url)
+                scheme = parsed.scheme or None
+                host = parsed.hostname
+                port = parsed.port
+                database = (parsed.path or "").lstrip("/") or None
+                has_password = bool(parsed.password)
+                netloc = parsed.hostname or ""
+                if parsed.port:
+                    netloc += f":{parsed.port}"
+                if parsed.username:
+                    netloc = f"{parsed.username}:********@{netloc}"
+                masked_url = parsed._replace(netloc=netloc).geturl()
+            except Exception:
+                masked_url = None
+
+        return {
+            "id": str(addon.id),
+            "name": addon.name,
+            "addon_type": addon.addon_type,
+            "status": addon.status,
+            "service_id": str(addon.service.id) if addon.service else None,
+            "service_name": addon.service.name if addon.service else None,
+            "ha_enabled": getattr(addon, "ha_enabled", False),
+            "ha_status": getattr(addon, "ha_status", "DISABLED"),
+            "replica_container_name": getattr(addon, "replica_container_name", "") or None,
+            "deletion_error": getattr(addon, "deletion_error", "") or None,
+            "connection_scheme": scheme,
+            "connection_host": host,
+            "connection_port": port,
+            "connection_database": database,
+            "connection_has_password": has_password,
+            "connection_url_masked": masked_url,
+        }
+    except ObjectDoesNotExist:
+        return {"error": f"Addon {addon_id} not found."}
+    except Exception as e:
+        return {"error": f"Error: {e!s}"}
+
+
+def get_service_domains(service_id: str, user_id: str | None = None, user_email: str | None = None) -> dict[str, Any]:
+    """Get platform, staging, custom, and managed domains for a service with SSL/verification state."""
+    try:
+        from apps.domains.models.domain import Domain
+        user = _resolve_user(user_id, user_email)
+        svc = Service.objects.get(id=service_id)
+        if user and not user_can_read(user, svc):
+            return {"error": "Permission denied: You do not have read access to this service."}
+
+        managed = []
+        for dom in Domain.objects.filter(service=svc).order_by("domain_name"):
+            managed.append({
+                "id": dom.id,
+                "domain_name": dom.domain_name,
+                "status": dom.status,
+                "verified": dom.verified,
+                "ssl_active": dom.ssl_active,
+                "ssl_fail_count": dom.ssl_fail_count,
+                "expires_at": str(dom.expires_at) if dom.expires_at else None,
+                "last_error": (dom.last_error or "")[:500] or None,
+            })
+        return {
+            "service_id": str(svc.id),
+            "service_name": svc.name,
+            "public_domain": getattr(svc, "public_domain", None),
+            "domain_verified": getattr(svc, "domain_verified", False),
+            "staging_domain": getattr(svc, "staging_domain", None),
+            "staging_domain_verified": getattr(svc, "staging_domain_verified", False),
+            "custom_domains": getattr(svc, "custom_domains", []) or [],
+            "managed_domains": managed,
+        }
+    except ObjectDoesNotExist:
+        return {"error": f"Service {service_id} not found."}
+    except Exception as e:
+        return {"error": f"Error: {e!s}"}
 

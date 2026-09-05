@@ -167,4 +167,7 @@ pytest-xdist>=3.6
 pytest-mock>=3.15.1
 pytest-asyncio>=0.24
 freezegun>=1.5
-mcp>=1.0.0
+# MCP server SDK — MUST stay <2.0.0: SDK v2 removed FastMCP, which
+# apps/mcp/server.py requires (mcp_server would be None and the managed
+# smsly-mcp-server container would refuse to start).
+mcp>=1.0.0,<2.0.0

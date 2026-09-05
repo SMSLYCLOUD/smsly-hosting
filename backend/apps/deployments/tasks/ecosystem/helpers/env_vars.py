@@ -42,8 +42,12 @@ def _is_sentinel_value(value: Any) -> bool:
     return text.startswith("REPLACE_WITH_")
 
 
-def _generate_secret(length: int = 50) -> str:
-    """Generate a secure random string for env vars."""
+def _generate_secret(length: int = 44) -> str:
+    """Generate a secure random string for env vars.
+
+    44 chars matches the Fernet key string length convention and stays
+    above the 40+ standard minimum (~264 bits of entropy here).
+    """
     alphabet = string.ascii_letters + string.digits + "-_"
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
