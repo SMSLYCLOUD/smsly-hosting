@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 import os
 
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 
 from apps.deployments.constants import (
     FILE_CHUNK_SIZE,
@@ -610,4 +611,148 @@ def create_snapshot_task(self, service_id: str, trigger: str = 'MANUAL', label: 
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
         raise
+
+
+_ARCHIVE_TERMINAL_STATES = frozenset({
+    'ACTIVE', 'FAILED', 'CANCELLED', 'INACTIVE', 'ROLLED_BACK',
+    'BUILD_FAILED', 'BACKUP_FAILED', 'MIGRATION_FAILED', 'HEALTH_CHECK_FAILED',
+})
+
+_ARCHIVE_MARKER = '[smsly-log-archive]'
+
+
+def _truncate_log_field(text: str, keep_bytes: int, location: str) -> str:
+    """Keep the tail of an oversized log field with a marker header."""
+    total = len(text)
+    tail = text[-keep_bytes:]
+    return (
+        f"{_ARCHIVE_MARKER} {location} | showing last {len(tail)} of "
+        f"{total} bytes retained in DB.\n...\n{tail}"
+    )
+
+
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], max_retries=0, name="apps.deployments.tasks_backup.archive_old_deployment_logs_task")
+def archive_old_deployment_logs_task():
+    """Archive + truncate build/runtime logs of old terminal deployments (daily).
+
+    build_logs/runtime_logs grow unbounded (exhaustive 9-pillar logs) and
+    live in Postgres. Terminal deployments older than
+    DEPLOYMENT_LOG_RETENTION_DAYS get their full text uploaded to the
+    platform-wide S3 destination when one exists, then truncated to the
+    last DEPLOYMENT_LOG_KEEP_BYTES per field. Without a destination the
+    tail is still truncated (the alternative is unbounded DB growth), but
+    NOTHING is ever truncated before a successful upload when a
+    destination exists — a failed upload leaves the row untouched.
+    Idempotent via the marker header.
+    """
+    import os
+    import tempfile
+    from datetime import timedelta
+
+    from apps.cloud.models.cloud_storage import CloudStorageDestination
+    from apps.cloud.services.backup_service import upload_backup_to_s3
+    from apps.deployments.constants import (
+        DEPLOYMENT_LOG_ARCHIVE_BATCH,
+        DEPLOYMENT_LOG_KEEP_BYTES,
+        DEPLOYMENT_LOG_RETENTION_DAYS,
+    )
+    from apps.deployments.models import Deployment
+
+    cutoff = timezone.now() - timedelta(days=DEPLOYMENT_LOG_RETENTION_DAYS)
+    today = timezone.now().date().isoformat()
+
+    try:
+        destination = CloudStorageDestination.objects.filter(
+            service__isnull=True, is_active=True,
+        ).order_by('name').first()
+    except Exception as exc:
+        logger.warning("Log archival: destination lookup failed: %s", exc)
+        destination = None
+
+    rows = list(Deployment.objects.select_related('service').filter(
+        status__in=_ARCHIVE_TERMINAL_STATES,
+        created_at__lt=cutoff,
+    ).order_by('created_at')[:DEPLOYMENT_LOG_ARCHIVE_BATCH])
+
+    archived = truncated_only = skipped = 0
+    errors = 0
+    try:
+        for dep in rows:
+            try:
+                fields = []
+                for field in ('build_logs', 'runtime_logs'):
+                    text = getattr(dep, field, '') or ''
+                    if len(text) <= DEPLOYMENT_LOG_KEEP_BYTES:
+                        continue
+                    if text.startswith(_ARCHIVE_MARKER):
+                        continue
+                    fields.append((field, text))
+                if not fields:
+                    skipped += 1
+                    continue
+
+                location = None
+                if destination:
+                    location = _upload_deployment_logs(
+                        dep, fields, destination, upload_backup_to_s3,
+                    )
+                    if location is None:
+                        # Upload failed — never destroy the only copy.
+                        errors += 1
+                        continue
+                    archived += 1
+                else:
+                    truncated_only += 1
+
+                for field, text in fields:
+                    setattr(dep, field, _truncate_log_field(
+                        text, DEPLOYMENT_LOG_KEEP_BYTES,
+                        location or 'no archive destination configured',
+                    ))
+                dep.save(update_fields=['build_logs', 'runtime_logs', 'updated_at'])
+            except Exception as exc:
+                logger.warning("Log archival failed for deployment %s: %s", getattr(dep, 'id', '?'), exc)
+                errors += 1
+    except SoftTimeLimitExceeded:
+        logger.warning("archive_old_deployment_logs hit soft time limit")
+    logger.info(
+        "Deployment log archival: %d archived, %d truncated, %d skipped, %d errors",
+        archived, truncated_only, skipped, errors,
+    )
+    return {"archived": archived, "truncated_only": truncated_only, "skipped": skipped, "errors": errors}
+
+
+def _upload_deployment_logs(dep, fields, destination, upload_fn) -> str | None:
+    """Upload full log fields to S3; return the s3:// URI, or None on failure."""
+    import contextlib
+    import os
+    import tempfile
+
+    service_id = getattr(getattr(dep, 'service', None), 'id', 'unknown')
+    base_key = f"smsly-deploy-logs/{service_id}/{dep.id}"
+    uris = []
+    for field, text in fields:
+        suffix = 'build' if field == 'build_logs' else 'runtime'
+        key = f"{base_key}-{suffix}.log"
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as tmp:
+                tmp.write(text)
+                path = tmp.name
+            ok = upload_fn(
+                path, destination.bucket, key,
+                endpoint=destination.endpoint, region=destination.region,
+                access_key=destination.access_key, secret_key=destination.secret_key,
+            )
+            if not ok:
+                return None
+            uris.append(f"s3://{destination.bucket}/{key}")
+        except Exception as exc:
+            logger.warning("Log upload failed for deployment %s field %s: %s", getattr(dep, 'id', '?'), field, exc)
+            return None
+        finally:
+            if path:
+                with contextlib.suppress(Exception):
+                    os.unlink(path)
+    return ', '.join(uris)
 

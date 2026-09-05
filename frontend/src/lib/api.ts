@@ -2393,6 +2393,9 @@ export const ecosystemApi = {
 
   getPlan: (planId: string) =>
     api.get(`/cloud/ecosystem/plans/${planId}/`).then(r => r.data),
+
+  restorePlanSnapshots: (planId: string, data: { confirm: true; service_ids?: string[]; redeploy?: boolean }) =>
+    api.post(`/cloud/ecosystem/plans/${planId}/restore-snapshots/`, data).then(r => r.data),
 };
 
 // ─── Database Replicas API ───────────────────────────────────────────────────

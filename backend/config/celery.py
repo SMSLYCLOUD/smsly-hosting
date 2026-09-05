@@ -189,6 +189,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks_backup.run_scheduled_backups_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.run_scheduled_snapshots_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.create_snapshot_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_backup.archive_old_deployment_logs_task': {'queue': 'deploy'},
     'apps.deployments.tasks_bundles.provision_bundle_task': {'queue': 'deploy'},
     'apps.deployments.tasks_bundles.deprovision_bundle_task': {'queue': 'deploy'},
     'apps.deployments.tasks_bundles.delete_bundle_task': {'queue': 'deploy'},
@@ -534,6 +535,14 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks_backup.cleanup_old_backups_task',
         'schedule': 21600.0,
         'options': {'expires': 21600.0},
+    },
+    # Archive + truncate build/runtime logs of old terminal deployments
+    # daily (04:00): Postgres holds unbounded log text, so offload the
+    # full text to S3 when a platform destination exists, else truncate.
+    'archive-old-deployment-logs-daily': {
+        'task': 'apps.deployments.tasks_backup.archive_old_deployment_logs_task',
+        'schedule': crontab(hour=4, minute=0),
+        'options': {'expires': 3600.0},
     },
     # Verify backup integrity daily (random sample of COMPLETED backups)
     'verify-backup-integrity-daily': {

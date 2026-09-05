@@ -91,6 +91,11 @@ urlpatterns = [
         name='ecosystem-plan-detail',
     ),
     path(
+        'ecosystem/plans/<uuid:plan_id>/restore-snapshots/',
+        IntelligenceViewSet.as_view({'post': 'restore_snapshots'}),
+        name='ecosystem-plan-restore-snapshots',
+    ),
+    path(
         'ecosystem/deep_scan/',
         CodeIntelligenceView.as_view(),
         name='cloud-ecosystem-deep-scan',

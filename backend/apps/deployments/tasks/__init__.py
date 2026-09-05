@@ -43,6 +43,7 @@ from apps.addons.tasks.crud import (
 
 # ── Re-exports from tasks_backup ──────────────────────────────────
 from apps.deployments.tasks.data.tasks_backup import (  # noqa: F401
+    archive_old_deployment_logs_task,
     cleanup_old_backups_task,
     create_server_backup_task,
     create_service_backup_task,

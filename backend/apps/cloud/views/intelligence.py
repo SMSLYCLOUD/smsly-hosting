@@ -1322,3 +1322,119 @@ MIGRATION_PHASE=phase4
                 status=status.HTTP_404_NOT_FOUND,
             )
         return Response(EcosystemPlanDetailSerializer(plan).data)
+
+    @action(detail=False, methods=['post'], url_path=r'plans/(?P<plan_id>[^/.]+)/restore-snapshots')
+    def restore_snapshots(self, request, plan_id=None):
+        """Restore pre-ecosystem-deploy snapshots for a finished plan.
+
+        Iterates the plan's ``services_created`` entries, restoring each
+        linked ``pre_deploy_snapshot_id`` to its service (config + env +
+        DB clone, mirroring the single-snapshot restore endpoint).
+        Only ``failed``/``completed`` plans; refuses while scanning,
+        review, or deploying. Requires explicit ``confirm: true``.
+        Body: {"confirm": true, "service_ids"?: [...], "redeploy"?: bool
+        (default true — restored config only takes effect on redeploy).}
+        """
+        import contextlib
+
+        from apps.cloud.models.backup import ServiceSnapshot
+        from apps.deployments.models.audit import AuditLog
+        from apps.deployments.models.ecosystem import EcosystemPlan
+        from apps.deployments.services.snapshot_service import SnapshotService
+        from apps.deployments.views.snapshot import ServiceSnapshotViewSet
+
+        if str(request.data.get('confirm', '')).lower() != 'true':
+            return Response(
+                {'error': 'Explicit confirmation required. Send "confirm": true.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            plan = EcosystemPlan.objects.get(id=plan_id, user=request.user)
+        except EcosystemPlan.DoesNotExist:
+            return Response(
+                {'error': 'Plan not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if plan.status not in (EcosystemPlan.Status.FAILED, EcosystemPlan.Status.COMPLETED):
+            return Response(
+                {'error': f'Plan is {plan.status}; restore is only available for failed or completed plans.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        only_ids = request.data.get('service_ids')
+        if only_ids is not None and not isinstance(only_ids, list):
+            return Response(
+                {'error': 'service_ids must be a list of service IDs.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        only_set = {str(sid) for sid in (only_ids or [])}
+        redeploy = request.data.get('redeploy', True)
+        redeploy = str(redeploy).lower() not in ('false', '0', 'no', 'off')
+
+        restored, skipped, errors = [], [], []
+        for entry in (plan.services_created or []):
+            if not isinstance(entry, dict):
+                continue
+            sid = str(entry.get('service_id') or '')
+            name = entry.get('name') or sid or 'unknown'
+            snap_id = entry.get('pre_deploy_snapshot_id')
+            if not sid or not snap_id:
+                skipped.append({'service_id': sid or None, 'service_name': name,
+                                'reason': 'no pre-deploy snapshot (new service)'})
+                continue
+            if only_set and sid not in only_set:
+                skipped.append({'service_id': sid, 'service_name': name,
+                                'reason': 'not selected'})
+                continue
+            try:
+                snap = ServiceSnapshot.objects.select_related('service').get(id=snap_id)
+            except ServiceSnapshot.DoesNotExist:
+                errors.append({'service_id': sid, 'service_name': name,
+                               'error': 'linked snapshot no longer exists'})
+                continue
+            if str(snap.service_id) != sid:
+                errors.append({'service_id': sid, 'service_name': name,
+                               'error': 'snapshot belongs to a different service'})
+                continue
+            if not ServiceSnapshotViewSet._user_can_access_service(request.user, snap.service):
+                errors.append({'service_id': sid, 'service_name': name,
+                               'error': 'permission denied for target service'})
+                continue
+            try:
+                result = SnapshotService.restore_snapshot(
+                    snapshot_id=str(snap.id),
+                    redeploy=redeploy,
+                    requesting_user=request.user,
+                )
+                with contextlib.suppress(Exception):
+                    AuditLog(
+                        actor=request.user.get_username(),
+                        action='SNAPSHOT_RESTORED',
+                        target=f'snapshot={snap.id}',
+                        metadata={
+                            'service_id': sid,
+                            'ecosystem_plan_id': str(plan.id),
+                            'redeploy': redeploy,
+                            'changes_count': result.get('config_changes', 0),
+                        },
+                    ).save()
+                restored.append({
+                    'service_id': sid,
+                    'service_name': snap.service.name if snap.service else name,
+                    'snapshot_id': str(snap.id),
+                    'snapshot_label': snap.label,
+                    'config_changes': result.get('config_changes', 0),
+                    'env_var_changes': result.get('env_var_changes', 0),
+                    'db_clone_restored': result.get('db_clone_restored', False),
+                    'redeployed': result.get('redeployed', False),
+                })
+            except Exception as exc:
+                errors.append({'service_id': sid, 'service_name': name,
+                               'error': str(exc)})
+        return Response({
+            'plan_id': str(plan.id),
+            'redeploy': redeploy,
+            'restored': restored,
+            'skipped': skipped,
+            'errors': errors,
+        })

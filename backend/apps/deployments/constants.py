@@ -65,6 +65,11 @@ STALLED_DEPLOYMENT_AGE_MINUTES = 60   # row created longer ago than this...
 STALLED_DEPLOYMENT_IDLE_MINUTES = 30  # ...and untouched for this long = stalled
 STALLED_DEPLOYMENT_BATCH_SIZE = 20    # max stalled deployments to cancel per cycle
 
+# ── Deployment log archival ─────────────────────────────────────────────
+DEPLOYMENT_LOG_RETENTION_DAYS = 30  # terminal deployments older than this get logs archived/truncated
+DEPLOYMENT_LOG_KEEP_BYTES = 204800  # tail kept in DB per log field (200 KiB)
+DEPLOYMENT_LOG_ARCHIVE_BATCH = 50  # max deployments processed per cycle
+
 # ── Blue-green rollback grace period ────────────────────────────────────────
 # Rollback containers younger than this are ignored by the stale scanner.
 DEFAULT_ROLLBACK_GRACE_MINUTES = 10
