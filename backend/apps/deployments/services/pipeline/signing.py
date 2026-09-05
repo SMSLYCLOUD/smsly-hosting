@@ -282,9 +282,14 @@ class SigningMixin:
                     self.image_name,
                 ]
 
-            # For local registries with self-signed certs, skip TLS verify
+            # For local registries with self-signed certs, skip TLS verify.
+            # The flag belongs to the `verify` SUBCOMMAND — it must come
+            # AFTER "verify", not before. insert(1, ...) previously put it
+            # in the top-level position, cosign parsed it as the command
+            # name and every verification failed with:
+            #   Error: unknown command "registry:5000/..." for "cosign"
             if self._is_local_registry():
-                verify_cmd.insert(1, "--allow-insecure-registry")
+                verify_cmd.insert(2, "--allow-insecure-registry")
 
             # Pass registry auth if configured
             reg_user = os.environ.get("REGISTRY_USER", "")
