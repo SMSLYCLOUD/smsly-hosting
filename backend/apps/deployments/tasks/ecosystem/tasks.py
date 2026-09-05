@@ -177,6 +177,27 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         return {"error": f"Scan failed: {exc!s}"}
 
 
+def _ecosystem_plan_still_deploying(plan_id: str | None) -> bool:
+    """True while the owning plan is still actively deploying.
+
+    Deferred-build tasks use this to stop re-scheduling themselves once
+    their wave engine is gone. A missing plan row counts as NOT deploying
+    (deleted/abandoned plans must not hold deployments hostage), and any
+    DB error fails open (keep deferring — never cancel on uncertainty).
+    """
+    if not plan_id:
+        return True
+    try:
+        from apps.deployments.models.ecosystem import EcosystemPlan
+        plan = EcosystemPlan.objects.filter(id=plan_id).values_list("status", flat=True).first()
+        if plan is None:
+            return False
+        return str(plan) == EcosystemPlan.Status.DEPLOYING
+    except Exception as exc:
+        logger.debug("Plan liveness check failed for %s: %s", plan_id, exc)
+        return True
+
+
 @shared_task(
     bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task", queue='fast',
     soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0],
@@ -185,8 +206,16 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
     default_retry_delay=RETRY_DELAY_HEAVY,
     autoretry_for=(Exception,),
 )
-def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wave_index: int) -> dict:
-    """Retry a deployment that was deferred due to concurrency limits."""
+def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wave_index: int, plan_id: str | None = None) -> dict:
+    """Retry a deployment that was deferred due to concurrency limits.
+
+    ``plan_id`` lets the task stop re-scheduling itself once its owning
+    plan is finished: without this, a deferred deployment whose wave
+    engine already moved on (timeout/finalize) would re-queue itself
+    forever, since each re-send is a fresh task the retry counter never
+    sees. Older in-flight tasks without ``plan_id`` keep the legacy
+    defer-forever behaviour.
+    """
     deployment = Deployment.objects.filter(id=deployment_id).first()
     if not deployment:
         return {"status": "skipped", "reason": "deployment not found"}
@@ -197,12 +226,28 @@ def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wa
     max_concurrent = _env_int("ECOSYSTEM_MAX_CONCURRENT_BUILDS", _MAX_CONCURRENT_BUILDS, minimum=1, maximum=10)
 
     if active >= max_concurrent:
+        if plan_id and not _ecosystem_plan_still_deploying(plan_id):
+            # Owning plan is finished (or gone) — nobody will ever pick
+            # this row up. Cancel it instead of re-scheduling forever.
+            deployment.status = Deployment.Status.CANCELLED
+            deployment.finished_at = timezone.now()
+            deployment.build_logs = (
+                f"{deployment.build_logs or ''}"
+                "\n[Ecosystem] Cancelled: owning plan finished while this "
+                "build was still waiting for a concurrency slot.\n"
+            )
+            deployment.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
+            logger.warning(
+                "Ecosystem deferred build %s orphaned (plan %s finished) — marked CANCELLED",
+                deployment_id, plan_id,
+            )
+            return {"status": "cancelled", "reason": "owning plan finished"}
         # Exponential backoff: base defer × retry count
         retry_count = getattr(self, 'request', {}).get('retries', 0)
         backoff = min(_BUILD_DEFER_SECONDS * (2 ** retry_count), 3600)
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task",
-            args=[deployment_id, provider_id, wave_index],
+            args=[deployment_id, provider_id, wave_index, plan_id],
             countdown=backoff,
         )
         return {"status": "deferred", "active": active, "max": max_concurrent}
@@ -265,7 +310,7 @@ def ecosystem_release_wave_task(
                 countdown=_wave_recheck_countdown(),
             )
             return {"status": "deferred", "wave": 0, "reason": "low_memory"}
-        queued = _queue_wave(self.app, waves[0], provider_id, wave_index=0)
+        queued = _queue_wave(self.app, waves[0], provider_id, wave_index=0, plan_id=plan_id)
         if len(waves) >= 1:
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
@@ -340,8 +385,32 @@ def ecosystem_release_wave_task(
 
     if in_progress:
         if recheck_count >= max_rechecks:
-            # Time out waiting for remaining ones
-            failed_ids.extend([str(dep["id"]) for dep in deployments if dep["status"] in in_progress_states])
+            # Time out waiting for remaining ones. The hung rows below are
+            # ones THIS task waited on and is now abandoning — mark them
+            # CANCELLED so neither they nor the plan stay stuck forever
+            # with no owner. Each row is re-read first: one may have
+            # finished between our earlier SELECT and now.
+            timed_out_ids = [str(dep["id"]) for dep in deployments if dep["status"] in in_progress_states]
+            failed_ids.extend(timed_out_ids)
+            hung = []
+            _timeout_now = timezone.now()
+            for hung_obj in Deployment.objects.filter(id__in=timed_out_ids):
+                if hung_obj.status not in in_progress_states:
+                    continue
+                hung_obj.status = Deployment.Status.CANCELLED
+                hung_obj.finished_at = _timeout_now
+                hung_obj.build_logs = (
+                    f"{hung_obj.build_logs or ''}"
+                    f"\n[Ecosystem] Cancelled: wave {wave_index} timed out after "
+                    f"{recheck_count} rechecks waiting for this deployment.\n"
+                )
+                hung.append(hung_obj)
+            if hung:
+                Deployment.objects.bulk_update(hung, ["status", "finished_at", "build_logs"])
+                logger.warning(
+                    "Ecosystem wave %s timed out: marked %d hung deployment(s) CANCELLED",
+                    wave_index, len(hung),
+                )
             if cancel_others_on_failure and deployment_by_repo_key:
                 cancelled = _cancel_all_remaining_deployments(
                     waves,
@@ -405,7 +474,7 @@ def ecosystem_release_wave_task(
         return {"status": "deferred", "wave": wave_index, "reason": "low_memory"}
 
     # We queue the next wave (which ignores CANCELLED statuses so only viable nodes deploy)
-    queued = _queue_wave(self.app, waves[wave_index], provider_id, wave_index)
+    queued = _queue_wave(self.app, waves[wave_index], provider_id, wave_index, plan_id=plan_id)
     if wave_index + 1 <= len(waves):
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
@@ -1589,7 +1658,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 countdown=_wave_recheck_countdown(),
             )
         else:
-            queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0)
+            queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0, plan_id=plan_id)
             if len(waves) >= 1:
                 self.app.send_task(
                     "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",

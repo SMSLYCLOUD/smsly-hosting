@@ -318,13 +318,16 @@ def _wave_recheck_countdown() -> int:
     return _get_ecosystem_build_config()["wave_recheck_seconds"]
 
 
-def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: int) -> int:
+def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: int, plan_id: str | None = None) -> int:
     """Queue QUEUED deployments in this wave with dynamic concurrency control.
 
     Before queuing, the function re-checks available memory. If the wave
     would push us below the safety reserve, the entire wave is deferred
     (not partially queued) so we don't end up with a half-running set
     that OOMs the host.
+
+    ``plan_id`` is threaded through to deferred-build tasks so they can
+    stop re-scheduling themselves once their owning plan is finished.
     """
 
     queued = 0
@@ -348,7 +351,7 @@ def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: in
             deployment.save(update_fields=["build_logs"])
             app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task",
-                args=[str(deployment.id), str(provider_id), wave_index],
+                args=[str(deployment.id), str(provider_id), wave_index, plan_id],
                 countdown=_BUILD_DEFER_SECONDS,
             )
         return 0
@@ -371,7 +374,7 @@ def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: in
             deployment.save(update_fields=["build_logs"])
             app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task",
-                args=[str(deployment.id), str(provider_id), wave_index],
+                args=[str(deployment.id), str(provider_id), wave_index, plan_id],
                 countdown=_BUILD_DEFER_SECONDS,
             )
             continue

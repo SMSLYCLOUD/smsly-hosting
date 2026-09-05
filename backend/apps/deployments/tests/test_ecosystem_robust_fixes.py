@@ -8,7 +8,9 @@ from apps.deployments.models.ecosystem import EcosystemPlan
 from apps.deployments.tasks.ecosystem.tasks import (
     _cancel_dependent_deployments,
     _cancel_unreleased_deployments,
+    _ecosystem_plan_still_deploying,
     _finalize_ecosystem_plan,
+    ecosystem_deferred_build_task,
     ecosystem_release_wave_task,
 )
 
@@ -208,5 +210,139 @@ class TestEcosystemRobustFixes(TestCase):
         self.assertEqual(res["status"], "released")
         self.assertEqual(res["cancelled_dependents"], 0)
         mock_cancel_dep.assert_not_called()
+
+
+class TestWaveTimeoutOrphanFixes(TestCase):
+    """Timed-out in-progress deployments and orphaned deferred builds must
+    reach a terminal state instead of lingering forever with no owner."""
+
+    @patch("apps.deployments.tasks.ecosystem.tasks._finalize_ecosystem_plan")
+    @patch("apps.deployments.tasks.ecosystem.tasks._cancel_unreleased_deployments")
+    @patch("apps.deployments.models.Deployment.objects.bulk_update")
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    @patch("apps.deployments.tasks.ecosystem.tasks._rebuild_ecosystem_build_counter")
+    def test_wave_timeout_marks_hung_in_progress_cancelled(
+        self, mock_counter, mock_dep_filter, mock_bulk_update,
+        mock_cancel_unreleased, mock_finalize,
+    ):
+        """A BUILDING row the wave task gives up waiting on becomes CANCELLED."""
+        values_mock = MagicMock()
+        values_mock.values.return_value = [
+            {"id": "dep-1", "status": Deployment.Status.BUILDING}
+        ]
+        hung = MagicMock(status=Deployment.Status.BUILDING, build_logs="")
+        mock_dep_filter.side_effect = [values_mock, [hung]]
+        mock_cancel_unreleased.return_value = 0
+
+        waves = [["dep-1"], ["dep-2"]]
+        res = ecosystem_release_wave_task.run(
+            provider_id="prov-1",
+            waves=waves,
+            wave_index=1,
+            recheck_count=10,
+            max_rechecks=10,
+            plan_id="plan-123",
+        )
+
+        self.assertEqual(res["status"], "timed_out")
+        self.assertEqual(hung.status, Deployment.Status.CANCELLED)
+        self.assertIsNotNone(hung.finished_at)
+        self.assertIn("timed out", hung.build_logs)
+        mock_bulk_update.assert_called_once()
+
+    @patch("apps.deployments.tasks.ecosystem.tasks._finalize_ecosystem_plan")
+    @patch("apps.deployments.tasks.ecosystem.tasks._cancel_unreleased_deployments")
+    @patch("apps.deployments.models.Deployment.objects.bulk_update")
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    @patch("apps.deployments.tasks.ecosystem.tasks._rebuild_ecosystem_build_counter")
+    def test_wave_timeout_skips_row_finished_during_timeout(
+        self, mock_counter, mock_dep_filter, mock_bulk_update,
+        mock_cancel_unreleased, mock_finalize,
+    ):
+        """A row that reached ACTIVE between the status read and the timeout
+        write must NOT be clobbered back to CANCELLED."""
+        values_mock = MagicMock()
+        values_mock.values.return_value = [
+            {"id": "dep-1", "status": Deployment.Status.BUILDING}
+        ]
+        finished = MagicMock(status=Deployment.Status.ACTIVE, build_logs="")
+        mock_dep_filter.side_effect = [values_mock, [finished]]
+        mock_cancel_unreleased.return_value = 0
+
+        waves = [["dep-1"], ["dep-2"]]
+        res = ecosystem_release_wave_task.run(
+            provider_id="prov-1",
+            waves=waves,
+            wave_index=1,
+            recheck_count=10,
+            max_rechecks=10,
+            plan_id="plan-123",
+        )
+
+        self.assertEqual(res["status"], "timed_out")
+        self.assertEqual(finished.status, Deployment.Status.ACTIVE)
+        mock_bulk_update.assert_not_called()
+
+    @patch.object(ecosystem_deferred_build_task.app, "send_task")
+    @patch("apps.deployments.tasks.ecosystem.tasks._ecosystem_plan_still_deploying")
+    @patch("apps.deployments.tasks.ecosystem.tasks._count_active_ecosystem_builds")
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_deferred_build_orphan_cancelled_when_plan_finished(
+        self, mock_dep_filter, mock_count, mock_plan_alive, mock_send_task
+    ):
+        """A deferred build whose plan already finalized is CANCELLED, not re-queued."""
+        deployment = MagicMock(status=Deployment.Status.QUEUED, build_logs="")
+        mock_dep_filter.return_value.first.return_value = deployment
+        mock_count.return_value = 99
+        mock_plan_alive.return_value = False
+
+        res = ecosystem_deferred_build_task.run(
+            deployment_id="dep-1", provider_id="prov-1",
+            wave_index=0, plan_id="plan-123",
+        )
+
+        self.assertEqual(res["status"], "cancelled")
+        self.assertEqual(deployment.status, Deployment.Status.CANCELLED)
+        mock_send_task.assert_not_called()
+        deployment.save.assert_called_once()
+
+    @patch.object(ecosystem_deferred_build_task.app, "send_task")
+    @patch("apps.deployments.tasks.ecosystem.tasks._ecosystem_plan_still_deploying")
+    @patch("apps.deployments.tasks.ecosystem.tasks._count_active_ecosystem_builds")
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_deferred_build_keeps_deferring_while_plan_alive(
+        self, mock_dep_filter, mock_count, mock_plan_alive, mock_send_task
+    ):
+        """While the plan is still deploying, the deferred build re-queues with its plan_id."""
+        deployment = MagicMock(status=Deployment.Status.QUEUED, build_logs="")
+        mock_dep_filter.return_value.first.return_value = deployment
+        mock_count.return_value = 99
+        mock_plan_alive.return_value = True
+
+        res = ecosystem_deferred_build_task.run(
+            deployment_id="dep-1", provider_id="prov-1",
+            wave_index=0, plan_id="plan-123",
+        )
+
+        self.assertEqual(res["status"], "deferred")
+        self.assertEqual(deployment.status, Deployment.Status.QUEUED)
+        mock_send_task.assert_called_once()
+        sent_kwargs = mock_send_task.call_args[1]
+        self.assertIn("plan-123", sent_kwargs["args"])
+
+    @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
+    def test_plan_liveness_deploying(self, mock_plan_filter):
+        mock_plan_filter.return_value.values_list.return_value.first.return_value = "deploying"
+        self.assertTrue(_ecosystem_plan_still_deploying("plan-123"))
+
+    @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
+    def test_plan_liveness_missing_plan_counts_as_finished(self, mock_plan_filter):
+        mock_plan_filter.return_value.values_list.return_value.first.return_value = None
+        self.assertFalse(_ecosystem_plan_still_deploying("plan-123"))
+
+    @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
+    def test_plan_liveness_db_error_fails_open(self, mock_plan_filter):
+        mock_plan_filter.side_effect = Exception("db down")
+        self.assertTrue(_ecosystem_plan_still_deploying("plan-123"))
 
 
