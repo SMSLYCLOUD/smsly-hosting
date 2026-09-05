@@ -404,6 +404,13 @@ def ai_test_prompt(request):
 
     POST /api/v1/ai/test/
     Body: { "prompt": "What stack does a Django app use?" }
+
+    BOUNDED: the whole Senate/fallback chain runs in a worker thread
+    with a hard deadline (AI_TEST_TIMEOUT_SECONDS, default 90s). A
+    stalled provider chain previously hung the request indefinitely
+    (live repro: 120s+ with a dead 'localllm' endpoint in the mix).
+    On timeout the endpoint returns 504 with the cause instead of
+    holding the connection open.
     """
     prompt = request.data.get("prompt", "Hello, are you working?")
     system_prompt = request.data.get("system_prompt", None)
@@ -422,7 +429,35 @@ def ai_test_prompt(request):
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
-        response, provider_name = _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
+        import concurrent.futures
+        import os as _os
+
+        deadline = int(_os.environ.get("AI_TEST_TIMEOUT_SECONDS", "90"))
+
+        def _run():
+            return _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_run)
+            try:
+                response, provider_name = future.result(timeout=deadline)
+            except concurrent.futures.TimeoutError:
+                # The worker thread keeps running in the background (it
+                # cannot be force-killed in Python); its result is
+                # discarded. The circuit breaker will have recorded any
+                # connection-level failures along the way.
+                return Response(
+                    {
+                        "error": (
+                            f"AI providers did not respond within {deadline}s. "
+                            "One or more configured providers appear stalled or "
+                            "unreachable — check provider status in Settings > AI."
+                        ),
+                        "code": "ai_test_timeout",
+                    },
+                    status=status.HTTP_504_GATEWAY_TIMEOUT,
+                )
+
         mode = "senate_committee" if len(configured) >= 2 else ("solo" if len(configured) == 1 else "unconfigured")
         # SECURITY (Batch G): pass prompt + response so the spend
         # cap can estimate tokens when the provider doesn't report

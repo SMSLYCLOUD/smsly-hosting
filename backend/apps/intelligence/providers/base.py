@@ -52,10 +52,24 @@ _circuit_lock = threading.Lock()
 CIRCUIT_FAILURE_THRESHOLD = 5
 CIRCUIT_OPEN_DURATION = timedelta(minutes=5)
 CIRCUIT_WINDOW = timedelta(minutes=5)
+# Connection-level failures (DNS/refused/unreachable) mean the provider
+# endpoint is DOWN — waiting for 5 failures still costs 5 x 60s httpx
+# timeouts before the circuit trips. Two consecutive connection errors
+# trip it immediately.
+CIRCUIT_CONNECTION_FAILURE_THRESHOLD = 2
+CIRCUIT_CONNECTION_OPEN_DURATION = timedelta(minutes=10)
+_provider_connection_failures: dict[str, list[datetime]] = defaultdict(list)
 
 
-def _record_provider_failure(provider_id: str):
-    """Record a provider failure for circuit breaker."""
+def _record_provider_failure(provider_id: str, connection_error: bool = False):
+    """Record a provider failure for circuit breaker.
+
+    ``connection_error=True`` marks a transport-level failure (DNS
+    resolution failure, connection refused, unreachable host) — the
+    provider endpoint itself is down, so the circuit trips after
+    CIRCUIT_CONNECTION_FAILURE_THRESHOLD consecutive occurrences with
+    a LONGER open duration.
+    """
     with _circuit_lock:
         now = datetime.now()
         _provider_failures[provider_id].append(now)
@@ -63,6 +77,19 @@ def _record_provider_failure(provider_id: str):
         _provider_failures[provider_id] = [f for f in _provider_failures[provider_id] if f > cutoff]
         if len(_provider_failures[provider_id]) >= CIRCUIT_FAILURE_THRESHOLD:
             _provider_circuit_open_until[provider_id] = now + CIRCUIT_OPEN_DURATION
+            return
+        if connection_error:
+            _provider_connection_failures[provider_id].append(now)
+            conn_cutoff = now - CIRCUIT_WINDOW
+            _provider_connection_failures[provider_id] = [
+                f for f in _provider_connection_failures[provider_id] if f > conn_cutoff
+            ]
+            if len(_provider_connection_failures[provider_id]) >= CIRCUIT_CONNECTION_FAILURE_THRESHOLD:
+                _provider_circuit_open_until[provider_id] = now + CIRCUIT_CONNECTION_OPEN_DURATION
+                logger.warning(
+                    "Circuit OPEN for provider %s after %d connection errors",
+                    provider_id, len(_provider_connection_failures[provider_id]),
+                )
 
 
 def _is_circuit_open(provider_id: str) -> bool:

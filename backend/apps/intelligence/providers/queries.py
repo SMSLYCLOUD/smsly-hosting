@@ -2,6 +2,8 @@ import concurrent.futures
 import hashlib
 import os
 
+import httpx
+
 from django.core.cache import cache
 
 from .base import AIProvider, _is_circuit_open, _record_provider_failure, logger
@@ -27,6 +29,24 @@ CODE_REVIEW_SYSTEM_PROMPT = (
 )
 
 SENATE_COMMITTEE_COST_MULTIPLIER = 3
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """True when the failure is transport-level (endpoint down/unreachable)
+    rather than an HTTP/protocol error — these trip the circuit breaker
+    fast (2 strikes) instead of waiting for the normal threshold."""
+    if isinstance(exc, (ConnectionError, OSError)):
+        return True
+    if isinstance(exc, httpx.ConnectError):
+        return True
+    return False
+
+
+def _record_failure_for(provider_or_id, exc: Exception) -> None:
+    """Record a provider failure with automatic connection-error
+    classification (see _is_connection_error)."""
+    pid = provider_or_id if isinstance(provider_or_id, str) else getattr(provider_or_id, "id", "")
+    _record_provider_failure(pid, connection_error=_is_connection_error(exc))
 
 
 def _ask_single(
@@ -57,8 +77,9 @@ def _parallel_ask(providers: list[AIProvider], prompt: str,
                 response, name = future.result()
                 results.append((response, name))
             except Exception as e:
-                _record_provider_failure(getattr(provider, "id", ""))
-                logger.warning("Provider %s failed: %s", provider.name(), e)
+                _record_failure_for(provider, e)
+                logger.warning("Provider %s failed (conn=%s): %s",
+                               provider.name(), _is_connection_error(e), e)
     except concurrent.futures.TimeoutError:
         logger.warning("Parallel ask timed out, proceeding with %d results", len(results))
     finally:
@@ -79,7 +100,7 @@ def ask_collaborative(prompt: str, system_prompt: str | None = None) -> tuple[st
         try:
             return _ask_single(provider, prompt, system_prompt)
         except Exception as e:
-            _record_provider_failure(getattr(provider, "id", ""))
+            _record_failure_for(provider, e)
             logger.warning("Single provider %s failed: %s", provider.name(), e)
             raise
 
@@ -138,7 +159,7 @@ def ask_collaborative(prompt: str, system_prompt: str | None = None) -> tuple[st
         logger.info("Phase 3 complete: Chair %s delivered resolution", chair.name())
         return resolution, attribution
     except Exception as e:
-        _record_provider_failure(getattr(chair, "id", ""))
+        _record_failure_for(chair, e)
         logger.warning("Chair %s failed to deliver resolution: %s", chair.name(), e)
         for fallback_chair in configured:
             if fallback_chair is not chair:
@@ -151,6 +172,7 @@ def ask_collaborative(prompt: str, system_prompt: str | None = None) -> tuple[st
                 except Exception:
                     _record_provider_failure(getattr(fallback_chair, "id", ""))
                     continue
+    if proposals:
         return proposals[0][0], f"{proposals[0][1]} (committee failed, solo answer)"
 
 
@@ -271,7 +293,7 @@ def ask_with_fallback(
             try:
                 return _wrap(*_ask_single(provider, prompt, system_prompt))
             except Exception as exc:
-                _record_provider_failure(getattr(provider, "id", ""))
+                _record_failure_for(provider, exc)
                 logger.warning("Direct provider rescue with %s failed: %s", provider.name(), exc)
         raise RuntimeError("All configured AI providers failed to respond.")
 
@@ -289,7 +311,7 @@ def ask_with_fallback(
             try:
                 return _wrap(*_ask_single(provider, prompt, system_prompt))
             except Exception as exc:
-                _record_provider_failure(getattr(provider, "id", ""))
+                _record_failure_for(provider, exc)
                 logger.warning("Direct provider rescue with %s failed: %s", provider.name(), exc)
         raise RuntimeError("All configured AI providers failed to respond.")
 
@@ -306,7 +328,7 @@ def ask_with_fallback(
             try:
                 return _wrap(*_ask_single(target, prompt, system_prompt))
             except Exception as e:
-                _record_provider_failure(provider_id)
+                _record_failure_for(provider_id, e)
                 logger.warning("Target provider %s failed, falling back: %s", provider_id, e)
 
     senate_enabled = os.environ.get("SENATE_ENABLED", "True").lower() == "true"
@@ -320,7 +342,7 @@ def ask_with_fallback(
             try:
                 return _wrap(*_ask_single(provider, prompt, system_prompt))
             except Exception as exc:
-                _record_provider_failure(getattr(provider, "id", ""))
+                _record_failure_for(provider, exc)
                 logger.warning("Committee rescue with %s failed: %s", provider.name(), exc)
         raise RuntimeError("All configured AI providers failed to respond.")
 
@@ -329,7 +351,7 @@ def ask_with_fallback(
         try:
             return _wrap(*_ask_single(provider, prompt, system_prompt))
         except Exception as e:
-            _record_provider_failure(getattr(provider, "id", ""))
+            _record_failure_for(provider, e)
             raise RuntimeError(f"AI provider {provider.name()} failed: {e}")
 
     raise RuntimeError("No AI providers configured. Add an API key in Settings > AI.")

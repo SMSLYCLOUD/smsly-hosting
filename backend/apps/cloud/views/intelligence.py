@@ -458,12 +458,22 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'warning': warning,
         })
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAdminUser])
     def ecosystem_prompts(self, request):
         """
         Debug endpoint to show all prompts used in ecosystem analysis.
+
+        ADMIN-ONLY: the prompts describe the platform's internal AI
+        architecture (system prompt text, provider chains, validation
+        rules) — disclosing them to every authenticated user was an
+        information leak for anyone probing the platform's AI design.
         This helps with transparency and debugging AI behavior.
         """
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Admin access required.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         try:
             from apps.deployments.services.ecosystem import get_ecosystem_prompts
 
