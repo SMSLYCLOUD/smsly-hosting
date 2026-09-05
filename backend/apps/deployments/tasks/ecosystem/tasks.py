@@ -464,15 +464,43 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                         "plan_id": str(plan_id),
                         "in_flight": _active.count(),
                     }
-                logger.info(
-                    "Ecosystem plan %s already has terminal deployments — "
-                    "not re-creating (use plan retry instead)",
-                    plan_id,
+                # Partial-failure recovery: a plan whose deployments are
+                # ALL terminal (previous attempt finished or died — e.g.
+                # the {{POSTGRES_URL}} resolution failure that stranded 8
+                # services with NO deployment rows) is safe to RE-RUN:
+                # service creation is name-based (existing rows reused),
+                # deployment creation is get_or_create keyed on
+                # (service, commit_hash) — no duplication. Reset the plan
+                # row so the wave engine can finalize it again.
+                _failed_dps = existing_dps.filter(
+                    status__in=[
+                        Deployment.Status.FAILED,
+                        Deployment.Status.CANCELLED,
+                        Deployment.Status.HEALTH_CHECK_FAILED,
+                        Deployment.Status.ROLLED_BACK,
+                    ],
                 )
-                return {
-                    "status": "already_deployed",
-                    "plan_id": str(plan_id),
-                }
+                if _failed_dps.exists():
+                    logger.info(
+                        "Ecosystem plan %s has %d terminal deployments with "
+                        "zero in-flight — re-running creation phase as "
+                        "recovery (get_or_create makes this idempotent)",
+                        plan_id, _failed_dps.count(),
+                    )
+                    existing_plan.status = 'deploying'
+                    existing_plan.error_message = ''
+                    existing_plan.save(update_fields=['status', 'error_message', 'updated_at'])
+                    # fall through to the normal creation path below
+                else:
+                    logger.info(
+                        "Ecosystem plan %s already has terminal deployments — "
+                        "not re-creating (use plan retry instead)",
+                        plan_id,
+                    )
+                    return {
+                        "status": "already_deployed",
+                        "plan_id": str(plan_id),
+                    }
 
     # SEC-ZT-007: Validate plan structure before creating any records
     schema_errors = _validate_plan_structure(plan)
@@ -1024,6 +1052,17 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         (e.g. via the anchor service), the per-service loop MUST skip to
         avoid duplicate containers and alias collisions. This is the
         source-of-truth check — the config flag is advisory.
+
+        CRITICAL: only addons NAMED '{type}-shared' count (the naming
+        convention of the shared-provisioning block above). Matching ANY
+        active addon of the type broke per-addon 'individual' mode: with
+        shared_addon_config={'POSTGRES': {'shared': False}}, wave-0
+        services each provisioned a personal '{svc}-postgres', and every
+        LATER service's individual provisioning was skipped ("shared
+        addon exists") while {{POSTGRES_URL}} could only resolve from a
+        shared URL — 8 of 10 services in plan 2a7b78d3 died with 'Addon
+        placeholder {{POSTGRES_URL}} ... could not be resolved' and were
+        stranded with no deployment rows ('Ready to Deploy' forever).
         """
         if not project:
             return False
@@ -1032,6 +1071,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             service__project=project,
             addon_type=addon_type,
             status=Addon.Status.ACTIVE,
+            name=f"{addon_type.lower()}-shared",
         ).exists()
 
     if addon_anchor_service and required_addons:

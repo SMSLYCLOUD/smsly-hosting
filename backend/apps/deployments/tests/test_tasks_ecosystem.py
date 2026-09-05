@@ -12,6 +12,7 @@ from apps.deployments.models import (
     Deployment,
     EnvironmentVariable,
     ManagedServer,
+    Project,
     Service,
 )
 from apps.deployments.tasks.ecosystem.helpers import (
@@ -657,6 +658,61 @@ class EcosystemDeployTaskTests(TestCase):
         new_svc = Service.objects.get(owner=self.user, name="new-api")
         db_url_env = EnvironmentVariable.objects.get(service=new_svc, key="DATABASE_URL")
         self.assertEqual(db_url_env.value, "postgresql://new-user:new-pass@new-db:5432/app")
+
+    @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
+    @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("mock-cid", "postgresql://ind-user:ind-pass@ind-db:5432/app"))
+    def test_individual_addon_mode_provisions_each_service(self, _provision, _queue_wave):
+        """Per-addon 'individual' mode (shared_addon_config={'X': {'shared': False}}):
+        EVERY service with an {{X_URL}} placeholder must get its own addon
+        provisioned and its placeholder resolved — including services that
+        deploy AFTER an earlier service's individual addon already exists.
+
+        Regression for plan 2a7b78d3: _has_shared_addon matched ANY active
+        addon of the type in the project, so the second service's individual
+        provisioning was skipped ('shared addon exists') while the
+        placeholder could only resolve from a shared URL -> every later
+        service failed with 'Addon placeholder {{POSTGRES_URL}} ... could
+        not be resolved' and was stranded with no deployment row.
+        """
+        from apps.deployments.models.addons import Addon
+
+        project = Project.objects.create(name="Ind Proj", owner=self.user)
+        plan = {
+            "use_shared_addons": True,
+            "shared_addon_config": {"POSTGRES": {"shared": False}},
+            "services": [
+                {
+                    "name": "svc-alpha",
+                    "repo": "owner/svc-alpha",
+                    "stack": "node",
+                    "port": 3000,
+                    "env_vars": {"DATABASE_URL": "{{POSTGRES_URL}}"},
+                },
+                {
+                    "name": "svc-beta",
+                    "repo": "owner/svc-beta",
+                    "stack": "node",
+                    "port": 3000,
+                    "env_vars": {"DATABASE_URL": "{{POSTGRES_URL}}"},
+                },
+            ],
+        }
+
+        with self.settings(SENATE_ENABLED=False):
+            result = ecosystem_deploy_task.run(str(self.user.id), plan)
+
+        self.assertEqual(result["failed"], 0)
+        for name in ("svc-alpha", "svc-beta"):
+            svc = Service.objects.get(owner=self.user, name=name)
+            env = EnvironmentVariable.objects.get(service=svc, key="DATABASE_URL")
+            self.assertEqual(env.value, "postgresql://ind-user:ind-pass@ind-db:5432/app")
+            # Each service got its OWN addon (named '{svc}-postgres'),
+            # not skipped because of the other's individual addon.
+            own = Addon.objects.filter(
+                service=svc, addon_type="POSTGRES",
+                name=f"{svc.name}-postgres",
+            ).exists()
+            self.assertTrue(own, f"{name} must have its own individual POSTGRES addon")
 
     def test_heuristic_analysis_is_dynamic(self):
         """Heuristic analysis detects Dockerfile if present, otherwise defaults to nixpacks."""
