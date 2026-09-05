@@ -1556,12 +1556,16 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             _rollback_deployments.append(str(deployment.id))
 
             deployment_by_repo_key[repo_key] = str(deployment.id)
+            pre_deploy_snapshot_id = _capture_pre_ecosystem_snapshot(
+                service, str(deployment.id), plan_id, user,
+            )
             results.append({
                 "repo": repo,
                 "name": service.name,
                 "server": service.server.name if service.server else "N/A",
                 "service_id": str(service.id),
                 "deployment_id": str(deployment.id),
+                "pre_deploy_snapshot_id": pre_deploy_snapshot_id,
                 "status": "queued",
                 "stack": stack,
                 "port": port,
@@ -1698,6 +1702,44 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         logger.debug("Failed to update ecosystem plan deployment status: %s", exc)
 
     return deploy_result
+
+
+def _capture_pre_ecosystem_snapshot(service, deployment_id: str, plan_id: str | None, user) -> str | None:
+    """Capture a PRE_DEPLOY snapshot for a reused ecosystem service.
+
+    Only services deployed by a PREVIOUS ecosystem run have live state
+    worth capturing (brand-new services have nothing to roll back to).
+    Snapshot failures are non-fatal — the deploy must proceed. Returns
+    the snapshot id, or None when skipped/failed. The id is stored on
+    the service's ``results`` entry so the plan record links to it.
+    """
+    try:
+        had_prior = Deployment.objects.filter(
+            service=service, commit_hash="ecosystem-deploy",
+        ).exclude(id=deployment_id).exists()
+    except Exception:
+        return None
+    if not had_prior:
+        return None
+    try:
+        from apps.deployments.services.snapshot_service import SnapshotService
+        snap = SnapshotService.capture_snapshot(
+            service_id=str(service.id),
+            trigger="PRE_DEPLOY",
+            label=(
+                f"Pre-ecosystem-deploy: {service.name} "
+                f"(plan {str(plan_id)[:8] if plan_id else 'adhoc'})"
+            ),
+            created_by=user,
+        )
+        logger.info("Pre-ecosystem snapshot %s captured for %s", snap.id, service.name)
+        return str(snap.id)
+    except Exception as exc:
+        logger.warning(
+            "Pre-ecosystem snapshot failed for %s: %s",
+            getattr(service, "name", "?"), exc,
+        )
+        return None
 
 
 def _fail_plan_record(plan_id: str | None, error_message: str) -> None:

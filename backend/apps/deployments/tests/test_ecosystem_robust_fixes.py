@@ -8,6 +8,7 @@ from apps.deployments.models.ecosystem import EcosystemPlan
 from apps.deployments.tasks.ecosystem.tasks import (
     _cancel_dependent_deployments,
     _cancel_unreleased_deployments,
+    _capture_pre_ecosystem_snapshot,
     _ecosystem_plan_still_deploying,
     _finalize_ecosystem_plan,
     ecosystem_deferred_build_task,
@@ -344,5 +345,56 @@ class TestWaveTimeoutOrphanFixes(TestCase):
     def test_plan_liveness_db_error_fails_open(self, mock_plan_filter):
         mock_plan_filter.side_effect = Exception("db down")
         self.assertTrue(_ecosystem_plan_still_deploying("plan-123"))
+
+
+class TestPreEcosystemSnapshot(TestCase):
+    """Reused services get a PRE_DEPLOY snapshot; new/failed ones don't."""
+
+    def _filter_mock(self, exists=True, raises=False):
+        mock_filter = MagicMock()
+        if raises:
+            mock_filter.return_value.exclude.side_effect = Exception("db down")
+        else:
+            mock_filter.return_value.exclude.return_value.exists.return_value = exists
+        return mock_filter
+
+    @patch("apps.deployments.services.snapshot_service.SnapshotService")
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_reused_service_gets_snapshot(self, mock_dep_filter, mock_snap_cls):
+        mock_dep_filter.return_value = self._filter_mock(exists=True).return_value
+        mock_snap_cls.capture_snapshot.return_value = MagicMock(id="snap-1")
+        service = MagicMock(); service.id = 'svc-1'; service.name = 'api'
+
+        res = _capture_pre_ecosystem_snapshot(service, "dep-9", "plan-123", MagicMock())
+
+        self.assertEqual(res, "snap-1")
+        mock_snap_cls.capture_snapshot.assert_called_once()
+        _, kwargs = mock_snap_cls.capture_snapshot.call_args
+        self.assertEqual(kwargs["trigger"], "PRE_DEPLOY")
+        self.assertEqual(kwargs["service_id"], "svc-1")
+        self.assertIn("plan-123", kwargs["label"][:60])
+
+    @patch("apps.deployments.services.snapshot_service.SnapshotService")
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_brand_new_service_skipped(self, mock_dep_filter, mock_snap_cls):
+        mock_dep_filter.return_value = self._filter_mock(exists=False).return_value
+        service = MagicMock(); service.id = 'svc-1'; service.name = 'api'
+
+        res = _capture_pre_ecosystem_snapshot(service, "dep-9", "plan-123", MagicMock())
+
+        self.assertIsNone(res)
+        mock_snap_cls.capture_snapshot.assert_not_called()
+
+    @patch("apps.deployments.services.snapshot_service.SnapshotService")
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_snapshot_failure_is_non_fatal(self, mock_dep_filter, mock_snap_cls):
+        mock_dep_filter.return_value = self._filter_mock(exists=True).return_value
+        mock_snap_cls.capture_snapshot.side_effect = Exception("pg clone failed")
+        service = MagicMock(); service.id = 'svc-1'; service.name = 'api'
+
+        res = _capture_pre_ecosystem_snapshot(service, "dep-9", "plan-123", MagicMock())
+
+        self.assertIsNone(res)
+
 
 
