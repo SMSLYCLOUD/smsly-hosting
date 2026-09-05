@@ -35,13 +35,49 @@ def get_sentinel_master():
         return None
 
 
-def _get_container_ip(container):
-    networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+def _resolve_host(host: str) -> str | None:
+    """Resolve a hostname to an IP, or None when unresolvable."""
+    import socket
+    try:
+        return socket.gethostbyname((host or "").strip())
+    except Exception:
+        return None
+
+
+def _container_addresses(container) -> set[str]:
+    """All IPs, Docker network aliases, and the name of a container."""
+    addrs: set[str] = set()
+    networks = container.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
     for net_config in networks.values():
+        net_config = net_config or {}
         ip = net_config.get("IPAddress")
         if ip:
-            return ip
-    return None
+            addrs.add(str(ip).strip())
+        for alias in net_config.get("Aliases") or []:
+            if alias:
+                addrs.add(str(alias).strip().lower())
+    name = (getattr(container, "name", "") or "").strip().lower()
+    if name:
+        addrs.add(name)
+    return addrs
+
+
+def _container_is_master(container, master_host: str) -> bool:
+    """True when the container IS the Sentinel-reported master.
+
+    Compares bidirectionally (resolved IPs AND names/aliases) because
+    Sentinel may report a hostname (redis-primary) while Docker reports
+    an IP (172.18.0.x), or vice versa. A one-sided string comparison
+    can never match and caused false "orphan" deletions (2026-09-04:
+    a healthy primary was deleted because "172.18.0.13" != "redis-primary").
+    """
+    if not master_host:
+        return False
+    addrs = _container_addresses(container)
+    if master_host.strip().lower() in addrs:
+        return True
+    master_ip = _resolve_host(master_host)
+    return bool(master_ip and master_ip in addrs)
 
 
 def check_and_recover(dry_run: bool = False) -> dict:
@@ -78,32 +114,41 @@ def check_and_recover(dry_run: bool = False) -> dict:
         result["message"] = f"Container '{PRIMARY_CONTAINER}' not found."
         return result
 
-    container_ip = _get_container_ip(container)
+    container_ip = next(
+        (a for a in _container_addresses(container) if a and a[0].isdigit()),
+        None,
+    )
     logger.info(
         "Container '%s' status=%s ip=%s",
         PRIMARY_CONTAINER, container.status, container_ip,
     )
 
-    if container_ip and container_ip == master_host:
+    if _container_is_master(container, master_host):
         result["message"] = (
             f"Container '{PRIMARY_CONTAINER}' ({container_ip}) IS the Sentinel master."
         )
         return result
 
-    try:
-        container_hostname = container.exec_run("hostname").output.decode().strip()
-        if container_hostname == master_host:
-            result["message"] = (
-                f"Container '{PRIMARY_CONTAINER}' (hostname: {container_hostname}) "
-                "IS the Sentinel master by hostname."
-            )
-            return result
-    except Exception as exc:
-        logger.debug("Sentinel master check failed: %s", exc)
+    # Fail-safe: only delete when the master positively resolves to a
+    # DIFFERENT address. If the master hostname doesn't resolve (DNS down,
+    # sentinel mid-failover) we know nothing — deleting then risks killing
+    # the healthy primary, which is exactly what happened on 2026-09-04.
+    master_ip = _resolve_host(master_host)
+    if not master_ip:
+        result["status"] = "skipped"
+        result["message"] = (
+            f"Sentinel master '{master_host}:{master_port}' does not resolve; "
+            f"leaving container '{PRIMARY_CONTAINER}' untouched."
+        )
+        logger.warning(
+            "Redis failover check inconclusive (master %s unresolvable) — no action taken.",
+            master_host,
+        )
+        return result
 
     logger.warning(
-        "Failover detected: container=%s (%s) is NOT master (%s:%s)",
-        PRIMARY_CONTAINER, container_ip or "unknown", master_host, master_port,
+        "Failover detected: container=%s (%s) is NOT master (%s:%s, resolved %s)",
+        PRIMARY_CONTAINER, container_ip or "unknown", master_host, master_port, master_ip,
     )
 
     if dry_run:

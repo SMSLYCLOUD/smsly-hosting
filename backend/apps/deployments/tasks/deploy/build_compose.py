@@ -593,7 +593,95 @@ def _infer_database_name(service: Service) -> str:
 
     return re.sub(r'[^a-z0-9_]', '_', svc_name)[:63]
 
+def _ensure_database_via_addon_container(base_url: str, db_name: str) -> bool:
+    """CREATE DATABASE from inside the addon postgres container.
+
+    The deploy worker is NOT on the project-scoped bridge, so addon DNS
+    names (postgres-smsly-*) never resolve from here — the direct
+    psycopg2 path in _ensure_database_exists always fails on scoped
+    networks. Running psql via `docker exec` inside the addon container
+    itself sidesteps Docker DNS entirely.
+    Returns True when the database exists (created or already present).
+    Never raises; never logs credentials.
+    """
+    try:
+        from urllib.parse import urlparse as _urlparse
+
+        import docker as _docker
+
+        parsed = _urlparse(base_url)
+        hostname = (parsed.hostname or '').strip().lower()
+        if not hostname:
+            return False
+        if not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_$]{0,62}', db_name or ''):
+            logger.warning("Refusing to provision database with unsafe name: %r", db_name)
+            return False
+
+        addon = None
+        for cand in Addon.objects.filter(
+            addon_type='POSTGRES',
+            status=Addon.Status.ACTIVE,
+        ).exclude(connection_url=''):
+            try:
+                if (_urlparse(cand.connection_url).hostname or '').strip().lower() == hostname:
+                    addon = cand
+                    break
+            except Exception:
+                continue
+        if addon is None:
+            return False
+
+        container_name = f"smsly-addon-postgres-{addon.id}"
+        try:
+            client = _docker.from_env()
+            container = client.containers.get(container_name)
+        except Exception as exc:
+            logger.debug("Addon container %s lookup failed: %s", container_name, exc)
+            return False
+
+        db_user = parsed.username or 'postgres'
+        env = {}
+        if parsed.password:
+            env['PGPASSWORD'] = parsed.password
+        check_cmd = [
+            'psql', '-U', db_user, '-d', 'postgres', '-tAc',
+            f"SELECT 1 FROM pg_database WHERE datname = '{db_name}'",
+        ]
+        try:
+            rc, out = container.exec_run(check_cmd, environment=env or None)
+        except Exception as exc:
+            logger.debug("Addon container exec failed for %s: %s", container_name, exc)
+            return False
+        out_bytes = out if isinstance(out, bytes) else str(out or '').encode('utf-8', 'replace')
+        if rc == 0 and b'1' in out_bytes:
+            return True
+        if rc != 0:
+            return False
+
+        create_cmd = ['psql', '-U', db_user, '-d', 'postgres', '-c', f'CREATE DATABASE "{db_name}"']
+        try:
+            rc, _out = container.exec_run(create_cmd, environment=env or None)
+        except Exception as exc:
+            logger.debug("CREATE DATABASE exec failed for %s: %s", db_name, exc)
+            return False
+        if rc == 0:
+            logger.info("Ecosystem: Auto-provisioned shared database '%s' (via %s)", db_name, container_name)
+            return True
+        return False
+    except Exception as exc:
+        logger.debug("Container-side database provisioning failed for %s: %s", db_name, exc)
+        return False
+
+
 def _ensure_database_exists(base_url: str, db_name: str):
+    # Container-side first: the worker is not on the project-scoped
+    # bridge, so addon DNS names never resolve from here. Fall through
+    # to the direct psycopg2 path (localhost etc.) when it misses.
+    try:
+        if _ensure_database_via_addon_container(base_url, db_name):
+            return
+    except Exception as exc:
+        logger.debug("Container-side provisioning attempt failed for %s: %s", db_name, exc)
     conn = None
     try:
         from urllib.parse import urlparse

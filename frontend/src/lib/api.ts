@@ -385,6 +385,9 @@ export interface Service {
   // Auto recovery
   auto_restart?: boolean;
   ha_mode?: 'none' | 'local' | 'remote';
+  external_ha_endpoint?: string;
+  external_ha_username?: string;
+  external_ha_database?: string;
   auto_rollback_enabled?: boolean;
   auto_rollback_threshold?: number | null;
   // Domain visibility

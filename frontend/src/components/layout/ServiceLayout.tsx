@@ -45,6 +45,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'monitoring', label: 'Monitoring', icon: BarChart3 },
         { id: 'topology', label: 'Topology', icon: Network },
         { id: 'scaling', label: 'Scaling', icon: Layers },
+        { id: 'ha', label: 'High Availability', icon: ShieldCheck },
         { id: 'cloud-storage', label: 'Cloud Storage', icon: Cloud },
         { id: 'cron', label: 'Cron Jobs', icon: Timer },
         { id: 'backups', label: 'Backups', icon: HardDrive },

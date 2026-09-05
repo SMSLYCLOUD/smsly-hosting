@@ -5,7 +5,7 @@
 #   • Transaction-mode pooling (Django-compatible)
 #   • Read/write query splitting (when DB_REPLICA_HOSTS is set; see
 #     render_pgcat_config.py)
-#   • Prometheus metrics on :9930
+#   • Prometheus metrics on :9930 — INERT (binary has no exporter)
 #   • Automatic health checks and backend banning
 #
 # NOTE: This file is a fallback / reference. The actual running config
@@ -48,6 +48,7 @@ admin_username = "pgcat_admin"
 admin_password = "pgcat_admin"  # Internal only — not exposed outside Docker
 
 # ── Prometheus Metrics ────────────────────────────────────────────────────────
+# INERT: the pgcat binary has no exporter; kept for future binaries.
 # Exposed on port 9930 for Grafana/Prometheus scraping
 prometheus_exporter_port = 9930
 

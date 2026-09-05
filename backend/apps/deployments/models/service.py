@@ -502,6 +502,32 @@ class Service(TimeStampedModel):
             "failure — disk, kernel, network, power)."
         ),
     )
+    # Optional non-WireGuard failover target. This stores connection details
+    # for an external HA adapter; the current ServiceHAManager still requires
+    # a ManagedServer for automatic failover, so the UI must not imply that a
+    # plain URL alone enables failover until an adapter is configured.
+    external_ha_endpoint = models.URLField(
+        blank=True,
+        default='',
+        help_text="External HA control/data endpoint (HTTPS recommended).",
+    )
+    external_ha_username = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+    )
+    external_ha_password = EncryptedCharField(
+        max_length=512,
+        blank=True,
+        default='',
+        help_text="External HA credential encrypted at rest.",
+    )
+    external_ha_database = models.CharField(
+        max_length=120,
+        blank=True,
+        default='',
+        help_text="Optional external PostgreSQL database name.",
+    )
 
     # Deploy Mode (single container vs docker-compose)
     DEPLOY_MODE_CHOICES = [

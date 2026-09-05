@@ -617,6 +617,47 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.restart_policy': restart_policy,
         }
 
+        # --- mTLS: ecosystem SPIRE mounts for user-deployed services ---
+        # The blue-green path previously created containers with no SPIRE
+        # mounts/env at all, so ecosystem services either ran without mTLS
+        # or kept stale platform-flavored env. Canonical source is
+        # apps.deployments.services.mtls_integration (ecosystem.local).
+        # Canonical MtlsConfig values win over stale env rows.
+        try:
+            from apps.deployments.models import Service as _SvcMtls
+            _mtls_svc = None
+            _mtls_svc_id = getattr(self, '_service_id', None) or kwargs.get('service_id', '')
+            if _mtls_svc_id:
+                _mtls_svc = _SvcMtls.objects.filter(id=_mtls_svc_id).first()
+            if _mtls_svc is None:
+                _mtls_svc = _SvcMtls.objects.filter(name=name).first()
+            if _mtls_svc is not None:
+                from apps.deployments.services.mtls_integration import (
+                    get_mtls_docker_run_volumes,
+                    get_mtls_env_vars,
+                    get_mtls_labels,
+                    resolve_spire_volume_name,
+                )
+                _mtls_labels = get_mtls_labels(_mtls_svc)
+                if _mtls_labels:
+                    labels.update(_mtls_labels)
+                _mtls_env = get_mtls_env_vars(_mtls_svc)
+                if _mtls_env:
+                    env.update(_mtls_env)
+                for _vol_name, _vol_bind in get_mtls_docker_run_volumes(_mtls_svc).items():
+                    _resolved_vol = resolve_spire_volume_name(_vol_name)
+                    try:
+                        self.docker_client.volumes.get(_resolved_vol)
+                    except Exception:
+                        logger.warning(
+                            "mTLS SPIRE volume %s not found — skipping mount for %s",
+                            _resolved_vol, name,
+                        )
+                        continue
+                    docker_volumes[_resolved_vol] = _vol_bind
+        except Exception as exc:
+            logger.debug("mTLS injection skipped for %s: %s", name, exc)
+
         # Check if this is a staged deployment (green candidate with staging domain)
         is_staged_green = hold_for_staging
 

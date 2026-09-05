@@ -44,8 +44,35 @@ PLATFORM_SPIFFE_TRUST_DOMAIN = os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"
 SPIRE_SOCKET_CONTAINER_PATH = "/opt/spire/run"
 SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 
-# Allow both ecosystem and platform trust domains for user services
-ALLOWED_ECOSYSTEM_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN, PLATFORM_SPIFFE_TRUST_DOMAIN}
+# Only the ecosystem trust domain is allowed for user services.
+# platform.local belongs to platform-internal services (separate SPIRE
+# server/trust bundle) — letting a user service claim it binds the
+# wrong certificate chain (see get_service_trust_domain).
+ALLOWED_ECOSYSTEM_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN}
+
+
+def resolve_spire_volume_name(short_name: str) -> str:
+    """Resolve a SPIRE named volume to the real Docker volume name.
+
+    Compose stacks prefix volumes with the project name (e.g.
+    ``smsly-hosting_spire-ecosystem-agent-socket``), so the bare short
+    name usually does not exist — mounting it would make Docker create
+    an EMPTY volume that shadows the real socket directory. Prefer the
+    exact name, else the unique ``*_<short>`` match, else the short
+    name unchanged (caller decides whether to mount or skip).
+    """
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        names = [v.name for v in get_docker_client().volumes.list()]
+    except Exception:
+        return short_name
+    if short_name in names:
+        return short_name
+    suffix = '_' + short_name
+    matches = sorted(v for v in names if v.endswith(suffix))
+    if matches:
+        return matches[0]
+    return short_name
 
 
 def is_mtls_enabled(service) -> bool:

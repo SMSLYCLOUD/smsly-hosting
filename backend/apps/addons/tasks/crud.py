@@ -68,7 +68,16 @@ def provision_addon_task(self, addon_id: str) -> None:
                     defaults={'value': url, 'is_secret': True, 'source': 'ADDON'},
                 )
     except Exception as e:
-        logger.error("Addon provisioning failed for %s: %s", addon_id, e)
+        # CalledProcessError str() omits stderr — include it so the real
+        # daemon error (e.g. image pull failures) is visible in logs.
+        _stderr = str(getattr(e, 'stderr', '') or '').strip()
+        if _stderr:
+            logger.error(
+                "Addon provisioning failed for %s: %s\n--- stderr ---\n%s",
+                addon_id, e, _stderr[-2000:],
+            )
+        else:
+            logger.error("Addon provisioning failed for %s: %s", addon_id, e)
         try:
             addon = Addon.objects.get(id=addon_id)
             if self.request.retries >= self.max_retries:

@@ -29,7 +29,7 @@
  | Addon | MEILISEARCH | Meilisearch | Database | /logos/addons/meilisearch.svg | SVG (Official) | getmeili/meilisearch:v1.4.0 | TBA | 7700 | VERIFIED | 
  | Addon | TYPESENSE | Typesense | Database | /logos/addons/typesense.svg | SVG (Official) | typesense/typesense:0.25.1 | TBA | 8108 | VERIFIED | 
  | Addon | SOLR | Solr | Database | /logos/addons/solr.svg | SVG (Official) | solr:9.3 | TBA | 8983 | VERIFIED | 
- | Addon | KAFKA | Kafka | Database | /logos/addons/kafka.svg | SVG (Official) | bitnami/kafka:3.5.1 | TBA | 9092 | VERIFIED | 
+ | Addon | KAFKA | Kafka | Database | /logos/addons/kafka.svg | SVG (Official) | bitnamilegacy/kafka:3.8.1 | TBA | 9092 | VERIFIED | 
  | Addon | NATS | Nats | Database | /logos/addons/nats.svg | SVG (Official) | nats:2.9.22-alpine | TBA | 4222 | VERIFIED | 
  | Addon | REDPANDA | Redpanda | Database | /logos/addons/redpanda.svg | SVG (Official) | redpandadata/redpanda:v23.2.14 | TBA | 9092 | VERIFIED | 
  | Addon | PULSAR | Pulsar | Database | /logos/addons/pulsar.svg | SVG (Official) | apachepulsar/pulsar:3.1.0 | TBA | 6650 | VERIFIED | 

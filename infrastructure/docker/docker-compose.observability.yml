@@ -1,6 +1,14 @@
 # SMSLY Hosting Observability Stack
 # Loki + Promtail + Grafana + Prometheus for log aggregation and metrics
 
+# Pinned project name: this file is invoked from different working
+# directories across flows (repo root vs infrastructure/docker/), and the
+# default project derives from the cwd basename — which once created a
+# shadow `docker` project with duplicate container_names and split data
+# volumes (docker_* vs smsly-hosting_*). Pinning keeps every invocation on
+# the same project, volumes, and containers as docker-compose.prod.yml.
+name: smsly-hosting
+
 services:
   # Loki - Log aggregation system
   loki:

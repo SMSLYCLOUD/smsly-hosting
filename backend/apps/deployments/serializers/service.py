@@ -216,6 +216,12 @@ class ServiceListSerializer(serializers.ModelSerializer):
 
 
 class ServiceSerializer(serializers.ModelSerializer):
+    external_ha_password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=False,
+        style={'input_type': 'password'},
+    )
     env_vars = EnvVarSerializer(many=True, required=False)
     regions = serializers.PrimaryKeyRelatedField(
         many=True, queryset=Region.objects.all(), required=False)
@@ -380,6 +386,10 @@ class ServiceSerializer(serializers.ModelSerializer):
             'health_check_path', 'health_check_port',
             'health_check_interval', 'health_check_timeout',
             'health_check_retries', 'auto_restart', 'health_status', 'ha_mode',
+            'external_ha_endpoint', 'external_ha_username', 'external_ha_database',
+            # write-only — declared above, must be in fields or DRF asserts
+            # at request time (every service detail GET 500s otherwise).
+            'external_ha_password',
             'restart_policy',
             'deploy_mode', 'compose_file', 'compose_main_service',
             'is_public',

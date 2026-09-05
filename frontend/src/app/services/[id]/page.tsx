@@ -24,6 +24,7 @@ import { StorageTab } from '@/components/storage/StorageTab';
 import { AddonsTab } from '@/components/addons/AddonsTab';
 import { ResourcesTab } from '@/components/settings/ResourcesTab';
 import { HealthTab } from '@/components/settings/HealthTab';
+import { HaTab } from '@/components/settings/HaTab';
 import { BuildTab } from '@/components/settings/BuildTab';
 import { FilesTab } from '@/components/settings/FilesTab';
 import { AiRouterTab } from '@/components/settings/AiRouterTab';
@@ -971,6 +972,8 @@ export default function ServiceDetailPage() {
             {activeTab === 'resources' && <ResourcesTab serviceId={service.id} service={service} />}
 
             {activeTab === 'health' && <HealthTab serviceId={service.id} service={service} />}
+
+            {activeTab === 'ha' && <HaTab serviceId={service.id} service={service} />}
 
             {activeTab === 'scaling' && <ScalingTab service={service} onUpdate={async () => {
                 try {

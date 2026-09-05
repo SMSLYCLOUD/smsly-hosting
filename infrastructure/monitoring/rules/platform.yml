@@ -107,13 +107,9 @@ groups:
           summary: "PgCat connection pooler is down"
           description: "pgcat container not seen for over 60s — all pooled DB traffic fails"
 
-      - alert: PgcatScrapeFailed
-        expr: up{job="pgcat"} == 0
-        for: 2m
-        labels: { severity: critical }
-        annotations:
-          summary: "PgCat Prometheus endpoint unreachable"
-          description: "Prometheus cannot scrape pgcat:9930 — pooler process may be hung"
+      # NOTE: no PgcatScrapeFailed rule — the pgcat binary ships no
+      # Prometheus exporter, so there is no pgcat scrape job. Pooler
+      # outages are caught by PgcatDown above.
 
       - alert: PostgresPrimaryDown
         expr: time() - max(container_last_seen{name=~".*postgres-primary.*"}) > 60
@@ -147,21 +143,11 @@ groups:
           summary: "HAProxy (Patroni routing) is down"
           description: "DB traffic routed via HAProxy :5000/:5001 has no healthy target"
 
+      # NOTE (2026-09-04): PgcatBackendBanned / PgcatPoolSaturation removed —
+      # they queried pgcat_* exporter metrics, but the levkk/pgcat binary
+      # ships no exporter, so the series can never exist and the rules
+      # would be permanently inert. Restore them if upstream adds the
+      # exporter (and re-add the pgcat scrape job in prometheus.yml).
       # Pool-level signals from PgCat's exporter. __name__ regex covers both
       # metric naming generations (levkk/pgcat unprefixed vs postgresml fork
       # pools_/servers_ prefixes).
-      - alert: PgcatBackendBanned
-        expr: max({__name__=~"pgcat_(servers_)?is_banned"}) == 1
-        for: 5m
-        labels: { severity: warning }
-        annotations:
-          summary: "PgCat has banned a database backend for 5+ minutes"
-          description: "Backend {{ $labels.host }} (role={{ $labels.role }}) failing health checks — verify Postgres is reachable from pgcat"
-
-      - alert: PgcatPoolSaturation
-        expr: min_over_time({__name__=~"pgcat_(pools_)?cl_waiting"}[5m]) > 0
-        for: 5m
-        labels: { severity: warning }
-        annotations:
-          summary: "Clients queuing on PgCat pool for 5+ minutes"
-          description: "Pool {{ $labels.pool }} has continuously waiting clients — consider PGCAT_APP_POOL_SIZE or check for slow queries"

@@ -1,3 +1,10 @@
+# Pinned project name: must stay identical to
+# infrastructure/docker/docker-compose.observability.yml, which defines the
+# same obs services. Without the pin, the project derives from the cwd
+# basename and a second `docker` project with duplicate container_names and
+# split data volumes appears (incident 2026-09-04).
+name: smsly-hosting
+
 services:
   # ── PostgreSQL HA (primary + replica) ──────────────────────────────────
   # Service is named `db` for backwards compat with scripts; container name
@@ -463,7 +470,7 @@ services:
       - -c
       - |
         printf '%s\n' \
-          "sentinel monitor mymaster redis-replica 6379 2" \
+          "sentinel monitor mymaster redis-primary 6379 2" \
           "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
           "sentinel down-after-milliseconds mymaster 5000" \
           "sentinel failover-timeout mymaster 15000" \
@@ -511,7 +518,7 @@ services:
       - -c
       - |
         printf '%s\n' \
-          "sentinel monitor mymaster redis-replica 6379 2" \
+          "sentinel monitor mymaster redis-primary 6379 2" \
           "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
           "sentinel down-after-milliseconds mymaster 5000" \
           "sentinel failover-timeout mymaster 15000" \
@@ -559,7 +566,7 @@ services:
       - -c
       - |
         printf '%s\n' \
-          "sentinel monitor mymaster redis-replica 6379 2" \
+          "sentinel monitor mymaster redis-primary 6379 2" \
           "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
           "sentinel down-after-milliseconds mymaster 5000" \
           "sentinel failover-timeout mymaster 15000" \
@@ -853,7 +860,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: smsly-hosting-backend:latest
-    command: celery -A config worker -l info --autoscale=${CELERY_AUTOSCALE:-12,4} -Q ${CELERY_QUEUES:-celery}
+    command: >
+      celery -A config worker -l WARNING --pool=prefork
+      --autoscale=${CELERY_AUTOSCALE:-4,0}
+      --prefetch-multiplier=1
+      --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50}
+      --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD:-524288}
+      -Q ${CELERY_QUEUES:-celery}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -906,138 +919,6 @@ services:
       resources:
         limits:
           memory: ${CELERY_MEMORY_LIMIT:-4G}
-  celery-2:
-    profiles:
-      - extra-workers
-    security_opt:
-      - apparmor:docker-default
-    cap_add:
-      - SETGID
-      - SETUID
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-    cap_drop:
-      - ALL
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    image: smsly-hosting-backend:latest
-    command: celery -A config worker -l info --autoscale=${CELERY_WORKER2_AUTOSCALE:-8,2} -Q celery
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      REDIS_HOST: ${REDIS_HOST:-redis-primary}
-      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
-      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
-      DOCKER_HOST: tcp://socket-proxy:2375
-      DOCKER_NETWORK: smsly-net
-      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
-      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
-    depends_on:
-      pgcat:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-      redis-sentinel-1:
-        condition: service_started
-      socket-proxy:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      registry:
-        condition: service_started
-    volumes:
-    - media_volume:/app/media
-    - caddy_config:/caddy-config
-    - /opt/smsly-cache:/opt/smsly-cache:z
-    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
-    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
-    - backups_data:/app/backups
-    - caddy_logs:/var/log/caddy:ro
-    - traefik_logs:/var/log/traefik:ro
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      interval: 30s
-      timeout: 20s
-      retries: 5
-      start_period: 300s
-    labels:
-    - managed_by=smsly-hosting
-    networks:
-    - smsly-net
-    deploy:
-      resources:
-        limits:
-          memory: ${CELERY_WORKER2_MEMORY_LIMIT:-4G}
-  celery-3:
-    profiles:
-      - extra-workers
-    security_opt:
-      - apparmor:docker-default
-    cap_add:
-      - SETGID
-      - SETUID
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-    cap_drop:
-      - ALL
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    image: smsly-hosting-backend:latest
-    command: celery -A config worker -l info --autoscale=${CELERY_WORKER3_AUTOSCALE:-8,2} -Q celery
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      REDIS_HOST: ${REDIS_HOST:-redis-primary}
-      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
-      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
-      DOCKER_HOST: tcp://socket-proxy:2375
-      DOCKER_NETWORK: smsly-net
-      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
-      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
-    depends_on:
-      pgcat:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-      redis-sentinel-1:
-        condition: service_started
-      socket-proxy:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      registry:
-        condition: service_started
-    volumes:
-    - media_volume:/app/media
-    - caddy_config:/caddy-config
-    - /opt/smsly-cache:/opt/smsly-cache:z
-    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
-    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
-    - backups_data:/app/backups
-    - caddy_logs:/var/log/caddy:ro
-    - traefik_logs:/var/log/traefik:ro
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      interval: 30s
-      timeout: 20s
-      retries: 5
-      start_period: 300s
-    labels:
-    - managed_by=smsly-hosting
-    networks:
-    - smsly-net
-    deploy:
-      resources:
-        limits:
-          memory: ${CELERY_WORKER3_MEMORY_LIMIT:-4G}
   celery-beat:
     security_opt:
       - apparmor:docker-default
@@ -1147,7 +1028,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: smsly-hosting-backend:latest
-    command: celery -A config worker -l info --autoscale=${CELERY_FAST_AUTOSCALE:-8,2} -Q fast
+    command: >
+      celery -A config worker -l WARNING --pool=prefork
+      --autoscale=${CELERY_FAST_AUTOSCALE:-4,1}
+      --prefetch-multiplier=1
+      --max-tasks-per-child=${CELERY_FAST_MAX_TASKS_PER_CHILD:-100}
+      --max-memory-per-child=${CELERY_FAST_MAX_MEMORY_PER_CHILD:-393216}
+      -Q fast
     restart: unless-stopped
     env_file: .env
     environment:
@@ -1206,7 +1093,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: smsly-hosting-backend:latest
-    command: celery -A config worker -l info --autoscale=${CELERY_DEPLOY_AUTOSCALE:-8,2} -Q deploy --hostname=deploy@%h
+    command: >
+      celery -A config worker -l WARNING --pool=prefork
+      --autoscale=${CELERY_DEPLOY_AUTOSCALE:-4,0}
+      --prefetch-multiplier=1
+      --max-tasks-per-child=${CELERY_DEPLOY_MAX_TASKS_PER_CHILD:-20}
+      --max-memory-per-child=${CELERY_DEPLOY_MAX_MEMORY_PER_CHILD:-786432}
+      -Q deploy --hostname=deploy@%h
     restart: unless-stopped
     env_file: .env
     environment:

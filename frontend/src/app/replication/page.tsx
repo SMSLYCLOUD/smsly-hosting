@@ -557,7 +557,7 @@ export default function ReplicationPage() {
                     )}
 
                     {/* No Health Data */}
-                    {!loading && !health && !showDeployForm && (
+                    {!loading && !health && !localHealth && !showDeployForm && (
                         <div className="text-center py-16">
                             <div className="w-20 h-20 mx-auto mb-4 rounded-3xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
                                 <Database className="text-blue-500" size={32} />
@@ -584,15 +584,41 @@ export default function ReplicationPage() {
                         </div>
                     )}
 
+                    {/* Local PostgreSQL HA does not imply a Patroni mesh. Keep
+                        the two states explicit so a healthy local primary /
+                        replica is not presented as a broken global cluster. */}
+                    {!loading && !health && localHealth && !showDeployForm && (
+                        <div className="mt-6 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-5">
+                            <div className="flex items-start gap-3">
+                                <CheckCircle2 className="mt-0.5 text-emerald-500" size={20} />
+                                <div>
+                                    <h2 className="font-bold">Local PostgreSQL HA is active</h2>
+                                    <p className="mt-1 text-sm text-muted-foreground">
+                                        The local primary and replica are running independently of the
+                                        Patroni mesh. No cross-node Patroni cluster is deployed yet.
+                                    </p>
+                                    <Button
+                                        variant="outline"
+                                        className="mt-4"
+                                        onClick={() => setShowDeployForm(true)}
+                                    >
+                                        <Zap size={16} className="mr-2" /> Deploy Patroni Mesh HA
+                                    </Button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Local HA Status — always shown when available, independent of mesh */}
                     {localHealth && (localHealth.primary || localHealth.local_replicas.length > 0) && (
                         <div className="space-y-4 mt-6">
                             <h2 className="text-lg font-bold flex items-center gap-2">
                                 <Server className="text-emerald-500" size={20} />
-                                Local HA Stack
+                                Local PostgreSQL HA
                             </h2>
                             <p className="text-sm text-muted-foreground -mt-2">
-                                PostgreSQL primary and replica running on this host.
+                                PostgreSQL primary and replica running on this host. This is separate
+                                from the optional cross-node Patroni mesh below.
                             </p>
 
                             {/* Primary */}

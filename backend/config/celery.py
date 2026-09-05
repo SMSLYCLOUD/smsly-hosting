@@ -347,12 +347,10 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
-    # Detect and clean up orphaned Redis primary after Sentinel failover
-    'recover-redis-failover-every-5m': {
-        'task': 'apps.deployments.tasks.recover_redis_failover',
-        'schedule': 300.0,
-        'options': {'expires': 300.0},
-    },
+    # Redis Sentinel owns failover. Do not run the legacy recovery task here:
+    # it can mistake a hostname/IP representation difference for an orphan
+    # and delete a healthy primary (incident 2026-09-05). Recovery is now
+    # manual until the task is redesigned around Sentinel's role/epoch.
     # Addon HA watchdog: replica health + Postgres auto-failover
     'addon-ha-watchdog-every-30s': {
         'task': 'apps.addons.tasks.ha_watchdog.check_addon_ha_task',

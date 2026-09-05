@@ -37,13 +37,14 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 30s
 
-  # PgCat connection pooler (built-in Prometheus exporter, see
-  # render_pgcat_config.py — enable_prometheus_exporter).
-  - job_name: 'pgcat'
-    static_configs:
-      - targets: ['pgcat:9930']
-    metrics_path: /metrics
-    scrape_interval: 15s
+  # PgCat connection pooler: NO scrape job on purpose. The levkk/pgcat
+  # binary (including :latest) contains no Prometheus exporter — the
+  # enable_prometheus_exporter keys in pgcat.toml are inert. Pooler health
+  # is covered by the PgcatDown container alert + the Docker healthcheck.
+  # If upstream ever ships the exporter, re-add:
+  #   - job_name: 'pgcat'
+  #     static_configs:
+  #       - targets: ['pgcat:9930']
 
   # System container metrics via cAdvisor (local + remote nodes)
   - job_name: 'cadvisor'

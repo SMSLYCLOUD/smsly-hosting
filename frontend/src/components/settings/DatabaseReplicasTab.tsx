@@ -16,6 +16,7 @@ import {
     AlertCircle, XCircle, Server, Network, Save, Lock, ExternalLink,
 } from 'lucide-react';
 import {
+    default as api,
     databaseReplicasApi,
     DatabaseReplica,
     DatabaseReplicaKind,
@@ -402,6 +403,16 @@ export function DatabaseReplicasTab() {
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
     const [dbHaEnabled, setDbHaEnabled] = useState(true);
+    const [localHealth, setLocalHealth] = useState<{
+        primary: { name: string; status: string } | null;
+        local_replicas: {
+            name: string;
+            host: string;
+            port: number;
+            status: string;
+            lag_seconds: number | null;
+        }[];
+    } | null>(null);
     const [haLoading, setHaLoading] = useState(false);
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [pendingHaValue, setPendingHaValue] = useState(false);
@@ -409,12 +420,14 @@ export function DatabaseReplicasTab() {
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const [list, eps] = await Promise.all([
+            const [list, eps, local] = await Promise.all([
                 databaseReplicasApi.list(),
                 databaseReplicasApi.endpoints(),
+                api.get('/replication/local-health/').catch(() => ({ data: null })),
             ]);
             setReplicas(list);
             setEndpoints(eps.endpoints);
+            setLocalHealth(local.data);
         } catch (err: any) {
             toast({ title: 'Failed to load replicas', description: err?.message, variant: 'destructive' });
         } finally {
@@ -552,11 +565,49 @@ export function DatabaseReplicasTab() {
             />
 
             <div className="space-y-3">
+                {localHealth?.local_replicas?.map((replica) => (
+                    <Card key={`local-${replica.host}-${replica.port}`}>
+                        <CardContent className="p-4">
+                            <div className="flex items-start justify-between gap-4 flex-wrap">
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <Server className="h-4 w-4 text-blue-400" />
+                                        <h3 className="font-semibold">{replica.name}</h3>
+                                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${
+                                            replica.status === 'OK'
+                                                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                                : 'bg-red-500/15 text-red-400 border-red-500/30'
+                                        }`}>
+                                            {replica.status === 'OK' ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                                            {replica.status === 'OK' ? 'Healthy' : replica.status}
+                                        </span>
+                                        <span className="text-xs px-2 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400">
+                                            Local HA
+                                        </span>
+                                    </div>
+                                    <div className="text-sm text-muted-foreground mt-1 font-mono break-all">
+                                        {replica.host}:{replica.port}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        Docker-managed read replica. Controlled by the PostgreSQL HA toggle,
+                                        not editable as an external database endpoint.
+                                    </p>
+                                </div>
+                                {replica.lag_seconds != null && (
+                                    <div className="text-right">
+                                        <p className="text-xs text-muted-foreground">Replication Lag</p>
+                                        <p className="font-bold text-sm text-emerald-500">{replica.lag_seconds.toFixed(2)}s</p>
+                                    </div>
+                                )}
+                            </div>
+                        </CardContent>
+                    </Card>
+                ))}
                 {loading ? (
                     <div className="flex justify-center py-8 text-muted-foreground">
                         <Loader2 className="h-5 w-5 animate-spin mr-2" />Loading…
                     </div>
-                ) : replicas.length === 0 ? (
+                ) : replicas.length === 0 && !localHealth?.local_replicas?.length ? (
                     <Card>
                         <CardContent className="py-12 text-center text-muted-foreground">
                             <Database className="h-8 w-8 mx-auto mb-2 opacity-40" />

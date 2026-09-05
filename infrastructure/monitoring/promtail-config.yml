@@ -33,12 +33,20 @@ scrape_configs:
       # Extract compose project name
       - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
         target_label: 'compose_project'
-      # Extract container name (strip leading /)
-      - source_labels: ['__meta_docker_container_label_com_docker_container_name']
+      # Extract container name (strip leading /).
+      # NOTE: the source must be the docker_sd meta label
+      # __meta_docker_container_name — there is no Docker label literally
+      # named com.docker.container_name, so the label_ infix variant is
+      # always empty and would blank this label.
+      - source_labels: ['__meta_docker_container_name']
         regex: '/(.*)'
         target_label: 'container_name'
-      # Use container ID as fallback container label
-      - source_labels: ['__meta_docker_container_label_com_docker_container_id']
+      # Use container ID as fallback container label (real docker_sd meta
+      # label — same caveat as above). Guarded so an empty value can never
+      # blank the label: the {container=""} drop stage below would then
+      # discard every entry (total log blackout, as seen 2026-09).
+      - source_labels: ['__meta_docker_container_id']
+        regex: '(.+)'
         target_label: 'container'
     pipeline_stages:
       # Parse Docker json-file log driver format

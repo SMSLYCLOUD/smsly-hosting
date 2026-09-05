@@ -415,6 +415,8 @@ class ReplicationViewSet(viewsets.ViewSet):
         HA stack (primary + replica) running as Docker containers on the
         same host.
         """
+        import os
+
         local_replicas = _get_local_replica_health()
 
         # Also probe the primary directly so the page can show both sides
@@ -425,9 +427,9 @@ class ReplicationViewSet(viewsets.ViewSet):
             class _PrimaryProbe:
                 host = "smsly-postgres-primary"
                 port = 5432
-                username = "postgres"
-                password = ""
-                database = "smsly_hosting"
+                username = os.environ.get("POSTGRES_USER", "smsly_admin")
+                password = os.environ.get("POSTGRES_PASSWORD", "")
+                database = os.environ.get("POSTGRES_DB", "smsly_hosting")
                 ssl_mode = "disable"
 
             ok, err, _lag = svc.test_connection(_PrimaryProbe())
