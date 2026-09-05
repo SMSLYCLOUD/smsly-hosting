@@ -12,6 +12,10 @@ _DEFAULT_WAVE_SIZE = 3
 _VALID_PORT_RANGE = (1, 65535)
 _MAX_CONCURRENT_BUILDS = 3
 _ACTIVE_BUILDS_CACHE_KEY = "smsly:ecosystem:active_builds"
+# A dispatched/in-progress build row untouched for longer than this is
+# presumed to have no live worker (ghost) and stops consuming a
+# concurrency slot. recover_stalled_deployments reaps such rows.
+_ACTIVE_BUILD_IDLE_MINUTES = 30
 _BUILD_DEFER_SECONDS = 300
 _DEFERRED_TASK_MAX_RETRIES = 5
 

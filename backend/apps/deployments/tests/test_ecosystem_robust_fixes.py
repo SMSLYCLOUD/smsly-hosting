@@ -14,6 +14,10 @@ from apps.deployments.tasks.ecosystem.tasks import (
     ecosystem_deferred_build_task,
     ecosystem_release_wave_task,
 )
+from apps.deployments.tasks.ecosystem.helpers.lifecycle import (
+    _count_active_ecosystem_builds,
+    _rebuild_ecosystem_build_counter,
+)
 
 
 class TestEcosystemRobustFixes(TestCase):
@@ -345,6 +349,48 @@ class TestWaveTimeoutOrphanFixes(TestCase):
     def test_plan_liveness_db_error_fails_open(self, mock_plan_filter):
         mock_plan_filter.side_effect = Exception("db down")
         self.assertTrue(_ecosystem_plan_still_deploying("plan-123"))
+
+
+class TestActiveBuildCounting(TestCase):
+    """The concurrency gate must count running builds, never the waiting queue."""
+
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_queued_rows_do_not_consume_slots(self, mock_filter):
+        mock_filter.return_value.count.return_value = 0
+        self.assertEqual(_count_active_ecosystem_builds(), 0)
+        kwargs = mock_filter.call_args[1]
+        self.assertNotIn(Deployment.Status.QUEUED, set(kwargs["status__in"]))
+
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_dispatched_and_running_states_count(self, mock_filter):
+        mock_filter.return_value.count.return_value = 3
+        self.assertEqual(_count_active_ecosystem_builds(), 3)
+        swept = set(mock_filter.call_args[1]["status__in"])
+        self.assertIn(Deployment.Status.REVIEW, swept)
+        self.assertIn(Deployment.Status.BUILDING, swept)
+        self.assertIn(Deployment.Status.DEPLOYING, swept)
+        self.assertIn(Deployment.Status.HEALTH_CHECK, swept)
+
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_stale_rows_do_not_consume_slots(self, mock_filter):
+        mock_filter.return_value.count.return_value = 0
+        _count_active_ecosystem_builds()
+        self.assertIn("updated_at__gte", mock_filter.call_args[1])
+
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_count_db_error_fails_open_to_zero(self, mock_filter):
+        mock_filter.side_effect = Exception("db down")
+        self.assertEqual(_count_active_ecosystem_builds(), 0)
+
+    @patch("apps.deployments.tasks.ecosystem.helpers.lifecycle.django_cache")
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    def test_rebuild_counter_matches_count_query(self, mock_filter, mock_cache):
+        mock_filter.return_value.count.return_value = 2
+        _rebuild_ecosystem_build_counter()
+        kwargs = mock_filter.call_args[1]
+        self.assertNotIn(Deployment.Status.QUEUED, set(kwargs["status__in"]))
+        mock_cache.set.assert_called_once()
+        self.assertEqual(mock_cache.set.call_args[0][1], 2)
 
 
 class TestPreEcosystemSnapshot(TestCase):

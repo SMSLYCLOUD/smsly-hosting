@@ -11,6 +11,7 @@ from django.utils import timezone
 from apps.deployments.models import Deployment
 from apps.deployments.tasks.ecosystem.constants import (
     _ACTIVE_BUILDS_CACHE_KEY,
+    _ACTIVE_BUILD_IDLE_MINUTES,
     _BUILD_DEFER_SECONDS,
     _DEFAULT_WAVE_SIZE,
     _MAX_CONCURRENT_BUILDS,
@@ -196,22 +197,33 @@ def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 500) -> i
 
 
 def _count_active_ecosystem_builds() -> int:
-    """Count ecosystem deployments currently being built (from DB — source of truth).
+    """Count ecosystem builds actually consuming resources (from DB — source of truth).
 
     The cache counter drifts because _decrement is never reliably called.
     Counting from DB eliminates drift entirely.
+
+    Only rows with a worker behind them count: QUEUED rows are *waiting
+    for* a slot, so counting them deadlocks the gate (10 waiting rows
+    read as "10 active builds" and nothing ever dispatches). REVIEW rows
+    (dispatched, awaiting pickup) count only while fresh — a REVIEW row
+    idle past the activity window is a dead dispatch, not a build.
+    Ghost rows are reaped separately by recover_stalled_deployments.
     """
     try:
+        from datetime import timedelta
+
         from apps.deployments.models import Deployment
         active_statuses = {
-            Deployment.Status.QUEUED,
+            Deployment.Status.REVIEW,
             Deployment.Status.BUILDING,
             Deployment.Status.DEPLOYING,
             Deployment.Status.HEALTH_CHECK,
         }
+        fresh_cutoff = timezone.now() - timedelta(minutes=_ACTIVE_BUILD_IDLE_MINUTES)
         return Deployment.objects.filter(
             commit_hash="ecosystem-deploy",
             status__in=active_statuses,
+            updated_at__gte=fresh_cutoff,
         ).count()
     except Exception:
         return 0
@@ -221,9 +233,9 @@ def _increment_active_ecosystem_builds() -> None:
     """Increment the active build counter (1-hour TTL safety net)."""
     try:
         try:
-            cache.incr(_ACTIVE_BUILDS_CACHE_KEY)
+            django_cache.incr(_ACTIVE_BUILDS_CACHE_KEY)
         except (ValueError, ConnectionError):
-            cache.add(_ACTIVE_BUILDS_CACHE_KEY, 1, timeout=3600)
+            django_cache.add(_ACTIVE_BUILDS_CACHE_KEY, 1, timeout=3600)
     except Exception as exc:
         logger.debug("Failed to increment active build counter: %s", exc)
 
@@ -231,28 +243,34 @@ def _increment_active_ecosystem_builds() -> None:
 def _decrement_active_ecosystem_builds() -> None:
     """Decrement the active build counter."""
     try:
-        current = int(cache.get(_ACTIVE_BUILDS_CACHE_KEY, 0))
+        current = int(django_cache.get(_ACTIVE_BUILDS_CACHE_KEY, 0))
         if current > 0:
-            cache.set(_ACTIVE_BUILDS_CACHE_KEY, current - 1, timeout=3600)
+            django_cache.set(_ACTIVE_BUILDS_CACHE_KEY, current - 1, timeout=3600)
     except Exception as exc:
         logger.debug("Failed to decrement active build counter: %s", exc)
 
 
 def _rebuild_ecosystem_build_counter() -> None:
     """Recalculate the build counter from actual deployment statuses.
-    Called periodically to prevent drift from stale cache entries."""
+    Called periodically to prevent drift from stale cache entries.
+    Mirrors _count_active_ecosystem_builds: waiting (QUEUED) and stale
+    rows are not active builds."""
     try:
+        from datetime import timedelta
+
         active_statuses = {
-            Deployment.Status.QUEUED,
+            Deployment.Status.REVIEW,
             Deployment.Status.BUILDING,
             Deployment.Status.DEPLOYING,
             Deployment.Status.HEALTH_CHECK,
         }
+        fresh_cutoff = timezone.now() - timedelta(minutes=_ACTIVE_BUILD_IDLE_MINUTES)
         count = Deployment.objects.filter(
             commit_hash="ecosystem-deploy",
             status__in=active_statuses,
+            updated_at__gte=fresh_cutoff,
         ).count()
-        cache.set(_ACTIVE_BUILDS_CACHE_KEY, count, timeout=3600)
+        django_cache.set(_ACTIVE_BUILDS_CACHE_KEY, count, timeout=3600)
     except Exception as exc:
         logger.debug("Failed to sync active build counter: %s", exc)
 
@@ -600,3 +618,4 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
         plan_rec.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
     except Exception as exc:
         logger.warning("Failed to finalize ecosystem plan %s: %s", plan_id, exc)
+
