@@ -14,7 +14,12 @@ services:
     image: infisical/infisical:v0.162.2
     restart: unless-stopped
     env_file:
-      - /data/infisical.env
+      # Set by the installer (lib/update_rebuild.sh, lib/fresh_deploy.sh),
+      # which extracts the generated secrets from the infisical_data volume
+      # to a host file. Compose cannot read env_file from inside a volume,
+      # so a bare /data/infisical.env path here fails — the variable is
+      # mandatory on purpose (loud failure beats silent misconfiguration).
+      - ${INFISICAL_ENV_FILE:?INFISICAL_ENV_FILE must be set, e.g. /opt/smsly-hosting/.infisical.env}
     environment:
       # Database — uses existing Postgres
       DB_CONNECTION_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@smsly-postgres-primary:5432/infisical
@@ -55,7 +60,12 @@ services:
           memory: 256M
 
 volumes:
+  # External + fixed name: the installer pre-populates this EXACT volume
+  # (docker volume create infisical_data) with generated secrets. A
+  # project-scoped volume would silently use a different, empty volume.
   infisical_data:
+    external: true
+    name: infisical_data
 
 networks:
   smsly-net:

@@ -246,10 +246,24 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                     echo -e "${YELLOW}  ⚠ Could not generate Infisical env${NC}"
             fi
 
-            docker compose --env-file "$INSTALL_DIR/.env" \
-                -f "$_INFISICAL_COMPOSE" up -d --remove-orphans  && \
-                echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
-                echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
+            # Compose reads env_file from the HOST, not from inside a
+            # volume — extract the generated secrets to a host file.
+            export INFISICAL_ENV_FILE="$INSTALL_DIR/.infisical.env"
+            if ! docker run --rm -v infisical_data:/data alpine:3.19 \
+                    cat /data/infisical.env > "$INFISICAL_ENV_FILE" 2>/dev/null; then
+                echo -e "${YELLOW}  ⚠ Could not read Infisical env from volume — skipping Infisical${NC}"
+            elif ! grep -q "^ENCRYPTION_KEY=.\+" "$INFISICAL_ENV_FILE" || ! grep -q "^AUTH_SECRET=.\+" "$INFISICAL_ENV_FILE"; then
+                echo -e "${YELLOW}  ⚠ Infisical env incomplete — skipping Infisical${NC}"
+            else
+                chmod 600 "$INFISICAL_ENV_FILE"
+                # No --remove-orphans: with the shared directory it would
+                # classify main-stack services as orphans and SIGTERM the
+                # whole platform (see AGENTS.md #16).
+                docker compose --env-file "$INSTALL_DIR/.env" \
+                    -f "$_INFISICAL_COMPOSE" up -d  && \
+                    echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
+                    echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
+            fi
         fi
     fi
 

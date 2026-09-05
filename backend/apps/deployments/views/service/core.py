@@ -567,6 +567,63 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         }, status=status.HTTP_201_CREATED)
 
 
+    @action(detail=True, methods=['post'], url_path='apply-env')
+    def apply_env(self, request, pk=None):
+        """
+        Apply current DB env/config to the running container WITHOUT rebuilding.
+        POST /api/v1/services/{id}/apply-env/
+        Body: { "confirm": true, "dry_run"?: false }
+
+        Linux processes snapshot env at exec, and `docker restart` keeps the
+        OLD env — so this recreates the container from the SAME image with
+        fresh env (seconds of downtime for a process boot, no build, no pull).
+        The old container is kept as a backup until the replacement reports
+        running; any failure rolls back automatically. Remote-node services
+        are refused (run where the code is current).
+        """
+        service = self.get_object()
+        assert_can_write(self.request.user, service)
+        if str(request.data.get('confirm', '')).lower() != 'true':
+            return Response(
+                {'error': 'Explicit confirmation required. Send "confirm": true.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        dry_run = _parse_bool(request.data.get('dry_run', False))
+
+        try:
+            from apps.deployments.services.container_refresh import (
+                ContainerRefreshError,
+                recreate_with_fresh_env,
+            )
+            result = recreate_with_fresh_env(service, dry_run=dry_run)
+        except ContainerRefreshError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
+        except Exception as exc:
+            logger.error("Apply-env failed for %s: %s", service.name, exc)
+            return Response({'error': f'Apply-env failed: {exc}'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not dry_run:
+            from django.core.cache import cache
+            cache.set(f"health:restart_grace:{service.id}", True, timeout=60)
+            AuditLog(
+                actor=request.user.get_username(),
+                action='SERVICE_APPLY_ENV',
+                target=f'Service: {service.name}',
+                metadata={
+                    'service_id': str(service.id),
+                    'container': result.get('container'),
+                    'env_keys': result.get('env_keys'),
+                },
+            ).save()
+
+        return Response({
+            'message': f'Service {service.name} env applied (no rebuild)',
+            'method': 'recreate_same_image',
+            **result,
+        })
+
+
     @action(detail=True, methods=['post'], url_path='recheck-health')
     def recheck_health(self, request, pk=None):
         """

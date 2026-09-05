@@ -568,6 +568,10 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/restart/`, { force_rebuild: forceRebuild });
     return response.data;
   },
+  applyEnv: async (id: string, data: { confirm: true; dry_run?: boolean }): Promise<{ message?: string; method?: string; container?: string; env_keys?: number; plan?: unknown; error?: string }> => {
+    const response = await api.post(`/services/${id}/apply-env/`, data);
+    return response.data;
+  },
   triggerJulesFix: async (serviceId: string, deploymentId?: string): Promise<{ status: string; message?: string }> => {
     const body: Record<string, unknown> = {};
     if (deploymentId) body.deployment_id = deploymentId;

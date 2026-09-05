@@ -21,6 +21,7 @@ import {
   FileText,
   Upload,
   Download,
+  Zap,
 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -266,6 +267,35 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     }
   };
 
+  const handleApplyNow = async () => {
+    if (
+      !(await confirm({
+        title: "Apply variables now?",
+        message:
+          "Recreates the running container from the SAME image with the current variables (seconds of downtime, no rebuild). Rolls back automatically on failure.",
+        confirmText: "Apply now",
+      }))
+    )
+      return;
+    setDeploying(true);
+    try {
+      const res = await servicesApi.applyEnv(serviceId, { confirm: true });
+      setHasChanges(false);
+      toast({
+        title: "⚡ Variables applied",
+        description: res.message || `Container ${res.container || ""} recreated with fresh variables.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Apply failed",
+        description: err?.response?.data?.error || "Could not apply variables.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeploying(false);
+    }
+  };
+
   const toggleVisibility = (id: number) => {
     setVisibleValues((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -316,6 +346,20 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                 <Rocket className="w-4 h-4 mr-2" />
               )}
               {deploying ? "Deploying..." : "Redeploy Now"}
+            </Button>
+            <Button
+              onClick={handleApplyNow}
+              disabled={deploying}
+              className="bg-white/20 text-white hover:bg-white/30 font-semibold shadow-sm"
+              size="sm"
+              title="Recreate the container from the same image with fresh variables — no rebuild"
+            >
+              {deploying ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Zap className="w-4 h-4 mr-2" />
+              )}
+              {deploying ? "Applying..." : "Apply now"}
             </Button>
           </div>
         </div>
@@ -607,7 +651,8 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
         <div className="mt-8 pt-6 border-t border-border space-y-2">
           <p className="text-xs text-muted-foreground">
             <strong className="text-foreground">Note:</strong> Changes to
-            environment variables require a redeployment to take effect.
+            environment variables need a redeploy (full rebuild) or <strong className="text-foreground">Apply now</strong> (seconds,
+            same image) to take effect in the running container.
           </p>
           <p className="text-xs text-muted-foreground flex items-center gap-1.5">
             <Lock className="w-3 h-3 text-amber-500" />
