@@ -383,9 +383,13 @@ class EcosystemScanTaskTests(TestCase):
     @patch("apps.deployments.utils.github.get_github_token_for_user", return_value="gh-token")
     def test_scan_and_analyze_auto_skips_deployed_services(self, _token_mock, mock_analyze, mock_tree, mock_repos):
         """Verify that scan_and_analyze sets skip=True for already deployed services."""
+        # pushed_at is required: scan_and_analyze filters by recency when
+        # scan_window_days is set — without it every repo is dropped.
         mock_repos.return_value = [
-            {"full_name": "owner/existing-svc", "default_branch": "main", "private": False, "size": 100},
-            {"full_name": "owner/new-svc", "default_branch": "main", "private": False, "size": 100}
+            {"full_name": "owner/existing-svc", "default_branch": "main", "private": False, "size": 100,
+             "pushed_at": "2099-01-01T00:00:00Z"},
+            {"full_name": "owner/new-svc", "default_branch": "main", "private": False, "size": 100,
+             "pushed_at": "2099-01-01T00:00:00Z"},
         ]
         mock_tree.return_value = ["package.json"]
         mock_analyze.return_value = {
@@ -489,11 +493,23 @@ class EcosystemDeployTaskTests(TestCase):
             result = ecosystem_deploy_task.run(str(self.user.id), plan)
 
         self.assertEqual(result["failed"], 0)
-        service.refresh_from_db()
-        deployment = Deployment.objects.get(service=service)
-        # No auto-selection: the service stays on local (server=None) and
-        # the deployment targets the local master, not the Worker node.
-        self.assertIsNone(service.server)
+        # The pre-existing 'api' service has no ecosystem deployment, so
+        # the anti-squat path creates a suffixed ecosystem-owned service
+        # (api-2) rather than claiming the user's manual service. The
+        # deployment lands on the ecosystem service, targeting LOCAL.
+        deployed_names = list(
+            Deployment.objects.filter(
+                commit_hash="ecosystem-deploy",
+            ).values_list('service__name', flat=True),
+        )
+        self.assertEqual(len(deployed_names), 1)
+        self.assertTrue(deployed_names[0].startswith("api"), deployed_names)
+        eco_service = Service.objects.get(name=deployed_names[0])
+        self.assertNotEqual(eco_service.id, service.id)  # user's service untouched
+        deployment = Deployment.objects.get(service=eco_service)
+        # No auto-selection: the ecosystem service stays on local
+        # (server=None) and the deployment targets the local master.
+        self.assertIsNone(eco_service.server)
         self.assertIsNone(deployment.target_server)
         self.assertTrue(deployment.target_is_local)
 
