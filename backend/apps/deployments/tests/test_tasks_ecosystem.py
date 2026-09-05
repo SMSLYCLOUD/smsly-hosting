@@ -377,9 +377,13 @@ class EcosystemScanTaskTests(TestCase):
         self.assertTrue(result["retryable"])
         self.assertIn("timed out", result["error"])
 
-    @patch("apps.deployments.services.ecosystem.fetch_all_repos")
-    @patch("apps.deployments.services.ecosystem.fetch_repo_tree")
-    @patch("apps.deployments.services.ecosystem.analyze_ecosystem_chunked")
+    # Patch targets must be the pipeline module's OWN bindings — it does
+    # `from .ecosystem_github import fetch_all_repos, fetch_repo_tree`,
+    # so patching the package re-export (services.ecosystem.fetch_all_repos)
+    # never affects the call site.
+    @patch("apps.deployments.services.ecosystem.ecosystem_pipeline.fetch_all_repos")
+    @patch("apps.deployments.services.ecosystem.ecosystem_pipeline.fetch_repo_tree")
+    @patch("apps.deployments.services.ecosystem.ecosystem_pipeline.analyze_ecosystem_chunked")
     @patch("apps.deployments.utils.github.get_github_token_for_user", return_value="gh-token")
     def test_scan_and_analyze_auto_skips_deployed_services(self, _token_mock, mock_analyze, mock_tree, mock_repos):
         """Verify that scan_and_analyze sets skip=True for already deployed services."""
