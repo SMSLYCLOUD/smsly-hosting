@@ -36,6 +36,7 @@ from ..helpers import (
     build_agent_lite_install_env,
     server_connection_mode,
     server_install_mode,
+    stage_media_repo_for_node,
 )
 from ..provisioning_resources import _ProvisioningResources
 
@@ -226,16 +227,18 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
             install_env["MASTER_IP"] = master_ip
             install_env["MASTER_MESH_IP"] = _get_master_mesh_ip()
-            
-            if hasattr(server, 'media_profile'):
-                repo_url = server.media_profile.script_repo_url
-                repo_token = server.media_profile.script_repo_token
-                if repo_url:
-                    install_env["MEDIA_REPO_URL"] = str(repo_url)
-                    install_args.extend(["--repo-url", str(repo_url)])
-                if repo_token:
-                    install_env["MEDIA_REPO_TOKEN"] = str(repo_token)
-                    install_args.extend(["--repo-token", str(repo_token)])
+
+            # Stage the media code repo onto the node first: the master
+            # fetches it with a short-lived GitHub App token and copies
+            # the files over SSH, so no GitHub credential ever lands on
+            # the node. Returns a file:// URL (+ legacy token fallback).
+            repo_url, repo_token = stage_media_repo_for_node(ssh, server)
+            if repo_url:
+                install_env["MEDIA_REPO_URL"] = str(repo_url)
+                install_args.extend(["--repo-url", str(repo_url)])
+            if repo_token:
+                install_env["MEDIA_REPO_TOKEN"] = str(repo_token)
+                install_args.extend(["--repo-token", str(repo_token)])
         elif install_mode == "node":
             install_args.append("--mode=node")
             install_env["COMPOSE_FILE"] = "infrastructure/docker/docker-compose.node.yml"

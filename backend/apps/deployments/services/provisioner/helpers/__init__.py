@@ -35,6 +35,10 @@ from .logging import (
     _append_log,
     _broadcast_provision_log,
 )
+from .media_repo import (
+    resolve_media_repo_url,
+    stage_media_repo_for_node,
+)
 from .registry import (
     _registry_login_commands,
 )
@@ -73,6 +77,8 @@ __all__ = [
     "_url_username",
     "_verify_agent_db_connectivity",
     "build_agent_lite_install_env",
+    "resolve_media_repo_url",
     "server_connection_mode",
     "server_install_mode",
+    "stage_media_repo_for_node",
 ]
