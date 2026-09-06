@@ -188,12 +188,17 @@ def validate_service_routes_do_not_hit_control_plane(content: str) -> list[str]:
 def extract_site_labels(content: str) -> set[str]:
     """Return the normalized site labels (hostnames) of every site block.
 
-    Skips the keyless global options block and port-only addresses
-    like ``:80`` (those carry no hostname). Used by the no-regression
+    Only TOP-LEVEL blocks count (starting at column 0): nested
+    directive blocks such as ``handle /api/* {`` or ``on_demand_tls {``
+    are indented and must not be mistaken for site addresses. Skips
+    the keyless global options block and port-only addresses like
+    ``:80`` (those carry no hostname). Used by the no-regression
     guard to compare the generated content against the live file.
     """
     labels: set[str] = set()
     for line in str(content or "").splitlines():
+        if not line or line[0] in (" ", "\t"):
+            continue
         stripped = line.strip()
         if not stripped.endswith("{"):
             continue
@@ -271,17 +276,11 @@ def validate_control_plane_block_present(content: str, platform_domain: str) -> 
     if not platform_domain:
         return []
 
-    for line in str(content or "").splitlines():
-        stripped = line.strip()
-        if not stripped.endswith("{"):
-            continue
-        labels = [
-            _normalize_caddy_site_label(label)
-            for label in stripped[:-1].strip().split()
-            if label.strip()
-        ]
-        if platform_domain in labels:
-            return []
+    # Reuse the shared extractor so nested directive blocks (e.g. a
+    # handle line mentioning a domain) can never satisfy the check —
+    # only a real top-level site block counts.
+    if platform_domain in extract_site_labels(content):
+        return []
 
     return [
         f"Platform control-plane site block for '{platform_domain}' is "
