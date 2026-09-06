@@ -155,7 +155,7 @@ def daily_intelligence_report_task(self):
     success_rate = ((total - failed) / total * 100) if total > 0 else 100
 
     anomalies = AuditLog.objects.filter(
-        created_at__gte=yesterday,
+        timestamp__gte=yesterday,
         actor__in=["AI_REMEDIATOR", "AI_REVIEWER"]
     ).count()
 

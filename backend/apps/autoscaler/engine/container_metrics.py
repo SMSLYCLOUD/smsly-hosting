@@ -9,8 +9,11 @@ used by the container-level autoscaler dashboard (which scales
 ``Service`` rows) and have been moved here so they can be shared
 between the per-service pipeline and the per-container dashboard.
 """
+import json
 import logging
 import concurrent.futures
+import shutil
+import subprocess
 import threading
 
 logger = logging.getLogger(__name__)
@@ -20,6 +23,12 @@ logger = logging.getLogger(__name__)
 STATS_PER_CONTAINER_TIMEOUT = 3
 # Overall timeout for collecting ALL container stats (seconds).
 STATS_OVERALL_TIMEOUT = 20
+# `docker stats --no-stream` is ONE daemon round-trip for every
+# container (~2s total on 60+ containers) vs 2s PER container via
+# docker-py stats(stream=False) — the SDK path took 130s+ on busy
+# hosts and blew the dashboard's 15s API budget, leaving the
+# Autoscaler tab permanently empty.
+STATS_CLI_TIMEOUT = 12
 
 # Lazy-loaded K8s clients — only imported when the kubernetes package
 # is available.  ``init_k8s()`` populates ``_k8s_clients`` on first use.
@@ -67,7 +76,15 @@ def k8s_available() -> bool:
 
 
 def collect_container_stats() -> dict:
-    """Collect container-level metrics. Returns ``{container_name: stats_dict}``."""
+    """Collect container-level metrics. Returns ``{container_name: stats_dict}``.
+
+    Priority: docker CLI bulk stats (one daemon round-trip, ~2s for
+    60+ containers) -> K8s metrics API -> per-container SDK fallback.
+    """
+    cli_stats = _docker_stats_cli()
+    if cli_stats is not None:
+        return cli_stats
+
     if k8s_available():
         result = _k8s_container_stats()
         if result is not None:
@@ -126,6 +143,56 @@ def parse_k8s_memory(mem_str: str) -> float:
     if mem_str.endswith("Ti"):
         return float(mem_str[:-2]) * 1024 * 1024
     return float(mem_str) / (1024 * 1024)
+
+
+def _docker_stats_cli() -> dict | None:
+    """Collect ALL container stats in ONE daemon round-trip via
+    ``docker stats --no-stream --format json``.
+
+    Returns None when the docker CLI is unavailable or the call fails
+    (callers fall back to the per-container SDK path).
+    """
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return None
+    try:
+        result = subprocess.run(
+            [docker_bin, "stats", "--no-stream", "--format", "json"],
+            capture_output=True, text=True, timeout=STATS_CLI_TIMEOUT,
+        )
+        if result.returncode != 0:
+            logger.debug("docker stats CLI rc=%d: %s",
+                         result.returncode, (result.stderr or '')[:200])
+            return None
+
+        containers: dict = {}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name = row.get("Name") or row.get("Container")
+            if not name:
+                continue
+            containers[name] = {
+                "cpu_percent": _safe_float(row.get("CPUPercentage", "0")),
+                "memory_mb": parse_mem(row.get("MemUsage", "0") .split("/")[0].strip()),
+                "memory_limit_mb": parse_mem((row.get("MemUsage") or "0/0").split("/")[-1].strip()),
+                "memory_percent": _safe_float(row.get("MemPerc", "0")),
+                "net_rx_mb": parse_mem(row.get("NetIO", "0 / 0").split("/")[0].strip()),
+                "net_tx_mb": parse_mem((row.get("NetIO") or "0 / 0").split("/")[-1].strip()),
+                "pids": int(_safe_float(row.get("PIDs", "0"))),
+            }
+        return containers if containers else None
+    except subprocess.TimeoutExpired:
+        logger.warning("docker stats CLI timed out after %ds", STATS_CLI_TIMEOUT)
+        return None
+    except Exception as exc:
+        logger.debug("docker stats CLI failed: %s", exc)
+        return None
 
 
 def docker_stats_legacy() -> dict:

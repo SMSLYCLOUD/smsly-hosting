@@ -725,7 +725,7 @@ def ai_intelligence_report(request):
         report = (
             AuditLog.objects
             .filter(filters)
-            .order_by("-created_at")
+            .order_by("-timestamp")
             .first()
         )
     except (DatabaseError, Exception):
@@ -779,7 +779,11 @@ def ai_anomaly_history(request):
         qs = AuditLog.objects.filter(actor__in=["AI_REMEDIATOR", "AI_REVIEWER"])
         if service_id:
             qs = qs.filter(target__icontains=service_id)
-        anomalies = qs.order_by("-created_at")[:50]
+        # AuditLog's timestamp field is 'timestamp' — a previous
+        # order_by('-created_at') raised FieldError, which the blanket
+        # except swallowed into "anomalies: [], available: false" —
+        # the Anomalies tab has been silently empty ever since.
+        anomalies = qs.order_by("-timestamp")[:50]
     except (DatabaseError, Exception):
         return Response({"anomalies": [], "available": False})
 
@@ -794,7 +798,7 @@ def ai_anomaly_history(request):
             "service_name": str(a.target or ""),
             "issue_type": str(a.action or "UNKNOWN"),
             "severity": str(safe_meta.get("severity", "WARNING")),
-            "detected_at": a.created_at,
+            "detected_at": a.timestamp,
             "auto_fixed": a.action in ["SCALE_UP", "ROLLBACK", "CLEANUP", "RESTART", "REBUILD", "DIAGNOSE"],
             "fix_result": str(safe_meta),
         })
