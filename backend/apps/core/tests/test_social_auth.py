@@ -100,9 +100,14 @@ class CallbackOverrideGatingTests(TestCase):
         self.assertEqual(resp.status_code, 302, resp.content[:200])
         location = resp["Location"]
         self.assertIn("https://github.com/login/oauth/authorize", location)
-        # The provider must send the code back to ALLATH's callback —
-        # that is where state is validated and the session established.
-        self.assertIn("/accounts/github/login/callback/", location)
+        # The redirect_uri is URL-encoded inside the Location header —
+        # decode before asserting. The provider must send the code back
+        # to allauth's callback (where state is validated and the
+        # session established), and a state param must be present.
+        from urllib.parse import unquote
+
+        decoded = unquote(location)
+        self.assertIn("/accounts/github/login/callback/", decoded)
         self.assertIn("state=", location)
 
 
