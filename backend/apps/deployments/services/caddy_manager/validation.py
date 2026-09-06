@@ -185,6 +185,73 @@ def validate_service_routes_do_not_hit_control_plane(content: str) -> list[str]:
     return errors
 
 
+def extract_site_labels(content: str) -> set[str]:
+    """Return the normalized site labels (hostnames) of every site block.
+
+    Skips the keyless global options block and port-only addresses
+    like ``:80`` (those carry no hostname). Used by the no-regression
+    guard to compare the generated content against the live file.
+    """
+    labels: set[str] = set()
+    for line in str(content or "").splitlines():
+        stripped = line.strip()
+        if not stripped.endswith("{"):
+            continue
+        for label in stripped[:-1].strip().split():
+            label = (label or "").strip()
+            if not label or label.startswith(":"):
+                continue
+            norm = _normalize_caddy_site_label(label)
+            if norm:
+                labels.add(norm)
+    return labels
+
+
+def validate_no_site_block_regression(
+    new_content: str,
+    live_content: str,
+    platform_domain: str = "",
+) -> list[str]:
+    """Refuse new content that drops site blocks present in the live file.
+
+    OUTAGE GUARD (2026-09-06): a restart-race generated a stub Caddyfile
+    (global block + bare ``:80`` only) while the platform config read
+    empty; every site block vanished, Caddy dropped its 443 listener,
+    and all proxied traffic 521'd. The domain-based control-plane
+    guard cannot catch this when the domain itself is unreadable — so
+    compare against what's actually live.
+
+    Scoping (so legitimate removals keep working): a tenant removing a
+    custom domain regenerates content that drops exactly that block —
+    allowed. Refusal fires only when (a) the KNOWN platform domain is
+    among the dropped, or (b) the domain is unknown AND every live
+    label disappears (the total-wipe stub signature). Fresh installs
+    (no live file) are unaffected.
+    """
+    if not live_content or not live_content.strip():
+        return []
+    live_labels = extract_site_labels(live_content)
+    if not live_labels:
+        return []
+    new_labels = extract_site_labels(new_content or "")
+    dropped = sorted(live_labels - new_labels)
+    if not dropped:
+        return []
+
+    platform_domain = str(platform_domain or "").strip().lower().rstrip(".")
+    total_wipe = not new_labels
+    platform_dropped = bool(platform_domain) and platform_domain in dropped
+    if not (platform_dropped or total_wipe):
+        return []
+
+    return [
+        f"Refusing to apply Caddyfile that drops live site block(s): "
+        f"{', '.join(dropped)}. The previous good Caddyfile stays live. "
+        f"Likely cause: generation ran with an unreadable/empty platform "
+        f"config (backend restart race) — check PlatformConfig.domain."
+    ]
+
+
 def validate_control_plane_block_present(content: str, platform_domain: str) -> list[str]:
     """Refuse to apply a Caddyfile that drops the control plane site block.
 

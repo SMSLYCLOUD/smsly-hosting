@@ -152,6 +152,32 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                 logger.error("apply_caddyfile refused: %s", result["message"])
                 return result
 
+        # NO-REGRESSION GUARD (2026-09-06 outage): even when the domain
+        # is unreadable (so the control-plane check above is skipped),
+        # never silently replace a live Caddyfile with content that
+        # drops the platform block or wipes every site (the stub
+        # signature). Partial drops (a tenant removing a custom domain)
+        # still pass. Fresh installs (no live file) are unaffected.
+        try:
+            from .validation import validate_no_site_block_regression
+            _live_content = ""
+            if os.path.exists(CADDY_FILE_PATH):
+                with open(CADDY_FILE_PATH, encoding="utf-8") as _lf:
+                    _live_content = _lf.read()
+            reg_errors = validate_no_site_block_regression(
+                content, _live_content, platform_domain=_platform_domain,
+            )
+            if reg_errors:
+                result["message"] = reg_errors[0]
+                logger.error("apply_caddyfile refused: %s", result["message"])
+                return result
+        except Exception as _reg_exc:
+            logger.warning(
+                "site-block regression check errored (%s) — proceeding; "
+                "verify the Caddyfile after apply.",
+                _reg_exc,
+            )
+
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
         try:
             os.chmod(CADDY_CONFIG_DIR, 0o775)
