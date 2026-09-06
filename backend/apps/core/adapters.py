@@ -11,22 +11,32 @@ class CustomAccountAdapter(DefaultAccountAdapter):
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
     """Custom social account adapter that applies provider-specific callback URL overrides.
 
-    Only applies the override for the **account linking** flow (user is already
-    authenticated).  For the **SSO login** flow (user is NOT authenticated), the
-    default allauth callback URL is used so that allauth can establish the session.
+    Only applies the override for the **account linking** flow, identified
+    by allauth's ``?process=connect`` marker — never for the **SSO
+    login/signup** flow, where allauth must receive the code at its own
+    callback URL to validate state and establish the session.
     """
 
     def get_connect_redirect_url(self, request, _socialaccount):
         return settings.LOGIN_REDIRECT_URL
 
     def get_callback_url(self, request, provider):
-        # If the user is NOT authenticated, this is the SSO login flow.
-        # Let allauth handle the callback normally so it can create the session.
+        # The override applies ONLY to the account-linking ("connect")
+        # flow, which allauth marks with ?process=connect. Being merely
+        # authenticated is NOT sufficient: an already-logged-in user who
+        # clicks "Sign in with GitHub" again starts a *login* flow, and
+        # allauth must receive the code at its own callback URL to
+        # validate state. Sending the provider to an SPA page instead
+        # strands the code where nothing exchanges it (dead flow).
+        if request.GET.get('process') != 'connect':
+            return super().get_callback_url(request, provider)
+
         if not getattr(request, 'user', None) or not request.user.is_authenticated:
             return super().get_callback_url(request, provider)
 
-        # User IS authenticated — this is the account linking flow.
-        # Apply provider-specific callback URL overrides (SPA callback pages).
+        # User IS authenticated in a connect flow — this is account
+        # linking. Apply provider-specific callback URL overrides
+        # (SPA callback pages).
         provider_id = getattr(provider, 'provider_id', None) or str(provider)
         overrides = {
             'github': getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None),

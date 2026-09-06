@@ -845,6 +845,16 @@ REST_AUTH = {
 # instead of being logged in).
 ACCOUNT_EMAIL_VERIFICATION = 'mandatory' if not DEBUG else 'none'
 
+# Social login into EXISTING local accounts by verified email. Without this,
+# a user who first registered with email+password and later clicks "Sign in
+# with GitHub" (same email) hits a dead-end "account already exists" error
+# with no path forward. With it, allauth logs them into the existing
+# account when — and only when — the provider attests the email is
+# verified. Unverified provider emails still fall through to the normal
+# signup/conflict flow. ACCOUNT_PREVENT_ENUMERATION stays on, so failure
+# responses do not leak which emails have accounts.
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
+
 # Store social OAuth tokens (required for private-repo deploys via linked GitHub accounts).
 # Explicitly set to avoid relying on allauth defaults.
 # SECURITY RISK: If the database is compromised, all linked OAuth tokens are exposed,

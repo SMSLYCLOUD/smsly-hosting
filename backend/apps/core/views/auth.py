@@ -22,10 +22,10 @@ class SessionTokenView(GenericAPIView):
     cacheable, get recorded in browser history, and any CORS
     misconfiguration leaks the token to a third-party origin. POST
     bodies are not cached, not recorded in history, and only readable
-    by a correctly-configured Same-Origin request. The DRF token is
-    also rotated on every exchange so a token captured from any prior
-    response is invalidated as soon as the legitimate caller refreshes
-    it.
+    by a correctly-configured Same-Origin request. The token is
+    get_or_create (NOT rotated): rotation on every exchange would log
+    out concurrent sessions (second tab, CLI, websocket terminal) that
+    share the account's single DRF token.
     """
     serializer_class = EmptySerializer
     # CsrfExemptSessionAuthentication is required here: allauth's SSO login

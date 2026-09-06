@@ -13,7 +13,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAdminUser
+from rest_framework.permissions import AllowAny, IsAdminUser
 
 logger = logging.getLogger(__name__)
 from rest_framework.response import Response
@@ -172,3 +172,30 @@ def oauth_credentials(request):
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def oauth_providers_public(request):
+    """Public OAuth provider availability (booleans only, no secrets).
+
+    GET /api/v1/auth/oauth/providers/ — lets the login page hide
+    sign-in buttons for providers with no SocialApp configured,
+    instead of sending users into a JSON 404 dead end.
+
+    Returns only configured flags; client IDs/secrets are never
+    exposed here (see the admin-only oauth_credentials GET).
+    """
+    try:
+        return Response({
+            'github': SocialApp.objects.filter(provider='github').exists(),
+            'google': SocialApp.objects.filter(provider='google').exists(),
+            'gitlab': SocialApp.objects.filter(provider='gitlab').exists(),
+            'bitbucket_oauth2': SocialApp.objects.filter(provider='bitbucket_oauth2').exists(),
+        })
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

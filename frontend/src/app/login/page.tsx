@@ -23,6 +23,32 @@ export default function LoginPage() {
   const [totpCode, setTotpCode] = useState("");
   const [verifying2fa, setVerifying2fa] = useState(false);
 
+  const BACKEND_URL = typeof window !== 'undefined'
+    ? window.location.origin
+    : process.env.NEXT_PUBLIC_API_URL || "https://cloud.Trulay.co";
+
+  // OAuth provider availability: the backend reports which providers
+  // have a SocialApp configured. Unconfigured buttons are hidden so
+  // users are never sent into a 404 dead end. Fail-open (show all) if
+  // the endpoint is unreachable — GitHub is configured in practice.
+  const [oauthProviders, setOauthProviders] = useState<Record<string, boolean> | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${BACKEND_URL}/api/v1/oauth/providers/`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && data && typeof data === "object") setOauthProviders(data);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [BACKEND_URL]);
+
+  const showProvider = (key: string) =>
+    oauthProviders === null || oauthProviders[key] !== false;
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("2fa") === "1") {
@@ -30,10 +56,6 @@ export default function LoginPage() {
       setNeeds2fa(true);
     }
   }, []);
-
-  const BACKEND_URL = typeof window !== 'undefined'
-    ? window.location.origin
-    : process.env.NEXT_PUBLIC_API_URL || "https://cloud.Trulay.co";
 
   const finishLogin = () => {
     resetRedirectGuard();
@@ -160,34 +182,42 @@ export default function LoginPage() {
         <div className="px-6 pb-6">
           {!showEmailForm ? (
             <div className="rounded overflow-hidden border border-border">
-              <a
-                href={`${BACKEND_URL}/accounts/github/login/`}
-                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
-              >
-                <Github className="h-4 w-4" />
-                Sign in with GitHub
-              </a>
-              <a
-                href={`${BACKEND_URL}/accounts/google/login/`}
-                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
-              >
-                <Chrome className="h-4 w-4" />
-                Sign in with Google
-              </a>
-              <a
-                href={`${BACKEND_URL}/accounts/gitlab/login/`}
-                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
-              >
-                <GitBranch className="h-4 w-4 text-orange-500" />
-                Sign in with GitLab
-              </a>
-              <a
-                href={`${BACKEND_URL}/accounts/bitbucket_oauth2/login/`}
-                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition"
-              >
-                <Code2 className="h-4 w-4 text-blue-500" />
-                Sign in with Bitbucket
-              </a>
+              {showProvider("github") && (
+                <a
+                  href={`${BACKEND_URL}/accounts/github/login/`}
+                  className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
+                >
+                  <Github className="h-4 w-4" />
+                  Sign in with GitHub
+                </a>
+              )}
+              {showProvider("google") && (
+                <a
+                  href={`${BACKEND_URL}/accounts/google/login/`}
+                  className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
+                >
+                  <Chrome className="h-4 w-4" />
+                  Sign in with Google
+                </a>
+              )}
+              {showProvider("gitlab") && (
+                <a
+                  href={`${BACKEND_URL}/accounts/gitlab/login/`}
+                  className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
+                >
+                  <GitBranch className="h-4 w-4 text-orange-500" />
+                  Sign in with GitLab
+                </a>
+              )}
+              {showProvider("bitbucket_oauth2") && (
+                <a
+                  href={`${BACKEND_URL}/accounts/bitbucket_oauth2/login/`}
+                  className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition"
+                >
+                  <Code2 className="h-4 w-4 text-blue-500" />
+                  Sign in with Bitbucket
+                </a>
+              )}
             </div>
           ) : (
             <>

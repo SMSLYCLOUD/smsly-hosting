@@ -75,7 +75,7 @@ from ..views.mesh import MeshNetworkViewSet
 from ..views.metrics import MetricsViewSet
 from ..views.network_scope import ScopedNetworkViewSet
 from ..views.node_exchange import node_token_exchange, node_token_exchange_via_gateway
-from ..views.oauth import oauth_credentials, oauth_providers_status
+from ..views.oauth import oauth_credentials, oauth_providers_public, oauth_providers_status
 from ..views.project import ProjectViewSet
 from ..views.recovery import recovery_phrase_generate, recovery_phrase_verify
 from ..views.registry_auth import registry_token
@@ -198,6 +198,7 @@ urlpatterns = [
     path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),
     path('platform/resources/', PlatformResourcesView.as_view(), name='platform-resources'),
     path('oauth/status/', oauth_providers_status, name='oauth-status'),
+    path('oauth/providers/', oauth_providers_public, name='oauth-providers-public'),
     path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
     path('integrations/overview/', integrations_overview, name='integrations-overview'),
     path('integrations/github/', github_connection, name='github-connection'),
