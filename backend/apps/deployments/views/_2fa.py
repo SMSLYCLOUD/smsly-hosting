@@ -175,7 +175,10 @@ def two_factor_login(request):
     # Verify token against any confirmed TOTP device
     for device in devices_for_user(user, confirmed=True):
         if device.verify_token(token):
-            login(request, user)  # rotates the session key (fixation-safe)
+            # Explicit backend: the user comes from the DB (no
+            # .backend attr), and bare login(request, user) raises
+            # AttributeError -> 500 on the success path.
+            login(request, user, backend="django.contrib.auth.backends.ModelBackend")
             clear_pending_2fa(request)
             from rest_framework.authtoken.models import Token
             drf_token, _ = Token.objects.get_or_create(user=user)

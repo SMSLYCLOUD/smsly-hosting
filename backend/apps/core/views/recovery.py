@@ -128,7 +128,9 @@ def recovery_phrase_verify(request):
     # via the DRF token (header or HttpOnly cookie) — previously a
     # "successful" recovery left the operator unable to call the API.
     # Issue the full credential set here.
-    login(request, user)
+    # NOTE: explicit backend — the user comes from the DB without a
+    # .backend attr; bare login(request, user) raises AttributeError.
+    login(request, user, backend="django.contrib.auth.backends.ModelBackend")
     from rest_framework.authtoken.models import Token
     from apps.core.auth_cookies import set_auth_cookie
     token, _ = Token.objects.get_or_create(user=user)
