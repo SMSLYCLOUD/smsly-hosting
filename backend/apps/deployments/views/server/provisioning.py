@@ -43,6 +43,7 @@ class ProvisioningMixin:
         )
 
     @action(detail=False, methods=["post"], url_path="provision-token")
+    @throttle_classes([ServerProvisionThrottle])
     def provision_token(self, request):
         """Create a ManagedServer, pre-provision VPN + DNS, and return a
         bootstrap command the user runs on the target server.
@@ -70,6 +71,19 @@ class ProvisioningMixin:
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        is_primary_raw = request.data.get("is_primary", False)
+        if isinstance(is_primary_raw, str):
+            is_primary_requested = is_primary_raw.strip().lower() in (
+                "true", "1", "yes", "t", "on",
+            )
+        else:
+            is_primary_requested = bool(is_primary_raw)
+        if is_primary_requested and not request.user.is_superuser:
+            return Response(
+                {"error": "Only superusers can provision a primary server."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         from django.conf import settings
         from apps.deployments.models.core import PlatformConfig
         from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
@@ -79,93 +93,138 @@ class ProvisioningMixin:
         base_domain = getattr(config, "server_domain", "") or "grid.smsly.cloud"
         server_ip = getattr(config, "server_ip", "") or os.environ.get("PUBLIC_IP", "")
 
-        # ── 1. Assign node_number ──
-        max_num = ManagedServer.objects.filter(is_primary=False).aggregate(
-            m=db_models.Max("node_number")
-        )["m"] or 0
-        node_number = max_num + 1
-
-        # ── 2. Compute node_domain using grid{N} naming ──
-        domain_parts = base_domain.split(".")
-        if len(domain_parts) > 2:
-            node_domain = f"grid{node_number}.{'.'.join(domain_parts[1:])}"
-        else:
-            node_domain = f"grid{node_number}.{base_domain}"
-
-        # ── 3. Create ManagedServer ──
-        gateway_secret = secrets.token_hex(32)
+        # ── 1+2+3+4. Assign node_number, compute node_domain, create the
+        #    server, and pre-provision the WireGuard peer — all inside ONE
+        #    database transaction serialized on the mesh row. Without the
+        #    lock, two concurrent provision-token calls compute the same
+        #    max(node_number) and the same next_available_ip(), producing
+        #    duplicate node numbers/domains and clashing WG addresses. The
+        #    local (master) peer is ensured FIRST so a fresh platform never
+        #    hands 10.100.0.1 to a node — .1 is the master's conventional
+        #    mesh address. Network I/O (WG config deploy) stays outside.
+        from apps.deployments.services.provisioner.helpers.server_config import (
+            _get_master_wg_pubkey,
+        )
+        from django.db import transaction
         try:
-            server = ManagedServer.objects.create(
-                owner=request.user,
-                name=name,
-                host=host,
-                node_type=node_type,
-                is_lite_agent=is_lite_agent,
-                is_primary=is_primary,
-                allow_user_workloads=allow_user_workloads,
-                node_components=node_components,
-                node_number=node_number,
-                node_domain=node_domain,
-                gateway_secret=gateway_secret,
-                provision_status=ManagedServer.ProvisionStatus.PENDING,
-                status=ManagedServer.Status.UNKNOWN,
-            )
+            with transaction.atomic():
+                mesh = MeshNetwork.objects.filter(
+                    name="default", is_active=True,
+                ).first()
+                if not mesh:
+                    mesh = MeshNetwork.objects.create(
+                        name="default",
+                        subnet="10.100.0.0/24",
+                        listen_port=51820,
+                        listen_port_fallback=33500,
+                        interface_name="wg0",
+                        is_active=True,
+                    )
+                mesh_locked = MeshNetwork.objects.select_for_update().get(
+                    id=mesh.id
+                )
+
+                max_num = ManagedServer.objects.filter(
+                    is_primary=False
+                ).aggregate(m=db_models.Max("node_number"))["m"] or 0
+                node_number = max_num + 1
+
+                domain_parts = base_domain.split(".")
+                if len(domain_parts) > 2:
+                    node_domain = f"grid{node_number}.{'.'.join(domain_parts[1:])}"
+                else:
+                    node_domain = f"grid{node_number}.{base_domain}"
+
+                gateway_secret = secrets.token_hex(32)
+                server = ManagedServer.objects.create(
+                    owner=request.user,
+                    name=name,
+                    host=host,
+                    node_type=node_type,
+                    is_lite_agent=is_lite_agent,
+                    is_primary=is_primary,
+                    allow_user_workloads=allow_user_workloads,
+                    node_components=node_components,
+                    node_number=node_number,
+                    node_domain=node_domain,
+                    gateway_secret=gateway_secret,
+                    provision_status=ManagedServer.ProvisionStatus.PENDING,
+                    status=ManagedServer.Status.UNKNOWN,
+                    provider_metadata={
+                        "provision_started_by": request.user.id,
+                    },
+                )
+
+                wg_private_key, wg_public_key = None, None
+                wg_address = None
+                master_wg_pubkey = ""
+                master_wg_endpoint = ""
+                try:
+                    # Savepoint: a WG failure rolls back just the peer
+                    # (server + number survive, token is issued without
+                    # VPN — same degraded mode as before).
+                    with transaction.atomic():
+                        wg_private_key, wg_public_key = (
+                            WireGuardService.generate_keypair()
+                        )
+                        # Local (master) peer first — reserves .1.
+                        WireGuardService.add_peer_to_mesh(
+                            mesh_locked, server=None, is_local=True,
+                        )
+                        wg_address = mesh_locked.next_available_ip()
+                        master_wg_pubkey = _get_master_wg_pubkey() or ""
+                        if server_ip:
+                            master_wg_endpoint = (
+                                f"{server_ip}:{mesh_locked.listen_port}"
+                            )
+
+                        node_endpoint = ""
+                        try:
+                            node_endpoint = WireGuardService.validate_endpoint(
+                                f"{host}:{mesh_locked.listen_port}"
+                            )
+                        except ValueError:
+                            # The pre_save host allow-list constrains this,
+                            # but never fail provisioning over endpoint text.
+                            logger.warning(
+                                "provision-token: host %r is not a valid WG "
+                                "endpoint; leaving peer endpoint empty.",
+                                host,
+                            )
+
+                        WireGuardPeer.objects.create(
+                            mesh=mesh_locked,
+                            server=server,
+                            private_key=wg_private_key,
+                            public_key=wg_public_key,
+                            wg_address=wg_address,
+                            endpoint=node_endpoint,
+                            allowed_ips=f"{wg_address}/32",
+                            is_active=True,
+                            is_local=False,
+                        )
+
+                        server.wg_address = wg_address
+                        server.save(update_fields=["wg_address", "updated_at"])
+                except Exception as wg_exc:
+                    wg_private_key, wg_public_key = None, None
+                    wg_address = None
+                    master_wg_pubkey = ""
+                    master_wg_endpoint = ""
+                    logger.warning(
+                        "WireGuard pre-provisioning failed for %s: %s",
+                        server.name, wg_exc,
+                    )
+                mesh = mesh_locked
         except DjangoValidationError as exc:
             return Response(
                 {"error": getattr(exc, "message_dict", None) or str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── 4. Pre-provision WireGuard peer on master ──
-        wg_address = None
-        wg_private_key = None
-        wg_public_key = None
-        master_wg_pubkey = ""
-        master_wg_endpoint = ""
-
+        # Deploy the refreshed local WG config (network I/O — outside the
+        # transaction above).
         try:
-            mesh = MeshNetwork.objects.filter(
-                name="default", is_active=True,
-            ).first()
-            if not mesh:
-                mesh = MeshNetwork.objects.create(
-                    name="default",
-                    subnet="10.100.0.0/24",
-                    listen_port=51820,
-                    listen_port_fallback=33500,
-                    interface_name="wg0",
-                    is_active=True,
-                )
-
-            wg_private_key, wg_public_key = WireGuardService.generate_keypair()
-            wg_address = mesh.next_available_ip()
-
-            from apps.deployments.services.provisioner.helpers.server_config import (
-                _get_master_wg_pubkey,
-            )
-            master_wg_pubkey = _get_master_wg_pubkey() or ""
-            if server_ip:
-                master_wg_endpoint = f"{server_ip}:{mesh.listen_port}"
-
-            endpoint = ""
-            if master_wg_endpoint:
-                endpoint = WireGuardService.validate_endpoint(master_wg_endpoint)
-
-            peer = WireGuardPeer.objects.create(
-                mesh=mesh,
-                server=server,
-                private_key=wg_private_key,
-                public_key=wg_public_key,
-                wg_address=wg_address,
-                endpoint=endpoint,
-                allowed_ips=f"{wg_address}/32",
-                is_active=True,
-                is_local=False,
-            )
-
-            server.wg_address = wg_address
-            server.save(update_fields=["wg_address", "updated_at"])
-
             local_peer = WireGuardPeer.objects.filter(
                 mesh=mesh, is_local=True,
             ).first()
@@ -183,13 +242,27 @@ class ProvisioningMixin:
             )
 
         # ── 5. Pre-provision DNS A record ──
+        # The record must point at the NODE's address (host) — never the
+        # master's server_ip. Only literal IPs are valid A-record targets;
+        # a hostname host is skipped (its own DNS already resolves it).
         dns_result = None
         try:
+            import ipaddress as _ipaddress
+
+            dns_target = ""
+            try:
+                dns_target = str(_ipaddress.ip_address(host))
+            except ValueError:
+                logger.info(
+                    "provision-token: host %r is a hostname, skipping "
+                    "node-domain A-record pre-provisioning.",
+                    host,
+                )
             cf_token = getattr(config, "cloudflare_api_token", "") or ""
-            if cf_token and node_domain and server_ip:
+            if dns_target and cf_token and node_domain:
                 from apps.domains.services.dns import ensure_dns_records
                 dns_result = ensure_dns_records(
-                    [node_domain], server_ip, cf_token,
+                    [node_domain], dns_target, cf_token,
                 )
         except Exception as exc:
             logger.warning(
