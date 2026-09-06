@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,30 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [formData, setFormData] = useState({ username: "", password: "" });
+  // 2FA challenge state: after password login returns {requires_2fa: true},
+  // the server withholds the token until a valid TOTP code is submitted.
+  // OAuth logins redirect here with ?2fa=1 (the pending handshake already
+  // lives in the session).
+  const [needs2fa, setNeeds2fa] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
+  const [verifying2fa, setVerifying2fa] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("2fa") === "1") {
+      setShowEmailForm(true);
+      setNeeds2fa(true);
+    }
+  }, []);
 
   const BACKEND_URL = typeof window !== 'undefined'
     ? window.location.origin
     : process.env.NEXT_PUBLIC_API_URL || "https://cloud.Trulay.co";
+
+  const finishLogin = () => {
+    resetRedirectGuard();
+    window.location.assign("/dashboard");
+  };
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,12 +62,19 @@ export default function LoginPage() {
 
       if (response.ok) {
         const data = await response.json();
+        if (data?.requires_2fa) {
+          // Password accepted; the account has 2FA enrolled so the token
+          // is withheld until the TOTP challenge below completes.
+          setNeeds2fa(true);
+          setTotpCode("");
+          setError("");
+          return;
+        }
         if (!data?.key && !data?.token) {
           setError("Login succeeded but no auth token was returned. Please try again.");
           return;
         }
-        resetRedirectGuard();
-        window.location.assign("/dashboard");
+        finishLogin();
       } else {
         const errorData = await response.json().catch(() => ({}));
         if (response.status === 429 || errorData?.code === "throttled") {
@@ -70,6 +97,44 @@ export default function LoginPage() {
       setError("Unable to connect to server. Please try again.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handle2faVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = totpCode.replace(/\D/g, "");
+    if (code.length < 6) {
+      setError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
+    setVerifying2fa(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/v1/auth/2fa/login/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ token: code }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (response.ok && (data?.key || data?.success)) {
+        finishLogin();
+        return;
+      }
+      if (response.status === 429 || data?.code === "2fa_locked") {
+        // Handshake invalidated server-side — back to the password step.
+        setNeeds2fa(false);
+        setTotpCode("");
+        setError("Too many invalid codes. Please sign in again.");
+        return;
+      }
+      setError(data?.error || "Invalid verification code. Try again.");
+    } catch {
+      setError("Unable to connect to server. Please try again.");
+    } finally {
+      setVerifying2fa(false);
     }
   };
 
@@ -129,6 +194,8 @@ export default function LoginPage() {
               <button
                 onClick={() => {
                   setShowEmailForm(false);
+                  setNeeds2fa(false);
+                  setTotpCode("");
                   setError("");
                 }}
                 className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition mb-4"
@@ -137,60 +204,105 @@ export default function LoginPage() {
                 Back to options
               </button>
 
-              <form onSubmit={handleEmailLogin} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="username">Username or Email</Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    placeholder="admin or admin@Trulay.co"
-                    required
-                    value={formData.username}
-                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                    disabled={isLoading}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="password">Password</Label>
-                    <Link
-                      href="/forgot-password"
-                      className="text-xs text-muted-foreground hover:text-primary underline"
-                    >
-                      Forgot password?
-                    </Link>
+              {needs2fa ? (
+                <form onSubmit={handle2faVerify} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="totp">Authenticator code</Label>
+                    <Input
+                      id="totp"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      placeholder="6-digit code"
+                      required
+                      maxLength={8}
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                      disabled={verifying2fa}
+                      autoFocus
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Enter the code from your authenticator app to finish signing in.
+                    </p>
                   </div>
-                  <Input
-                    id="password"
-                    type="password"
-                    required
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    disabled={isLoading}
-                  />
-                </div>
 
-                {error && (
-                  <div className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 p-3 rounded">
-                    {error}
-                  </div>
-                )}
-
-                <Button
-                  type="submit"
-                  className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded transition"
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Signing in...
-                    </>
-                  ) : (
-                    "Sign in"
+                  {error && (
+                    <div className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 p-3 rounded">
+                      {error}
+                    </div>
                   )}
-                </Button>
-              </form>
+
+                  <Button
+                    type="submit"
+                    className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded transition"
+                    disabled={verifying2fa}
+                  >
+                    {verifying2fa ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Verifying...
+                      </>
+                    ) : (
+                      "Verify"
+                    )}
+                  </Button>
+                </form>
+              ) : (
+                <form onSubmit={handleEmailLogin} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="username">Username or Email</Label>
+                    <Input
+                      id="username"
+                      type="text"
+                      placeholder="admin or admin@Trulay.co"
+                      required
+                      value={formData.username}
+                      onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                      disabled={isLoading}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="password">Password</Label>
+                      <Link
+                        href="/forgot-password"
+                        className="text-xs text-muted-foreground hover:text-primary underline"
+                      >
+                        Forgot password?
+                      </Link>
+                    </div>
+                    <Input
+                      id="password"
+                      type="password"
+                      required
+                      value={formData.password}
+                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                      disabled={isLoading}
+                    />
+                  </div>
+
+                  {error && (
+                    <div className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 p-3 rounded">
+                      {error}
+                    </div>
+                  )}
+
+                  <Button
+                    type="submit"
+                    className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded transition"
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Signing in...
+                      </>
+                    ) : (
+                      "Sign in"
+                    )}
+                  </Button>
+                </form>
+              )}
             </>
           )}
 

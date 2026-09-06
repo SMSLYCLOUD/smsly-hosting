@@ -21,6 +21,14 @@ export function SecurityTab() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
 
+  // 2FA enrollment state
+  const [twoFaEnabled, setTwoFaEnabled] = useState<boolean | null>(null);
+  const [twoFaLoading, setTwoFaLoading] = useState(false);
+  const [enrollUri, setEnrollUri] = useState<string | null>(null);
+  const [enrollDeviceId, setEnrollDeviceId] = useState<string | null>(null);
+  const [enrollCode, setEnrollCode] = useState("");
+  const [disablePassword, setDisablePassword] = useState("");
+
   const handleChangePassword = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
       toast({ title: "Error", description: "Please fill all password fields.", variant: "destructive" });
@@ -63,7 +71,69 @@ export function SecurityTab() {
 
   useEffect(() => {
     fetchDevices();
+    fetch2faStatus();
   }, []);
+
+  const fetch2faStatus = async () => {
+    try {
+      const res = await api.get("/auth/2fa/status/");
+      setTwoFaEnabled(res.data?.enabled === true);
+    } catch {
+      setTwoFaEnabled(false);
+    }
+  };
+
+  const handle2faEnable = async () => {
+    setTwoFaLoading(true);
+    try {
+      const res = await api.post("/auth/2fa/enable/");
+      setEnrollUri(res.data?.provisioning_uri || null);
+      setEnrollDeviceId(res.data?.device_id ? String(res.data.device_id) : null);
+      setEnrollCode("");
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.response?.data?.error || "Failed to start 2FA setup.", variant: "destructive" });
+    } finally {
+      setTwoFaLoading(false);
+    }
+  };
+
+  const handle2faConfirm = async () => {
+    if (!enrollDeviceId || enrollCode.replace(/\D/g, "").length < 6) {
+      toast({ title: "Error", description: "Enter the 6-digit code from your authenticator app.", variant: "destructive" });
+      return;
+    }
+    setTwoFaLoading(true);
+    try {
+      await api.post("/auth/2fa/confirm/", { device_id: enrollDeviceId, token: enrollCode.replace(/\D/g, "") });
+      setEnrollUri(null);
+      setEnrollDeviceId(null);
+      setEnrollCode("");
+      setTwoFaEnabled(true);
+      toast({ title: "2FA enabled", description: "Your account is now protected. Future logins require a code." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.response?.data?.error || "Invalid code. Try again.", variant: "destructive" });
+    } finally {
+      setTwoFaLoading(false);
+    }
+  };
+
+  const handle2faDisable = async () => {
+    if (!disablePassword) {
+      toast({ title: "Error", description: "Enter your current password to disable 2FA.", variant: "destructive" });
+      return;
+    }
+    setTwoFaLoading(true);
+    try {
+      await api.post("/auth/2fa/disable/", { password: disablePassword });
+      setDisablePassword("");
+      setTwoFaEnabled(false);
+      toast({ title: "2FA disabled" });
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.response?.data?.error || "Failed to disable 2FA.", variant: "destructive" });
+    } finally {
+      setTwoFaLoading(false);
+    }
+  };
 
   const handleGenerateRecovery = async () => {
     try {
@@ -132,14 +202,77 @@ export function SecurityTab() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Shield className="h-5 w-5" /> Two-Factor Authentication (2FA)
+            {twoFaEnabled !== null && (
+              <Badge variant={twoFaEnabled ? "default" : "secondary"} className="ml-1 text-xs">
+                {twoFaEnabled ? "Enabled" : "Disabled"}
+              </Badge>
+            )}
           </CardTitle>
           <CardDescription>Secure your account with TOTP-based two-factor authentication.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
             Two-factor authentication adds an extra layer of security to your account.
+            Once enabled, every login requires a code from your authenticator app.
           </p>
-          <Button variant="outline">Setup 2FA App</Button>
+
+          {!twoFaEnabled && !enrollUri && (
+            <Button variant="outline" onClick={handle2faEnable} disabled={twoFaLoading}>
+              {twoFaLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Setup 2FA App
+            </Button>
+          )}
+
+          {!twoFaEnabled && enrollUri && (
+            <div className="space-y-3 rounded-lg border p-4">
+              <p className="text-sm">
+                Scan this URI in your authenticator app (or enter the secret manually),
+                then confirm with a code:
+              </p>
+              <div className="p-3 bg-secondary rounded font-mono text-xs break-all select-all">
+                {enrollUri}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="2fa-confirm-code">Confirmation code</Label>
+                <Input
+                  id="2fa-confirm-code"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="6-digit code"
+                  maxLength={8}
+                  value={enrollCode}
+                  onChange={(e) => setEnrollCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={handle2faConfirm} disabled={twoFaLoading}>
+                  {twoFaLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  Confirm &amp; Enable
+                </Button>
+                <Button variant="ghost" onClick={() => { setEnrollUri(null); setEnrollDeviceId(null); setEnrollCode(""); }}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {twoFaEnabled && (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="2fa-disable-password">Current password (to disable)</Label>
+                <Input
+                  id="2fa-disable-password"
+                  type="password"
+                  value={disablePassword}
+                  onChange={(e) => setDisablePassword(e.target.value)}
+                />
+              </div>
+              <Button variant="destructive" onClick={handle2faDisable} disabled={twoFaLoading}>
+                {twoFaLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Disable 2FA
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

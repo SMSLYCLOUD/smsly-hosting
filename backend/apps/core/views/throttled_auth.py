@@ -33,6 +33,11 @@ The wire-up in ``config/urls.py``:
 
 replaces the corresponding ``dj_rest_auth`` URLs.
 """
+from apps.core.auth_2fa import (
+    clear_pending_2fa,
+    stash_pending_2fa,
+    user_requires_2fa,
+)
 from apps.core.auth_cookies import delete_auth_cookie, set_auth_cookie
 from apps.core.rate_limiting import (
     LoginRateThrottle,
@@ -51,6 +56,7 @@ from dj_rest_auth.views import (
 from dj_rest_auth.views import (
     PasswordResetView as _BasePasswordResetView,
 )
+from rest_framework.response import Response
 
 
 class ThrottledLoginView(_BaseLoginView):
@@ -63,17 +69,45 @@ class ThrottledLoginView(_BaseLoginView):
     Also sets the auth token as an HttpOnly+SameSite=Strict cookie
     on a successful response. The cookie carries the same token that
     is returned in the JSON body (``{"key": "..."}``), so existing
-    API clients that read the body keep working.
+    API clients that read the body keep working unchanged.
+
+    2FA ENFORCEMENT: when the authenticated user has a confirmed TOTP
+    device, this view issues NOTHING — no DRF token, no session login,
+    no cookie. It stashes the pending identity in the session and
+    returns ``{"requires_2fa": true}``. The client must complete
+    ``POST /api/v1/auth/2fa/login/`` with a valid TOTP code, which is
+    the ONLY path that mints the token for enrolled users.
     """
     throttle_classes = [LoginRateThrottle]
 
+    def login(self):
+        user = self.serializer.validated_data['user']
+        if user_requires_2fa(user):
+            self.user = self.serializer.validated_data['user']
+            self.token = None
+            stash_pending_2fa(self.request, user)
+            return
+        super().login()
+
     def get_response(self):
+        if getattr(self, 'user', None) is not None and getattr(self, 'token', None) is None:
+            # 2FA-gated branch from login() above: authenticated
+            # credentials, but the token is withheld until TOTP.
+            return Response(
+                {
+                    'requires_2fa': True,
+                    'detail': 'Two-factor authentication required. '
+                              'Submit your authenticator code to '
+                              '/api/v1/auth/2fa/login/.',
+                },
+                status=200,
+            )
         response = super().get_response()
         # ``self.token`` is populated by ``dj_rest_auth``'s ``login()``
         # and is the canonical DRF Token instance. We only stamp the
         # cookie on a successful login (status 200) — failure responses
         # have no token and would clear any prior session cookie.
-        if response.status_code == 200 and getattr(self, "token", None):
+        if response.status_code == 200 and getattr(self, 'token', None):
             try:
                 set_auth_cookie(response, self.token.key)
             except Exception:
@@ -82,6 +116,10 @@ class ThrottledLoginView(_BaseLoginView):
                 # falls back to the body-returned token via the legacy
                 # ``Authorization: Token`` header.
                 pass
+        else:
+            # Belt-and-braces: a 2FA-pending response must never carry
+            # a stale token cookie from a previous session.
+            clear_pending_2fa(self.request)
         return response
 
 

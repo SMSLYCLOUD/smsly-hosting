@@ -8,6 +8,7 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from apps.core.rate_limiting import TrustedIdentMixin
 from apps.deployments.models.core import PlatformConfig
 from apps.core.services.recovery import (
     generate_recovery_phrase,
@@ -19,8 +20,14 @@ from apps.core.services.recovery import (
 logger = logging.getLogger(__name__)
 
 
-class RecoveryPhraseThrottle(AnonRateThrottle):
-    """Stricter rate limit for recovery phrase attempts."""
+class RecoveryPhraseThrottle(TrustedIdentMixin, AnonRateThrottle):
+    """Stricter rate limit for recovery phrase attempts.
+
+    Uses TrustedIdentMixin (not the default DRF ident): behind
+    Cloudflare the stock ident hashes the rotating XFF edge IP, so
+    every request lands in a fresh bucket and the guard never fires.
+    """
+    scope = 'recovery_phrase'
     rate = '5/hour'  # 5 attempts per hour per IP
 
 
@@ -115,8 +122,23 @@ def recovery_phrase_verify(request):
         return Response({'error': 'Admin user not found'},
                         status=status.HTTP_404_NOT_FOUND)
 
+    # Recovery is the last-resort path (128-bit phrase + per-IP
+    # attempt lockout), so it intentionally bypasses 2FA. But a bare
+    # Django session login is USELESS to the SPA, which authenticates
+    # via the DRF token (header or HttpOnly cookie) — previously a
+    # "successful" recovery left the operator unable to call the API.
+    # Issue the full credential set here.
     login(request, user)
-    return Response({
+    from rest_framework.authtoken.models import Token
+    from apps.core.auth_cookies import set_auth_cookie
+    token, _ = Token.objects.get_or_create(user=user)
+    response = Response({
         'success': True,
         'message': 'Recovery successful. Set up a new trusted device immediately.',
+        'key': token.key,
     })
+    try:
+        set_auth_cookie(response, token.key)
+    except Exception:
+        pass
+    return response

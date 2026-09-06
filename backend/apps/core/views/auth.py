@@ -59,6 +59,14 @@ class SessionTokenView(GenericAPIView):
                 {"error": "Authentication required"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        # 2FA ENFORCEMENT: an OAuth/SAML login establishes a Django
+        # session, but the DRF token must still wait for TOTP when the
+        # user enrolled a device. Stash the pending identity and tell
+        # the SPA to present the authenticator challenge instead.
+        from apps.core.auth_2fa import stash_pending_2fa, user_requires_2fa
+        if user_requires_2fa(user):
+            stash_pending_2fa(request, user)
+            return Response({'requires_2fa': True})
         # Get-or-create a DRF auth token for this user. The consumer
         # (TerminalConsumer._authenticate_token) validates the token as
         # a 40-char hex string against the rest_framework.authtoken

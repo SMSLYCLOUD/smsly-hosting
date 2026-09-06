@@ -119,34 +119,79 @@ def two_factor_disable(request):
 @throttle_classes([TwoFactorLoginRateThrottle])
 def two_factor_login(request):
     """
-    Verify a 2FA token during login.
+    Verify a 2FA token during login (step 2 of the 2FA handshake).
 
-    Expects the session has `2fa_user_id` set (from the first login step).
-    On success, logs the user in fully.
+    Expects the session has `2fa_user_id` set (from the first login
+    step — password login or OAuth session-token exchange). On success
+    this is the ONLY path that mints the DRF token for 2FA-enrolled
+    users: it session-logins (rotating the session key), clears the
+    pending handshake, creates/gets the DRF token, stamps the HttpOnly
+    auth cookie, and returns the key in the body for API clients.
+
+    Defense in depth: wrong codes are counted per session
+    (MAX_2FA_ATTEMPTS_PER_SESSION); exceeding the cap destroys the
+    pending handshake and forces the attacker back to the password
+    step — on top of the 10/min/IP TwoFactorLoginRateThrottle.
     """
-    from django.contrib.auth import login
+    from django.contrib.auth import get_user_model, login
 
-    token = request.data.get('token', '')
-    user_id = request.session.get('2fa_user_id')
+    from apps.core.auth_2fa import (
+        MAX_2FA_ATTEMPTS_PER_SESSION,
+        bump_pending_2fa_attempts,
+        clear_pending_2fa,
+        consume_pending_2fa,
+    )
+    from apps.core.auth_cookies import set_auth_cookie
+
+    token = str(request.data.get('token', '')).strip()
+    user_id, attempts = consume_pending_2fa(request)
 
     if not token or not user_id:
         return Response({'error': 'Token required'},
                         status=status.HTTP_400_BAD_REQUEST)
 
+    if attempts >= MAX_2FA_ATTEMPTS_PER_SESSION:
+        clear_pending_2fa(request)
+        logger.warning("2FA handshake locked out after %d attempts (session)", attempts)
+        return Response(
+            {'error': 'Too many invalid codes. Please log in again.',
+             'code': '2fa_locked'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
     User = get_user_model()
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
+        clear_pending_2fa(request)
         return Response({'error': 'Session expired. Please log in again.'},
+                        status=status.HTTP_401_UNAUTHORIZED)
+
+    if not user.is_active:
+        clear_pending_2fa(request)
+        return Response({'error': 'Account is disabled.'},
                         status=status.HTTP_401_UNAUTHORIZED)
 
     # Verify token against any confirmed TOTP device
     for device in devices_for_user(user, confirmed=True):
         if device.verify_token(token):
-            login(request, user)
-            del request.session['2fa_user_id']
-            return Response({'success': True, 'message': '2FA verified'})
+            login(request, user)  # rotates the session key (fixation-safe)
+            clear_pending_2fa(request)
+            from rest_framework.authtoken.models import Token
+            drf_token, _ = Token.objects.get_or_create(user=user)
+            response = Response({
+                'success': True,
+                'message': '2FA verified',
+                'key': drf_token.key,
+            })
+            try:
+                set_auth_cookie(response, drf_token.key)
+            except Exception:
+                pass
+            return response
 
+    left = MAX_2FA_ATTEMPTS_PER_SESSION - bump_pending_2fa_attempts(request)
+    logger.warning("Invalid 2FA code for user %s (%d attempts left)", user_id, max(left, 0))
     return Response({'error': 'Invalid verification code'},
                     status=status.HTTP_401_UNAUTHORIZED)
 

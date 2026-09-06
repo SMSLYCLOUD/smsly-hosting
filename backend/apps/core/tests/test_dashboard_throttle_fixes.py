@@ -333,11 +333,15 @@ class DefaultThrottleRateTests(TestCase):
         # Parse the rate string: '<num>/<period>'
         num, period = rates['user'].split('/')
         num = int(num)
-        # 'hour' period: 10000/hour is a reasonable floor
-        # that still protects against abuse.
+        # 'hour' period: 5000/hour is the deliberate floor set by the
+        # 81c67d39 security audit (which re-tightened Batch H's
+        # 1000000/hour). 5000/hour (~83/min) covers the dashboard's
+        # per-page burst of 4-20 GETs while restoring a meaningful
+        # per-user abuse ceiling. Do not raise this floor without
+        # re-evaluating the audit's abuse model.
         if period == 'hour':
             self.assertGreaterEqual(
-                num, 10000,
+                num, 5000,
                 f"Default 'user' throttle {rates['user']} is too tight "
                 f"for the dashboard's per-page burst of 4-20 GETs.",
             )

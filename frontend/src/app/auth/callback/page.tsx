@@ -9,7 +9,7 @@ import { resetRedirectGuard } from "@/lib/paths";
 // Prevent static prerendering — this page needs runtime URL params
 export const dynamic = "force-dynamic";
 
-async function fetchSessionToken(): Promise<{ token: string | null; unauthorized: boolean }> {
+async function fetchSessionToken(): Promise<{ token: string | null; unauthorized: boolean; requires2fa: boolean }> {
   try {
     const response = await fetch("/api/v1/auth/session-token/", {
       method: "POST",
@@ -17,13 +17,19 @@ async function fetchSessionToken(): Promise<{ token: string | null; unauthorized
       headers: { Accept: "application/json" },
     });
     if (!response.ok) {
-      return { token: null, unauthorized: response.status === 401 || response.status === 403 };
+      return { token: null, unauthorized: response.status === 401 || response.status === 403, requires2fa: false };
     }
     const data = await response.json();
-    return { token: typeof data?.token === "string" ? data.token : null, unauthorized: false };
+    return {
+      token: typeof data?.token === "string" ? data.token : null,
+      unauthorized: false,
+      // 2FA-enrolled SSO users get their token only after the TOTP
+      // step — the login page shows the challenge when flagged.
+      requires2fa: data?.requires_2fa === true,
+    };
   } catch (error) {
     console.error("Failed to fetch session token:", error);
-    return { token: null, unauthorized: false };
+    return { token: null, unauthorized: false, requires2fa: false };
   }
 }
 
@@ -41,11 +47,20 @@ function CallbackContent() {
       // and the browser attaches it automatically; we do not need to
       // read or store the token client-side.
       const sessionResult = queryToken
-        ? { token: null, unauthorized: false }
+        ? { token: null, unauthorized: false, requires2fa: false }
         : await fetchSessionToken();
       const token = queryToken || sessionResult.token;
 
       if (!active) {
+        return;
+      }
+
+      if (sessionResult.requires2fa) {
+        // OAuth identity verified, but the account has 2FA enrolled:
+        // the pending handshake lives in the session, so the login
+        // page can present the TOTP challenge directly.
+        resetRedirectGuard();
+        window.location.replace("/login?2fa=1");
         return;
       }
 
