@@ -52,78 +52,51 @@ class OAuthProvidersPublicTests(TestCase):
 
 
 class CallbackOverrideGatingTests(TestCase):
-    def _adapter(self):
+    """allauth 65 builds the OAuth2 callback URL on the provider's own
+    OAuth2Adapter (reverse("<provider>_callback")) — there is NO
+    adapter-level get_callback_url hook anymore. These tests pin that
+    reality so nobody re-adds a dead override, and prove the live SSO
+    entry point redirects to the provider with allauth's own callback.
+    """
+
+    def test_no_stale_callback_override_on_adapter(self):
+        from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
         from apps.core.adapters import CustomSocialAccountAdapter
-        return CustomSocialAccountAdapter()
 
-    def _request(self, authenticated, process=None):
-        from django.test import RequestFactory
-        rf = RequestFactory()
-        query = f"?process={process}" if process else ""
-        req = rf.get(f"/accounts/github/login/callback/{query}")
-        req.user = mock.Mock(
-            is_authenticated=authenticated,
-            spec=["is_authenticated"],
+        self.assertFalse(
+            hasattr(DefaultSocialAccountAdapter, "get_callback_url"),
+            "allauth base has no get_callback_url; an override would be dead code",
         )
-        return req
+        self.assertNotIn(
+            "get_callback_url",
+            CustomSocialAccountAdapter.__dict__,
+            "stale adapter-level override — allauth never calls it",
+        )
 
-    def _provider(self, provider_id="github"):
-        return mock.Mock(provider_id=provider_id)
+    def test_connect_redirect_goes_to_spa(self):
+        from django.conf import settings
+        from apps.core.adapters import CustomSocialAccountAdapter
 
-    def test_login_flow_uses_stock_callback_even_when_authenticated(self):
-        # Logged-in user re-clicking "Sign in with GitHub" starts a
-        # LOGIN flow (no ?process=connect) — allauth must get the code.
-        adapter = self._adapter()
-        with mock.patch(
-            "allauth.socialaccount.adapter.DefaultSocialAccountAdapter.get_callback_url",
-            return_value="https://grid.smsly.cloud/accounts/github/login/callback/",
-        ) as stock:
-            url = adapter.get_callback_url(
-                self._request(authenticated=True), self._provider()
-            )
-        stock.assert_called_once()
-        self.assertIn("/accounts/github/login/callback/", url)
+        adapter = CustomSocialAccountAdapter()
+        req = mock.Mock()
+        url = adapter.get_connect_redirect_url(req, mock.Mock())
+        self.assertEqual(url, settings.LOGIN_REDIRECT_URL)
 
-    def test_connect_flow_uses_override(self):
-        adapter = self._adapter()
-        # With ?process=connect and an override configured, the SPA URL wins
-        with mock.patch.object(
-            __import__("django.conf", fromlist=["settings"]).settings,
-            "GITHUB_OAUTH_CALLBACK_URL",
-            "https://grid.smsly.cloud/auth/github/callback",
-            create=True,
-        ):
-            url = adapter.get_callback_url(
-                self._request(authenticated=True, process="connect"),
-                self._provider(),
-            )
-        self.assertEqual(url, "https://grid.smsly.cloud/auth/github/callback")
+    def test_github_login_redirects_to_provider_with_allauth_callback(self):
+        from allauth.socialaccount.models import SocialApp
 
-    def test_connect_flow_without_override_falls_back(self):
-        adapter = self._adapter()
-        with mock.patch(
-            "allauth.socialaccount.adapter.DefaultSocialAccountAdapter.get_callback_url",
-            return_value="https://grid.smsly.cloud/accounts/github/login/callback/",
-        ) as stock:
-            url = adapter.get_callback_url(
-                self._request(authenticated=True, process="connect"),
-                self._provider(),
-            )
-        stock.assert_called_once()
-        self.assertIn("/accounts/github/login/callback/", url)
-
-    def test_anonymous_always_stock(self):
-        adapter = self._adapter()
-        with mock.patch(
-            "allauth.socialaccount.adapter.DefaultSocialAccountAdapter.get_callback_url",
-            return_value="https://grid.smsly.cloud/accounts/github/login/callback/",
-        ) as stock:
-            url = adapter.get_callback_url(
-                self._request(authenticated=False, process="connect"),
-                self._provider(),
-            )
-        stock.assert_called_once()
-        self.assertIn("/accounts/github/login/callback/", url)
+        SocialApp.objects.create(
+            provider="github", name="GitHub",
+            client_id="test-client-id", secret="test-secret",
+        )
+        resp = _client().get("/accounts/github/login/")
+        self.assertEqual(resp.status_code, 302, resp.content[:200])
+        location = resp["Location"]
+        self.assertIn("https://github.com/login/oauth/authorize", location)
+        # The provider must send the code back to ALLATH's callback —
+        # that is where state is validated and the session established.
+        self.assertIn("/accounts/github/login/callback/", location)
+        self.assertIn("state=", location)
 
 
 class EmailAuthPolicyTests(TestCase):
