@@ -2761,6 +2761,7 @@ export interface McpStatus {
   tools_count?: number;
   fastmcp_available?: boolean;
   sdk_available?: boolean;
+  sse_reachable?: boolean;
   error?: string;
 }
 
@@ -2775,6 +2776,14 @@ export interface McpTool {
   name: string;
   description: string;
   params: McpToolParam[];
+}
+
+export interface McpToken {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string | null;
+  last_used_at: string | null;
 }
 
 export const mcpApi = {
@@ -2792,6 +2801,18 @@ export const mcpApi = {
   },
   callTool: async (name: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; error?: string }> => {
     const res = await api.post(`/mcp/tools/${encodeURIComponent(name)}/call/`, { args });
+    return res.data;
+  },
+  tokens: async (): Promise<{ tokens: McpToken[] }> => {
+    const res = await api.get('/mcp/tokens/');
+    return res.data;
+  },
+  createToken: async (name?: string): Promise<McpToken & { token: string; warning?: string }> => {
+    const res = await api.post('/mcp/tokens/', name ? { name } : {});
+    return res.data;
+  },
+  revokeToken: async (id: string): Promise<{ revoked: boolean }> => {
+    const res = await api.delete(`/mcp/tokens/${encodeURIComponent(id)}/`);
     return res.data;
   },
 };

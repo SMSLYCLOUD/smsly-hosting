@@ -91,7 +91,32 @@ class McpStatusView(APIView):
         payload = mcp_services.get_status()
         payload["tools_count"] = len(_discover_tools())
         payload["fastmcp_available"] = bool(getattr(server_module, "_MCP_AVAILABLE", False))
+        payload["sse_reachable"] = _sse_reachable() if payload.get("running") else False
         return Response(payload)
+
+
+def _sse_reachable(timeout_seconds: int = 5) -> bool:
+    """Dial the managed SSE endpoint the way an AI client would.
+
+    Only the HTTP status line is read — the stream itself is closed
+    immediately. The FastMCP transport rejects requests without an SSE
+    Accept header, so one is sent. A 421 is also "reachable": the MCP
+    SDK's DNS-rebinding protection rejects non-loopback Host headers,
+    which proves the server is up (real clients tunnel to 127.0.0.1 and
+    get 200). Connection errors/timeouts are False.
+    """
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            "http://smsly-mcp-server:8001/sse",
+            headers={"Accept": "text/event-stream"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            return resp.status in (200, 421)
+    except Exception as exc:
+        if getattr(exc, "code", None) in (200, 421):
+            return True
+        return False
 
 
 class McpControlView(APIView):
@@ -119,6 +144,62 @@ class McpControlView(APIView):
             return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         payload["tools_count"] = len(_discover_tools())
         return Response(payload)
+
+
+class McpTokenListView(APIView):
+    """Personal API tokens for MCP/CLI access (raw shown once at creation)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.core.models.api_token import APIToken
+        tokens = APIToken.objects.filter(user=request.user, is_active=True).order_by("-created_at")
+        return Response({"tokens": [
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "prefix": t.prefix,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+            }
+            for t in tokens
+        ]})
+
+    def post(self, request):
+        from apps.core.models.api_token import APIToken
+        if APIToken.objects.filter(user=request.user, is_active=True).count() >= 10:
+            return Response(
+                {"error": "Token limit reached (10 active). Revoke an old one first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = str(request.data.get("name") or "").strip()[:100] or "MCP Token"
+        instance, raw = APIToken.create_token(request.user, name)
+        return Response(
+            {
+                "id": str(instance.id),
+                "name": instance.name,
+                "prefix": instance.prefix,
+                "token": raw,
+                "warning": "Copy now — the raw token is never shown again.",
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class McpTokenDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, token_id: str):
+        from apps.core.models.api_token import APIToken
+        try:
+            token = APIToken.objects.get(id=token_id, user=request.user, is_active=True)
+        except (APIToken.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"error": "Token not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        token.is_active = False
+        token.save(update_fields=["is_active"])
+        return Response({"revoked": True, "id": str(token.id)})
 
 
 class McpToolListView(APIView):

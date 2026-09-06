@@ -7,4 +7,6 @@ urlpatterns = [
     path('mcp/control/', views.McpControlView.as_view(), name='mcp-control'),
     path('mcp/tools/', views.McpToolListView.as_view(), name='mcp-tools'),
     path('mcp/tools/<str:name>/call/', views.McpToolCallView.as_view(), name='mcp-tool-call'),
+    path('mcp/tokens/', views.McpTokenListView.as_view(), name='mcp-tokens'),
+    path('mcp/tokens/<str:token_id>/', views.McpTokenDetailView.as_view(), name='mcp-token-detail'),
 ]

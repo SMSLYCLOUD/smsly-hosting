@@ -82,6 +82,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
     import apps.mtls.tasks  # noqa: F401  # inject_mtls_task
+    import apps.mcp.tasks  # noqa: F401  # ensure_mcp_server_running
     import apps.domains.tasks.reverify  # noqa: F401  # reverify_custom_domains_task (anti-hijack demotion)
     # -- apps.core.tasks is an empty package (only submodules hold tasks),
     #    so autodiscovery has nothing to import. Load them explicitly. --
@@ -122,6 +123,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.recover_stale_ecosystem_plans': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stalled_deployments': {'queue': 'fast'},
     'apps.deployments.tasks.apply_service_resource_limits': {'queue': 'fast'},
+    'apps.mcp.tasks.ensure_mcp_server_running': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_transfers': {'queue': 'fast'},
     'apps.deployments.tasks.recover_corrupt_docker_state': {'queue': 'deploy'},
     'apps.deployments.tasks.ensure_migrations_applied': {'queue': 'deploy'},
@@ -344,6 +346,13 @@ app.conf.beat_schedule = {
     # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
     'recover-stalled-deletions-every-5m': {
         'task': 'apps.deployments.tasks.recover_stalled_deletions',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Recreate the managed MCP container if removed (never overrides a
+    # deliberate stop; Docker's unless-stopped covers host reboots).
+    'ensure-mcp-server-every-5m': {
+        'task': 'apps.mcp.tasks.ensure_mcp_server_running',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },

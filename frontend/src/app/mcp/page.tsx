@@ -7,13 +7,14 @@ import {
   ExternalLink, Terminal, Code2, Server,
   Brain, List, Loader2, Globe, BookOpen,
   ChevronRight, Power, RotateCcw, Play, RefreshCw,
+  KeyRound, Trash2,
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { mcpApi, McpStatus, McpTool, McpToken } from '@/lib/api';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
-import { mcpApi, McpStatus, McpTool } from '@/lib/api';
 
 const TOOLS = [
   { name: 'list_services', desc: 'List all deployed services and their status' },
@@ -109,6 +110,9 @@ export default function MCPPage() {
   const [runningTool, setRunningTool] = useState<string | null>(null);
   const [toolArgs, setToolArgs] = useState<Record<string, string>>({});
   const [toolResult, setToolResult] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const [tokens, setTokens] = useState<McpToken[] | null>(null);
+  const [newToken, setNewToken] = useState<{ name: string; token: string } | null>(null);
+  const [tokenBusy, setTokenBusy] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async (silent = false) => {
     if (!silent) setStatusLoading(true);
@@ -130,10 +134,56 @@ export default function MCPPage() {
     }
   }, []);
 
+  const refreshTokens = useCallback(async () => {
+    try {
+      const res = await mcpApi.tokens();
+      setTokens(res.tokens || []);
+    } catch {
+      setTokens(null);
+    }
+  }, []);
+
+  const generateToken = async () => {
+    setTokenBusy('create');
+    setNewToken(null);
+    try {
+      const res = await mcpApi.createToken(`MCP ${new Date().toISOString().slice(0, 10)}`);
+      setNewToken({ name: res.name, token: res.token });
+      await refreshTokens();
+      toast({ title: 'Token created — copy it now, it is never shown again' });
+    } catch (err: any) {
+      toast({
+        title: 'Failed to create token',
+        description: err?.response?.data?.error || err?.message || String(err),
+        variant: 'destructive',
+      });
+    } finally {
+      setTokenBusy(null);
+    }
+  };
+
+  const revokeToken = async (id: string) => {
+    setTokenBusy(id);
+    try {
+      await mcpApi.revokeToken(id);
+      setTokens((prev) => (prev || []).filter((t) => t.id !== id));
+      toast({ title: 'Token revoked' });
+    } catch (err: any) {
+      toast({
+        title: 'Failed to revoke token',
+        description: err?.response?.data?.error || err?.message || String(err),
+        variant: 'destructive',
+      });
+    } finally {
+      setTokenBusy(null);
+    }
+  };
+
   useEffect(() => {
     refreshStatus();
     refreshTools();
-  }, [refreshStatus, refreshTools]);
+    refreshTokens();
+  }, [refreshStatus, refreshTools, refreshTokens]);
 
   const controlServer = async (action: 'start' | 'stop' | 'restart') => {
     setControlBusy(action);
@@ -188,6 +238,15 @@ export default function MCPPage() {
 
   const tools: McpTool[] = liveTools ?? TOOLS.map((t) => ({ name: t.name, description: t.desc, params: [] }));
   const running = !!mcpStatus?.running;
+  const sshHost = typeof window !== 'undefined' ? window.location.hostname : 'your-server';
+  const tunnelCmd = `ssh -N -L 8001:127.0.0.1:8001 ubuntu@${sshHost}`;
+  const sseUrl = 'http://127.0.0.1:8001/sse';
+  const autoSseConfig = {
+    mcpServers: {
+      'smsly-ecosystem': { url: sseUrl },
+    },
+  };
+  const sseReachable = mcpStatus?.sse_reachable === true;
 
   return (
     <DashboardShell>
@@ -296,6 +355,102 @@ export default function MCPPage() {
 
             {/* ─── Connect Tab ───────────────────────────────────────── */}
             <TabsContent value="connect" className="space-y-6 mt-6">
+              <Card className="border-emerald-500/20 bg-emerald-500/5">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Plug className="text-emerald-500" /> Automatic setup
+                  </CardTitle>
+                  <CardDescription>
+                    Three steps — values below are filled in for this server
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-start gap-3">
+                    <span className="text-xs font-bold text-muted-foreground mt-0.5">1.</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold">
+                        {running ? 'Server is running' : 'Start the server'}
+                        {running && (
+                          <span className={`ml-2 text-xs ${sseReachable ? 'text-emerald-500' : 'text-amber-500'}`}>
+                            {sseReachable ? '· SSE answering' : '· SSE not answering yet'}
+                          </span>
+                        )}
+                      </p>
+                      {!running && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Press Start above — the server also restarts itself automatically after reboots and image updates.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-xs font-bold text-muted-foreground mt-0.5">2.</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold">Open the tunnel from your machine</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 mb-2">
+                        The SSE endpoint only listens on the server itself — this forwards it to your laptop. Keep it running.
+                      </p>
+                      <CodeBlock language="Bash — your laptop" code={tunnelCmd} />
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-xs font-bold text-muted-foreground mt-0.5">3.</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold">Paste into Claude / Cursor / VS Code</p>
+                      <CodeBlock language="JSON — MCP config" code={JSON.stringify(autoSseConfig, null, 2)} />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <KeyRound className="text-cyan-500" /> API tokens
+                  </CardTitle>
+                  <CardDescription>
+                    Bearer tokens for the HTTPS API ({tools.length} tools callable without SSE)
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" onClick={generateToken} disabled={tokenBusy === 'create'}>
+                      {tokenBusy === 'create' ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <KeyRound className="w-3.5 h-3.5 mr-1" />}
+                      Generate token
+                    </Button>
+                    <span className="text-xs text-muted-foreground">Use as <code className="bg-muted px-1 rounded">Authorization: Bearer smsly_…</code></span>
+                  </div>
+                  {newToken && (
+                    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                      <p className="text-xs font-semibold text-amber-400 mb-1">Copy now — never shown again ({newToken.name})</p>
+                      <code className="text-xs font-mono break-all">{newToken.token}</code>
+                    </div>
+                  )}
+                  {tokens === null ? (
+                    <p className="text-xs text-muted-foreground">Could not load tokens.</p>
+                  ) : tokens.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No tokens yet.</p>
+                  ) : (
+                    <ul className="divide-y divide-border border border-border/50 rounded-lg">
+                      {tokens.map((t) => (
+                        <li key={t.id} className="px-3 py-2 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">{t.name} <span className="text-xs text-muted-foreground font-mono">{t.prefix}…</span></p>
+                            <p className="text-[11px] text-muted-foreground">
+                              created {t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'}
+                              {t.last_used_at ? ` · used ${new Date(t.last_used_at).toLocaleDateString()}` : ' · never used'}
+                            </p>
+                          </div>
+                          <Button variant="ghost" size="sm" onClick={() => revokeToken(t.id)} disabled={tokenBusy === t.id}>
+                            {tokenBusy === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -350,18 +505,14 @@ export default function MCPPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <p className="text-sm text-muted-foreground">
-                    Start the server in SSE mode, then configure your AI tool to connect via URL:
+                    With the tunnel from Automatic setup running, point your AI tool at the local URL:
                   </p>
-                  <CodeBlock
-                    language="Bash — Start SSE server"
-                    code={'python manage.py runmcpserver --sse --host 0.0.0.0 --port 8001'}
-                  />
                   <CodeBlock
                     language="JSON — Remote config"
                     code={JSON.stringify({
                       mcpServers: {
                         'smsly-ecosystem': {
-                          url: 'http://your-server:8001/sse',
+                          url: sseUrl,
                         },
                       },
                     }, null, 2)}

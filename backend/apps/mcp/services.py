@@ -7,8 +7,9 @@ dashboard could only document it, never control it.
 
 This module manages a ``smsly-mcp-server`` container (same backend image,
 SSE mode) through the Docker SDK so the frontend can start/stop/restart
-it and report live status. Creation is on-demand; nothing starts unless
-an operator asks for it.
+it and report live status. The container restarts with Docker
+(unless-stopped) and the ensure_mcp_server_running beat recreates it if
+removed — set MCP_AUTOSTART=false for fully manual control.
 """
 
 import logging
@@ -22,6 +23,10 @@ MCP_IMAGE = os.getenv("MCP_SERVER_IMAGE", "smsly-hosting-backend:latest")
 MCP_PORT = int(os.getenv("MCP_SERVER_PORT", "8001") or 8001)
 MCP_NETWORK = os.getenv("MCP_SERVER_NETWORK", "smsly-net")
 MCP_MEM_LIMIT = os.getenv("MCP_SERVER_MEM_LIMIT", "512m")
+# Auto-start: the managed container restarts with Docker (unless-stopped)
+# and the ensure_mcp_server_running beat recreates it if ever removed.
+# Set MCP_AUTOSTART=false to return to fully manual control.
+MCP_AUTOSTART = os.getenv("MCP_AUTOSTART", "true").lower() in ("1", "true", "yes", "on")
 
 # Env handling: pass through (almost) everything. Django settings.py
 # requires dozens of secrets at import (GATEWAY_SECRET, DB passwords,
@@ -134,7 +139,7 @@ def _ensure_container(client):
         network=primary,
         ports={"8001/tcp": ("127.0.0.1", MCP_PORT)},
         labels={"managed_by": "smsly-hosting", "smsly.mcp": "true"},
-        restart_policy={"Name": "no"},
+        restart_policy={"Name": "unless-stopped"},
         mem_limit=MCP_MEM_LIMIT,
         detach=True,
     )
