@@ -817,7 +817,7 @@ class LocalAdapter(BaseCloudAdapter):
             "cap_add": ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
             "pids_limit": 1024,
             "read_only": True,
-            "tmpfs": {"/tmp": "size=100m", "/run": "size=20m", "/app/.next/cache": "size=256m"},
+            "tmpfs": {"/tmp": "size=100m", "/run": "size=20m", "/app/.next/cache": "size=256m", "/app/tmp": "size=100m"},
             "ulimits": [
                 {"Name": "nofile", "Soft": 1024, "Hard": 2048},
                 {"Name": "fsize", "Soft": 512000000, "Hard": 512000000},
