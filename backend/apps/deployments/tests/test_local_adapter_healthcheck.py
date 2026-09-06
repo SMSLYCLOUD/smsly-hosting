@@ -10,6 +10,7 @@ from django.test import SimpleTestCase
 from apps.cloud.adapters.local import (
     LocalAdapter,
     _build_docker_healthcheck_cmd,
+    _localhost_free_healthcheck,
     _normalize_health_path,
 )
 
@@ -523,3 +524,60 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         for k in labels:
             if k.startswith("traefik.") and k != "traefik.enable":
                 self.fail(f"Found unexpected Traefik label: {k}")
+class LocalhostHealthcheckRewriteTests(SimpleTestCase):
+    """Inherited image probes using the hostname localhost fail on
+    IPv6-first containers even when the app is healthy."""
+
+    def test_rewrites_localhost_to_loopback_ip(self):
+        fixed = _localhost_free_healthcheck(
+            {
+                "Test": [
+                    "CMD-SHELL",
+                    "wget -qO- http://localhost:3000/api/health || "
+                    "wget -qO- http://localhost:3000/health || exit 1",
+                ],
+                "Interval": 30000000000,
+                "Timeout": 10000000000,
+                "Retries": 3,
+                "StartPeriod": 40000000000,
+            }
+        )
+        assert fixed is not None
+        # NOTE: docker.types.Healthcheck preserves the capitalized API
+        # field names (Test/Interval/...), exactly as the daemon expects.
+        self.assertEqual(
+            fixed["Test"],
+            [
+                "CMD-SHELL",
+                "wget -qO- http://127.0.0.1:3000/api/health || "
+                "wget -qO- http://127.0.0.1:3000/health || exit 1",
+            ],
+        )
+        self.assertEqual(fixed["Interval"], 30000000000)
+        self.assertEqual(fixed["Timeout"], 10000000000)
+        self.assertEqual(fixed["Retries"], 3)
+        self.assertEqual(fixed["StartPeriod"], 40000000000)
+
+    def test_leaves_loopback_ip_probe_untouched(self):
+        self.assertIsNone(
+            _localhost_free_healthcheck(
+                {"Test": ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]}
+            )
+        )
+
+    def test_leaves_explicit_none_untouched(self):
+        self.assertIsNone(_localhost_free_healthcheck({"Test": ["NONE"]}))
+
+    def test_leaves_missing_or_invalid_untouched(self):
+        self.assertIsNone(_localhost_free_healthcheck(None))
+        self.assertIsNone(_localhost_free_healthcheck({}))
+        self.assertIsNone(_localhost_free_healthcheck({"Test": []}))
+
+    def test_missing_timing_keys_fall_back_to_defaults(self):
+        fixed = _localhost_free_healthcheck(
+            {"Test": ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]}
+        )
+        assert fixed is not None
+        self.assertEqual(fixed["Interval"], 30_000_000_000)
+        self.assertEqual(fixed["Timeout"], 10_000_000_000)
+        self.assertEqual(fixed["Retries"], 3)

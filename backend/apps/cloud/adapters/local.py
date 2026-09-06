@@ -91,6 +91,43 @@ def _health_paths(primary_path: str | None) -> list[str]:
     return values
 
 
+def _localhost_free_healthcheck(image_healthcheck):
+    """Rewrite localhost to 127.0.0.1 in an inherited image HEALTHCHECK.
+
+    Docker puts ``::1 localhost`` first in a container's /etc/hosts, so a
+    probe against the hostname ``localhost`` is attempted over IPv6 first.
+    Apps that listen on IPv4 only (e.g. Next.js standalone on 0.0.0.0:3000)
+    then fail the check even though they are healthy, and minimal tooling
+    (busybox wget) does not fall back to 127.0.0.1. Probing 127.0.0.1
+    directly always hits the container-local stack.
+
+    Returns a docker.types.Healthcheck with the image's own timing
+    preserved, or None when no rewrite applies (so the image-native
+    check ??? including an explicit NONE ??? is left untouched).
+    """
+    if not isinstance(image_healthcheck, dict):
+        return None
+    test = image_healthcheck.get("Test")
+    if not test or not any("localhost" in str(part) for part in test):
+        return None
+
+    def _as_int(value, default):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    import docker.types
+
+    return docker.types.Healthcheck(
+        test=[str(part).replace("localhost", "127.0.0.1") for part in test],
+        interval=_as_int(image_healthcheck.get("Interval"), 30_000_000_000),
+        timeout=_as_int(image_healthcheck.get("Timeout"), 10_000_000_000),
+        retries=_as_int(image_healthcheck.get("Retries"), 3),
+        start_period=_as_int(image_healthcheck.get("StartPeriod"), 0),
+    )
+
+
 def _build_docker_healthcheck_cmd(url_or_urls: str | list[str], timeout_seconds: int) -> str:
     """
     Build a portable in-container probe command.
@@ -600,6 +637,26 @@ class LocalAdapter(BaseCloudAdapter):
                 "No explicit platform healthcheck for %s. Keeping image-native Docker HEALTHCHECK.",
                 name,
             )
+            try:
+                inherited = (
+                    self.docker_client.images.get(image)
+                    .attrs.get("Config", {})
+                    .get("Healthcheck")
+                )
+                fixed_healthcheck = _localhost_free_healthcheck(inherited)
+                if fixed_healthcheck is not None:
+                    docker_healthcheck = fixed_healthcheck
+                    logger.info(
+                        "Rewrote localhost to 127.0.0.1 in inherited image "
+                        "healthcheck for %s.",
+                        name,
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "Inherited healthcheck inspection skipped for %s: %s",
+                    name,
+                    exc,
+                )
 
         router_name = name.replace('.', '-').replace('_', '-')
         labels = {
