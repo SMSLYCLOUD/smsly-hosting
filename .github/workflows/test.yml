@@ -68,7 +68,7 @@ jobs:
         cd backend
         coverage run -m pytest --cov=apps --cov=config --cov-report=xml --cov-report=term-missing -m "not slow and not e2e"
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v7
+      uses: codecov/codecov-action@v7.0.0
       with:
         file: backend/coverage.xml
         fail_ci_if_error: false
