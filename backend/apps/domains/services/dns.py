@@ -117,19 +117,27 @@ def delete_dns_record(domain: str, token: str) -> bool:
     return ok
 
 
-def _desired_proxied_state() -> bool:
-    """Resolve whether records should be Cloudflare-proxied.
+def _desired_proxied_state(domain: str | None = None) -> bool:
+    """Resolve whether a record should be Cloudflare-proxied.
 
-    Edge Shield: when `edge_proxy_records` is enabled, ALL records this
-    module manages must stay proxied (orange cloud) so traffic flows
-    through Cloudflare Anycast — that is the core BGP-hijack defense.
-    When the shield is off, preserve the legacy DNS-only behavior.
+    Edge Shield: when `edge_proxy_records` is enabled, records are
+    proxied (orange cloud) for BGP-hijack defense. Third-level
+    wildcards (*.grid.example.com) are the exception — Cloudflare
+    Universal SSL does not cover them and every service behind the
+    wildcard gets ERR_SSL_VERSION_OR_CIPHER_MISMATCH when proxied.
+    Wildcards therefore respect `edge_proxy_wildcards` (default False,
+    DNS-only), which the PlatformConfig help text marks DANGEROUS for
+    third-level wildcards. Non-wildcard records still follow
+    `edge_proxy_records`.
 
-    Read lazily per-call (not import time) so tests can toggle flags.
+    Read lazily per-call so tests can toggle flags.
     """
     try:
         from apps.deployments.models import PlatformConfig
-        return bool(PlatformConfig.load().edge_proxy_records)
+        cfg = PlatformConfig.load()
+        if domain and domain.strip().startswith("*."):
+            return bool(getattr(cfg, "edge_proxy_wildcards", False))
+        return bool(cfg.edge_proxy_records)
     except Exception:
         return False
 
@@ -150,8 +158,8 @@ def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> di
         result["errors"].append("missing token/server_ip/domains")
         return result
 
-    desired_proxied = _desired_proxied_state()
     for domain in domains:
+        desired_proxied = _desired_proxied_state(domain)
         zone_name = _guess_zone_name(domain)
         zone_id = _get_zone_id(token, zone_name)
         if not zone_id:
