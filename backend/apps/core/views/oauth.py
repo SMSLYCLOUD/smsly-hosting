@@ -38,9 +38,18 @@ def _invalidate_social_app_cache(sender, instance, **kwargs):
     # to re-import the provider module — and the provider module
     # re-reads SOCIALACCOUNT_PROVIDERS (and any consumer that
     # re-queries SocialApp) picks up the new values.
+    #
+    # CRITICAL: reload IMMEDIATELY after wiping. Request-time lookups
+    # (DefaultSocialAccountAdapter.get_provider → registry.get_class)
+    # do NOT trigger a reload — get_class reads provider_map directly.
+    # Wiping without reloading broke every social login in the worker
+    # that handled the save (ImproperlyConfigured: unknown provider)
+    # until the next restart. load() is idempotent (register()
+    # overwrites by id), so this is safe to run on every save.
     try:
         allauth_providers.registry.provider_map = OrderedDict()
         allauth_providers.registry.loaded = False
+        allauth_providers.registry.load()
     except Exception as exc:
         logger.debug("Failed to reset allauth provider registry: %s", exc)
 

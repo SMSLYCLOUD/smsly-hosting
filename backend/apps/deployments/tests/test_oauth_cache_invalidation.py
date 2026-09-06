@@ -99,6 +99,15 @@ class OAuthCacheInvalidationTests(TestCase):
         _invalidate_social_app_cache(sender=SocialApp, instance=instance)
 
         self.assertIsNone(cache.get("social_app:github:42"))
-        self.assertEqual(len(allauth_providers.registry.provider_map), 0)
-        self.assertFalse(allauth_providers.registry.loaded)
+        # The receiver wipes the in-process registry AND immediately
+        # reloads it: request-time lookups (registry.get_class, which
+        # does NOT reload on its own) must keep working in the worker
+        # that handled the save. A wipe without reload broke every
+        # social login in that worker until restart.
+        self.assertTrue(allauth_providers.registry.loaded)
+        self.assertGreater(len(allauth_providers.registry.provider_map), 0)
+        github_cls = allauth_providers.registry.get_class("github")
+        self.assertIsNotNone(github_cls)
+        self.assertNotEqual(github_cls, _Stub)
+        self.assertEqual(github_cls.id, "github")
 

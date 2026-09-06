@@ -84,11 +84,18 @@ class CallbackOverrideGatingTests(TestCase):
 
     def test_github_login_redirects_to_provider_with_allauth_callback(self):
         from allauth.socialaccount.models import SocialApp
+        from django.contrib.sites.models import Site
 
-        SocialApp.objects.create(
+        app = SocialApp.objects.create(
             provider="github", name="GitHub",
             client_id="test-client-id", secret="test-secret",
         )
+        # allauth scopes apps to sites: without the link the login
+        # view cannot find the app and answers 404. Attach the
+        # current site exactly as the admin/SocialApp setup does.
+        # (No manual provider-registry reload needed: the
+        # _invalidate_social_app_cache receiver repopulates it on save.)
+        app.sites.add(Site.objects.get_current())
         resp = _client().get("/accounts/github/login/")
         self.assertEqual(resp.status_code, 302, resp.content[:200])
         location = resp["Location"]
