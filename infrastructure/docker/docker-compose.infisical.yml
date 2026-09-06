@@ -23,7 +23,11 @@ services:
     environment:
       # Database — uses existing Postgres
       DB_CONNECTION_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@smsly-postgres-primary:5432/infisical
-      REDIS_URL: redis://smsly-redis-primary:6379
+      # Platform Redis requires auth — REDIS_PASSWORD is exported by the
+      # installer (lib/update_rebuild.sh, lib/fresh_deploy.sh,
+      # scripts/provision_infisical.sh), never defaulted here: a wrong
+      # password fails loudly at boot instead of silently degrading.
+      REDIS_URL: redis://:${REDIS_PASSWORD}@smsly-redis-primary:6379
       # App config
       SITE_URL: ${INFISICAL_SITE_URL:-https://secrets.${DOMAIN:-localhost}}
       SMTP_HOST: ${INFISICAL_SMTP_HOST:-}

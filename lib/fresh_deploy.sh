@@ -249,6 +249,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
             # Compose reads env_file from the HOST, not from inside a
             # volume — extract the generated secrets to a host file.
             export INFISICAL_ENV_FILE="$INSTALL_DIR/.infisical.env"
+            _infisical_ready=""
             if ! docker run --rm -v infisical_data:/data alpine:3.19 \
                     cat /data/infisical.env > "$INFISICAL_ENV_FILE" 2>/dev/null; then
                 echo -e "${YELLOW}  ⚠ Could not read Infisical env from volume — skipping Infisical${NC}"
@@ -256,13 +257,31 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                 echo -e "${YELLOW}  ⚠ Infisical env incomplete — skipping Infisical${NC}"
             else
                 chmod 600 "$INFISICAL_ENV_FILE"
-                # No --remove-orphans: with the shared directory it would
-                # classify main-stack services as orphans and SIGTERM the
-                # whole platform (see AGENTS.md #16).
-                docker compose --env-file "$INSTALL_DIR/.env" \
+                # DB credentials: the compose file defaults
+                # (postgres/postgres) never match HA hosts — export the real
+                # ones for interpolation.
+                _pg_pass="$(grep '^POSTGRES_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)"
+                if [ -n "${_db_user:-}" ] && [ -n "$_pg_pass" ]; then
+                    export POSTGRES_USER="$_db_user" POSTGRES_PASSWORD="$_pg_pass"
+                    _redis_pass="$(grep '^REDIS_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)"
+                    if [ -n "$_redis_pass" ]; then
+                        export REDIS_PASSWORD="$_redis_pass"
+                        _infisical_ready=1
+                    else
+                        echo -e "${YELLOW}  ⚠ No Redis password — skipping Infisical${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}  ⚠ No Postgres credentials — skipping Infisical${NC}"
+                fi
+            fi
+            if [ -n "$_infisical_ready" ]; then
+                # Explicit project name; never --remove-orphans on a shared
+                # directory (AGENTS.md #16).
+                docker compose -p smsly-infisical --env-file "$INSTALL_DIR/.env" \
                     -f "$_INFISICAL_COMPOSE" up -d  && \
                     echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
                     echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
+                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD
             fi
         fi
     fi
