@@ -21,6 +21,7 @@ from apps.core.rate_limiting import (
 class _FakeRequest:
     def __init__(self, meta):
         self.META = meta
+        self.user = None
 
 
 class TrustedIdentTests(TestCase):
@@ -97,6 +98,9 @@ class TrustedIdentTests(TestCase):
         """Full allow_request cycle with a stable ident: 10 allowed, 11th blocked."""
         from django.core.cache import cache
 
+        # Clean slate for this ident's bucket
+        cache.delete("throttle_login_203.0.113.50")
+
         class _View:
             throttle_classes = [LoginRateThrottle]
 
@@ -108,9 +112,8 @@ class TrustedIdentTests(TestCase):
         codes = []
         for _ in range(12):
             t = LoginRateThrottle()
-            t.rate = None
             req = _FakeRequest(dict(meta))
             allowed = t.allow_request(req, view)
             codes.append(allowed)
-        self.assertTrue(all(codes[:10]))
-        self.assertFalse(any(codes[10:]))
+        self.assertTrue(all(codes[:10]), codes)
+        self.assertFalse(any(codes[10:]), codes)
