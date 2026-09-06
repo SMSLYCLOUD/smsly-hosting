@@ -27,6 +27,27 @@ def caddy_disabled_mode() -> bool:
     }
 
 
+def startup_sync_skip_reason(cfg) -> str | None:
+    """Return why the startup Caddy sync must be skipped, or None to proceed.
+
+    OUTAGE GUARD (2026-09-06): never generate from a ghost or
+    domain-less config. During backend restart races PlatformConfig.load()
+    can return a ghost/empty-domain instance; generating from it emits
+    a stub Caddyfile WITHOUT the control-plane site block, and
+    apply_caddyfile's own guard ALSO skips (it reads the same empty
+    domain) — the stub gets applied and every proxied request 521s
+    until manual regeneration. The previous good Caddyfile stays live
+    when we skip here.
+    """
+    if cfg is None:
+        return "no PlatformConfig available"
+    if getattr(cfg, "_is_ghost", False):
+        return "PlatformConfig is a ghost (restart race)"
+    if not (getattr(cfg, "domain", "") or "").strip():
+        return "platform domain is empty"
+    return None
+
+
 def _sync_caddy_once(delay: float = 3.0):
     """Delay a few seconds to let migrations/settings load, then apply Caddy."""
     try:
@@ -49,6 +70,13 @@ def _sync_caddy_once(delay: float = 3.0):
             from apps.deployments.models import PlatformConfig
 
             cfg = PlatformConfig.load()
+            skip_reason = startup_sync_skip_reason(cfg)
+            if skip_reason is not None:
+                logger.warning(
+                    "Startup Caddy sync skipped: %s — keeping the live Caddyfile",
+                    skip_reason,
+                )
+                return
             content = generate_caddyfile(cfg)
             token = (getattr(cfg, "cloudflare_api_token", "") or "").strip()
             result = apply_caddyfile(content, cloudflare_token=token, preserve_existing_token=True)

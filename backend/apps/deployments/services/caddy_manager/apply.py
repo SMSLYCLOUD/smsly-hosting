@@ -137,7 +137,13 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                 if not _cfg.use_ssl:
                     _platform_domain = ""  # HTTP mode: no TLS block expected
         except Exception as _exc:
-            logger.debug("control-plane guard could not read PlatformConfig: %s", _exc)
+            logger.warning(
+                "control-plane guard could not read PlatformConfig (%s) — "
+                "proceeding WITHOUT the control-plane check. If the generated "
+                "content lacks the platform site block this apply can take "
+                "down all proxied traffic; verify the Caddyfile after apply.",
+                _exc,
+            )
         if _platform_domain:
             from .validation import validate_control_plane_block_present
             cp_errors = validate_control_plane_block_present(content, _platform_domain)
