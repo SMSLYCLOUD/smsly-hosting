@@ -52,7 +52,44 @@ class AIAnalysisRateThrottle(UserRateThrottle):
     scope = 'ai_analysis'
 
 
-class NodeTokenExchangeThrottle(AnonRateThrottle):
+class TrustedIdentMixin:
+    """Correct client-IP resolution for ANON throttles behind Cloudflare+Caddy.
+
+    SECURITY (live-verified bug): DRF's SimpleRateThrottle.get_ident with
+    NUM_PROXIES=None returns the ENTIRE X-Forwarded-For string. Behind
+    Cloudflare every request arrives with a DIFFERENT CF edge IP in XFF
+    (CF rotates egress), so every request hashes to a unique throttle
+    bucket and NO anon throttle ever fires — the login brute-force
+    guard, password-reset bomb guard, and registration bot guard were
+    all effectively unlimited in production.
+
+    Resolution order (mirrors RateLimitMiddleware._get_client_ip):
+      1. CF-Connecting-IP when the request came through Cloudflare
+         (Cloudflare sets it; Caddy forwards it).
+      2. X-Real-IP when the direct peer (REMOTE_ADDR) is a trusted
+         proxy in TRUSTED_PROXY_IPS.
+      3. REMOTE_ADDR (the immediate peer) otherwise — for direct
+         connections this IS the client; behind an untrusted proxy a
+         spoofable header is deliberately ignored.
+    """
+
+    def get_ident(self, request):
+        from django.conf import settings
+
+        cf_ip = (request.META.get("HTTP_CF_CONNECTING_IP") or "").strip()
+        if cf_ip:
+            return cf_ip
+
+        remote_addr = (request.META.get("REMOTE_ADDR") or "").strip()
+        trusted_proxies = getattr(settings, "TRUSTED_PROXY_IPS", None) or []
+        real_ip = (request.META.get("HTTP_X_REAL_IP") or "").strip()
+        if real_ip and remote_addr in trusted_proxies:
+            return real_ip
+
+        return remote_addr or "0.0.0.0"
+
+
+class NodeTokenExchangeThrottle(TrustedIdentMixin, AnonRateThrottle):
     """Rate-limit the anonymous node-token-exchange endpoint.
 
     The endpoint is AllowAny (the caller doesn't have a token
@@ -75,7 +112,7 @@ class NodeTokenExchangeThrottle(AnonRateThrottle):
 # limits on auth-sensitive endpoints. Rate is read from
 # settings.DEFAULT_THROTTLE_RATES at instantiation.
 
-class LoginRateThrottle(AnonRateThrottle):
+class LoginRateThrottle(TrustedIdentMixin, AnonRateThrottle):
     """Brute-force guard on POST /api/v1/auth/login/.
 
     Keyed by client IP. The rate comes from
@@ -84,7 +121,7 @@ class LoginRateThrottle(AnonRateThrottle):
     scope = 'login'
 
 
-class PasswordResetRateThrottle(AnonRateThrottle):
+class PasswordResetRateThrottle(TrustedIdentMixin, AnonRateThrottle):
     """Email-bombing guard on password reset.
 
     Keyed by IP. Rate from
@@ -93,7 +130,7 @@ class PasswordResetRateThrottle(AnonRateThrottle):
     scope = 'password_reset'
 
 
-class RegistrationRateThrottle(AnonRateThrottle):
+class RegistrationRateThrottle(TrustedIdentMixin, AnonRateThrottle):
     """Bot-account guard on POST /api/v1/auth/registration/.
 
     Keyed by IP. Rate from
@@ -109,7 +146,7 @@ class RegistrationRateThrottle(AnonRateThrottle):
 # cheap, but unbounded attempts at forging signatures still
 # consume CPU on the master.
 
-class AttestationVerifyRateThrottle(AnonRateThrottle):
+class AttestationVerifyRateThrottle(TrustedIdentMixin, AnonRateThrottle):
     """Throttle on POST /api/v1/internal/attest/verify/.
 
     The endpoint authenticates requests by HMAC signature; an
@@ -213,7 +250,7 @@ class AddonDeleteRateThrottle(UserRateThrottle):
     scope = 'addon_delete'
 
 
-class TwoFactorLoginRateThrottle(AnonRateThrottle):
+class TwoFactorLoginRateThrottle(TrustedIdentMixin, AnonRateThrottle):
     """Brute-force guard on POST /api/v1/2fa/login/.
 
     Keyed by client IP. The rate comes from
