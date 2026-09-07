@@ -521,39 +521,43 @@ def ecosystem_release_wave_task(
     }
 
 
-def _is_ecosystem_plan_task_live(plan) -> bool:
-    """True if a previous deploy-task attempt for this plan looks alive.
+def _another_deploy_attempt_running(task_self, plan_id) -> bool:
+    """True if a DIFFERENT ecosystem_deploy_task for this plan is executing
+    or reserved on a worker right now (2026-09-07 follow-up).
 
-    The idempotency guard must NOT return ``already_in_progress`` for a
-    dead attempt: the stale-plan recovery beat fails plans whose worker
-    died mid-creation, leaving QUEUED rows behind with no task running
-    to drive them (2026-09-07 incident — plan stranded deploying with
-    6 QUEUED + 4 CANCELLED and every re-dispatch bouncing off the
-    guard). Two liveness signals, either suffices:
-      1. recent plan heartbeat (the task touches ``updated_at`` after
-         every prepared service), or
-      2. the recorded ``deploy_task_id`` still PENDING/STARTED/RETRY
-         on the broker.
+    The previous liveness check (plan heartbeat / broker task state) could
+    not distinguish "a task is driving these rows" from "this very
+    re-dispatch just touched the plan row" — every recovery run saw its
+    own dispatch touch as proof of life and bounced off the guard,
+    stranding the plan forever. Inspecting the workers and matching on
+    plan_id while excluding our own task id answers the real question:
+    is somebody ELSE working this plan?
     """
+    me = getattr(getattr(task_self, "request", None), "id", None)
     try:
-        updated = getattr(plan, "updated_at", None)
-        if updated is not None:
-            from apps.deployments.tasks.recover_stale_ecosystem_plans import (
-                ECOSYSTEM_ACTIVITY_MINUTES,
-            )
-            delta = (timezone.now() - updated).total_seconds()
-            if delta < ECOSYSTEM_ACTIVITY_MINUTES * 60:
-                return True
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
-    try:
-        task_id = getattr(plan, "deploy_task_id", "") or ""
-        if task_id:
-            from celery.result import AsyncResult
-            if AsyncResult(str(task_id)).state in {
-                "PENDING", "RECEIVED", "STARTED", "RETRY",
-            }:
-                return True
+        insp = task_self.app.control.inspect(timeout=10)
+        pools = []
+        for probe in ("active", "reserved"):
+            try:
+                pools.append(getattr(insp, probe)() or {})
+            except Exception:  # pylint: disable=broad-exception-caught
+                continue
+        for pool in pools:
+            for tasks in (pool or {}).values():
+                for t in tasks or []:
+                    if not isinstance(t, dict):
+                        continue
+                    if (t.get("name") or "").split(".")[-1] != "ecosystem_deploy_task":
+                        continue
+                    if me and t.get("id") == me:
+                        continue
+                    kwargs = t.get("kwargs") or {}
+                    args = t.get("args") or []
+                    other_plan = kwargs.get("plan_id")
+                    if other_plan is None and len(args) > 2:
+                        other_plan = args[2]
+                    if other_plan is not None and str(other_plan) == str(plan_id):
+                        return True
     except Exception:  # pylint: disable=broad-exception-caught
         pass
     return False
@@ -629,7 +633,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     ],
                 )
                 if _active.exists():
-                    if _is_ecosystem_plan_task_live(existing_plan):
+                    if _another_deploy_attempt_running(self, plan_id):
                         logger.info(
                             "Ecosystem plan %s already has %d in-flight "
                             "deployments — skipping duplicate creation phase",

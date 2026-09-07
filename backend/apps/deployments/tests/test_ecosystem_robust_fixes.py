@@ -12,7 +12,7 @@ from apps.deployments.tasks.ecosystem.tasks import (
     _ecosystem_plan_still_deploying,
     _fail_plan_record,
     _finalize_ecosystem_plan,
-    _is_ecosystem_plan_task_live,
+    _another_deploy_attempt_running,
     _rollback_ecosystem_deploy,
     ecosystem_deferred_build_task,
     ecosystem_release_wave_task,
@@ -511,42 +511,52 @@ class TestEcosystemRollback(TestCase):
 
 
 class TestEcosystemTaskLiveness(TestCase):
-    """_is_ecosystem_plan_task_live: dead attempts must not trip the guard."""
+    """_another_deploy_attempt_running: only a DIFFERENT live attempt trips
+    the guard — our own re-dispatch must fall through to recovery."""
 
-    def _live_plan(self, minutes_ago=2):
-        from datetime import timedelta
+    def _task_self(self, me="me-1", active=None, reserved=None):
+        task_self = MagicMock()
+        task_self.request.id = me
+        task_self.app.control.inspect.return_value.active.return_value = active
+        task_self.app.control.inspect.return_value.reserved.return_value = reserved
+        return task_self
 
-        from django.utils import timezone
+    def _entry(self, tid, plan_id):
+        return {
+            "id": tid,
+            "name": "apps.deployments.tasks_ecosystem.ecosystem_deploy_task",
+            "args": ["user-1", {}, plan_id],
+            "kwargs": {"plan_id": plan_id},
+        }
 
-        plan = MagicMock()
-        plan.updated_at = timezone.now() - timedelta(minutes=minutes_ago)
-        plan.deploy_task_id = ""
-        return plan
+    def test_no_other_attempt_is_dead(self):
+        task_self = self._task_self(active={}, reserved={})
+        self.assertFalse(_another_deploy_attempt_running(task_self, "plan-1"))
 
-    def test_recent_heartbeat_is_live(self):
-        self.assertTrue(_is_ecosystem_plan_task_live(self._live_plan(2)))
+    def test_only_self_running_is_dead(self):
+        mine = self._entry("me-1", "plan-1")
+        task_self = self._task_self(active={"w@h": [mine]}, reserved={})
+        self.assertFalse(_another_deploy_attempt_running(task_self, "plan-1"))
 
-    def test_stale_plan_without_task_is_dead(self):
-        plan = self._live_plan(60)
-        with patch(
-            "celery.result.AsyncResult"
-        ) as mock_res:
-            mock_res.return_value.state = "SUCCESS"
-            self.assertFalse(_is_ecosystem_plan_task_live(plan))
+    def test_other_attempt_same_plan_is_live(self):
+        other = self._entry("other-9", "plan-1")
+        task_self = self._task_self(active={"w@h": [other]}, reserved={})
+        self.assertTrue(_another_deploy_attempt_running(task_self, "plan-1"))
 
-    def test_stale_plan_with_running_task_is_live(self):
-        plan = self._live_plan(60)
-        with patch(
-            "celery.result.AsyncResult"
-        ) as mock_res:
-            mock_res.return_value.state = "STARTED"
-            plan.deploy_task_id = "task-123"
-            self.assertTrue(_is_ecosystem_plan_task_live(plan))
+    def test_other_attempt_other_plan_is_dead(self):
+        other = self._entry("other-9", "plan-2")
+        task_self = self._task_self(active={"w@h": [other]}, reserved={})
+        self.assertFalse(_another_deploy_attempt_running(task_self, "plan-1"))
 
-    def test_missing_attrs_is_dead(self):
-        self.assertFalse(_is_ecosystem_plan_task_live(MagicMock(
-            updated_at=None, deploy_task_id="",
-        )))
+    def test_reserved_other_attempt_is_live(self):
+        other = self._entry("other-9", "plan-1")
+        task_self = self._task_self(active={}, reserved={"w@h": [other]})
+        self.assertTrue(_another_deploy_attempt_running(task_self, "plan-1"))
+
+    def test_inspect_failure_is_dead(self):
+        task_self = self._task_self()
+        task_self.app.control.inspect.side_effect = Exception("broker down")
+        self.assertFalse(_another_deploy_attempt_running(task_self, "plan-1"))
 
 
 
