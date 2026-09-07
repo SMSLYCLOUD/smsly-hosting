@@ -17,9 +17,17 @@ def _configure_ecosystem_mtls(service, enabled: bool) -> None:
     try:
         from apps.mtls.models import MtlsConfig
 
+        # Ecosystem deployment is authoritative: user services always use
+        # ecosystem.local with SPIFFE/Envoy enabled. PlatformConfig flags are
+        # for platform workloads and must not disable this path.
+        enabled = True
         config, _created = MtlsConfig.objects.get_or_create(
             service=service,
-            defaults={"enabled": enabled, "trust_domain": ECOSYSTEM_TRUST_DOMAIN},
+            defaults={
+                "enabled": enabled,
+                "trust_domain": ECOSYSTEM_TRUST_DOMAIN,
+                "sidecar_enabled": True,
+            },
         )
         changed = []
         if config.enabled != enabled:
@@ -28,6 +36,9 @@ def _configure_ecosystem_mtls(service, enabled: bool) -> None:
         if config.trust_domain != ECOSYSTEM_TRUST_DOMAIN:
             config.trust_domain = ECOSYSTEM_TRUST_DOMAIN
             changed.extend(["trust_domain", "spiffe_id"])
+        if not config.sidecar_enabled:
+            config.sidecar_enabled = True
+            changed.append("sidecar_enabled")
         if changed:
             config.save(update_fields=sorted(set(changed + ["updated_at"])))
     except Exception:
@@ -325,7 +336,9 @@ def ecosystem_release_wave_task(
     statuses = [dep["status"] for dep in deployments]
 
     if not statuses:
-        # If the wave is missing entirely, we don't have enough context to continue branches
+        # A missing wave is terminal; do not leave the plan deploying forever.
+        _cancel_unreleased_deployments(waves, wave_index, "previous wave not found")
+        _fail_plan_record(plan_id, "Ecosystem wave is missing its previous deployment rows")
         return {
             "status": "blocked",
             "reason": "previous wave not found",
@@ -366,8 +379,16 @@ def ecosystem_release_wave_task(
                 # Mark as queued to retry once
                 dep_obj.status = Deployment.Status.QUEUED
                 dep_obj.ecosystem_retry_count = (dep_obj.ecosystem_retry_count or 0) + 1
+                dep_obj.started_at = None
+                dep_obj.finished_at = None
+                dep_obj.container_id = ""
+                dep_obj.green_container_id = ""
+                dep_obj.remote_deployment_id = ""
                 dep_obj.build_logs = (dep_obj.build_logs or "") + "\n[Ecosystem] Retrying (attempt 2/2)...\n"
-                dep_obj.save(update_fields=["status", "ecosystem_retry_count", "build_logs"])
+                dep_obj.save(update_fields=[
+                    "status", "ecosystem_retry_count", "started_at", "finished_at",
+                    "container_id", "green_container_id", "remote_deployment_id", "build_logs",
+                ])
 
                 # Re-queue the individual task
                 self.app.send_task(
@@ -527,6 +548,13 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if not isinstance(plan, dict):
         return {"error": "Invalid plan payload"}
 
+    from apps.mtls.views import ensure_ecosystem_spire
+    spire_status = ensure_ecosystem_spire()
+    if spire_status.startswith("error"):
+        message = f"Ecosystem SPIRE infrastructure is unavailable: {spire_status}"
+        _fail_plan_record(plan_id, message)
+        return {"error": message}
+
     # ── Idempotency guard (re-dispatch / double-click protection) ──────
     # If this plan already has ecosystem deployments, do NOT re-run the
     # creation phase. Either a previous attempt is mid-flight (return
@@ -545,7 +573,6 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             if existing_dps.exists():
                 _active = existing_dps.exclude(
                     status__in=[
-                        Deployment.Status.COMPLETED,
                         Deployment.Status.FAILED,
                         Deployment.Status.CANCELLED,
                         Deployment.Status.STAGED,
@@ -939,6 +966,14 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         wave_size=wave_size,
     )
 
+    if unresolved:
+        message = (
+            "Ecosystem plan contains unresolved or cyclic dependencies: "
+            + ", ".join(unresolved)
+        )
+        _fail_plan_record(plan_id, message)
+        return {"error": message, "unresolved_dependency_nodes": unresolved}
+
     # SEC-ZT-007: Report alias ambiguity + unresolved cycles to user
     alias_warnings = _alias_ambiguity_report(dependencies, entries_by_key)
     if unresolved:
@@ -1298,7 +1333,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
         try:
             # Service.name is globally unique — check all owners, not just the current user.
-            service = Service.objects.filter(name=requested_name).first()
+            service = Service.objects.filter(
+                name=requested_name,
+                owner=user,
+                project=project,
+            ).first()
+            global_name_taken = Service.objects.filter(name=requested_name).exists()
             # If the service already exists but was NOT created by ecosystem,
             # create a new service with a unique name instead of overwriting
             # the user's manually-deployed service.
@@ -1346,6 +1386,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 _rollback_services.append(str(service.id))
             elif service is None:
                 final_name = _next_available_service_name(Service, requested_name)
+                if global_name_taken and final_name == requested_name:
+                    final_name = _next_available_service_name(Service, f"{requested_name}-ecosystem")
                 service = Service.objects.create(
                     name=final_name,
                     owner=user,
@@ -1365,9 +1407,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     service, bool(mtls_config.get("enabled")),
                 )
                 _rollback_services.append(str(service.id))
-            elif project and service.project != project:
-                service.project = project
-                service.save(update_fields=["project", "updated_at"])
+            # Services outside this user's project are never adopted or moved
+            # by an ecosystem deployment. The scoped lookup above ensures a
+            # collision becomes a new uniquely named service instead.
 
             service_profile = {**svc_plan, "repo": repo}
             if target_is_local and server is None:
@@ -1376,7 +1418,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # platform.local by default, but ecosystem workloads belong to
             # the isolated ecosystem SPIRE trust domain.
             _configure_ecosystem_mtls(
-                service, bool(mtls_config.get("enabled")),
+                service, True,
             )
             _apply_service_profile(service, service_profile, provider, port, server=server)
 
@@ -1692,9 +1734,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             plan_record = EcosystemPlan.objects.filter(id=plan_id, user=user).first()
             if plan_record:
                 plan_record.services_created = results
-                if deploy_result.get("failed", 0) == len(results):
+                if deploy_result.get("failed", 0) or deploy_result.get("prepared", 0) == 0:
                     plan_record.status = EcosystemPlan.Status.FAILED
-                    plan_record.error_message = "All services failed to deploy"
+                    plan_record.error_message = "One or more ecosystem services failed during preparation"
                 else:
                     plan_record.status = EcosystemPlan.Status.DEPLOYING
                 plan_record.save(update_fields=['services_created', 'status', 'error_message', 'updated_at'])

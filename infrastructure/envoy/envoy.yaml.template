@@ -14,6 +14,10 @@
 #   {{SERVICE_NAME}}      - Service name for DNS resolution
 #   {{SPIRE_AGENT_SOCKET}} - Path to SPIRE agent UDS socket
 
+node:
+  id: "{{SERVICE_NAME}}"
+  cluster: "{{SERVICE_NAME}}"
+
 static_resources:
   listeners:
   # ── Inbound listener: terminates mTLS from other services ──
@@ -94,18 +98,22 @@ static_resources:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
         require_client_certificate: true
         common_tls_context:
-          tls_certificates:
-          - certificate_chain:
-              filename: /opt/spire/svids/svid.pem
-            private_key:
-              filename: /opt/spire/svids/svid.key
-          validation_context:
-            trusted_ca:
-              filename: /opt/spire/svids/bundle.pem
-            match_typed_subject_alt_names:
-            - matcher:
-                exact: "spiffe://{{TRUST_DOMAIN}}/service/{{SERVICE_NAME}}"
-              san_type: URI
+           tls_certificate_sds_secret_configs:
+           - name: default
+             sds_config:
+               api_config_source:
+                 api_type: GRPC
+                 grpc_services:
+                 - envoy_grpc:
+                     cluster_name: spire_agent
+           validation_context_sds_secret_config:
+             name: ROOTCA
+             sds_config:
+               api_config_source:
+                 api_type: GRPC
+                 grpc_services:
+                 - envoy_grpc:
+                     cluster_name: spire_agent
 
   # ── Outbound listener: originates mTLS to other services ──
   - name: outbound
@@ -144,14 +152,14 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
         common_tls_context:
-          tls_certificates:
-          - certificate_chain:
-              filename: /opt/spire/svids/svid.pem
-            private_key:
-              filename: /opt/spire/svids/svid.key
-          validation_context:
-            trusted_ca:
-              filename: /opt/spire/svids/bundle.pem
+           tls_certificate_sds_secret_configs:
+           - name: default
+             sds_config:
+               api_config_source:
+                 api_type: GRPC
+                 grpc_services:
+                 - envoy_grpc:
+                     cluster_name: spire_agent
 
   clusters:
   # ── Local application cluster ──
@@ -172,15 +180,15 @@ static_resources:
   - name: spire_agent
     connect_timeout: 1s
     type: STATIC
+    http2_protocol_options: {}
     load_assignment:
       cluster_name: spire_agent
       endpoints:
       - lb_endpoints:
         - endpoint:
-            address:
-              uds:
-                path: "{{SPIRE_AGENT_SOCKET}}"
-                server_features: envoy
+             address:
+               pipe:
+                 path: "{{SPIRE_AGENT_SOCKET}}"
 
   # ── Upstream services cluster (for outbound mTLS) ──
   # Uses DNS resolution via Docker network for service discovery
@@ -202,14 +210,22 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
         common_tls_context:
-          tls_certificates:
-          - certificate_chain:
-              filename: /opt/spire/svids/svid.pem
-            private_key:
-              filename: /opt/spire/svids/svid.key
-          validation_context:
-            trusted_ca:
-              filename: /opt/spire/svids/bundle.pem
+           tls_certificate_sds_secret_configs:
+           - name: default
+             sds_config:
+               api_config_source:
+                 api_type: GRPC
+                 grpc_services:
+                 - envoy_grpc:
+                     cluster_name: spire_agent
+           validation_context_sds_secret_config:
+             name: ROOTCA
+             sds_config:
+               api_config_source:
+                 api_type: GRPC
+                 grpc_services:
+                 - envoy_grpc:
+                     cluster_name: spire_agent
 
   listeners:
   # ... (listeners defined above)

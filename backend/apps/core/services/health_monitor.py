@@ -413,7 +413,12 @@ def _check_infrastructure_health():
         logger.debug("fail2ban health check skipped: %s", exc)
 
 
-@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+@shared_task(
+    bind=True,
+    queue="celery",
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
+)
 def monitor_health_task(self) -> None:
     """
     Check health for all services with configured health paths.

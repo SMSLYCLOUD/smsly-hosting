@@ -17,6 +17,7 @@ import { AdvancedTab } from '@/components/settings/AdvancedTab';
 import { EnvVarsTab } from '@/components/settings/EnvVarsTab';
 import { AIInsightsTab } from '@/components/settings/AIInsightsTab';
 import { DomainsTab } from '@/components/settings/DomainsTab';
+import { ServiceMtlsTab } from '@/components/settings/ServiceMtlsTab';
 import { DeploymentsTab } from '@/components/settings/DeploymentsTab';
 import { MetricsTab } from '@/components/metrics/MetricsTab';
 import { CronTab } from '@/components/cron/CronTab';
@@ -936,6 +937,15 @@ export default function ServiceDetailPage() {
             )}
 
             {activeTab === 'domains' && <DomainsTab service={service} />}
+
+            {activeTab === 'mtls' && (
+                <ServiceMtlsTab
+                    serviceId={service.id}
+                    serviceName={service.name}
+                    internalPort={service.internal_port}
+                    publicDomain={service.public_domain}
+                />
+            )}
 
             {activeTab === 'deployments' && <DeploymentsTab serviceId={service.id} />}
 

@@ -32,7 +32,7 @@ class MtlsConfig(models.Model):
     )
     trust_domain = models.CharField(
         max_length=255,
-        default="platform.local",
+        default="ecosystem.local",
         help_text="SPIFFE trust domain for this service.",
     )
     spiffe_id = models.CharField(
@@ -51,7 +51,7 @@ class MtlsConfig(models.Model):
         help_text="When the SVID was last rotated.",
     )
     sidecar_enabled = models.BooleanField(
-        default=False,
+        default=True,
         help_text=(
             "Enable Envoy sidecar for transparent mTLS. "
             "When enabled, an Envoy proxy is deployed alongside the service "

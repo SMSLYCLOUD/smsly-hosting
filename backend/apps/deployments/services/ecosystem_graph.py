@@ -38,6 +38,19 @@ def build_ecosystem_graph(service) -> dict[str, Any]:
             },
         }
     """
+    # Legacy callers pass a manifest string; keep that API routed to the
+    # manifest graph builder instead of treating the string as a Service row.
+    if isinstance(service, str):
+        import yaml
+        from types import SimpleNamespace
+
+        manifest = yaml.safe_load(service) or {}
+        return SimpleNamespace(
+            manifest=manifest,
+            shared_env=manifest.get("shared_env", {}).get("groups", {}),
+            services=manifest.get("services", {}),
+        )
+
     from apps.deployments.models import Service  # type: ignore[attr-defined]
 
     if not service.owner:
@@ -65,9 +78,20 @@ def build_ecosystem_graph(service) -> dict[str, Any]:
     }
 
     for sib in siblings:
-        # Only include services that have had at least one successful deploy
+        # Include live siblings and services participating in the current
+        # ecosystem run. During wave preparation every dependency is still
+        # QUEUED/REVIEW, so restricting this graph to ACTIVE rows preserves
+        # stale localhost/legacy URLs exactly when a fresh ecosystem deploy
+        # needs to replace them.
+        has_runnable_deployment = sib.deployments.filter(
+            status__in={
+                'ACTIVE', 'QUEUED', 'REVIEW', 'BUILDING', 'DEPLOYING',
+                'HEALTH_CHECK', 'STAGED',
+            },
+            commit_hash='ecosystem-deploy',
+        ).exists()
         has_active = sib.deployments.filter(status='ACTIVE').exists()
-        if not has_active:
+        if not has_active and not has_runnable_deployment:
             continue
 
         sib_info = {

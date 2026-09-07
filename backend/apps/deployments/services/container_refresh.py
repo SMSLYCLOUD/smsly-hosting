@@ -99,16 +99,23 @@ def _container_networks(container) -> tuple[str, dict]:
 def _container_volumes(container) -> dict:
     """Rebuild the docker-py ``volumes`` mapping from inspect data."""
     volumes = {}
+
+    def add_mount(source, destination, mode):
+        for old_source, old_config in list(volumes.items()):
+            if old_config.get("bind") == destination:
+                del volumes[old_source]
+        volumes[source] = {"bind": destination, "mode": mode}
+
     binds = (((container.attrs or {}).get("HostConfig", {}) or {}).get("Binds", []) or [])
     for item in binds:
         parts = str(item).split(":")
         if len(parts) >= 2:
-            volumes[parts[0]] = {"bind": parts[1], "mode": parts[2] if len(parts) > 2 else "rw"}
+            add_mount(parts[0], parts[1], parts[2] if len(parts) > 2 else "rw")
     for mount in (container.attrs or {}).get("Mounts", []) or []:
         mtype = (mount or {}).get("Type", "")
         src, dst = (mount or {}).get("Source", ""), (mount or {}).get("Destination", "")
         if mtype in ("bind", "volume") and src and dst:
-            volumes[src] = {"bind": dst, "mode": (mount.get("Mode", "") or "rw")}
+            add_mount(src, dst, (mount.get("Mode", "") or "rw"))
         elif mtype not in ("", "bind", "volume"):
             raise ContainerRefreshError(
                 f"Unsupported mount type '{mtype}' on {dst or '?'} — refusing to recreate"
@@ -199,6 +206,18 @@ def recreate_with_fresh_env(service, container_id=None, dry_run=False) -> dict:
             raise ContainerRefreshError("Container is not attached to any network — refusing to recreate")
         volumes = _container_volumes(container)
         env_vars = _fresh_env(service)
+        try:
+            from apps.deployments.services.mtls_integration import (
+                get_mtls_docker_run_volumes,
+                get_mtls_env_vars,
+                get_mtls_labels,
+                merge_docker_volumes,
+            )
+            labels.update(get_mtls_labels(service))
+            env_vars.update(get_mtls_env_vars(service))
+            volumes = merge_docker_volumes(volumes, get_mtls_docker_run_volumes(service))
+        except Exception as exc:
+            logger.warning("mTLS refresh integration skipped for %s: %s", service.name, exc)
 
         networking_config = {
             net_name: client.api.create_endpoint_config(aliases=info["aliases"])

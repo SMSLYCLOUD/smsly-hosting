@@ -120,6 +120,7 @@ services:
       - spire-ecosystem-agent-data:/opt/spire/data
       - spire-ecosystem-agent-socket:/opt/spire/run
       - spire-ecosystem-agent-svids:/opt/spire/svids
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infrastructure/spire/agent-ecosystem.conf:/etc/spire/agent.conf:ro,z
     environment:
       SPIFFE_TRUST_DOMAIN: ${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}

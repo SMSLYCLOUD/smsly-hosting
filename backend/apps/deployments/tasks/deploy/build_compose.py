@@ -524,19 +524,53 @@ def _link_ecosystem(service: Service, env_vars: dict) -> None:
             logger.warning("Failed to inject shared DATABASE_URL: %s", exc)
 
     if not svc_name.startswith('preview-'):
+        placeholder_values = {
+            '', 'changeme', 'change-me', 'todo', 'none', 'null',
+            '<your_value>', '<your-url>', 'http://localhost:8000',
+            'https://localhost:8000', 'http://localhost:8004',
+        }
         for env_key, match_patterns in _SERVICE_URL_PATTERNS.items():
-            if env_key in env_vars:
-                continue
-
+            current = str(env_vars.get(env_key, '') or '').strip().lower()
+            # AI Senate and copied templates often leave a placeholder or
+            # localhost URL. Replace those with the resolved sibling URL, but
+            # preserve an explicit non-placeholder operator value.
             for pattern in match_patterns:
                 matched_sib = None
+                # Prefer an exact canonical service/alias match. Loose
+                # substring matching can select historical suffixed rows
+                # (for example ``smsly-backend-ee98``) over the active
+                # canonical ``smsly-backend`` service.
+                exact_names = {
+                    str(pattern).lower(),
+                    f"smsly-{str(pattern).lower()}",
+                }
                 for sib_name, sib_info in deployed.items():
-                    if pattern in sib_name.lower():
+                    if str(sib_name).lower() in exact_names or str(sib_info.get("name", "")).lower() in exact_names:
                         matched_sib = sib_info
                         break
+                if matched_sib:
+                    url = resolve_service_url(matched_sib)
+                    env_vars[env_key] = url
+                    logger.info(
+                        "Ecosystem: %s=%s (exact sibling '%s')",
+                        env_key, url, matched_sib['name'],
+                    )
+                    break
+
+                substring_matches = []
+                for sib_name, sib_info in deployed.items():
+                    if pattern in sib_name.lower():
+                        substring_matches.append(sib_info)
+
+                if len(substring_matches) == 1:
+                    matched_sib = substring_matches[0]
 
                 if matched_sib:
                     url = resolve_service_url(matched_sib)
+                    # Ecosystem service-link variables are controlled by the
+                    # live graph. Replace stale localhost, legacy aliases,
+                    # and wrong ports; preserve unrelated operator URLs when
+                    # no sibling match exists.
                     env_vars[env_key] = url
                     logger.info(
                         "Ecosystem: %s=%s (from sibling '%s')",

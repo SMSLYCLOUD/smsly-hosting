@@ -128,8 +128,8 @@ def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: st
         lines.append(f"    reverse_proxy {upstream_url}")
 
 
-def _service_path_redirect_rules(service) -> list[tuple[str, str, str]]:
-    """Sanitized (path_segment, target_host, target_path) triples from
+def _service_path_redirect_rules(service) -> list[tuple[str, str, str, str]]:
+    """Sanitized (source_host, path_segment, target_host, target_path) rules.
     service.path_redirects.
 
     Fully user-configurable — invalid entries are skipped defensively at
@@ -148,8 +148,8 @@ def _service_path_redirect_rules(service) -> list[tuple[str, str, str]]:
     remainder.
     """
     from apps.domains.utils import normalize_domain, split_host_and_path
-    rules: list[tuple[str, str, str]] = []
-    seen: set[str] = set()
+    rules: list[tuple[str, str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
     raw_entries = getattr(service, "path_redirects", None)
     if not isinstance(raw_entries, list):
         return []
@@ -160,6 +160,13 @@ def _service_path_redirect_rules(service) -> list[tuple[str, str, str]]:
         target = str(entry.get("target") or "").strip().lower()
         if not path or not target:
             continue
+        source_host = ""
+        if not path.startswith("/"):
+            try:
+                source_host, path = split_host_and_path(path)
+                source_host = normalize_domain(source_host)
+            except ValueError:
+                continue
         if not _PATH_REDIRECT_SEGMENT_RE.match(path):
             continue
         # Strip a URL scheme if the operator pasted a full URL.
@@ -173,16 +180,21 @@ def _service_path_redirect_rules(service) -> list[tuple[str, str, str]]:
             target_host = normalize_domain(target_host)
         except ValueError:
             continue
-        if path in seen:
+        rule_key = (source_host, path)
+        if rule_key in seen:
             continue
-        seen.add(path)
-        rules.append((path, target_host, target_path))
+        seen.add(rule_key)
+        rules.append((source_host, path, target_host, target_path))
         if len(rules) >= _MAX_PATH_REDIRECTS_PER_SERVICE:
             break
     return rules
 
 
-def _path_redirect_site_lines(rules: list[tuple[str, str, str]], indent: str = "    ") -> list[str]:
+def _path_redirect_site_lines(
+    rules: list[tuple[str, str, str, str]],
+    site_domain: str = "",
+    indent: str = "    ",
+) -> list[str]:
     """Caddyfile lines implementing 301 path redirects inside a site block.
 
     Two target shapes:
@@ -195,7 +207,9 @@ def _path_redirect_site_lines(rules: list[tuple[str, str, str]], indent: str = "
         appended). This is the 'domain/path' format the UI accepts.
     """
     lines: list[str] = []
-    for index, (segment, target, target_path) in enumerate(rules):
+    for index, (source_host, segment, target, target_path) in enumerate(rules):
+        if source_host and source_host != site_domain:
+            continue
         if target_path and target_path != "/":
             # Host/path target: /seg -> https://host/path, /seg/x -> https://host/path/x
             # Caddy's {http.request.uri.path} excludes the query; {uri} keeps it.
@@ -311,11 +325,11 @@ def _build_service_domain_block(
     domain: str,
     upstream_host: str,
     upstream_url: str = "",
-    path_redirect_rules: list[tuple[str, str, str]] | None = None,
+    path_redirect_rules: list[tuple[str, str, str, str]] | None = None,
 ) -> str:
     lines = [f"{domain} {{"]
 
-    lines.extend(_path_redirect_site_lines(path_redirect_rules or []))
+    lines.extend(_path_redirect_site_lines(path_redirect_rules or [], site_domain=domain))
 
     if upstream_url:
         _append_reverse_proxy(lines, upstream_url, upstream_host or domain)
@@ -422,7 +436,9 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     target_host = public_domain if (public_domain and not isHidden) else value
 
                     lines = [f"{value} {{"]
-                    lines.extend(_path_redirect_site_lines(_service_path_redirect_rules(service)))
+                    lines.extend(_path_redirect_site_lines(
+                        _service_path_redirect_rules(service), site_domain=value,
+                    ))
                     lines.append("    tls {")
                     lines.append("        on_demand")
                     lines.append("    }")
@@ -1056,7 +1072,9 @@ def _get_wildcard_path_redirect_lines(wildcard_domain: str) -> list[str]:
             # path is exact for /seg and /seg/rest maps to
             # https://host/target-path/rest (handle_path-style stripping
             # without needing a second matcher).
-            for r_index, (segment, target, target_path) in enumerate(rules):
+            for r_index, (source_host, segment, target, target_path) in enumerate(rules):
+                if source_host and source_host != public_domain:
+                    continue
                 matcher = f"@wpr_{svc_alias}_{r_index}"
                 rest_re = f"wpr_{svc_alias}_{r_index}"
                 seg_q = segment.replace('/', r'\/')

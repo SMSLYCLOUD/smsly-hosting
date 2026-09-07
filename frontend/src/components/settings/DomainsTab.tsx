@@ -227,10 +227,10 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     };
 
     const handleAddPathRedirect = () => {
-        const path = newPath.trim().toLowerCase();
+        const path = newPath.trim().toLowerCase().replace(/^https?:\/\//, '');
         const target = newTarget.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
-        if (!/^\/[a-z0-9_-]{1,63}$/.test(path)) {
-            toast({ title: 'Invalid path', description: 'Use a single segment like /account', variant: 'destructive' });
+        if (!/^(?:[a-z0-9.-]+)?\/[a-z0-9_-]{1,63}$/.test(path)) {
+            toast({ title: 'Invalid source', description: 'Use /account or app.example.com/account', variant: 'destructive' });
             return;
         }
         if (!target || !target.includes('.') || target.includes(' ')) {
@@ -555,7 +555,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 <div className="mb-8">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Path Redirects</h4>
                     <p className="text-xs text-muted-foreground mb-3">
-                        Permanently forward paths on this service&apos;s domains to another host, e.g. /account → account.example.com.
+                        Permanently redirect /path or a specific domain/path to another domain/path.
                     </p>
 
                     {(service.path_redirects ?? []).map(({ path, target }) => (
@@ -576,7 +576,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
 
                     <div className="flex gap-2 mt-3">
                         <Input
-                            placeholder="/account"
+                            placeholder="/account or app.example.com/account"
                             value={newPath}
                             onChange={(e) => setNewPath(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleAddPathRedirect()}

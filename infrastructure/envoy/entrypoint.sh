@@ -7,7 +7,7 @@ set -e
 # then starts Envoy with the generated config.
 
 ENVOY_TEMPLATE="/etc/envoy/envoy.yaml.template"
-ENVOY_CONFIG="/etc/envoy/envoy.yaml"
+ENVOY_CONFIG="/tmp/envoy.yaml"
 
 # Required environment variables
 TRUST_DOMAIN="${SPIFFE_TRUST_DOMAIN:-ecosystem.local}"
@@ -24,13 +24,17 @@ echo "  Service name: ${SERVICE_NAME}"
 echo "  App port: ${APP_PORT}"
 echo "  SPIRE socket: ${SOCKET_PATH}"
 
-# Generate config from template
-sed \
-    -e "s|{{APP_PORT}}|${APP_PORT}|g" \
-    -e "s|{{TRUST_DOMAIN}}|${TRUST_DOMAIN}|g" \
-    -e "s|{{SERVICE_NAME}}|${SERVICE_NAME}|g" \
-    -e "s|{{SPIRE_AGENT_SOCKET}}|${SOCKET_PATH}|g" \
-    "${ENVOY_TEMPLATE}" > "${ENVOY_CONFIG}"
+# Generate config from template only when the controller did not mount a
+# rendered config. The application container may be read-only and the
+# controller-generated file is already fully substituted.
+if [ ! -f "${ENVOY_CONFIG}" ]; then
+    sed \
+        -e "s|{{APP_PORT}}|${APP_PORT}|g" \
+        -e "s|{{TRUST_DOMAIN}}|${TRUST_DOMAIN}|g" \
+        -e "s|{{SERVICE_NAME}}|${SERVICE_NAME}|g" \
+        -e "s|{{SPIRE_AGENT_SOCKET}}|${SOCKET_PATH}|g" \
+        "${ENVOY_TEMPLATE}" > "${ENVOY_CONFIG}"
+fi
 
 echo "[envoy-sidecar] Config generated at ${ENVOY_CONFIG}"
 

@@ -66,6 +66,12 @@ def resolve_spire_volume_name(short_name: str) -> str:
         names = [v.name for v in get_docker_client().volumes.list()]
     except Exception:
         return short_name
+    prefixed = sorted(
+        v for v in names
+        if v.endswith(short_name) and v.startswith("smsly-hosting_")
+    )
+    if prefixed:
+        return prefixed[0]
     if short_name in names:
         return short_name
     suffix = '_' + short_name
@@ -77,6 +83,17 @@ def resolve_spire_volume_name(short_name: str) -> str:
 
 def is_mtls_enabled(service) -> bool:
     """Check if mTLS is enabled for a service."""
+    # An explicitly enabled ecosystem service is authoritative. Do not let a
+    # stale platform-wide toggle suppress the labels/mounts needed by SPIRE
+    # Docker selectors during its redeploy.
+    try:
+        enabled = getattr(service.mtls_config, "enabled", False)
+        if not isinstance(enabled, bool):
+            return False
+        if enabled and get_service_trust_domain(service) == ECOSYSTEM_SPIFFE_TRUST_DOMAIN:
+            return True
+    except Exception:
+        pass
     # Check PlatformConfig DB toggle first
     try:
         from apps.deployments.models.platform import PlatformConfig
@@ -92,7 +109,8 @@ def is_mtls_enabled(service) -> bool:
         return False
 
     try:
-        return service.mtls_config.enabled
+        enabled = getattr(service.mtls_config, "enabled", False)
+        return enabled if isinstance(enabled, bool) else False
     except Exception:
         pass
 
@@ -131,6 +149,16 @@ def get_mtls_labels(service) -> dict:
         "com.paas.service": service_name,
         "com.paas.mtls": "true",
         "com.paas.spiffe_id": f"spiffe://{trust_domain}/service/{service_name}",
+    }
+
+
+def get_ecosystem_mtls_labels(service) -> dict:
+    """Return mandatory ecosystem labels for SPIRE Docker attestation."""
+    service_name = _safe_service_name(service.name)
+    return {
+        "com.paas.service": service_name,
+        "com.paas.mtls": "true",
+        "com.paas.spiffe_id": f"spiffe://{ECOSYSTEM_SPIFFE_TRUST_DOMAIN}/service/{service_name}",
     }
 
 
@@ -183,6 +211,21 @@ def get_mtls_docker_run_volumes(service) -> dict:
         ECOSYSTEM_SPIRE_SOCKET_HOST_PATH: {"bind": SPIRE_SOCKET_CONTAINER_PATH, "mode": "ro"},
         ECOSYSTEM_SPIRE_SVIDS_HOST_PATH: {"bind": SPIRE_SVIDS_CONTAINER_PATH, "mode": "ro"},
     }
+
+
+def merge_docker_volumes(*volume_maps: dict) -> dict:
+    """Merge mounts by destination, preventing Docker duplicate bind errors."""
+    merged = {}
+    for volume_map in volume_maps:
+        for source, config in (volume_map or {}).items():
+            destination = str((config or {}).get("bind") or "").strip()
+            if not destination:
+                continue
+            for old_source, old_config in list(merged.items()):
+                if old_config.get("bind") == destination:
+                    del merged[old_source]
+            merged[source] = config
+    return merged
 
 
 def _safe_service_name(name: str) -> str:

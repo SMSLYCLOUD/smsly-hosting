@@ -830,6 +830,10 @@ export const servicesApi = {
 };
 
 export const platformApi = {
+  mtlsOverview: async (): Promise<any> => {
+    const response = await api.get('/mtls/overview/');
+    return response.data;
+  },
   resources: async (): Promise<{ cpu_cores: number; ram_mb: number; disk_gb: number }> => {
     const response = await api.get('/platform/resources/');
     return response.data;
@@ -1284,6 +1288,13 @@ export interface ManagedServerRuntimeInfo {
   disk_used_pct?: number;
   mem_used_pct?: number;
   registrar_version?: string;
+  services?: Record<string, 'running' | 'stopped' | 'unknown' | string>;
+  capacity?: {
+    score?: number;
+    active_calls?: number;
+    active_rooms?: number;
+    active_participants?: number;
+  };
 }
 
 export interface ManagedServer {

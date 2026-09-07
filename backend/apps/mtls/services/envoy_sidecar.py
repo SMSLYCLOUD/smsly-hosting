@@ -28,6 +28,7 @@ Usage:
 import logging
 import os
 import re
+import shutil
 import time
 
 logger = logging.getLogger(__name__)
@@ -59,9 +60,9 @@ class EnvoySidecar:
         Returns:
             str: Complete Envoy YAML configuration
         """
-        template_path = os.path.join(
+        template_path = os.getenv("ENVOY_TEMPLATE_PATH") or os.path.join(
             os.path.dirname(__file__),
-            "..", "..", "..", "..",
+            "..", "..", "..", "..", "..",
             "infrastructure", "envoy", "envoy.yaml.template",
         )
 
@@ -144,25 +145,40 @@ class EnvoySidecar:
         config = EnvoySidecar.generate_config(service, mtls_config)
 
         # Write config to a temp file and mount it
-        import tempfile
-        config_dir = tempfile.mkdtemp(prefix="envoy-config-")
-        config_path = os.path.join(config_dir, "envoy.yaml")
+        config_dir = os.getenv("ENVOY_CONFIG_DIR", "/opt/smsly-hosting/builds")
+        os.makedirs(config_dir, exist_ok=True)
+        safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "", service.name)[:80]
+        config_path = os.path.join(config_dir, f"envoy-{safe_name}.yaml")
+        if os.path.isdir(config_path):
+            shutil.rmtree(config_path)
         with open(config_path, "w") as f:
             f.write(config)
 
         try:
+            from apps.deployments.services.mtls_integration import resolve_spire_volume_name
+            socket_volume = resolve_spire_volume_name(SPIRE_AGENT_SOCKET_VOLUME)
+            svids_volume = resolve_spire_volume_name(SPIRE_SVIDS_VOLUME)
             container = client.containers.run(
                 image=ENVOY_IMAGE,
                 name=sidecar_name,
                 detach=True,
                 restart_policy={"Name": "unless-stopped"},
                 # Share network namespace with main container
-                network_mode=f"service:{main_container.name}",
+                # The Docker API accepts container:<id> for namespace sharing;
+                # service:<name> is a Compose-only form and fails via the
+                # socket proxy during runtime injection.
+                network_mode=f"container:{main_container.id}",
+                # Keep the sidecar process in the host PID namespace so the
+                # host-PID SPIRE agent can resolve its Workload API caller.
+                # Network namespace remains shared with the app container.
+                pid_mode="host",
                 labels={
                     "managed_by": "smsly-hosting",
                     "envoy_sidecar": "true",
                     "smsly.blue_green.canonical_name": service.name,
                     "com.paas.service": service.name,
+                    "com.paas.mtls": "true",
+                    "com.paas.spiffe_id": mtls_config.spiffe_id or f"spiffe://{mtls_config.trust_domain}/service/{service.name}",
                 },
                 environment={
                     "SPIFFE_TRUST_DOMAIN": mtls_config.trust_domain or "ecosystem.local",
@@ -171,12 +187,15 @@ class EnvoySidecar:
                     "APP_PORT": str(service.internal_port or 8000),
                 },
                 volumes={
-                    config_path: {"bind": "/etc/envoy/envoy.yaml", "mode": "ro"},
-                    SPIRE_AGENT_SOCKET_VOLUME: {
+                     config_path: {"bind": "/etc/envoy/envoy.yaml", "mode": "ro"},
+                     "/opt/smsly-hosting/builds/envoy.yaml.template": {
+                         "bind": "/etc/envoy/envoy.yaml.template", "mode": "ro",
+                     },
+                     socket_volume: {
                         "bind": SPIRE_AGENT_SOCKET_CONTAINER_PATH,
                         "mode": "ro",
                     },
-                    SPIRE_SVIDS_VOLUME: {
+                     svids_volume: {
                         "bind": SPIRE_SVIDS_CONTAINER_PATH,
                         "mode": "ro",
                     },
@@ -200,10 +219,10 @@ class EnvoySidecar:
             }
 
         finally:
-            # Cleanup temp config
+            # Keep the host-visible config while the sidecar is running.
             try:
-                os.unlink(config_path)
-                os.rmdir(config_dir)
+                if not os.getenv("ENVOY_CONFIG_DIR"):
+                    os.unlink(config_path)
             except Exception:
                 pass
 
@@ -225,6 +244,7 @@ class EnvoySidecar:
 
         try:
             container = client.containers.get(sidecar_name)
+            container.reload()
             container.stop(timeout=5)
             container.remove(force=True)
             logger.info("Removed Envoy sidecar %s for service %s", sidecar_name, service.name)
@@ -258,8 +278,8 @@ class EnvoySidecar:
                 try:
                     # Use docker exec to check health
                     result = container.exec_run(
-                        ["curl", "-sf", "http://127.0.0.1:9901/ready"],
-                        timeout=5,
+                        ["/bin/sh", "-c", "curl -fsS http://127.0.0.1:9901/ready"],
+                        demux=False,
                     )
                     healthy = result.exit_code == 0
                 except Exception:

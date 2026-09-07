@@ -511,7 +511,7 @@ _fallback_sqlite_path = (BASE_DIR / 'fallback.db').resolve().as_posix()
 _DATABASE_DEFAULT = (
     'postgresql://smsly_admin:smsly_admin@localhost:5432/smsly_hosting'
     if DEBUG
-    else f'sqlite:///{_fallback_sqlite_path}'
+    else ('sqlite:///:memory:' if IS_TESTING else f'sqlite:///{_fallback_sqlite_path}')
 )
 
 # ---------------------------------------------------------------------------

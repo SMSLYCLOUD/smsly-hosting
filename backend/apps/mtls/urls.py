@@ -34,6 +34,11 @@ urlpatterns = [
         name="mtls-health",
     ),
     path(
+        "mtls/overview/",
+        views.mtls_overview,
+        name="mtls-overview",
+    ),
+    path(
         "mtls/configs/",
         views.mtls_list,
         name="mtls-list",

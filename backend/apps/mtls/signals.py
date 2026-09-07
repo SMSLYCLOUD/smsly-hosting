@@ -18,7 +18,8 @@ def create_mtls_config(sender, instance, created, **kwargs):
                 service=instance,
                 defaults={
                     "enabled": True,
-                    "trust_domain": "platform.local",
+                    "trust_domain": "ecosystem.local",
+                    "sidecar_enabled": True,
                 },
             )
             if created:

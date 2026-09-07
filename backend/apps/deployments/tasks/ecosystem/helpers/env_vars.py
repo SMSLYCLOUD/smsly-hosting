@@ -204,10 +204,13 @@ def _service_placeholder_target(
 
     if ref_service:
         host = ref_service.name
-        port = ref_service.internal_port or 3000
+        port = ref_service.internal_port or 8000
         return host, port
 
-    return _slugify_name(ref_name), 3000
+    raise ValueError(
+        f"Service placeholder references unknown service '{ref_name}'. "
+        "Declare it in the ecosystem plan before deployment."
+    )
 
 
 
@@ -425,7 +428,14 @@ def _resolve_from_manifest_or_fallback(
                     _senate_context, stack, service_name, fill_keys=_needs_senate,
                 )
                 for k, v in senate_suggestions.items():
-                    if k in resolved_env and (not resolved_env[k] or resolved_env[k] in ("", "{{GENERATE}}", "{{FILL_ME}}")):
+                    current = str(resolved_env.get(k, '') or '').strip().lower()
+                    is_placeholder = (
+                        not current
+                        or current in {"{{generate}}", "{{fill_me}}", "changeme", "todo"}
+                        or current.startswith("replace_with_")
+                        or any(token in current for token in ("localhost", "127.0.0.1", "mock", "fake_"))
+                    )
+                    if is_placeholder:
                         resolved_env[k] = v
         except Exception as exc:
             logger.warning("AI Senate enrichment failed for %s: %s", service_name, exc)
@@ -610,6 +620,4 @@ def _validate_required_env(resolved_env: dict[str, str], addon_types: set[str] |
             missing.append(f"{addon_type} ({'/'.join(keys)})")
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
-
-
 

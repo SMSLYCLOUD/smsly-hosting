@@ -572,6 +572,11 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
         plan_rec = EcosystemPlan.objects.filter(id=plan_id).first()
         if not plan_rec:
             return
+        preparation_results = plan_rec.services_created or []
+        preparation_failures = [
+            item for item in preparation_results
+            if isinstance(item, dict) and item.get("status") in {"failed", "pending"}
+        ]
         if not waves:
             plan_rec.status = EcosystemPlan.Status.COMPLETED
             plan_rec.completed_at = timezone.now()
@@ -607,13 +612,20 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
         if any(st in in_progress_states for st in statuses):
             return  # Still running
         failed_count = sum(1 for st in statuses if st in failed_states)
-        if failed_count == 0 and statuses:
+        if not preparation_results and not statuses:
+            plan_rec.status = EcosystemPlan.Status.FAILED
+            plan_rec.error_message = "Ecosystem deploy produced no service deployments."
+        elif failed_count == 0 and not preparation_failures and statuses:
             plan_rec.status = EcosystemPlan.Status.COMPLETED
             plan_rec.completed_at = timezone.now()
             plan_rec.error_message = ""
         else:
             plan_rec.status = EcosystemPlan.Status.FAILED
-            plan_rec.error_message = f"Ecosystem deploy finished with {failed_count}/{len(statuses)} service failures or cancellations."
+            plan_rec.error_message = (
+                f"Ecosystem deploy finished with {failed_count} deployment failures "
+                f"and {len(preparation_failures)} preparation failures "
+                f"({failed_count}/{len(statuses)} service failures or cancellations)."
+            )
         _rebuild_ecosystem_build_counter()
         plan_rec.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
     except Exception as exc:

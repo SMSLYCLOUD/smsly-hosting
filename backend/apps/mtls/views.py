@@ -121,11 +121,14 @@ def _start_agent_with_token(
                 "--name", agent_container,
                 "--hostname", agent_container,
                 "--network", _SPIRE_NETWORK,
+                "--pid", "host",
                 "--restart", "unless-stopped",
                 "-v", f"{data_volume}:/opt/spire/data",
                 "-v", f"{socket_volume}:/opt/spire/run",
                 "-v", f"{svids_volume}:/opt/spire/svids",
+                "-v", "/var/run/docker.sock:/var/run/docker.sock:ro",
                 "-v", f"{agent_conf_path}:/etc/spire/agent.conf:ro,z",
+                "-e", "DOCKER_HOST=unix:///var/run/docker.sock",
                 "ghcr.io/spiffe/spire-agent:1.9.6",
                 "-config", "/etc/spire/agent.conf",
                 "-joinToken", token,
@@ -137,6 +140,30 @@ def _start_agent_with_token(
         return f"error: {r.stderr[:200]}"
     except Exception as exc:
         return f"error: {exc}"
+
+
+def ensure_ecosystem_spire() -> str:
+    """Ensure ecosystem SPIRE server/agent are running before user deploys."""
+    server = _container_running(ECOSYSTEM_SPIRE_SERVER_CONTAINER)
+    if not server:
+        result = subprocess.run(
+            [*_docker_compose_base(), *_SPIRE_COMPOSE_PROJECT,
+             "-f", "/opt/smsly-hosting/docker-compose.spire.yml",
+             "up", "-d", "spire-server-ecosystem"],
+            capture_output=True, text=True, timeout=180,
+            cwd="/opt/smsly-hosting",
+        )
+        if result.returncode != 0:
+            return f"error: ecosystem SPIRE server: {result.stderr[:300]}"
+    agent = _start_agent_with_token(
+        agent_container=ECOSYSTEM_SPIRE_AGENT_CONTAINER,
+        server_container=ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+        agent_conf_path="/opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf",
+        data_volume="smsly-hosting_spire-ecosystem-agent-data",
+        socket_volume="smsly-hosting_spire-ecosystem-agent-socket",
+        svids_volume="smsly-hosting_spire-ecosystem-agent-svids",
+    )
+    return agent if str(agent).startswith("error") else "ready"
 
 
 def _container_running(container_name: str) -> bool:
@@ -175,6 +202,8 @@ def mtls_status(request, service_id):
         return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
 
     config = get_object_or_404(MtlsConfig, service=service)
+    from apps.mtls.services.envoy_sidecar import EnvoySidecar
+    sidecar = EnvoySidecar.get_sidecar_status(service)
     return Response({
         "service_id": str(config.service_id),
         "service_name": config.service.name,
@@ -184,7 +213,18 @@ def mtls_status(request, service_id):
         "svid_expiry": config.svid_expiry.isoformat() if config.svid_expiry else None,
         "svid_ttl_remaining": config.svid_ttl_remaining,
         "is_svid_expired": config.is_svid_expired,
+        "svid_status": (
+            "missing" if not config.svid_expiry
+            else "expired" if config.is_svid_expired
+            else "valid"
+        ),
         "last_rotation": config.last_rotation.isoformat() if config.last_rotation else None,
+        "sidecar_enabled": config.sidecar_enabled,
+        "sidecar": sidecar,
+        "mtls_url": (
+            f"https://{service.name}:80"
+            if sidecar.get("status") == "running" and sidecar.get("healthy") else None
+        ),
     })
 
 
@@ -566,6 +606,42 @@ def mtls_health(request):
         "total_services": total_services,
         "mtls_enabled_services": enabled_services,
         "expired_svids": expired_svids,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def mtls_overview(request):
+    """Return actionable SPIRE, SVID, and sidecar status for the Services page."""
+    from apps.deployments.models import Service
+
+    def running(name):
+        return _container_running(name)
+
+    configs = MtlsConfig.objects.select_related("service")
+    if not request.user.is_superuser:
+        from django.db.models import Q
+        configs = configs.filter(
+            Q(service__owner=request.user)
+            | Q(service__project__team__members__user=request.user)
+        ).distinct()
+    return Response({
+        "platform": {
+            "server": running(PLATFORM_SPIRE_SERVER_CONTAINER),
+            "agent": running(PLATFORM_SPIRE_AGENT_CONTAINER),
+        },
+        "ecosystem": {
+            "server": running(ECOSYSTEM_SPIRE_SERVER_CONTAINER),
+            "agent": running(ECOSYSTEM_SPIRE_AGENT_CONTAINER),
+        },
+        "services": [{
+            "id": str(config.service_id),
+            "name": config.service.name,
+            "mtls_enabled": config.enabled,
+            "trust_domain": config.trust_domain,
+            "svid_expired": config.is_svid_expired,
+            "sidecar_configured": config.sidecar_enabled,
+        } for config in configs],
     })
 
 

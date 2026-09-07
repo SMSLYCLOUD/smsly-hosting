@@ -6,6 +6,7 @@ Background tasks for mTLS management: auto-injection, SVID rotation tracking.
 
 import logging
 import time
+import datetime
 
 from celery import shared_task
 from django.utils import timezone
@@ -13,6 +14,47 @@ from django.utils import timezone
 from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, RETRY_DELAY_STANDARD
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(
+    name="apps.mtls.tasks.sync_svid_metadata_task",
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
+)
+def sync_svid_metadata_task():
+    """Sync SVID expiry metadata from running workload containers."""
+    import docker
+    from apps.deployments.models import Service
+    from apps.mtls.models import MtlsConfig
+
+    client = docker.from_env()
+    synced = 0
+    for config in MtlsConfig.objects.filter(enabled=True).select_related("service"):
+        service = config.service
+        container = next(iter(client.containers.list(
+            filters={"label": f"smsly.blue_green.canonical_name={service.name}"}
+        )), None)
+        if not container:
+            continue
+        try:
+            result = container.exec_run([
+                "sh", "-c",
+                "openssl x509 -in /opt/spire/svids/cert.pem -noout -enddate -startdate",
+            ])
+            if result.exit_code != 0:
+                continue
+            values = {}
+            for line in result.output.decode(errors="replace").splitlines():
+                key, _, value = line.partition("=")
+                values[key.lower()] = value.strip()
+            expiry = datetime.datetime.strptime(values["notafter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=datetime.timezone.utc)
+            config.svid_expiry = expiry
+            config.last_rotation = timezone.now()
+            config.save(update_fields=["svid_expiry", "last_rotation", "updated_at"])
+            synced += 1
+        except Exception as exc:
+            logger.debug("SVID metadata unavailable for %s: %s", service.name, exc)
+    return {"synced": synced}
 
 
 @shared_task(
@@ -36,6 +78,7 @@ def inject_mtls_task(self, service_id: str):
         get_mtls_labels,
         get_mtls_env_vars,
         get_mtls_docker_run_volumes,
+        merge_docker_volumes,
     )
 
     try:
@@ -129,7 +172,7 @@ def _swap_container_with_mtls(client, old_container, service):
         mode = vol.get("Mode", "rw")
         if src and dst:
             new_volumes[src] = {"bind": dst, "mode": mode}
-    new_volumes.update(mtls_volumes)
+    new_volumes = merge_docker_volumes(new_volumes, mtls_volumes)
 
     # Get network config
     network_config = old_container.attrs.get("NetworkSettings", {}).get("Networks") or {}

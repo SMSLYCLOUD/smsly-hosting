@@ -38,6 +38,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'ai-insights', label: 'Insights', icon: Sparkles },
         ...(isAiRouter ? [{ id: 'router', label: 'AI Router', icon: Route }] : []),
         { id: 'domains', label: 'Domains', icon: Globe },
+        { id: 'mtls', label: 'mTLS / Envoy', icon: ShieldCheck },
         { id: 'metrics', label: 'Metrics', icon: BarChart3 },
         { id: 'resources', label: 'Resources', icon: Cpu },
         { id: 'health', label: 'Health', icon: HeartPulse },

@@ -166,8 +166,10 @@ app.conf.task_routes = {
     'apps.deployments.tasks.registry_garbage_collection_task': {'queue': 'deploy'},
     'apps.deployments.tasks_spiffe.sync_spiffe_entries_task': {'queue': 'deploy'},
     'apps.mtls.tasks.inject_mtls_task': {'queue': 'deploy'},
+    'apps.mtls.tasks.sync_svid_metadata_task': {'queue': 'celery'},
     'apps.deployments.services.provisioner.provision_server': {'queue': 'deploy'},
-    'apps.core.services.health_monitor.monitor_health_task': {'queue': 'deploy'},
+    # Health monitoring is long-running and must not starve deployment work.
+    'apps.core.services.health_monitor.monitor_health_task': {'queue': 'celery'},
     'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'deploy'},
     'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task': {'queue': 'deploy'},
     'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning': {'queue': 'deploy'},
@@ -440,6 +442,10 @@ app.conf.beat_schedule = {
         'task': 'apps.cloud.services.ssl_monitor.check_ssl_certificates_task',
         'schedule': 21600.0,
         'options': {'expires': 1800.0},
+    },
+    'sync-svid-metadata-every-hour': {
+        'task': 'apps.mtls.tasks.sync_svid_metadata_task',
+        'schedule': crontab(minute=15),
     },
     # Cleanup Docker build cache daily
     'cleanup-build-cache-daily': {

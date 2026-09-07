@@ -118,7 +118,7 @@ def auto_promote_staged_deployments():
     promoted = 0
     for deployment in staged:
         try:
-            from .providers import _resolve_provider_for_service
+            from .provider import _resolve_provider_for_service
             provider = _resolve_provider_for_service(deployment.service, prefer_local=True)
             if not provider:
                 logger.warning("Auto-promote: no provider for %s, skipping", deployment.service.name)
@@ -130,6 +130,27 @@ def auto_promote_staged_deployments():
             )
             promoted += 1
         except Exception as exc:
+            # A missing green container can never promote (it was GC'd or
+            # crashed away). Fail the row fast with a clear log instead of
+            # error-spamming every 15 minutes forever. An UNHEALTHY or
+            # stopped green may still recover, so those stay STAGED.
+            if isinstance(exc, docker.errors.NotFound):
+                try:
+                    deployment.status = Deployment.Status.FAILED
+                    deployment.finished_at = timezone.now()
+                    deployment.save(update_fields=["status", "finished_at", "updated_at"])
+                    append_log(
+                        deployment,
+                        "[AUTO-PROMOTE] Green container is gone — cannot promote. "
+                        "Marked FAILED; redeploy to ship a fresh build.\n",
+                    )
+                    logger.warning(
+                        "Auto-promote: green gone for deployment %s — marked FAILED",
+                        deployment.id,
+                    )
+                except Exception as inner:
+                    logger.exception("Auto-promote: failed to fail deployment %s: %s", deployment.id, inner)
+                continue
             logger.exception("Auto-promote failed for deployment %s: %s", deployment.id, exc)
 
     return {'promoted': promoted}

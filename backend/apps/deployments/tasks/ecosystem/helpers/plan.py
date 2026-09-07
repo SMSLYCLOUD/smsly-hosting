@@ -217,6 +217,9 @@ def _build_dependency_waves(
         if key not in processed
     ]
 
+    # Keep unresolved nodes visible to callers for diagnostics. The deploy
+    # task rejects this result before queueing, so these nodes are never
+    # silently deployed out of dependency order.
     if unresolved:
         for chunk in _chunked(unresolved, wave_size):
             waves.append(chunk)

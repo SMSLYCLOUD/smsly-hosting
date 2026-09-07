@@ -70,4 +70,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Default CMD: gunicorn for backend. Celery/celery-beat override via docker-compose command:
 # Use ASGI so Django Channels WebSockets work consistently (dev + prod).
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.asgi:application", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "600"]
-

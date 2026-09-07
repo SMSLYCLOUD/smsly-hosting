@@ -640,11 +640,11 @@ class PlatformConfig(models.Model):
 
     # ── SPIFFE mTLS ─────────────────────────────────────────────────────
     mtls_enabled = models.BooleanField(
-        default=False,
+        default=True,
         help_text="Enable SPIFFE mTLS for platform services. "
                   "Requires platform SPIRE infrastructure to be deployed.")
     mtls_ecosystem_enabled = models.BooleanField(
-        default=False,
+        default=True,
         help_text="Enable SPIFFE mTLS for user-deployed services. "
                   "Requires ecosystem SPIRE infrastructure to be deployed.")
 

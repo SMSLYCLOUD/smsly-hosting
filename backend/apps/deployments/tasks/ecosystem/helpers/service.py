@@ -183,9 +183,9 @@ def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: in
     ).strip() or "main"
     service.branch = resolved_branch
 
-    # Only set port from plan if still at model default (8000) or unset/invalid.
-    if not service.internal_port or service.internal_port == 8000:
-        service.internal_port = int(port)
+    # The ecosystem plan is the source of truth for auto-managed services.
+    # Keep Service.internal_port aligned with the injected runtime PORT.
+    service.internal_port = int(port)
 
     service.buildpack = buildpack
     service.deploy_mode = deploy_mode

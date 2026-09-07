@@ -364,9 +364,20 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             service_id=str(service.id),
         )
 
+        auto_promoted = False
+        if staged_only and provider.provider_type == CloudProvider.ProviderType.LOCAL:
+            try:
+                promoted = docker.from_env().containers.get(resource.resource_id)
+                auto_promoted = promoted.name == service.name
+            except Exception:
+                pass
+
         deployment.status = Deployment.Status.HEALTH_CHECK
         deployment.green_container_id = resource.resource_id
         deployment.save(update_fields=['status', 'green_container_id'])
+        # The local adapter may auto-promote after the staging hold. Refresh
+        # before the staged-only branch so it cannot overwrite ACTIVE.
+        deployment.refresh_from_db()
         broadcast_status(deployment)
 
         if provider.provider_type == CloudProvider.ProviderType.LOCAL:
@@ -386,6 +397,23 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 raise RuntimeError(
                     f"Container failed readiness checks for service {service.name}"
                 )
+
+            # Inject Envoy only after the application itself is healthy. This
+            # preserves the normal CPU/memory/network deployment path and
+            # prevents a sidecar startup failure from masking app readiness.
+            try:
+                from apps.mtls.models import MtlsConfig
+                from apps.mtls.services.envoy_sidecar import EnvoySidecar
+                mtls_config = MtlsConfig.objects.filter(
+                    service=service, enabled=True, sidecar_enabled=True,
+                ).first()
+                if mtls_config:
+                    EnvoySidecar.inject_sidecar(service)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"mTLS sidecar injection failed for {service.name}: {exc}"
+                ) from exc
+
             if service.is_public:
                 route_timeout = _local_route_timeout_seconds(service)
                 staging_host = ""
@@ -459,7 +487,7 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 "[ADDON-CONNECTIVITY] All addon connections verified from service container.\n",
             )
 
-        if staged_only:
+        if staged_only and not auto_promoted and deployment.status != Deployment.Status.ACTIVE:
             _cancel_previous_staged(deployment)
             deployment.status = Deployment.Status.STAGED
             deployment.staged_at = timezone.now()

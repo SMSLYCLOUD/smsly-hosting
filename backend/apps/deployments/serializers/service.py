@@ -359,6 +359,45 @@ class ServiceSerializer(serializers.ModelSerializer):
         # tried to render that as a child element.
         return normalized_aliases
 
+    def validate_path_redirects(self, value):
+        """Validate redirects from ``/path`` or ``domain/path`` sources."""
+        if not isinstance(value, list):
+            raise serializers.ValidationError("path_redirects must be a list.")
+        from apps.domains.utils import normalize_domain, split_host_and_path
+        normalized = []
+        seen = set()
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise serializers.ValidationError("Each path_redirect must be an object.")
+            raw_path = str(entry.get('path') or '').strip().lower()
+            target = str(entry.get('target') or '').strip().lower()
+            if not raw_path or not target:
+                raise serializers.ValidationError("Each path_redirect needs path and target.")
+            source_domain = ''
+            if not raw_path.startswith('/'):
+                try:
+                    source_domain, raw_path = split_host_and_path(raw_path)
+                    source_domain = normalize_domain(source_domain)
+                except ValueError as exc:
+                    raise serializers.ValidationError(f"Invalid source domain/path: {exc}")
+            if not re.fullmatch(r'/[a-z0-9_-]{1,63}', raw_path):
+                raise serializers.ValidationError("Redirect paths must be a single segment like /account.")
+            if '://' in target:
+                target = target.split('://', 1)[1]
+            try:
+                target_host, target_path = split_host_and_path(target)
+                target = normalize_domain(target_host)
+                if target_path and target_path != '/':
+                    target = f'{target}{target_path}'
+            except ValueError as exc:
+                raise serializers.ValidationError(f"Invalid redirect target: {exc}")
+            key = (source_domain, raw_path)
+            if key in seen:
+                raise serializers.ValidationError("Duplicate path redirect.")
+            seen.add(key)
+            normalized.append({'path': f'{source_domain}{raw_path}' if source_domain else raw_path, 'target': target})
+        return normalized
+
     class Meta:
         model = Service
         fields = [

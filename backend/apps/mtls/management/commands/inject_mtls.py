@@ -117,6 +117,7 @@ class Command(BaseCommand):
             get_mtls_labels,
             get_mtls_env_vars,
             get_mtls_docker_run_volumes,
+            merge_docker_volumes,
         )
         from apps.cloud.docker_client import get_docker_client
         import docker as docker_lib
@@ -169,7 +170,7 @@ class Command(BaseCommand):
             mode = vol.get("Mode", "rw")
             if src and dst:
                 new_volumes[src] = {"bind": dst, "mode": mode}
-        new_volumes.update(mtls_volumes)
+        new_volumes = merge_docker_volumes(new_volumes, mtls_volumes)
 
         # Get network config from old container
         network_config = old_container.attrs.get("NetworkSettings", {}).get("Networks") or {}

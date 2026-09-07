@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { platformApi, servicesApi, addonsApi, Service, Addon } from '@/lib/api';
+import { servicesApi, addonsApi, Service, Addon } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { Plus, LayoutGrid, Radar, Puzzle, Store } from 'lucide-react';
 
@@ -147,7 +147,8 @@ export default function ServicesPage() {
                 {fetchError}
               </span>
             )}
-          </div>
+      </div>
+
 
           <div className="flex justify-center">
             <div className="inline-flex items-center gap-1 rounded-full border border-zinc-700/70 bg-black/35 p-1 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">

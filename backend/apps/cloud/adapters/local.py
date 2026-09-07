@@ -636,6 +636,7 @@ class LocalAdapter(BaseCloudAdapter):
                     get_mtls_docker_run_volumes,
                     get_mtls_env_vars,
                     get_mtls_labels,
+                    merge_docker_volumes,
                     resolve_spire_volume_name,
                 )
                 _mtls_labels = get_mtls_labels(_mtls_svc)
@@ -644,6 +645,7 @@ class LocalAdapter(BaseCloudAdapter):
                 _mtls_env = get_mtls_env_vars(_mtls_svc)
                 if _mtls_env:
                     env.update(_mtls_env)
+                _mtls_volumes = {}
                 for _vol_name, _vol_bind in get_mtls_docker_run_volumes(_mtls_svc).items():
                     _resolved_vol = resolve_spire_volume_name(_vol_name)
                     try:
@@ -654,7 +656,8 @@ class LocalAdapter(BaseCloudAdapter):
                             _resolved_vol, name,
                         )
                         continue
-                    docker_volumes[_resolved_vol] = _vol_bind
+                    _mtls_volumes[_resolved_vol] = _vol_bind
+                docker_volumes = merge_docker_volumes(docker_volumes, _mtls_volumes)
         except Exception as exc:
             logger.debug("mTLS injection skipped for %s: %s", name, exc)
 
