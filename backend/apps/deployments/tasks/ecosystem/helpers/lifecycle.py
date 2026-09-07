@@ -6,7 +6,8 @@ from collections import defaultdict
 from functools import lru_cache
 
 from django.core.cache import cache as django_cache
-from django.db.models import F
+from django.db.models import F, Value
+from django.db.models.functions import Concat
 from django.utils import timezone
 
 from apps.deployments.models import Deployment
@@ -411,7 +412,13 @@ def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: in
             status=Deployment.Status.QUEUED,
         ).update(
             status=Deployment.Status.REVIEW,
-            build_logs=F("build_logs") + f"\n[Ecosystem] Queued in wave {wave_index + 1} (stagger +{countdown}s).\n",
+            # Concat (not F() + str): Postgres has no text + unknown
+            # operator — the F() form raised ProgrammingError and killed
+            # wave 1 dispatch (2026-09-07 incident).
+            build_logs=Concat(
+                F("build_logs"),
+                Value(f"\n[Ecosystem] Queued in wave {wave_index + 1} (stagger +{countdown}s).\n"),
+            ),
         )
         if updated != 1:
             continue

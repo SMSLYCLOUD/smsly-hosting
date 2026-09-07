@@ -19,6 +19,7 @@ from apps.deployments.tasks.ecosystem.tasks import (
 )
 from apps.deployments.tasks.ecosystem.helpers.lifecycle import (
     _count_active_ecosystem_builds,
+    _queue_wave,
     _rebuild_ecosystem_build_counter,
 )
 
@@ -557,6 +558,44 @@ class TestEcosystemTaskLiveness(TestCase):
         task_self = self._task_self()
         task_self.app.control.inspect.side_effect = Exception("broker down")
         self.assertFalse(_another_deploy_attempt_running(task_self, "plan-1"))
+
+
+class TestQueueWaveDispatch(TestCase):
+    """_queue_wave must flip QUEUED→REVIEW with a Postgres-safe update."""
+
+    @patch("apps.deployments.tasks.ecosystem.helpers.lifecycle._increment_active_ecosystem_builds")
+    @patch("apps.deployments.tasks.ecosystem.helpers.lifecycle._count_active_ecosystem_builds", return_value=0)
+    @patch("apps.deployments.tasks.ecosystem.helpers.lifecycle._has_enough_memory", return_value=True)
+    @patch("apps.deployments.tasks.ecosystem.helpers.lifecycle._get_ecosystem_build_config")
+    @patch("apps.deployments.tasks.ecosystem.helpers.lifecycle.Deployment")
+    def test_queue_wave_dispatches_with_concat_update(
+        self, mock_dep, mock_cfg, mock_mem, mock_count, mock_incr,
+    ):
+        from django.db.models.functions import Concat
+
+        mock_cfg.return_value = {
+            "max_concurrent_builds": 5,
+            "build_stagger_seconds": 10,
+        }
+        deployment = MagicMock()
+        deployment.id = "dep-1"
+        deployment.status = Deployment.Status.QUEUED
+        mock_dep.objects.filter.return_value.first.return_value = deployment
+        mock_dep.objects.filter.return_value.update.return_value = 1
+        mock_dep.Status = Deployment.Status
+
+        app = MagicMock()
+        queued = _queue_wave(app, ["dep-1"], "prov-1", 0, plan_id="plan-1")
+
+        self.assertEqual(queued, 1)
+        _, kwargs = mock_dep.objects.filter.return_value.update.call_args
+        self.assertEqual(kwargs["status"], Deployment.Status.REVIEW)
+        # Regression (2026-09-07): F("build_logs") + str raises
+        # ProgrammingError on Postgres (no text + unknown operator).
+        self.assertIsInstance(kwargs["build_logs"], Concat)
+        app.send_task.assert_called_once()
+        send_args, send_kwargs = app.send_task.call_args
+        self.assertIn("smart_deploy_task", send_args[0])
 
 
 
