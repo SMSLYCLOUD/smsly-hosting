@@ -65,6 +65,18 @@ def recover_stale_ecosystem_plans(self):
     recovered = 0
     skipped_alive = 0
     for plan in stale:
+        # Freshness check first: the deploy task heartbeats the plan row
+        # after each prepared service, and finalization touches it too. A
+        # recently-updated plan is alive (possibly mid-preparation with no
+        # deployment rows yet) — never treat it as a ghost.
+        if plan.updated_at and plan.updated_at >= activity_cutoff:
+            skipped_alive += 1
+            logger.debug(
+                "EcosystemPlan %s is %s but was updated recently — "
+                "presumed alive, not recovering",
+                plan.id, plan.status,
+            )
+            continue
         # Activity check: does the plan's project have ANY deployment
         # touched recently? A building/queued deployment bumps updated_at
         # on every status transition and log append, so a live wave

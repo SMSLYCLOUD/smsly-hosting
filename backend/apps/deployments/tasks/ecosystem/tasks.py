@@ -1627,6 +1627,34 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             _rollback_deployments.append(str(deployment.id))
             _rollback_env_vars.extend(list(resolved_env.keys()))
 
+            if not _dep_created and deployment.status in {
+                Deployment.Status.FAILED,
+                Deployment.Status.BUILD_FAILED,
+                Deployment.Status.BACKUP_FAILED,
+                Deployment.Status.MIGRATION_FAILED,
+                Deployment.Status.CANCELLED,
+                Deployment.Status.HEALTH_CHECK_FAILED,
+                Deployment.Status.ROLLED_BACK,
+                Deployment.Status.INACTIVE,
+            }:
+                # Recovery re-run reuses the terminal row via get_or_create —
+                # reset it so the wave engine picks it up instead of
+                # silently skipping a CANCELLED/FAILED row forever.
+                deployment.status = Deployment.Status.QUEUED
+                deployment.started_at = None
+                deployment.finished_at = None
+                deployment.container_id = ""
+                deployment.green_container_id = ""
+                deployment.remote_deployment_id = ""
+                deployment.build_logs = (
+                    (deployment.build_logs or "")
+                    + "\n[Ecosystem] Re-queued by plan recovery re-run.\n"
+                )
+                deployment.save(update_fields=[
+                    "status", "started_at", "finished_at", "container_id",
+                    "green_container_id", "remote_deployment_id", "build_logs",
+                ])
+
             deployment_by_repo_key[repo_key] = str(deployment.id)
             pre_deploy_snapshot_id = _capture_pre_ecosystem_snapshot(
                 service, str(deployment.id), plan_id, user,
@@ -1644,6 +1672,19 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 "stack": stack,
                 "port": port,
             })
+            # Heartbeat: preparation of one service (AI enrichment, addon
+            # provisioning) can take minutes under provider rate limits.
+            # Touch the plan row so the stale-plan recovery beat cannot
+            # mistake a live preparation for a ghost task and fail it.
+            if plan_id:
+                try:
+                    from apps.deployments.models.ecosystem import EcosystemPlan
+                    EcosystemPlan.objects.filter(id=plan_id).update(
+                        services_created=results,
+                        updated_at=timezone.now(),
+                    )
+                except Exception:
+                    pass
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("Failed to prepare deploy for %s: %s", repo, exc)
             results.append({
