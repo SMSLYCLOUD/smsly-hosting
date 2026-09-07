@@ -130,6 +130,10 @@ PORT=8002
 # TURN
 TURN_SECRET=${turn_secret}
 
+# LiveKit SFU (rendered into /etc/livekit/livekit.yaml by install_livekit)
+LIVEKIT_API_KEY=${livekit_api_key}
+LIVEKIT_API_SECRET=${livekit_api_secret}
+
     # Node identity
 PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip  || echo "")}
 # PRIVATE_IP is what Kamailio/coturn bind: prefer the first non-loopback
@@ -221,19 +225,26 @@ install_media_packages() {
     fi
 
     # ── FreeSWITCH (SignalWire repo; voice switching) ──
+    # SignalWire's apt repo needs a free Personal Access Token
+    # (id.signalwire.com): pass FREESWITCH_REPO_TOKEN in the environment.
+    # Debian bookworm binaries run fine on Ubuntu noble. Without a token
+    # there is no public binary source, so this stays warn-and-continue.
     if ! command -v freeswitch >/dev/null 2>&1; then
-        echo -e "${BLUE}  → Adding FreeSWITCH repository...${NC}"
-        . /etc/os-release
-        if curl -fsSL "https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-bookworm-release.deb" -o /tmp/signalwire-repo.deb 2>/dev/null \
-            && dpkg -i /tmp/signalwire-repo.deb >/dev/null 2>&1; then
-            rm -f /tmp/signalwire-repo.deb
-            if apt-get update -qq; then
-                apt-get install -y -qq "${apt_conf[@]}" freeswitch fs_cli || echo -e "${YELLOW}  ⚠ FreeSWITCH install failed — voice switching unavailable (non-fatal)${NC}"
+        if [ -n "${FREESWITCH_REPO_TOKEN:-}" ]; then
+            echo -e "${BLUE}  → Adding authenticated SignalWire repository...${NC}"
+            if curl -fsSL https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-repo.gpg 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/signalwire-freeswitch-repo.gpg 2>/dev/null; then
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/signalwire-freeswitch-repo.gpg] https://${FREESWITCH_REPO_TOKEN}@freeswitch.signalwire.com/repo/deb/debian-release/ bookworm main" > /etc/apt/sources.list.d/freeswitch.list
+                chmod 600 /etc/apt/sources.list.d/freeswitch.list
+                if apt-get update -qq; then
+                    apt-get install -y -qq "${apt_conf[@]}" freeswitch-meta-vanilla fs_cli || echo -e "${YELLOW}  ⚠ FreeSWITCH install failed — voice switching unavailable (non-fatal)${NC}"
+                else
+                    echo -e "${YELLOW}  ⚠ FreeSWITCH repo update failed — check FREESWITCH_REPO_TOKEN (non-fatal)${NC}"
+                fi
             else
-                echo -e "${YELLOW}  ⚠ FreeSWITCH repo update failed — voice switching unavailable (non-fatal)${NC}"
+                echo -e "${YELLOW}  ⚠ SignalWire key download failed — voice switching unavailable (non-fatal)${NC}"
             fi
         else
-            echo -e "${YELLOW}  ⚠ FreeSWITCH repo bootstrap failed — voice switching unavailable (non-fatal)${NC}"
+            echo -e "${YELLOW}  ⚠ FREESWITCH_REPO_TOKEN not set — skipping FreeSWITCH (create a free PAT at id.signalwire.com to enable)${NC}"
         fi
     fi
         
@@ -263,7 +274,7 @@ install_media_packages() {
 # only what the media configs define.
 stop_stale_media_listeners() {
     echo -e "${BLUE}  → Clearing stale listeners from media ports...${NC}"
-    for squat in kamailio coturn rtpengine freeswitch openresty nginx apache2; do
+    for squat in kamailio coturn rtpengine freeswitch livekit-server openresty nginx apache2; do
         systemctl stop "$squat" 2>/dev/null || true
         systemctl disable "$squat" 2>/dev/null || true
     done
@@ -317,7 +328,7 @@ deploy_media_systemd_units() {
     fi
 
     local installed=0
-    for unit in coturn.service rtpengine.service smsly-media-mgmt.service smsly-voice-api.service smsly-video.service; do
+    for unit in coturn.service rtpengine.service livekit-server.service smsly-media-mgmt.service smsly-voice-api.service smsly-video.service; do
         if [ -f "$units_dir/$unit" ]; then
             cp -f "$units_dir/$unit" /etc/systemd/system/
             echo -e "  → Installed ${unit}"
@@ -360,6 +371,14 @@ template_media_configs() {
             /etc/coturn/turnserver.conf
     fi
 
+    # RTPEngine
+    if [ -f /etc/rtpengine/rtpengine.conf ]; then
+        sed -i \
+            -e "s|\${PUBLIC_IP}|${PUBLIC_IP}|g" \
+            -e "s|\${PRIVATE_IP}|${PRIVATE_IP:-127.0.0.1}|g" \
+            /etc/rtpengine/rtpengine.conf
+    fi
+
     # Attestation
     if [ -f /etc/smsly/attestation.json ]; then
         sed -i \
@@ -383,7 +402,7 @@ start_media_services() {
     systemctl reset-failed 2>/dev/null || true
 
     local infra_services=(postgresql redis-server wireguard)
-    local media_services=(kamailio rtpengine freeswitch coturn)
+    local media_services=(kamailio rtpengine freeswitch coturn livekit-server)
     local app_services=(smsly-voice-api smsly-video)
     local mgmt_services=(smsly-media-mgmt openresty)
 
@@ -416,7 +435,8 @@ verify_media_services() {
     local services=(
         "postgresql:pg_isready -q"
         "redis:redis-cli ping"
-        "kamailio:nc -zvu 127.0.0.1 5060"
+        "kamailio:ss -ulnp | grep -q ':5060 '"
+        "livekit-server:nc -z 127.0.0.1 7880"
         "smsly-media-mgmt:curl -sf http://127.0.0.1:9090/health"
     )
 
@@ -495,10 +515,23 @@ build_media_mgmt() {
 }
 
 prepare_media_voice_database() {
+    # DB creds live in the node .env (written by generate_media_secrets in
+    # Phase 2) — they are NOT in this shell's environment otherwise, and
+    # referencing them unset under `set -u` kills the installer silently.
+    local env_file="${MEDIA_NODE_ENV:-/opt/smsly-hosting-media/.env}"
+    if [ -f "$env_file" ]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "$env_file"
+        set +a
+    fi
     local db_user="${MEDIA_DB_USER:-smsly_voice}"
     local db_password="${MEDIA_DB_PASSWORD:-}"
     local db_name="smsly_voice"
-    [ -n "$db_password" ] || return 1
+    if [ -z "$db_password" ]; then
+        echo -e "${RED}  ✗ MEDIA_DB_PASSWORD is empty — voice schema cannot be prepared (re-run Phase 2?)${NC}"
+        return 1
+    fi
 
     systemctl enable --now postgresql >/dev/null 2>&1 || true
     runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c \
@@ -508,12 +541,35 @@ prepare_media_voice_database() {
         "ALTER ROLE ${db_user} PASSWORD '${db_password}';" >/dev/null
     runuser -u postgres -- createdb -O "$db_user" "$db_name" 2>/dev/null || true
 
-    local migration
+    # Migration ledger — re-runs must skip files that already applied
+    # (001_initial.sql has bare CREATE TYPEs that fail on second apply).
+    export PGPASSWORD="$db_password"
+    psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1 -c \
+        "CREATE TABLE IF NOT EXISTS smsly_media_schema_migrations (filename text PRIMARY KEY, applied_at timestamptz DEFAULT NOW());" >/dev/null
+
+    local migration mig_name applied
     for migration in "${MEDIA_VOICE_SOURCE_DIR}/storage/migrations/"*.sql; do
         [ -f "$migration" ] || continue
-        PGPASSWORD="$db_password" psql -h 127.0.0.1 -U "$db_user" \
-            -d "$db_name" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+        mig_name="$(basename "$migration")"
+        applied="$(psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -tAc \
+            "SELECT 1 FROM smsly_media_schema_migrations WHERE filename='$mig_name';")"
+        if [ "$applied" = "1" ]; then
+            echo -e "${BLUE}  → Migration $mig_name already applied, skipping${NC}"
+            continue
+        fi
+        echo -e "${BLUE}  → Applying migration $mig_name...${NC}"
+        if psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1 \
+                -f "$migration" >/tmp/smsly-voice-migrate.log 2>&1; then
+            psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1 -c \
+                "INSERT INTO smsly_media_schema_migrations (filename) VALUES ('$mig_name');" >/dev/null
+        else
+            tail -20 /tmp/smsly-voice-migrate.log
+            echo -e "${RED}  ✗ Migration $mig_name failed${NC}"
+            unset PGPASSWORD
+            return 1
+        fi
     done
+    unset PGPASSWORD
 }
 
 build_media_applications() {
@@ -547,6 +603,75 @@ build_media_applications() {
         return 1
     }
     install -o smsly -g smsly -m 0755 target/release/smsly-api /usr/local/bin/smsly-api
+}
+
+# ─── Install LiveKit SFU server ────────────────────────────────────────────
+# LiveKit ships no apt package: pin a GitHub release tarball, verify its
+# sha256, and render /etc/livekit/livekit.yaml from the node .env (API
+# keys are generated in Phase 2). TURN stays on standalone coturn, so the
+# built-in TURN relay is disabled; RTC media uses UDP 30000-31000 to match
+# the pre-flight port check.
+LIVEKIT_VERSION="${LIVEKIT_VERSION:-v1.13.6}"
+LIVEKIT_SHA256_AMD64="2b61abef2b9ba14b4b8ca38b37de9a37ffc682b9931d5fc03ceca2f0b77d3e33"
+LIVEKIT_SHA256_ARM64="5c75f09173199f3f8fe0c3c0d5a41171f9b306ffce6843d752c276d11e77d19b"
+
+install_livekit() {
+    local env_file="${1:-/opt/smsly-hosting-media/.env}"
+    echo -e "${BLUE}  → Installing LiveKit server ${LIVEKIT_VERSION}...${NC}"
+
+    local arch
+    case "$(dpkg --print-architecture 2>/dev/null || uname -m)" in
+        amd64|x86_64) arch="amd64"; local want_sha="$LIVEKIT_SHA256_AMD64" ;;
+        arm64|aarch64) arch="arm64"; local want_sha="$LIVEKIT_SHA256_ARM64" ;;
+        *) echo -e "${YELLOW}  ⚠ Unsupported architecture for LiveKit binaries (non-fatal)${NC}"; return 0 ;;
+    esac
+
+    if command -v livekit-server >/dev/null 2>&1 && livekit-server --version 2>/dev/null | grep -q "$LIVEKIT_VERSION"; then
+        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} already installed${NC}"
+    else
+        local url="https://github.com/livekit/livekit/releases/download/${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION#v}_linux_${arch}.tar.gz"
+        rm -f /tmp/livekit.tgz
+        if ! curl -fsSL --max-time 300 "$url" -o /tmp/livekit.tgz; then
+            echo -e "${YELLOW}  ⚠ LiveKit download failed — WebRTC SFU unavailable (non-fatal)${NC}"
+            return 0
+        fi
+        local got_sha
+        got_sha="$(sha256sum /tmp/livekit.tgz | awk '{print $1}')"
+        if [ "$got_sha" != "$want_sha" ]; then
+            echo -e "${YELLOW}  ⚠ LiveKit checksum mismatch (got ${got_sha:0:12}…) — refusing to install (non-fatal)${NC}"
+            rm -f /tmp/livekit.tgz
+            return 0
+        fi
+        tar -xzf /tmp/livekit.tgz -C /tmp livekit-server
+        install -o root -g root -m 0755 /tmp/livekit-server /usr/local/bin/livekit-server
+        rm -f /tmp/livekit.tgz /tmp/livekit-server
+        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} installed${NC}"
+    fi
+
+    # Render config (idempotent — re-run picks up rotated keys).
+    [ -f "$env_file" ] && { set -a; source "$env_file"; set +a; }
+    mkdir -p /etc/livekit /var/lib/livekit
+    cat > /etc/livekit/livekit.yaml <<EOF
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  port_range_start: 30000
+  port_range_end: 31000
+  use_external_ip: true
+  node_ip: "${PUBLIC_IP:-127.0.0.1}"
+keys:
+  "${LIVEKIT_API_KEY:-devkey}": "${LIVEKIT_API_SECRET:-secret}"
+room:
+  empty_timeout: 300
+  max_participants: 200
+turn:
+  enabled: false
+EOF
+    chmod 640 /etc/livekit/livekit.yaml
+    chown root:smsly /etc/livekit/livekit.yaml
+    echo -e "${GREEN}  ✓ LiveKit config rendered${NC}"
 }
 
 install_media_node() {

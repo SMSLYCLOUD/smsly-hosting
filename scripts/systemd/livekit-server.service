@@ -1,0 +1,22 @@
+[Unit]
+Description=LiveKit WebRTC SFU Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smsly
+Group=smsly
+ExecStart=/usr/local/bin/livekit-server --config /etc/livekit/livekit.yaml
+EnvironmentFile=-/opt/smsly-hosting-media/.env
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smsly /run/smsly /var/lib/livekit
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

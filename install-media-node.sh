@@ -283,6 +283,15 @@ if [ "$(state_get phase2c)" != "done" ]; then
     state_set phase2c done
 fi
 
+# Phase 2.7: Install LiveKit SFU (pinned GitHub binary + rendered config).
+# Runs before unit deployment so Phase 3 can install its systemd unit and
+# Phase 5 can start it like every other media service.
+if [ "$(state_get phase2d)" != "done" ]; then
+    echo -e "\n${BLUE}Phase 2.7: Installing LiveKit server${NC}"
+    install_livekit "$ENV_FILE"
+    state_set phase2d done
+fi
+
 # Phase 3: Deploy configs + systemd
 if [ "$(state_get phase3)" != "done" ]; then
     echo -e "\n${BLUE}Phase 3: Deploying configs and systemd units${NC}"
