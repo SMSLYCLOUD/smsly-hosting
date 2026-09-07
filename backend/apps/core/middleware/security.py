@@ -84,6 +84,16 @@ class SecurityMiddleware:
 
         path = request.path
 
+        # Agent self-registration/heartbeat authenticate in their views with
+        # the ManagedServer-specific gateway_secret. Do not make them also
+        # satisfy the master-wide GATEWAY_SECRET here: that would reject a
+        # correctly signed per-node request before AgentMixin can verify it.
+        if (
+            path.startswith('/api/v1/servers/')
+            and path.endswith(('/agent-ready/', '/agent-heartbeat/'))
+        ):
+            return False
+
         # Exempt allowlisted paths
         for exempt in self.exempt_routes:
             if path.startswith(exempt):
