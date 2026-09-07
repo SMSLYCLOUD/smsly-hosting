@@ -70,15 +70,19 @@ def recover_stale_ecosystem_plans(self):
         # on every status transition and log append, so a live wave
         # chain always looks fresh.
         if plan.project_id:
+            # Activity must be scoped to this plan's own ecosystem
+            # deployments, otherwise a normal project build can keep a
+            # ghost plan alive forever.
             recent_activity = Deployment.objects.filter(
                 service__project_id=plan.project_id,
+                commit_hash="ecosystem-deploy",
                 updated_at__gte=activity_cutoff,
             ).exists()
             if recent_activity:
                 skipped_alive += 1
                 logger.debug(
-                    "EcosystemPlan %s is %s but has recent deployment "
-                    "activity — presumed alive, not recovering",
+                    "EcosystemPlan %s is %s but has recent ecosystem "
+                    "deployment activity — presumed alive, not recovering",
                     plan.id, plan.status,
                 )
                 continue

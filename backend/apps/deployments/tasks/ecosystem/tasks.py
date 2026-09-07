@@ -64,6 +64,7 @@ from apps.deployments.models import (
     Service,
 )
 from apps.deployments.models.addons import Addon
+from apps.deployments.models.network_scope import ScopedNetwork
 
 from .constants import (
     _BUILD_DEFER_SECONDS,
@@ -473,6 +474,15 @@ def ecosystem_release_wave_task(
                 deployment_by_repo_key=deployment_by_repo_key,
                 reason="a service deployment failed and cancel-others-on-failure is enabled",
             )
+        elif deployment_by_repo_key and dependencies:
+            cancelled = _cancel_dependent_deployments(
+                waves,
+                from_wave_index=wave_index,
+                failed_deployment_ids=failed_ids,
+                dependencies=dependencies,
+                deployment_by_repo_key=deployment_by_repo_key,
+                reason="a dependency deployment failed",
+            )
 
     if wave_index == len(waves):
         _finalize_ecosystem_plan(plan_id, waves)
@@ -674,14 +684,14 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             )
         except Exception as _prov_exc:
             logger.warning(
-                "Failed to auto-create ecosystem provider: %s. "
-                "Falling back to first active provider.",
+                "Failed to auto-create ecosystem provider: %s.",
                 _prov_exc,
             )
-            provider = (
-                CloudProvider.objects.filter(is_active=True).first()
-                or CloudProvider.objects.first()
-            )
+            _fail_plan_record(plan_id, "No ecosystem provider available and auto-create failed.")
+            return {"error": "No ecosystem provider available and auto-create failed."}
+    if not provider.is_active or (provider.scope or "platform") != "ecosystem":
+        _fail_plan_record(plan_id, "Ecosystem provider is inactive or wrong scope; refusing to use platform provider.")
+        return {"error": "Ecosystem provider is inactive or wrong scope; refusing to use platform provider."}
     if not provider:
         _fail_plan_record(
             plan_id,
@@ -717,6 +727,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         try:
             _plan_rec = EcosystemPlan.objects.filter(id=plan_id, user=user).first()
             if _plan_rec and _plan_rec.project:
+                # Explicit project must match the plan's stored project. A
+                # mismatch indicates the user is trying to deploy a plan into
+                # a different project than the one it was scanned for. We
+                # honor the explicit project but record the discrepancy.
+                if project and project.id != _plan_rec.project.id:
+                    logger.warning(
+                        "Ecosystem plan %s was scanned for project %s but is "
+                        "now being deployed with project %s.",
+                        plan_id,
+                        _plan_rec.project.id,
+                        project.id,
+                    )
                 project = _plan_rec.project
         except Exception as exc:
             logger.debug("Failed to look up ecosystem plan project: %s", exc)
@@ -1234,7 +1256,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                         # Check if entry already exists
                         exists = any(
                             e.get("spiffe_id", {}).get("path") == f"service/{svc_name}"
-                            and any(s.get("value", "").startswith(f"label:com.smsly.service={svc_name}") for s in e.get("selectors", []))
+                            and any(s.get("value", "").startswith(f"label:com.paas.service={svc_name}") for s in e.get("selectors", []))
                             for e in entries_data.get("entries", [])
                         )
                         
@@ -1251,7 +1273,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                                 "selectors": [
                                     {
                                         "type": "docker",
-                                        "value": f"label:com.smsly.service={svc_name}"
+                                        "value": f"label:com.paas.service={svc_name}"
                                     }
                                 ],
                                 "x509_svid_ttl": "1h"
@@ -1299,16 +1321,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # Mark the deployment as pending so the user sees a clear status
             # and can retry later when a node becomes available.
             logger.error(f"No eligible deployment node available for {repo}.")
-            results.append({
-                "repo": repo,
-                "name": requested_name,
-                "status": "pending",
-                "error": "No eligible deployment node available."
-            })
-            # Optionally, create a placeholder Service with a pending flag
-            # to surface in the UI. This avoids silent failures.
+            _pending_service_id = None
+            # Create a placeholder Service with a pending flag to surface
+            # in the UI. This avoids silent failures. Track it for rollback
+            # so failed plans don't leak UNKNOWN services.
             try:
-                Service.objects.create(
+                _pending_svc = Service.objects.create(
                     name=requested_name,
                     owner=user,
                     project=project,
@@ -1324,11 +1342,22 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     status=Service.Status.UNKNOWN,
                     env_scan_depth=_env_scan_depth,
                 )
+                _pending_service_id = str(_pending_svc.id)
+                _rollback_services.append(_pending_service_id)
             except Exception:
                 # If creation fails (e.g., model does not have a status field),
                 # we simply continue; the pending entry in ``results`` is still
                 # returned to the caller.
                 pass
+            _pending_entry: dict[str, object] = {
+                "repo": repo,
+                "name": requested_name,
+                "status": "pending",
+                "error": "No eligible deployment node available."
+            }
+            if _pending_service_id:
+                _pending_entry["service_id"] = _pending_service_id
+            results.append(_pending_entry)
             continue
 
         try:
@@ -1596,6 +1625,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 },
             )
             _rollback_deployments.append(str(deployment.id))
+            _rollback_env_keys.extend(list(resolved_env.keys()))
 
             deployment_by_repo_key[repo_key] = str(deployment.id)
             pre_deploy_snapshot_id = _capture_pre_ecosystem_snapshot(
@@ -1607,6 +1637,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 "server": service.server.name if service.server else "N/A",
                 "service_id": str(service.id),
                 "deployment_id": str(deployment.id),
+                "addon_ids": list(_rollback_addons[-(len(service_addon_types)):]) if service_addon_types else [],
+                "env_keys": list(resolved_env.keys()),
                 "pre_deploy_snapshot_id": pre_deploy_snapshot_id,
                 "status": "queued",
                 "stack": stack,
@@ -1715,6 +1747,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
     deploy_result = {
         "status": "deploying",
+        "plan_id": str(plan_id) if plan_id else None,
+        "task_id": str(getattr(self.request, "id", "") or ""),
         "total": len(services_plan),
         "prepared": len(results),
         "queued_immediately": queued_now,
@@ -1793,6 +1827,53 @@ def _fail_plan_record(plan_id: str | None, error_message: str) -> None:
     """
     if not plan_id:
         return
+    rollback_record: dict | None = None
+    try:
+        from apps.deployments.models.ecosystem import EcosystemPlan
+        plan_obj = EcosystemPlan.objects.filter(id=plan_id).first()
+        if plan_obj is not None:
+            services_created = plan_obj.services_created or []
+            if isinstance(services_created, list):
+                rollback_record = {
+                    "service_ids": sorted({
+                        str(item.get("service_id"))
+                        for item in services_created
+                        if isinstance(item, dict) and item.get("service_id")
+                    }),
+                    "deployment_ids": sorted({
+                        str(item.get("deployment_id"))
+                        for item in services_created
+                        if isinstance(item, dict) and item.get("deployment_id")
+                    }),
+                    "addon_ids": sorted({
+                        str(addon_id)
+                        for item in services_created
+                        if isinstance(item, dict)
+                        for addon_id in (item.get("addon_ids") or [])
+                    }),
+                    "env_var_keys": sorted({
+                        env_key
+                        for item in services_created
+                        if isinstance(item, dict)
+                        for env_key in (item.get("env_keys") or [])
+                    }),
+                    "project_id": str(plan_obj.project_id) if plan_obj.project_id else None,
+                }
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("Failed to read ecosystem plan for rollback: %s", exc)
+
+    try:
+        if rollback_record:
+            _rollback_ecosystem_deploy(
+                service_ids=rollback_record["service_ids"],
+                deployment_ids=rollback_record["deployment_ids"],
+                addon_ids=rollback_record["addon_ids"],
+                env_var_keys=[k for k in rollback_record["env_var_keys"] if k],
+                project_id=rollback_record["project_id"],
+            )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("Ecosystem rollback failed for plan %s: %s", plan_id, exc)
+
     try:
         from apps.deployments.models.ecosystem import EcosystemPlan
         EcosystemPlan.objects.filter(id=plan_id).update(
@@ -1809,34 +1890,52 @@ def _rollback_ecosystem_deploy(
     deployment_ids: list[str],
     addon_ids: list[str],
     env_var_keys: list[str],
+    project_id: str | None = None,
 ):
     """
     SEC-ZT-007: Clean up partially created resources on deploy failure.
-    Removes services, deployments, addons, and env vars created during
-    the failed ecosystem deployment attempt.
-    """
 
-    logger.warning("Rolling back ecosystem deploy: %d services, %d deployments, %d addons",
-                   len(service_ids), len(deployment_ids), len(addon_ids))
+    Only removes resources that:
+      - have not been promoted to ACTIVE / BUILDING, and
+      - are still owned by the failed plan's project (when provided).
+
+    Always safe to call multiple times.
+    """
+    safe_statuses = ("ACTIVE", "BUILDING")
+    logger.warning(
+        "Rolling back ecosystem deploy: %d services, %d deployments, %d addons",
+        len(service_ids), len(deployment_ids), len(addon_ids),
+    )
 
     if deployment_ids:
         Deployment.objects.filter(id__in=deployment_ids).exclude(
-            status__in=("ACTIVE", "BUILDING"),
+            status__in=safe_statuses,
         ).delete()
 
     if addon_ids:
-        Addon.objects.filter(id__in=addon_ids).exclude(
-            status="ACTIVE",
-        ).delete()
+        addon_qs = Addon.objects.filter(id__in=addon_ids).exclude(status="ACTIVE")
+        if project_id:
+            addon_qs = addon_qs.filter(service__project_id=project_id)
+        addon_qs.delete()
 
     if env_var_keys:
-        EnvironmentVariable.objects.filter(
+        env_qs = EnvironmentVariable.objects.filter(
             service_id__in=service_ids,
             key__in=env_var_keys,
-        ).delete()
+        )
+        env_qs.delete()
 
     if service_ids:
-        Service.objects.filter(id__in=service_ids).delete()
+        service_qs = Service.objects.filter(id__in=service_ids)
+        if project_id:
+            service_qs = service_qs.filter(project_id=project_id)
+        service_qs.delete()
+
+    if project_id:
+        try:
+            ScopedNetwork.objects.filter(scope_id=project_id, scope_type="project").delete()
+        except Exception as exc:
+            logger.debug("Scoped network cleanup skipped for %s: %s", project_id, exc)
 
     _rebuild_ecosystem_build_counter()
     logger.info("Rollback complete")

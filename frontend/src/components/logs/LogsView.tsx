@@ -73,10 +73,12 @@ export function LogsView({
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         const isUuid = uuidRegex.test(raw);
 
-        const applyFilter = (svcName: string, deployMode?: string) => {
+        const applyFilter = (svcName: string, deployMode?: string, serviceId?: string) => {
             setServiceFilter(svcName);
             const normalizedName = svcName.toLowerCase().replace(/ /g, '-');
-            const filteredQuery = deployMode === 'COMPOSE'
+            const filteredQuery = serviceId
+                ? `{smsly_service_id="${serviceId}"}`
+                : deployMode === 'COMPOSE'
                 ? `{compose_project="${normalizedName}"}`
                 : `{compose_service="${svcName}"}`;
             setQuery(filteredQuery);
@@ -89,7 +91,7 @@ export function LogsView({
             })
                 .then((r) => (r.ok ? r.json() : null))
                 .then((svc) => {
-                    if (svc?.name) applyFilter(svc.name, svc.deploy_mode);
+                    if (svc?.name) applyFilter(svc.name, svc.deploy_mode, svc.id || raw);
                 })
                 .catch(() => {});
         } else {
@@ -207,7 +209,9 @@ export function LogsView({
                 .then((svc) => {
                     if (svc) {
                         const svcNormalized = svc.name.toLowerCase().replace(/ /g, '-');
-                        const q = svc.deploy_mode === 'COMPOSE'
+                        const q = svc.id
+                            ? `{smsly_service_id="${svc.id}"}`
+                            : svc.deploy_mode === 'COMPOSE'
                             ? `{compose_project="${svcNormalized}"}`
                             : `{compose_service="${svc.name}"}`;
                         setDraftQuery(q);

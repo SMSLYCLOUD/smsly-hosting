@@ -57,6 +57,10 @@ class EcosystemPlan(models.Model):
 
     # Results
     services_created = models.JSONField(default=list, blank=True)  # type: ignore[var-annotated]
+    services_status = models.JSONField(
+        default=dict, blank=True,
+        help_text="Map of service name -> current Deployment.status for lifecycle display."
+    )
     error_message = models.TextField(blank=True, null=True)  # type: ignore[var-annotated]
 
     # Timestamps

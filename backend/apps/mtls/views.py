@@ -159,9 +159,9 @@ def ensure_ecosystem_spire() -> str:
         agent_container=ECOSYSTEM_SPIRE_AGENT_CONTAINER,
         server_container=ECOSYSTEM_SPIRE_SERVER_CONTAINER,
         agent_conf_path="/opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf",
-        data_volume="smsly-hosting_spire-ecosystem-agent-data",
-        socket_volume="smsly-hosting_spire-ecosystem-agent-socket",
-        svids_volume="smsly-hosting_spire-ecosystem-agent-svids",
+        data_volume="smsly-spire_spire-ecosystem-agent-data",
+        socket_volume="smsly-spire_spire-ecosystem-agent-socket",
+        svids_volume="smsly-spire_spire-ecosystem-agent-svids",
     )
     return agent if str(agent).startswith("error") else "ready"
 
@@ -448,9 +448,9 @@ def mtls_spire_deploy(request):
                 agent_container=ECOSYSTEM_SPIRE_AGENT_CONTAINER,
                 server_container=ECOSYSTEM_SPIRE_SERVER_CONTAINER,
                 agent_conf_path="/opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf",
-                data_volume="smsly-hosting_spire-ecosystem-agent-data",
-                socket_volume="smsly-hosting_spire-ecosystem-agent-socket",
-                svids_volume="smsly-hosting_spire-ecosystem-agent-svids",
+                data_volume="smsly-spire_spire-ecosystem-agent-data",
+                socket_volume="smsly-spire_spire-ecosystem-agent-socket",
+                svids_volume="smsly-spire_spire-ecosystem-agent-svids",
             )
             results["ecosystem_agent"] = agent_result
             if str(agent_result).startswith("error"):

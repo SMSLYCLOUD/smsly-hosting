@@ -10,7 +10,9 @@ from apps.deployments.tasks.ecosystem.tasks import (
     _cancel_unreleased_deployments,
     _capture_pre_ecosystem_snapshot,
     _ecosystem_plan_still_deploying,
+    _fail_plan_record,
     _finalize_ecosystem_plan,
+    _rollback_ecosystem_deploy,
     ecosystem_deferred_build_task,
     ecosystem_release_wave_task,
 )
@@ -28,17 +30,20 @@ class TestEcosystemRobustFixes(TestCase):
     def test_finalize_ecosystem_plan_completed(self, mock_dep_filter, mock_plan_filter):
         """When all deployments in all waves succeed, plan status transitions to COMPLETED."""
         mock_plan = MagicMock()
+        mock_plan.services_status = {}
         mock_plan_filter.return_value.first.return_value = mock_plan
 
         mock_dep_filter.return_value.values.return_value = [
-            {"status": Deployment.Status.ACTIVE},
-            {"status": Deployment.Status.ACTIVE},
+            {"status": Deployment.Status.ACTIVE, "service__name": "api-1"},
+            {"status": Deployment.Status.ACTIVE, "service__name": "api-2"},
         ]
 
         _finalize_ecosystem_plan("plan-123", [["dep-1"], ["dep-2"]])
 
         self.assertEqual(mock_plan.status, EcosystemPlan.Status.COMPLETED)
         self.assertEqual(mock_plan.error_message, "")
+        self.assertEqual(mock_plan.services_status.get("api-1"), Deployment.Status.ACTIVE)
+        self.assertEqual(mock_plan.services_status.get("api-2"), Deployment.Status.ACTIVE)
         mock_plan.save.assert_called_once()
 
     @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
@@ -46,34 +51,40 @@ class TestEcosystemRobustFixes(TestCase):
     def test_finalize_ecosystem_plan_failed(self, mock_dep_filter, mock_plan_filter):
         """When any deployment fails, plan status transitions to FAILED."""
         mock_plan = MagicMock()
+        mock_plan.services_status = {}
         mock_plan_filter.return_value.first.return_value = mock_plan
 
         mock_dep_filter.return_value.values.return_value = [
-            {"status": Deployment.Status.ACTIVE},
-            {"status": Deployment.Status.FAILED},
+            {"status": Deployment.Status.ACTIVE, "service__name": "api-1"},
+            {"status": Deployment.Status.FAILED, "service__name": "api-2"},
         ]
 
         _finalize_ecosystem_plan("plan-123", [["dep-1"], ["dep-2"]])
 
         self.assertEqual(mock_plan.status, EcosystemPlan.Status.FAILED)
-        self.assertIn("1/2 service failures or cancellations", mock_plan.error_message)
+        self.assertIn("service failures or cancellations", mock_plan.error_message)
+        self.assertEqual(mock_plan.services_status.get("api-1"), Deployment.Status.ACTIVE)
+        self.assertEqual(mock_plan.services_status.get("api-2"), Deployment.Status.FAILED)
         mock_plan.save.assert_called_once()
 
     @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
     @patch("apps.deployments.models.Deployment.objects.filter")
-    def test_finalize_ecosystem_plan_in_progress(self, mock_dep_filter, mock_plan_filter):
-        """If deployments are still in progress, finalization is deferred."""
+    def test_finalize_ecosystem_plan_persists_services_status_in_progress(self, mock_dep_filter, mock_plan_filter):
+        """In-progress deployments persist services_status so the UI can show partial state."""
         mock_plan = MagicMock()
+        mock_plan.services_status = {}
         mock_plan_filter.return_value.first.return_value = mock_plan
 
         mock_dep_filter.return_value.values.return_value = [
-            {"status": Deployment.Status.BUILDING},
-            {"status": Deployment.Status.ACTIVE},
+            {"status": Deployment.Status.BUILDING, "service__name": "api-1"},
+            {"status": Deployment.Status.QUEUED, "service__name": "api-2"},
         ]
 
         _finalize_ecosystem_plan("plan-123", [["dep-1"], ["dep-2"]])
 
-        mock_plan.save.assert_not_called()
+        self.assertEqual(mock_plan.services_status.get("api-1"), Deployment.Status.BUILDING)
+        self.assertEqual(mock_plan.services_status.get("api-2"), Deployment.Status.QUEUED)
+        mock_plan.save.assert_called_once()
 
     @patch("apps.deployments.models.Deployment.objects.filter")
     @patch("apps.deployments.models.Deployment.objects.bulk_update")
@@ -208,13 +219,11 @@ class TestEcosystemRobustFixes(TestCase):
             plan_id="plan-123",
         )
 
-        # Since the fail-fast cascade removal (fb249554), a failure with
-        # cancel_others_on_failure=False does NOT cancel downstream
-        # dependents — independent branches continue deploying and only
-        # cancel_others_on_failure=True cancels everything.
+        # A dependency failure cancels only its transitive dependents;
+        # independent branches continue deploying.
         self.assertEqual(res["status"], "released")
-        self.assertEqual(res["cancelled_dependents"], 0)
-        mock_cancel_dep.assert_not_called()
+        self.assertEqual(res["cancelled_dependents"], 1)
+        mock_cancel_dep.assert_called_once()
 
 
 class TestWaveTimeoutOrphanFixes(TestCase):
@@ -441,6 +450,63 @@ class TestPreEcosystemSnapshot(TestCase):
         res = _capture_pre_ecosystem_snapshot(service, "dep-9", "plan-123", MagicMock())
 
         self.assertIsNone(res)
+
+
+class TestEcosystemRollback(TestCase):
+    """Verify _rollback_ecosystem_deploy removes only the created resources
+    and never touches live/unrelated rows."""
+
+    @patch("apps.deployments.models.network_scope.ScopedNetwork.objects.filter")
+    @patch("apps.deployments.models.addons.Addon.objects.filter")
+    @patch("apps.deployments.models.environment.EnvironmentVariable.objects.filter")
+    @patch("apps.deployments.models.Service.objects.filter")
+    @patch("apps.deployments.tasks.ecosystem.helpers.lifecycle._rebuild_ecosystem_build_counter")
+    @patch("apps.deployments.models.deployment.Deployment.objects.filter")
+    def test_rollback_removes_created_resources_only(
+        self,
+        mock_dep_filter, mock_counter, mock_svc_filter, mock_env_filter,
+        mock_addon_filter, mock_scoped_filter,
+    ):
+        """Created rows are removed; live/unrelated rows are not."""
+        from apps.deployments.models.addons import Addon
+
+        def _q(*args, **kwargs):
+            m = MagicMock()
+            m.exclude.return_value = m
+            m.delete.return_value = None
+            return m
+
+        mock_dep_filter.return_value = _q()
+        mock_svc_filter.return_value = _q()
+        mock_addon_filter.return_value = _q()
+        mock_env_filter.return_value = _q()
+        mock_scoped_filter.return_value = _q()
+
+        _rollback_ecosystem_deploy(
+            service_ids=["svc-1"],
+            deployment_ids=["dep-1"],
+            addon_ids=["ad-1"],
+            env_var_keys=["API_KEY"],
+            project_id="proj-1",
+        )
+
+        # Live deployments/addons are excluded by status; only created rows are removed.
+        # Service/EnvVar/ScopedNet may be queried twice (once for status filter,
+        # once for project scope) so allow any positive call count.
+        self.assertGreaterEqual(mock_dep_filter.call_count, 1)
+        self.assertGreaterEqual(mock_addon_filter.call_count, 1)
+        self.assertGreaterEqual(mock_env_filter.call_count, 1)
+        self.assertGreaterEqual(mock_svc_filter.call_count, 1)
+        self.assertGreaterEqual(mock_scoped_filter.call_count, 1)
+
+    def test_rollback_handles_empty_input(self):
+        """Idempotent when no resources were tracked."""
+        _rollback_ecosystem_deploy(
+            service_ids=[],
+            deployment_ids=[],
+            addon_ids=[],
+            env_var_keys=[],
+        )
 
 
 

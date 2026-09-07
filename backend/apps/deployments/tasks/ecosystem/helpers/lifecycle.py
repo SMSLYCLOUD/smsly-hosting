@@ -6,6 +6,7 @@ from collections import defaultdict
 from functools import lru_cache
 
 from django.core.cache import cache as django_cache
+from django.db.models import F
 from django.utils import timezone
 
 from apps.deployments.models import Deployment
@@ -405,12 +406,15 @@ def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: in
         # re-send, worker redelivery) skips REVIEW rows — without this
         # marker, a dispatched-but-not-yet-started deployment stayed QUEUED
         # and every re-send double-dispatched smart_deploy_task.
-        deployment.status = Deployment.Status.REVIEW
-        deployment.build_logs = (
-            f"{deployment.build_logs or ''}"
-            f"\n[Ecosystem] Queued in wave {wave_index + 1} (stagger +{countdown}s).\n"
+        updated = Deployment.objects.filter(
+            id=deployment.id,
+            status=Deployment.Status.QUEUED,
+        ).update(
+            status=Deployment.Status.REVIEW,
+            build_logs=F("build_logs") + f"\n[Ecosystem] Queued in wave {wave_index + 1} (stagger +{countdown}s).\n",
         )
-        deployment.save(update_fields=["build_logs", "status"])
+        if updated != 1:
+            continue
 
         app.send_task(
             "apps.deployments.tasks.smart_deploy_task",
@@ -581,11 +585,22 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
             plan_rec.status = EcosystemPlan.Status.COMPLETED
             plan_rec.completed_at = timezone.now()
             plan_rec.error_message = ""
-            plan_rec.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
+            plan_rec.services_status = services_status
+            plan_rec.save(update_fields=[
+                "status", "completed_at", "error_message",
+                "services_status", "updated_at",
+            ])
             return
         all_ids = [str(dep_id) for wave in waves for dep_id in wave]
-        deployments = list(Deployment.objects.filter(id__in=all_ids).values("status"))
+        deployments = list(
+            Deployment.objects.filter(id__in=all_ids).values(
+                "id", "status", "service__name",
+            )
+        )
         statuses = [d["status"] for d in deployments]
+        services_status = {
+            d["service__name"]: d["status"] for d in deployments
+        }
         failed_states = {
             Deployment.Status.FAILED,
             Deployment.Status.BUILD_FAILED,
@@ -610,6 +625,8 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
             Deployment.Status.HEALTH_CHECK,
         }
         if any(st in in_progress_states for st in statuses):
+            plan_rec.services_status = services_status
+            plan_rec.save(update_fields=["services_status", "updated_at"])
             return  # Still running
         failed_count = sum(1 for st in statuses if st in failed_states)
         if not preparation_results and not statuses:
@@ -619,6 +636,11 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
             plan_rec.status = EcosystemPlan.Status.COMPLETED
             plan_rec.completed_at = timezone.now()
             plan_rec.error_message = ""
+            plan_rec.services_status = services_status
+            plan_rec.save(update_fields=[
+                "status", "completed_at", "error_message",
+                "services_status", "updated_at",
+            ])
         else:
             plan_rec.status = EcosystemPlan.Status.FAILED
             plan_rec.error_message = (
@@ -626,8 +648,12 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
                 f"and {len(preparation_failures)} preparation failures "
                 f"({failed_count}/{len(statuses)} service failures or cancellations)."
             )
+            plan_rec.services_status = services_status
+            plan_rec.save(update_fields=[
+                "status", "completed_at", "error_message",
+                "services_status", "updated_at",
+            ])
         _rebuild_ecosystem_build_counter()
-        plan_rec.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
     except Exception as exc:
         logger.warning("Failed to finalize ecosystem plan %s: %s", plan_id, exc)
 

@@ -30,6 +30,17 @@ scrape_configs:
       - source_labels: ['__meta_docker_container_label_smsly_blue_green_canonical_name']
         target_label: 'compose_service'
         regex: '(.+)'
+      # Promote SMSLY ownership labels so Loki queries can scope logs by the
+      # actual service/project instead of only the Docker compose container.
+      - source_labels: ['__meta_docker_container_label_smsly_service_id']
+        target_label: 'smsly_service_id'
+        regex: '(.+)'
+      - source_labels: ['__meta_docker_container_label_smsly_project_id']
+        target_label: 'smsly_project_id'
+        regex: '(.+)'
+      - source_labels: ['__meta_docker_container_label_smsly_project']
+        target_label: 'smsly_project'
+        regex: '(.+)'
       # Extract compose project name
       - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
         target_label: 'compose_project'

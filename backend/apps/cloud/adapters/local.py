@@ -616,6 +616,12 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.hc_timeout': str(hc_timeout),
             'smsly.blue_green.restart_policy': restart_policy,
         }
+        try:
+            if svc_obj is not None:
+                labels['smsly.project_id'] = str(svc_obj.project_id or '')
+                labels['smsly.project'] = str(getattr(svc_obj.project, 'slug', '') or '')
+        except Exception:
+            pass
 
         # --- mTLS: ecosystem SPIRE mounts for user-deployed services ---
         # The blue-green path previously created containers with no SPIRE

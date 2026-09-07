@@ -706,29 +706,30 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         if env_scan_depth in ('shallow', 'standard', 'deep'):
             plan['env_scan_depth'] = env_scan_depth
 
-        # ── Concurrent-deploy guard (mirror of the scan view's 429) ────
-        # Without this, a double-click or retry-after-timeout dispatches
-        # two ecosystem_deploy_task instances that race through service
-        # and deployment creation. The task has its own idempotency guard,
-        # but rejecting at the view is cheaper and gives the user a clear
-        # message instead of a silently-duplicated deploy.
-        if EcosystemPlan.objects.filter(
-            user=request.user,
-            status__in=[
-                EcosystemPlan.Status.SCANNING,
-                EcosystemPlan.Status.DEPLOYING,
-            ],
-        ).exclude(id=plan_id).exists():
-            return Response(
-                {
-                    'error': (
-                        'Another ecosystem scan or deploy is already in '
-                        'progress. Wait for it to finish or cancel it '
-                        'before starting a new one.'
+        # ── Concurrent-deploy guard (atomic) ────────────────────────────
+        # Use a row lock so two concurrent requests cannot both pass the
+        # in-process check before either commits. Rejecting early here is
+        # cheaper and clearer than letting the task duplicate the work.
+        from django.db import transaction as _transaction
+        try:
+            with _transaction.atomic():
+                locked = EcosystemPlan.objects.select_for_update().get(id=plan_id)
+                if locked.status in (
+                    EcosystemPlan.Status.SCANNING,
+                    EcosystemPlan.Status.DEPLOYING,
+                ):
+                    return Response(
+                        {
+                            'error': (
+                                'Another ecosystem scan or deploy is already in '
+                                'progress. Wait for it to finish or cancel it '
+                                'before starting a new one.'
+                            )
+                        },
+                        status=status.HTTP_429_TOO_MANY_REQUESTS,
                     )
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
+        except EcosystemPlan.DoesNotExist:
+            pass
 
         # Resolve project — from explicit param, or from existing plan
         project = None
@@ -773,6 +774,25 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 is_ephemeral=True,
             )
 
+        # Harden browser-submitted plan: strip untrusted passthrough keys
+        # and validate service entries before persisting/dispatching.
+        _allowed_top = {"services", "addons", "wave_size", "env_scan_depth", "project_name", "name", "use_shared_addons", "cancel_others_on_failure", "shared_addon_config"}
+        _allowed_svc = {"name", "repo", "branch", "port", "stack", "build", "depends_on", "env_vars", "addons", "server_id", "skip", "deploy_order"}
+        if not isinstance(plan.get("services", []), list) or len(plan.get("services", [])) > 50:
+            return Response({'error': 'Invalid plan services list.'}, status=status.HTTP_400_BAD_REQUEST)
+        _clean_services = []
+        for _svc in plan.get("services", []):
+            if not isinstance(_svc, dict) or not _svc.get("name") or not _svc.get("repo"):
+                return Response({'error': 'Each service needs name and repo.'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                _p = int(_svc.get("port", 8000))
+                if not 1 <= _p <= 65535:
+                    raise ValueError()
+            except (TypeError, ValueError):
+                return Response({'error': f"Invalid port for service {_svc.get('name')}"}, status=status.HTTP_400_BAD_REQUEST)
+            _clean_services.append({k: _svc.get(k) for k in _allowed_svc if k in _svc})
+        plan = {k: v for k, v in plan.items() if k in _allowed_top}
+        plan["services"] = _clean_services
         if plan_record:
             if not plan_record.project:
                 plan_record.project = project
@@ -885,7 +905,7 @@ services:
     networks:
       - smsly-network
     labels:
-      - "com.smsly.service={service_name}"
+      - "com.paas.service={service_name}"
 
 volumes:
   spire_agent_socket:
@@ -945,7 +965,7 @@ MIGRATION_PHASE=phase4
             "selectors": [
                 {
                     "type": "docker",
-                    "value": f"label:com.smsly.service={service_name}"
+                    "value": f"label:com.paas.service={service_name}"
                 }
             ],
             "x509_svid_ttl": "1h"

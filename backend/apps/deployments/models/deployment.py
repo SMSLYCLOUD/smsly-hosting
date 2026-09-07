@@ -178,6 +178,18 @@ class Deployment(TimeStampedModel):
             models.Index(fields=["service", "-created_at"], name="dep_service_created_idx"),
             models.Index(fields=["status"], name="dep_status_idx"),
         ]
+        constraints = [
+            # Ecosystem deployments are keyed on (service, commit_hash).
+            # The unique constraint is conditional so historical / non-ecosystem
+            # deployments are not affected and pre-existing duplicate rows are
+            # skipped. Conditional unique indexes are supported on PostgreSQL
+            # and modern SQLite.
+            models.UniqueConstraint(
+                fields=["service", "commit_hash"],
+                name="uniq_ecosystem_deployment_per_service",
+                condition=models.Q(commit_hash="ecosystem-deploy"),
+            ),
+        ]
 
     @property
     def duration_seconds(self) -> float | None:
