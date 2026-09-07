@@ -119,8 +119,13 @@ REDIS_PASSWORD=${redis_password}
 # TURN
 TURN_SECRET=${turn_secret}
 
-# Node identity
+    # Node identity
 PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip  || echo "")}
+# PRIVATE_IP is what Kamailio/coturn bind: prefer the first non-loopback
+# local address (private NIC when present, else the public one). Never
+# leave it at 127.0.0.1 on a real node — SIP/RTP would be unreachable.
+PRIVATE_IP=${PRIVATE_IP:-$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | head -1 || echo "")}
+PRIVATE_IP=${PRIVATE_IP:-${PUBLIC_IP:-127.0.0.1}}
 DOMAIN=${DOMAIN:-$(hostname -f  || hostname)}
 
 # Management daemon
@@ -136,28 +141,86 @@ EOF
 install_media_packages() {
     echo -e "${BLUE}  → Installing media infrastructure packages...${NC}"
 
-    # Ensure smsly system user exists (all systemd units run as this user)
-    if ! id smsly ; then
-        useradd -r -s /usr/sbin/nologin -u 1000 smsly  || true
-        echo -e "${GREEN}  ✓ Created smsly system user${NC}"
+    # Ensure smsly system user exists (all systemd units run as this user).
+    # No hardcoded UID: cloud images often already take 1000 (e.g. the
+    # default `ubuntu` user); a system UID picked by useradd is fine since
+    # units reference the user by name.
+    if ! id smsly >/dev/null 2>&1; then
+        if useradd -r -s /usr/sbin/nologin smsly; then
+            echo -e "${GREEN}  ✓ Created smsly system user${NC}"
+        else
+            echo -e "${RED}  ✗ Failed to create smsly system user — systemd units will fail to start${NC}"
+        fi
     fi
 
     # Create required directories
     mkdir -p /var/log/smsly /run/smsly /var/lib/freeswitch /var/lib/livekit /var/log/coturn /var/lib/rtpengine-recording
 
+    # Heal an interrupted dpkg from a previous killed run (half-configured
+    # packages block every later apt invocation).
+    dpkg --configure -a 2>&1 | tail -2 || true
+
     apt-get update -qq
-    apt-get install -y -qq \
-        postgresql-15 \
+    # NOTE: `postgresql` (no version) tracks the distro default (14 on
+    # jammy, 16 on noble) — every media component talks stock SQL, so no
+    # PGDG pin is needed. freeswitch/fs_cli/openresty are NOT in Ubuntu
+    # archives; their repos are added below (warn-tolerant: the node still
+    # provisions without voice switching / edge proxy).
+    # Never prompt on conffiles: Phase 3 deploys our configs over stock
+    # paths, so re-runs must keep them (conffold) without asking.
+    local -a apt_conf=(
+        -o Dpkg::Options::="--force-confdef"
+        -o Dpkg::Options::="--force-confold"
+    )
+    apt-get install -y -qq "${apt_conf[@]}" \
+        postgresql \
         redis-server \
         wireguard \
         kamailio \
-        freeswitch \
+        kamailio-websocket-modules \
+        kamailio-tls-modules \
         coturn \
-        openresty \
         curl \
         jq \
         netcat-openbsd \
-        fs_cli \
+        gnupg \
+        ca-certificates \
+        build-essential \
+        pkg-config \
+        libssl-dev \
+
+    # ── OpenResty (official repo; edge proxy for media APIs) ──
+    if ! command -v openresty >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Adding OpenResty repository...${NC}"
+        if curl -fsSL https://openresty.org/package/pubkey.gpg 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/openresty.gpg 2>/dev/null; then
+            . /etc/os-release
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/openresty.gpg] http://openresty.org/package/ubuntu $VERSION_CODENAME main" > /etc/apt/sources.list.d/openresty.list
+            if apt-get update -qq; then
+                apt-get install -y -qq "${apt_conf[@]}" openresty || echo -e "${YELLOW}  ⚠ OpenResty install failed — edge proxy unavailable (non-fatal)${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ OpenResty repo update failed — edge proxy unavailable (non-fatal)${NC}"
+            fi
+        else
+            echo -e "${YELLOW}  ⚠ OpenResty key download failed — edge proxy unavailable (non-fatal)${NC}"
+        fi
+    fi
+
+    # ── FreeSWITCH (SignalWire repo; voice switching) ──
+    if ! command -v freeswitch >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Adding FreeSWITCH repository...${NC}"
+        . /etc/os-release
+        if curl -fsSL "https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-bookworm-release.deb" -o /tmp/signalwire-repo.deb 2>/dev/null \
+            && dpkg -i /tmp/signalwire-repo.deb >/dev/null 2>&1; then
+            rm -f /tmp/signalwire-repo.deb
+            if apt-get update -qq; then
+                apt-get install -y -qq "${apt_conf[@]}" freeswitch fs_cli || echo -e "${YELLOW}  ⚠ FreeSWITCH install failed — voice switching unavailable (non-fatal)${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ FreeSWITCH repo update failed — voice switching unavailable (non-fatal)${NC}"
+            fi
+        else
+            echo -e "${YELLOW}  ⚠ FreeSWITCH repo bootstrap failed — voice switching unavailable (non-fatal)${NC}"
+        fi
+    fi
         
 
     # Install RTPEngine (not in default Ubuntu repos — build from source or use PPA)
@@ -167,13 +230,29 @@ install_media_packages() {
             echo -e "${YELLOW}  ⚠ RTPEngine not in apt repos — installing from Sipwise PPA...${NC}"
             apt-get install -y -qq software-properties-common  || true
             add-apt-repository -y ppa:sipwise/rtpengine  || true
-            apt-get update -qq  && apt-get install -y -qq rtpengine  || {
+            apt-get update -qq  && apt-get install -y -qq "${apt_conf[@]}" rtpengine  || {
                 echo -e "${YELLOW}  ⚠ RTPEngine auto-install failed — install manually${NC}"
             }
         }
     fi
 
     echo -e "${GREEN}  ✓ Packages installed${NC}"
+}
+
+# ─── Stop listeners squatting the media ports ─────────────────────────────
+# apt auto-starts kamailio/coturn/rtpengine/... with STOCK configs that grab
+# the media ports; a repurposed box may also carry nginx/apache2 on :80.
+# A media node is dedicated: stop + disable them all. Runs BEFORE the
+# Phase-0 port check (a previous partial install leaves daemons behind)
+# and again after package install (apt re-enables them). Phase 5 restarts
+# only what the media configs define.
+stop_stale_media_listeners() {
+    echo -e "${BLUE}  → Clearing stale listeners from media ports...${NC}"
+    for squat in kamailio coturn rtpengine freeswitch openresty nginx apache2; do
+        systemctl stop "$squat" 2>/dev/null || true
+        systemctl disable "$squat" 2>/dev/null || true
+    done
+    echo -e "${GREEN}  ✓ Stale listeners stopped (media owns :80/443/5060/3478)${NC}"
 }
 
 # ─── Deploy media configs ────────────────────────────────────────────────────
@@ -187,6 +266,11 @@ deploy_media_configs() {
         return 0
     fi
 
+    # Required by systemd units with ProtectSystem=strict + ReadWritePaths
+    # (e.g. smsly-media-mgmt needs /etc/smsly to exist or it exits 226).
+    mkdir -p /etc/smsly
+    chmod 755 /etc/smsly
+
     # Kamailio
     [ -d /etc/kamailio ] || mkdir -p /etc/kamailio
     cp -f "$infra_dir/kamailio/kamailio.cfg" /etc/kamailio/  || true
@@ -199,16 +283,37 @@ deploy_media_configs() {
     [ -d /etc/rtpengine ] || mkdir -p /etc/rtpengine
     cp -f "$infra_dir/rtpengine/rtpengine.conf" /etc/rtpengine/  || true
 
-    for unit in "$systemd_dir"/*.service; do
-        [ -f "$unit" ] || continue
-        local name
-        name=$(basename "$unit")
-        cp -f "$unit" /etc/systemd/system/
-        echo -e "  → Installed ${name}"
+    echo -e "${GREEN}  ✓ Media configs deployed${NC}"
+}
+
+# ─── Deploy media systemd units ───────────────────────────────────────────
+# Units ship in <scripts-checkout>/scripts/systemd/ (smsly-media-mgmt,
+# smsly-voice-api, smsly-video, coturn, rtpengine). Binaries for voice/video
+# land in a later step; missing binaries only make those units fail at
+# START time (warned, non-fatal) — mgmt + infra still come up.
+deploy_media_systemd_units() {
+    local script_dir="$1"
+    echo -e "${BLUE}  → Deploying media systemd units...${NC}"
+
+    local units_dir="$script_dir/scripts/systemd"
+    if [ ! -d "$units_dir" ]; then
+        echo -e "${YELLOW}  ⚠ scripts/systemd/ not found under $script_dir — skipping unit deployment${NC}"
+        return 0
+    fi
+
+    local installed=0
+    for unit in coturn.service rtpengine.service smsly-media-mgmt.service smsly-voice-api.service smsly-video.service; do
+        if [ -f "$units_dir/$unit" ]; then
+            cp -f "$units_dir/$unit" /etc/systemd/system/
+            echo -e "  → Installed ${unit}"
+            installed=$((installed + 1))
+        else
+            echo -e "${YELLOW}  ⚠ Unit ${unit} not in $units_dir — skipping${NC}"
+        fi
     done
 
     systemctl daemon-reload
-    echo -e "${GREEN}  ✓ Systemd units deployed${NC}"
+    echo -e "${GREEN}  ✓ Systemd units deployed ($installed)${NC}"
 }
 
 # ─── Template env vars into config files ─────────────────────────────────────
@@ -258,6 +363,10 @@ template_media_configs() {
 start_media_services() {
     echo -e "${BLUE}  → Starting media services...${NC}"
 
+    # A previous partial install can leave units in failed/rate-limited
+    # state — clear it so `enable --now` below actually starts them.
+    systemctl reset-failed 2>/dev/null || true
+
     local infra_services=(postgresql redis-server wireguard)
     local media_services=(kamailio rtpengine freeswitch coturn)
     local app_services=(smsly-voice-api smsly-video)
@@ -298,7 +407,9 @@ verify_media_services() {
 
     for entry in "${services[@]}"; do
         local name="${entry%%:*}"
-        local check="${entry##*:}"
+        # Strip up to the FIRST colon only — checks contain URLs
+        # (http://127.0.0.1:9090/...) where ## would mangle the scheme.
+        local check="${entry#*:}"
         if eval "$check" ; then
             echo -e "  ${GREEN}✓${NC} ${name}"
         else
@@ -346,14 +457,18 @@ build_media_mgmt() {
 
     if [ -f "$mgmt_dir/Cargo.toml" ]; then
         echo -e "${BLUE}  -> Rebuilding smsly-media-mgmt...${NC}"
-        
+
         if ! command -v cargo >/dev/null; then
             echo -e "${BLUE}  -> Installing Rust toolchain...${NC}"
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y >/dev/null
             export PATH="$HOME/.cargo/bin:$PATH"
         fi
 
-        cd "$mgmt_dir" && cargo build --release 2>&1 | tail -5
+        cd "$mgmt_dir" && cargo build --release 2>&1 | tail -20 || true
+        if [ ! -f target/release/smsly-media-mgmt ]; then
+            echo -e "${RED}  ✗ smsly-media-mgmt build produced no binary — see build output above${NC}"
+            return 1
+        fi
         if [ -f target/release/smsly-media-mgmt ]; then
             cp target/release/smsly-media-mgmt /usr/local/bin/smsly-media-mgmt
             systemctl restart smsly-media-mgmt 2>/dev/null || true

@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=forking
-ExecStart=/usr/sbin/rtpengine --config-file /etc/rtpengine/rtpengine.conf
+# Distro packages install to /usr/bin (source builds use /usr/sbin).
+ExecStart=/usr/bin/rtpengine --config-file /etc/rtpengine/rtpengine.conf
 PIDFile=/run/rtpengine.pid
 Restart=on-failure
 RestartSec=5
