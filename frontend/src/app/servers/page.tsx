@@ -1740,6 +1740,37 @@ function ServerCard({
                 </div>
             )}
 
+            {/* Media runtime is visible without opening the details drawer. */}
+            {!isProvisioning && server.node_type === 'media' && runtime?.services && (
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-cyan-400">
+                            Media services
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">live heartbeat</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                        {Object.entries(runtime.services).map(([service, state]) => {
+                            const running = state === 'running';
+                            return (
+                                <div key={service} className="flex items-center justify-between gap-2 rounded-md bg-background/60 px-2 py-1.5 text-[10px]">
+                                    <span className="truncate font-mono" title={service}>{service}</span>
+                                    <span className={running ? 'text-emerald-400' : 'text-amber-400'}>{running ? 'running' : state}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {runtime.capacity && (
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+                            <span>Capacity: <strong className="text-foreground">{Math.round((runtime.capacity.score ?? 0) * 100)}%</strong></span>
+                            <span>Calls: <strong className="text-foreground">{runtime.capacity.active_calls ?? 0}</strong></span>
+                            <span>Rooms: <strong className="text-foreground">{runtime.capacity.active_rooms ?? 0}</strong></span>
+                            <span>Participants: <strong className="text-foreground">{runtime.capacity.active_participants ?? 0}</strong></span>
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Runtime info (when agent has reported in) */}
             {!isProvisioning && runtime && (
                 <details
