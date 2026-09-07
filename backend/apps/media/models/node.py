@@ -46,6 +46,7 @@ class MediaNodeProfile(models.Model):
     capacity_score = models.FloatField(default=1.0)  # type: ignore[var-annotated]
 
     # -- Telemetry --
+    service_status = models.JSONField(default=dict, blank=True)  # type: ignore[var-annotated]
     cpu_percent = models.FloatField(default=0.0)  # type: ignore[var-annotated]
     memory_percent = models.FloatField(default=0.0)  # type: ignore[var-annotated]
     disk_percent = models.FloatField(default=0.0)  # type: ignore[var-annotated]

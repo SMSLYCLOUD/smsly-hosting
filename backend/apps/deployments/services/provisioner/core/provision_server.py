@@ -36,6 +36,7 @@ from ..helpers import (
     build_agent_lite_install_env,
     server_connection_mode,
     server_install_mode,
+    stage_media_application_repos,
     stage_media_repo_for_node,
 )
 from ..provisioning_resources import _ProvisioningResources
@@ -227,12 +228,24 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
             install_env["MASTER_IP"] = master_ip
             install_env["MASTER_MESH_IP"] = _get_master_mesh_ip()
+            if not server.gateway_secret:
+                server.gateway_secret = secrets.token_hex(32)
+                server.save(update_fields=["gateway_secret", "updated_at"])
+            install_env["NODE_ID"] = str(server.id)
+            install_env["SERVER_ID"] = str(server.id)
+            install_env["GATEWAY_SECRET"] = str(server.gateway_secret)
+            master_url = os.environ.get("PUBLIC_URL", "https://grid.smsly.cloud").rstrip("/")
+            install_env["MASTER_API_URL"] = f"{master_url}/api/v1"
 
             # Stage the media code repo onto the node first: the master
             # fetches it with a short-lived GitHub App token and copies
             # the files over SSH, so no GitHub credential ever lands on
             # the node. Returns a file:// URL (+ legacy token fallback).
             repo_url, repo_token = stage_media_repo_for_node(ssh, server)
+            stage_media_application_repos(ssh, server)
+            install_env["MEDIA_VOICE_SOURCE_DIR"] = "/opt/smsly-voice-src"
+            install_env["MEDIA_VIDEO_SOURCE_DIR"] = "/opt/smsly-video-src"
+            install_env["MEDIA_ATTESTATION_SOURCE_DIR"] = "/opt/smsly-attestation"
             if repo_url:
                 install_env["MEDIA_REPO_URL"] = str(repo_url)
                 install_args.extend(["--repo-url", str(repo_url)])
