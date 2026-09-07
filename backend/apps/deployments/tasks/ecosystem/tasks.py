@@ -521,6 +521,44 @@ def ecosystem_release_wave_task(
     }
 
 
+def _is_ecosystem_plan_task_live(plan) -> bool:
+    """True if a previous deploy-task attempt for this plan looks alive.
+
+    The idempotency guard must NOT return ``already_in_progress`` for a
+    dead attempt: the stale-plan recovery beat fails plans whose worker
+    died mid-creation, leaving QUEUED rows behind with no task running
+    to drive them (2026-09-07 incident — plan stranded deploying with
+    6 QUEUED + 4 CANCELLED and every re-dispatch bouncing off the
+    guard). Two liveness signals, either suffices:
+      1. recent plan heartbeat (the task touches ``updated_at`` after
+         every prepared service), or
+      2. the recorded ``deploy_task_id`` still PENDING/STARTED/RETRY
+         on the broker.
+    """
+    try:
+        updated = getattr(plan, "updated_at", None)
+        if updated is not None:
+            from apps.deployments.tasks.recover_stale_ecosystem_plans import (
+                ECOSYSTEM_ACTIVITY_MINUTES,
+            )
+            delta = (timezone.now() - updated).total_seconds()
+            if delta < ECOSYSTEM_ACTIVITY_MINUTES * 60:
+                return True
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        task_id = getattr(plan, "deploy_task_id", "") or ""
+        if task_id:
+            from celery.result import AsyncResult
+            if AsyncResult(str(task_id)).state in {
+                "PENDING", "RECEIVED", "STARTED", "RETRY",
+            }:
+                return True
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return False
+
+
 @shared_task(
     bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_deploy_task", queue='deploy',
     soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1],
@@ -591,16 +629,30 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     ],
                 )
                 if _active.exists():
-                    logger.info(
-                        "Ecosystem plan %s already has %d in-flight "
-                        "deployments — skipping duplicate creation phase",
+                    if _is_ecosystem_plan_task_live(existing_plan):
+                        logger.info(
+                            "Ecosystem plan %s already has %d in-flight "
+                            "deployments — skipping duplicate creation phase",
+                            plan_id, _active.count(),
+                        )
+                        return {
+                            "status": "already_in_progress",
+                            "plan_id": str(plan_id),
+                            "in_flight": _active.count(),
+                        }
+                    # Dead attempt: rows are QUEUED but no task is driving
+                    # them (worker died / recovery failed the plan). Fall
+                    # through to creation recovery — get_or_create reuses
+                    # the rows and terminal ones are reset to QUEUED.
+                    logger.warning(
+                        "Ecosystem plan %s has %d in-flight deployments "
+                        "but no live task — re-running creation phase as "
+                        "recovery",
                         plan_id, _active.count(),
                     )
-                    return {
-                        "status": "already_in_progress",
-                        "plan_id": str(plan_id),
-                        "in_flight": _active.count(),
-                    }
+                    existing_plan.status = 'deploying'
+                    existing_plan.error_message = ''
+                    existing_plan.save(update_fields=['status', 'error_message', 'updated_at'])
                 # Partial-failure recovery: a plan whose deployments are
                 # ALL terminal (previous attempt finished or died — e.g.
                 # the {{POSTGRES_URL}} resolution failure that stranded 8
