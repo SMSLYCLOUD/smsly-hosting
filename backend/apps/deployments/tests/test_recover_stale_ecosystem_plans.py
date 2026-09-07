@@ -59,6 +59,23 @@ class TestRecoverStaleEcosystemPlansFreshness(TestCase):
 
     @patch("apps.deployments.models.Deployment.objects.filter")
     @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
+    def test_slow_iteration_plan_is_not_recovered(
+        self, mock_plan_filter, mock_dep_filter
+    ):
+        """A plan updated 20 min ago (slow single-service iteration, no row
+        touches yet) is alive under the 30-min activity window."""
+        plan = _plan(updated_minutes_ago=20)
+        mock_plan_filter.return_value = [plan]
+        mock_dep_filter.return_value.exists.return_value = False
+
+        res = recover_stale_ecosystem_plans.run()
+
+        self.assertEqual(res["recovered"], 0)
+        self.assertEqual(res["kept_alive"], 1)
+        plan.save.assert_not_called()
+
+    @patch("apps.deployments.models.Deployment.objects.filter")
+    @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
     def test_stale_plan_with_recent_deployments_is_skipped(
         self, mock_plan_filter, mock_dep_filter
     ):

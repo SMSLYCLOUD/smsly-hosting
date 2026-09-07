@@ -17,7 +17,7 @@ on created_at would auto-fail an actively-deploying plan. A plan is
 only "ghost" when BOTH:
   1. the plan row is older than the stale threshold, AND
   2. no deployment in the plan's project has been updated within the
-     activity window (ECOSYSTEM_ACTIVITY_MINUTES, default 10).
+      activity window (ECOSYSTEM_ACTIVITY_MINUTES, default 30).
 
 The scan and deploy tasks themselves are idempotent — re-running them
 on the same plan creates a fresh Deployment row, so clearing the stale
@@ -40,7 +40,12 @@ logger = logging.getLogger(__name__)
 ECOSYSTEM_PLAN_STALE_MINUTES = 30
 # A deployment row touched within this window proves the wave engine
 # is still alive — never fail a plan with recent deployment activity.
-ECOSYSTEM_ACTIVITY_MINUTES = 10
+# 30 min (not 10): a single service iteration can legitimately take
+# >10 min — addon provisioning has 60s health-check timeouts per addon
+# and AI enrichment backs off through provider 429 storms — with the
+# heartbeat only firing at the END of each iteration. A true ghost
+# never heartbeats and touches nothing, so it is still cleared.
+ECOSYSTEM_ACTIVITY_MINUTES = 30
 
 
 @shared_task(
