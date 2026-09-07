@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MEDIA_REPO_URL = "https://github.com/SMSLYCLOUD/smsly-media-mgmt"
 MEDIA_STAGING_DIR = "/opt/smsly-media-src"
+MEDIA_APPLICATION_STAGES = {
+    "SMSLYCLOUD/SMSLY-VOICE": "/opt/smsly-voice-src",
+    "SMSLYCLOUD/SMSLY-VIDEO": "/opt/smsly-video-src",
+    "SMSLYCLOUD/SMSLY-ATTESTATION": "/opt/smsly-attestation",
+}
 GITHUB_API_TIMEOUT_SECONDS = 30
 TARBALL_DOWNLOAD_TIMEOUT_SECONDS = 180
 SSH_COMMAND_TIMEOUT_SECONDS = 120
@@ -236,3 +241,35 @@ def stage_media_repo_for_node(ssh, server: ManagedServer) -> tuple[str, str]:
             "attempt an unauthenticated clone (works for public repos only).",
         )
     return repo_url, legacy_token
+
+
+def stage_media_application_repos(ssh, server: ManagedServer) -> None:
+    """Stage voice, video, and shared attestation sources on a media node.
+
+    These are fetched by the master using the GitHub App and uploaded over
+    the already-authenticated SSH connection. The installer can then build
+    the applications locally without GitHub credentials or network access to
+    private repositories. A clean media provision must fail early if any of
+    these sources cannot be staged; silently installing only the management
+    daemon produces a deceptively healthy but unusable node.
+    """
+    for repo_full_name, remote_root in MEDIA_APPLICATION_STAGES.items():
+        token = _mint_app_token(repo_full_name)
+        if not token:
+            raise RuntimeError(
+                f"GitHub App token unavailable for required media repository "
+                f"{repo_full_name}"
+            )
+        tmp_dir = tempfile.mkdtemp(prefix="smsly-media-app-")
+        try:
+            _append_log(server, f"Fetching required media source {repo_full_name}...")
+            extracted = _download_repo_tarball(repo_full_name, token, tmp_dir)
+            count = _sftp_upload_tree(ssh, extracted, remote_root)
+            _append_log(server, f"Staged {repo_full_name} ({count} files).")
+        except Exception as exc:
+            safe = str(exc).replace(token, "[REDACTED]")
+            raise RuntimeError(
+                f"Failed to stage required media repository {repo_full_name}: {safe}"
+            ) from exc
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -37,6 +37,7 @@ from .logging import (
 )
 from .media_repo import (
     resolve_media_repo_url,
+    stage_media_application_repos,
     stage_media_repo_for_node,
 )
 from .registry import (
@@ -78,6 +79,7 @@ __all__ = [
     "_verify_agent_db_connectivity",
     "build_agent_lite_install_env",
     "resolve_media_repo_url",
+    "stage_media_application_repos",
     "server_connection_mode",
     "server_install_mode",
     "stage_media_repo_for_node",

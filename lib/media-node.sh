@@ -98,6 +98,10 @@ generate_media_secrets() {
     postgres_password="$(openssl rand -hex 16  || python3 -c 'import secrets; print(secrets.token_hex(16))')"
     local redis_password
     redis_password="$(openssl rand -hex 16  || python3 -c 'import secrets; print(secrets.token_hex(16))')"
+    local jwt_secret
+    jwt_secret="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    local webhook_secret
+    webhook_secret="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
     cat > "$env_file" <<EOF
 # SMSLY Media Node — Auto-generated secrets
@@ -110,11 +114,18 @@ NODE_ID=${NODE_ID:-$(hostname -f  || hostname)}
 MASTER_IP=${MASTER_IP:-}
 MASTER_MESH_IP=${MASTER_MESH_IP:-}
 MASTER_API_URL=${MASTER_API_URL:-https://master.smsly.com/api/v1}
-GATEWAY_SECRET=${gateway_secret}
+GATEWAY_SECRET=${GATEWAY_SECRET:-$gateway_secret}
 
 # Database (local)
 POSTGRES_PASSWORD=${postgres_password}
 REDIS_PASSWORD=${redis_password}
+MEDIA_DB_USER=smsly_voice
+MEDIA_DB_PASSWORD=${postgres_password}
+DATABASE_URL=postgresql://smsly_voice:${postgres_password}@127.0.0.1:5432/smsly_voice
+REDIS_URL=redis://127.0.0.1:6379
+JWT_SECRET=${jwt_secret}
+WEBHOOK_SECRET=${webhook_secret}
+PORT=8002
 
 # TURN
 TURN_SECRET=${turn_secret}
@@ -186,6 +197,10 @@ install_media_packages() {
         gnupg \
         ca-certificates \
         build-essential \
+        autoconf \
+        automake \
+        libtool \
+        libopus-dev \
         pkg-config \
         libssl-dev \
 
@@ -477,6 +492,61 @@ build_media_mgmt() {
     else
         echo -e "${YELLOW}  [WARN] smsly-media-mgmt not found or missing Cargo.toml at $mgmt_dir${NC}"
     fi
+}
+
+prepare_media_voice_database() {
+    local db_user="${MEDIA_DB_USER:-smsly_voice}"
+    local db_password="${MEDIA_DB_PASSWORD:-}"
+    local db_name="smsly_voice"
+    [ -n "$db_password" ] || return 1
+
+    systemctl enable --now postgresql >/dev/null 2>&1 || true
+    runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c \
+        "DO \$\$ BEGIN CREATE ROLE ${db_user} LOGIN PASSWORD '${db_password}'; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;" \
+        >/dev/null
+    runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c \
+        "ALTER ROLE ${db_user} PASSWORD '${db_password}';" >/dev/null
+    runuser -u postgres -- createdb -O "$db_user" "$db_name" 2>/dev/null || true
+
+    local migration
+    for migration in "${MEDIA_VOICE_SOURCE_DIR}/storage/migrations/"*.sql; do
+        [ -f "$migration" ] || continue
+        PGPASSWORD="$db_password" psql -h 127.0.0.1 -U "$db_user" \
+            -d "$db_name" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+    done
+}
+
+build_media_applications() {
+    local voice_dir="${MEDIA_VOICE_SOURCE_DIR:-}"
+    local video_dir="${MEDIA_VIDEO_SOURCE_DIR:-}"
+    local attestation_dir="${MEDIA_ATTESTATION_SOURCE_DIR:-}"
+    [ -d "$voice_dir" ] || { echo -e "${RED}  ✗ Voice source was not staged${NC}"; return 1; }
+    [ -d "$video_dir" ] || { echo -e "${RED}  ✗ Video source was not staged${NC}"; return 1; }
+    [ -f "$attestation_dir/Cargo.toml" ] || { echo -e "${RED}  ✗ Attestation source was not staged${NC}"; return 1; }
+
+    if ! command -v cargo >/dev/null 2>&1; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y >/dev/null
+        export PATH="$HOME/.cargo/bin:$PATH"
+    fi
+
+    echo -e "${BLUE}  → Preparing voice schema for SQLx compile-time queries...${NC}"
+    prepare_media_voice_database
+
+    echo -e "${BLUE}  → Building smsly-voice-api...${NC}"
+    cd "$voice_dir"
+    DATABASE_URL="${DATABASE_URL}" cargo build --release --bin smsly-voice-api >/tmp/smsly-voice-build.log 2>&1 || {
+        tail -60 /tmp/smsly-voice-build.log
+        return 1
+    }
+    install -o smsly -g smsly -m 0755 target/release/smsly-voice-api /usr/local/bin/smsly-voice-api
+
+    echo -e "${BLUE}  → Building smsly-api video service...${NC}"
+    cd "$video_dir"
+    cargo build --release -p smsly-api >/tmp/smsly-video-build.log 2>&1 || {
+        tail -60 /tmp/smsly-video-build.log
+        return 1
+    }
+    install -o smsly -g smsly -m 0755 target/release/smsly-api /usr/local/bin/smsly-api
 }
 
 install_media_node() {

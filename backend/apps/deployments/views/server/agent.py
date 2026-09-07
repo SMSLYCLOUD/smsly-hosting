@@ -2,6 +2,8 @@
 Agent endpoint mixins for ManagedServerViewSet.
 """
 
+import logging
+
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
@@ -9,6 +11,33 @@ from rest_framework.response import Response
 
 from ...models.servers import ManagedServer
 from .helpers import _append_log_safe, _truncate_dict
+
+logger = logging.getLogger(__name__)
+
+
+def _persist_media_runtime(server, runtime_info):
+    if str(getattr(server, "node_type", "")) != ManagedServer.NodeType.MEDIA:
+        return
+    try:
+        from apps.media.models import MediaNodeProfile
+
+        profile = MediaNodeProfile.objects.filter(server=server).first()
+        if not profile:
+            return
+        capacity = runtime_info.get("capacity") or {}
+        profile.service_status = runtime_info.get("services") or {}
+        profile.active_calls = int(capacity.get("active_calls") or 0)
+        profile.active_rooms = int(capacity.get("active_rooms") or 0)
+        profile.active_participants = int(capacity.get("active_participants") or 0)
+        profile.capacity_score = float(capacity.get("score") or 0)
+        profile.last_telemetry_at = timezone.now()
+        profile.save(update_fields=[
+            "service_status", "active_calls", "active_rooms",
+            "active_participants", "capacity_score",
+            "last_telemetry_at", "updated_at",
+        ])
+    except Exception:
+        logger.exception("Failed to persist media heartbeat for %s", server.id)
 
 
 class AgentMixin:
@@ -52,6 +81,8 @@ class AgentMixin:
             server.provision_status = ManagedServer.ProvisionStatus.DONE
             update_fields.append("provision_status")
         server.save(update_fields=update_fields)
+
+        _persist_media_runtime(server, runtime_info)
 
         _append_log_safe(
             server,
@@ -111,6 +142,7 @@ class AgentMixin:
                 "✅ Agent ready (implicit via first heartbeat)",
             )
         server.save(update_fields=update_fields)
+        _persist_media_runtime(server, runtime_info)
 
         if status_payload.lower() in {"degraded", "down", "unhealthy"}:
             if server.status == ManagedServer.Status.ONLINE:
