@@ -1284,6 +1284,13 @@ export interface ManagedServerRuntimeInfo {
   disk_used_pct?: number;
   mem_used_pct?: number;
   registrar_version?: string;
+  services?: Record<string, 'running' | 'stopped' | 'unknown' | string>;
+  capacity?: {
+    score?: number;
+    active_calls?: number;
+    active_rooms?: number;
+    active_participants?: number;
+  };
 }
 
 export interface ManagedServer {
