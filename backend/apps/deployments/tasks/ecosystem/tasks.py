@@ -1625,7 +1625,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 },
             )
             _rollback_deployments.append(str(deployment.id))
-            _rollback_env_keys.extend(list(resolved_env.keys()))
+            _rollback_env_vars.extend(list(resolved_env.keys()))
 
             deployment_by_repo_key[repo_key] = str(deployment.id)
             pre_deploy_snapshot_id = _capture_pre_ecosystem_snapshot(
