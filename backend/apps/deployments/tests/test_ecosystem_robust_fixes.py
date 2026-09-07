@@ -15,6 +15,7 @@ from apps.deployments.tasks.ecosystem.tasks import (
     _another_deploy_attempt_running,
     _rollback_ecosystem_deploy,
     ecosystem_deferred_build_task,
+    ecosystem_deploy_task,
     ecosystem_release_wave_task,
 )
 from apps.deployments.tasks.ecosystem.helpers.lifecycle import (
@@ -558,6 +559,87 @@ class TestEcosystemTaskLiveness(TestCase):
         task_self = self._task_self()
         task_self.app.control.inspect.side_effect = Exception("broker down")
         self.assertFalse(_another_deploy_attempt_running(task_self, "plan-1"))
+
+
+class TestEcosystemGuardRecovery(TestCase):
+    """Idempotency guard: dead attempts fall through to creation recovery.
+
+    Regression (2026-09-07): 10 QUEUED rows with no live task first fell
+    through the in-flight branch, then hit the all-terminal check whose
+    else returned already_deployed — stranding the plan with no driver.
+    The validation error below is intentional: it proves the task got
+    PAST the guard into the creation path.
+    """
+
+    def _run_guard(self, active_exists, other_live, failed_exists):
+        existing_plan = MagicMock()
+        existing_plan.project = MagicMock()
+        qs = MagicMock()
+        qs.exists.return_value = True
+        active_qs = MagicMock()
+        active_qs.exists.return_value = active_exists
+        active_qs.count.return_value = 10
+        failed_qs = MagicMock()
+        failed_qs.exists.return_value = failed_exists
+        failed_qs.count.return_value = 4
+
+        def _filter(**kwargs):
+            if "status__in" in kwargs:
+                return failed_qs
+            return qs
+
+        qs.filter.side_effect = _filter
+        qs.exclude.return_value = active_qs
+        with patch(
+            "apps.mtls.views.ensure_ecosystem_spire", return_value="ok"
+        ), patch(
+            "django.contrib.auth.get_user_model"
+        ) as mock_user_model, patch(
+            "apps.deployments.models.EcosystemPlan"
+        ) as mock_plan_model, patch(
+            "apps.deployments.tasks.ecosystem.tasks.Deployment"
+        ) as mock_dep_model, patch(
+            "apps.deployments.tasks.ecosystem.tasks._another_deploy_attempt_running",
+            return_value=other_live,
+        ), patch(
+            "apps.deployments.tasks.ecosystem.tasks._validate_plan_structure",
+            return_value=["boom"],
+        ):
+            mock_plan_model.objects.get.return_value = existing_plan
+            mock_user_model.return_value.objects.get.return_value = MagicMock(
+                id="user-1"
+            )
+            mock_dep_model.objects.filter.return_value = qs
+            mock_dep_model.Status = Deployment.Status
+            return ecosystem_deploy_task.run(
+                "user-1", {"services": []},
+                plan_id="plan-1", project_id="proj-1",
+            )
+
+    def test_live_attempt_returns_in_progress(self):
+        res = self._run_guard(
+            active_exists=True, other_live=True, failed_exists=False,
+        )
+        self.assertEqual(res["status"], "already_in_progress")
+
+    def test_dead_attempt_falls_through_to_creation(self):
+        res = self._run_guard(
+            active_exists=True, other_live=False, failed_exists=False,
+        )
+        # Past the guard → stopped at plan-structure validation.
+        self.assertEqual(res["error"], "Plan validation failed")
+
+    def test_all_terminal_reruns_creation(self):
+        res = self._run_guard(
+            active_exists=False, other_live=False, failed_exists=True,
+        )
+        self.assertEqual(res["error"], "Plan validation failed")
+
+    def test_no_failed_no_active_returns_deployed(self):
+        res = self._run_guard(
+            active_exists=False, other_live=False, failed_exists=False,
+        )
+        self.assertEqual(res["status"], "already_deployed")
 
 
 class TestQueueWaveDispatch(TestCase):

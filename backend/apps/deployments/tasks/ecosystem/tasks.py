@@ -632,6 +632,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                         Deployment.Status.ROLLED_BACK,
                     ],
                 )
+                _needs_creation = False
                 if _active.exists():
                     if _another_deploy_attempt_running(self, plan_id):
                         logger.info(
@@ -657,6 +658,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     existing_plan.status = 'deploying'
                     existing_plan.error_message = ''
                     existing_plan.save(update_fields=['status', 'error_message', 'updated_at'])
+                    _needs_creation = True
                 # Partial-failure recovery: a plan whose deployments are
                 # ALL terminal (previous attempt finished or died — e.g.
                 # the {{POSTGRES_URL}} resolution failure that stranded 8
@@ -665,35 +667,46 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 # deployment creation is get_or_create keyed on
                 # (service, commit_hash) — no duplication. Reset the plan
                 # row so the wave engine can finalize it again.
-                _failed_dps = existing_dps.filter(
-                    status__in=[
-                        Deployment.Status.FAILED,
-                        Deployment.Status.CANCELLED,
-                        Deployment.Status.HEALTH_CHECK_FAILED,
-                        Deployment.Status.ROLLED_BACK,
-                    ],
-                )
-                if _failed_dps.exists():
+                # NOTE: on the dead-attempt path above (_needs_creation),
+                # skip this check — _failed_dps may be empty while QUEUED
+                # rows still need a driver, and the else below would
+                # wrongly return already_deployed (2026-09-07 incident).
+                if _needs_creation:
                     logger.info(
-                        "Ecosystem plan %s has %d terminal deployments with "
-                        "zero in-flight — re-running creation phase as "
-                        "recovery (get_or_create makes this idempotent)",
-                        plan_id, _failed_dps.count(),
-                    )
-                    existing_plan.status = 'deploying'
-                    existing_plan.error_message = ''
-                    existing_plan.save(update_fields=['status', 'error_message', 'updated_at'])
-                    # fall through to the normal creation path below
-                else:
-                    logger.info(
-                        "Ecosystem plan %s already has terminal deployments — "
-                        "not re-creating (use plan retry instead)",
+                        "Ecosystem plan %s dead-attempt recovery: "
+                        "proceeding to creation phase",
                         plan_id,
                     )
-                    return {
-                        "status": "already_deployed",
-                        "plan_id": str(plan_id),
-                    }
+                else:
+                    _failed_dps = existing_dps.filter(
+                        status__in=[
+                            Deployment.Status.FAILED,
+                            Deployment.Status.CANCELLED,
+                            Deployment.Status.HEALTH_CHECK_FAILED,
+                            Deployment.Status.ROLLED_BACK,
+                        ],
+                    )
+                    if _failed_dps.exists():
+                        logger.info(
+                            "Ecosystem plan %s has %d terminal deployments with "
+                            "zero in-flight — re-running creation phase as "
+                            "recovery (get_or_create makes this idempotent)",
+                            plan_id, _failed_dps.count(),
+                        )
+                        existing_plan.status = 'deploying'
+                        existing_plan.error_message = ''
+                        existing_plan.save(update_fields=['status', 'error_message', 'updated_at'])
+                        # fall through to the normal creation path below
+                    else:
+                        logger.info(
+                            "Ecosystem plan %s already has terminal deployments — "
+                            "not re-creating (use plan retry instead)",
+                            plan_id,
+                        )
+                        return {
+                            "status": "already_deployed",
+                            "plan_id": str(plan_id),
+                        }
 
     # SEC-ZT-007: Validate plan structure before creating any records
     schema_errors = _validate_plan_structure(plan)
