@@ -24,6 +24,43 @@ from django.core.management.base import BaseCommand
 
 logger = logging.getLogger(__name__)
 
+
+def _live_agent_parent(cfg) -> str | None:
+    """Discover the live agent's SPIFFE ID for entry parenting."""
+    try:
+        result = subprocess.run(
+            [
+                "docker", "exec", cfg["container"],
+                "/opt/spire/bin/spire-server", "agent", "list",
+                "-socketPath", "/tmp/spire-server/private/api.sock",
+                "-output", "json",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        best, best_exp = None, ""
+        fallback = None
+        for ag in json.loads(result.stdout).get("agents", []):
+            if not isinstance(ag, dict) or ag.get("banned"):
+                continue
+            if ag.get("attestation_type") != "join_token":
+                continue
+            path = ((ag.get("id") or {}).get("path")) or ""
+            if not path:
+                continue
+            trust_domain = ((ag.get("id") or {}).get("trust_domain")) or cfg["trust_domain"]
+            full = f"spiffe://{trust_domain}{path}"
+            if fallback is None:
+                fallback = full
+            exp = str(ag.get("x509svid_expires_at") or "")
+            if exp >= best_exp:
+                best, best_exp = full, exp
+        return best or fallback
+    except Exception as exc:
+        logger.warning("Failed to discover live SPIRE agent: %s", exc)
+        return None
+
 ECOSYSTEM_SPIRE_SERVER_CONTAINER = os.getenv(
     "SPIRE_ECOSYSTEM_SERVER_CONTAINER", "smsly-spire-server-ecosystem"
 )
@@ -104,11 +141,15 @@ class Command(BaseCommand):
             configs = []
 
         entries = []
+        agent_parent = _live_agent_parent(cfg)
         for config in configs:
             service_name = config.service.name
             entry = {
                 "spiffe_id": f"spiffe://{trust_domain}/service/{service_name}",
-                "parent_id": f"spiffe://{trust_domain}/spire-server",
+                # Workload entries only sync to the agent they are
+                # parented to; agent IDs rotate on re-bootstrap, so
+                # resolve the live agent every run (never hardcode).
+                "parent_id": agent_parent or f"spiffe://{trust_domain}/spire-server",
                 "selectors": [f"docker:label:com.paas.service:{service_name}"],
                 "ttl": svid_ttl,
                 "dns": [service_name, f"{service_name}.{dns_suffix}"],

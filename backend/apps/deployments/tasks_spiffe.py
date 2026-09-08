@@ -80,9 +80,39 @@ def sync_spiffe_entries_task(self):
                 existing_services.add(path[len("/service/"):])
 
         created = 0
+        live_agent = _live_ecosystem_agent_id()
         for name in service_names - existing_services:
-            if _create_spire_entry(name):
+            if _create_spire_entry(name, parent_id=live_agent):
                 created += 1
+
+        reparented = 0
+        if live_agent:
+            # Self-heal parent drift: entries parented to a stale/rotated
+            # agent (or the legacy static path) never sync, so their
+            # workloads silently stop receiving SVIDs. Move canonical
+            # single-selector entries under the live agent.
+            for entry in existing_entries:
+                path = entry.get("spiffe_id", {}).get("path", "")
+                if not path.startswith("/service/"):
+                    continue
+                selectors = [
+                    s.get("value", "")
+                    for s in entry.get("selectors", [])
+                    if isinstance(s, dict)
+                ]
+                name = path[len("/service/"):]
+                expected = f"docker:label:com.paas.service:{name}"
+                if selectors != [expected]:
+                    continue
+                parent = entry.get("parent", {})
+                parent_id = (
+                    f"spiffe://{parent.get('trust_domain', '')}{parent.get('path', '')}"
+                    if isinstance(parent, dict) else ""
+                )
+                if parent_id != live_agent and _reparent_spire_entry(
+                    entry.get("id", ""), path, expected, live_agent
+                ):
+                    reparented += 1
 
         removed = 0
         for name in existing_services - service_names:
@@ -95,6 +125,7 @@ def sync_spiffe_entries_task(self):
             "total_services": len(service_names),
             "existing_entries": len(existing_services),
             "created": created,
+            "reparented": reparented,
             "removed": removed,
         }
         logger.info("SPIRE ecosystem sync complete: %s", result)
@@ -126,11 +157,65 @@ def _list_spire_entries() -> list:
     return []
 
 
-def _create_spire_entry(service_name: str) -> bool:
-    """Create a SPIRE registration entry in the ecosystem server for a service."""
+def _live_ecosystem_agent_id() -> str | None:
+    """Discover the live ecosystem agent's SPIFFE ID.
+
+    Workload entries are only synced to (and served for) the agent
+    they are parented to, and join-token agent IDs rotate on every
+    re-bootstrap. A hardcoded parent (e.g. .../spire-server) therefore
+    silently stops issuing SVIDs (2026-09-08: every sidecar served
+    smsly-identity-service's SVID via a stale catch-all). Picks the
+    non-banned join_token agent with the latest SVID expiry.
+    """
+    import json
+
+    try:
+        result = subprocess.run(
+            [
+                "docker", "exec", ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+                "/opt/spire/bin/spire-server", "agent", "list",
+                "-socketPath", ECOSYSTEM_SPIRE_SERVER_SOCKET,
+                "-output", "json",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        agents = json.loads(result.stdout).get("agents", [])
+        best, best_exp = None, ""
+        fallback = None
+        for ag in agents:
+            if not isinstance(ag, dict) or ag.get("banned"):
+                continue
+            if ag.get("attestation_type") != "join_token":
+                continue
+            path = ((ag.get("id") or {}).get("path")) or ""
+            if not path:
+                continue
+            full = f"spiffe://{ECOSYSTEM_SPIFFE_TRUST_DOMAIN}{path}"
+            if fallback is None:
+                fallback = full
+            exp = str(ag.get("x509svid_expires_at") or "")
+            if exp >= best_exp:
+                best, best_exp = full, exp
+        return best or fallback
+    except Exception as exc:
+        logger.warning("Failed to discover live SPIRE agent: %s", exc)
+        return None
+
+
+def _create_spire_entry(service_name: str, parent_id: str | None = None) -> bool:
+    """Create a SPIRE registration entry in the ecosystem server for a service.
+
+    Parent defaults to the live agent (discovered); callers must not use
+    a static parent — agent IDs rotate on re-bootstrap.
+    """
     try:
         spiffe_id = f"spiffe://{ECOSYSTEM_SPIFFE_TRUST_DOMAIN}/service/{service_name}"
-        parent_id = f"spiffe://{ECOSYSTEM_SPIFFE_TRUST_DOMAIN}/spire-server"
+        if not parent_id:
+            parent_id = _live_ecosystem_agent_id()
+        if not parent_id:
+            parent_id = f"spiffe://{ECOSYSTEM_SPIFFE_TRUST_DOMAIN}/spire-server"
         selector = f"docker:label:com.paas.service:{service_name}"
 
         result = subprocess.run(
@@ -157,6 +242,35 @@ def _create_spire_entry(service_name: str) -> bool:
             return False
     except Exception as e:
         logger.warning("Failed to create SPIRE ecosystem entry for %s: %s", service_name, e)
+        return False
+
+
+def _reparent_spire_entry(entry_id: str, path: str, selector: str, parent_id: str) -> bool:
+    """Move an entry under a new parent, preserving SPIFFE ID + selectors."""
+    try:
+        if not entry_id:
+            return False
+        trust_domain = ECOSYSTEM_SPIFFE_TRUST_DOMAIN
+        spiffe_id = f"spiffe://{trust_domain}{path}"
+        result = subprocess.run(
+            [
+                "docker", "exec", ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+                "/opt/spire/bin/spire-server", "entry", "update",
+                "-socketPath", ECOSYSTEM_SPIRE_SERVER_SOCKET,
+                "-entryID", entry_id,
+                "-spiffeID", spiffe_id,
+                "-parentID", parent_id,
+                "-selector", selector,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            logger.info("Re-parented SPIRE entry %s under live agent", spiffe_id)
+            return True
+        logger.warning("Failed to re-parent SPIRE entry %s: %s", spiffe_id, result.stderr)
+        return False
+    except Exception as e:
+        logger.warning("Failed to re-parent SPIRE entry %s: %s", path, e)
         return False
 
 

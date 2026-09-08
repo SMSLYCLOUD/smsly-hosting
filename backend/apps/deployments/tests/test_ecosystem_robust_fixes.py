@@ -829,6 +829,61 @@ class TestWaitSidecarReady(TestCase):
         self.assertFalse(EnvoySidecar.wait_sidecar_ready(self._service(), timeout_seconds=10))
 
 
+class TestSpiffeAgentParent(TestCase):
+    """SPIRE entries must parent to the live agent (2026-09-08: static
+    parents silently stopped issuing SVIDs)."""
+
+    def _agents_json(self):
+        import json
+
+        return json.dumps({"agents": [
+            {"id": {"trust_domain": "ecosystem.local",
+                    "path": "/spire/agent/join_token/old"},
+             "attestation_type": "join_token", "banned": False,
+             "x509svid_expires_at": "100"},
+            {"id": {"trust_domain": "ecosystem.local",
+                    "path": "/spire/agent/join_token/new"},
+             "attestation_type": "join_token", "banned": False,
+             "x509svid_expires_at": "200"},
+            {"id": {"trust_domain": "ecosystem.local",
+                    "path": "/spire/agent/join_token/banned"},
+             "attestation_type": "join_token", "banned": True,
+             "x509svid_expires_at": "999"},
+        ]})
+
+    @patch("apps.deployments.tasks_spiffe.subprocess.run")
+    def test_picks_live_agent_with_latest_expiry(self, mock_run):
+        from apps.deployments.tasks_spiffe import _live_ecosystem_agent_id
+
+        mock_run.return_value = MagicMock(returncode=0, stdout=self._agents_json())
+        self.assertEqual(
+            _live_ecosystem_agent_id(),
+            "spiffe://ecosystem.local/spire/agent/join_token/new",
+        )
+
+    @patch("apps.deployments.tasks_spiffe.subprocess.run")
+    def test_none_when_command_fails(self, mock_run):
+        from apps.deployments.tasks_spiffe import _live_ecosystem_agent_id
+
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        self.assertIsNone(_live_ecosystem_agent_id())
+
+    @patch("apps.deployments.tasks_spiffe.subprocess.run")
+    def test_reparent_updates_parent(self, mock_run):
+        from apps.deployments.tasks_spiffe import _reparent_spire_entry
+
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        ok = _reparent_spire_entry(
+            "eid-1", "/service/svc-a",
+            "docker:label:com.paas.service:svc-a",
+            "spiffe://ecosystem.local/spire/agent/join_token/new",
+        )
+        self.assertTrue(ok)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("update", cmd)
+        self.assertIn("spiffe://ecosystem.local/spire/agent/join_token/new", cmd)
+
+
 class TestQueueWaveDispatch(TestCase):
     """_queue_wave must flip QUEUED→REVIEW with a Postgres-safe update."""
 
