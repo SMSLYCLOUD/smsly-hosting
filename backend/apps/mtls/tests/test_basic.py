@@ -85,9 +85,45 @@ class MtlsStatusApiTests(TestCase):
         MtlsConfig.objects.create(service=self.service, enabled=True)
         resp = self.client.get(f'/api/v1/services/{self.service.id}/mtls/status/')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(resp.data.get('enabled'))
+        self.assertTrue(resp.data.get('mtls_enabled'))
 
     def test_mtls_status_returns_404_for_missing_service(self):
         self.client.force_authenticate(self.user)
         resp = self.client.get('/api/v1/services/00000000-0000-0000-0000-000000000000/mtls/status/')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class ParseSidecarIdentityTests(TestCase):
+    """_parse_sidecar_identity reads the served SVID from Envoy /certs."""
+
+    def test_picks_service_identity_over_ca(self):
+        from apps.mtls.tasks import _parse_sidecar_identity
+
+        certs = {"certificates": [{
+            "ca_cert": [{
+                "path": "ecosystem.local: <inline>",
+                "subject_alt_names": [{"uri": "spiffe://ecosystem.local"}],
+                "expiration_time": "2026-09-08T02:57:46Z",
+            }],
+            "cert_chain": [{
+                "path": "<inline>",
+                "subject_alt_names": [
+                    {"uri": "spiffe://ecosystem.local/service/smsly-identity-service"}
+                ],
+                "valid_from": "2026-09-08T15:14:00Z",
+                "expiration_time": "2026-09-08T16:14:10Z",
+            }],
+        }]}
+        uri, expiry = _parse_sidecar_identity(certs)
+        self.assertEqual(uri, "spiffe://ecosystem.local/service/smsly-identity-service")
+        self.assertEqual(expiry.isoformat(), "2026-09-08T16:14:10+00:00")
+
+    def test_empty_returns_nones(self):
+        from apps.mtls.tasks import _parse_sidecar_identity
+
+        self.assertEqual(_parse_sidecar_identity({}), (None, None))
+        self.assertEqual(_parse_sidecar_identity({"certificates": []}), (None, None))
+        self.assertEqual(
+            _parse_sidecar_identity({"certificates": [{"cert_chain": []}]}),
+            (None, None),
+        )

@@ -16,45 +16,138 @@ from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, RETRY_DELAY_STANDA
 logger = logging.getLogger(__name__)
 
 
+def _parse_sidecar_identity(certs_data):
+    """Extract the served identity SVID (URI + expiry) from Envoy /certs.
+
+    Returns (spiffe_uri, expiry_utc) or (None, None) when no service
+    identity certificate is present.
+    """
+    certificates = (certs_data or {}).get("certificates") or []
+    best = None
+    for group in certificates:
+        if not isinstance(group, dict):
+            continue
+        for cert in group.get("cert_chain") or []:
+            if not isinstance(cert, dict):
+                continue
+            uris = [
+                (alt or {}).get("uri", "")
+                for alt in (cert.get("subject_alt_names") or [])
+                if isinstance(alt, dict)
+            ]
+            identity_uris = [u for u in uris if "/service/" in u]
+            if not identity_uris:
+                continue
+            try:
+                expiry = datetime.datetime.strptime(
+                    cert.get("expiration_time") or "", "%Y-%m-%dT%H:%M:%SZ"
+                ).replace(tzinfo=datetime.timezone.utc)
+            except (ValueError, TypeError):
+                continue
+            if best is None or expiry < best[1]:
+                best = (identity_uris[0], expiry)
+    return best if best else (None, None)
+
+
+def _read_sidecar_certs(client, sidecar_name):
+    """Fetch and parse Envoy admin /certs from a sidecar container."""
+    import json
+
+    try:
+        container = client.containers.get(sidecar_name)
+    except Exception:
+        return None
+    try:
+        if getattr(container, "status", "") != "running":
+            container.reload()
+            if getattr(container, "status", "") != "running":
+                return None
+        result = container.exec_run(
+            ["sh", "-c", "curl -fsS --max-time 8 http://127.0.0.1:9901/certs"],
+            demux=False,
+        )
+        if result.exit_code != 0:
+            return None
+        output = result.output
+        if isinstance(output, (bytes, bytearray)):
+            output = output.decode(errors="replace")
+        return json.loads(output)
+    except Exception as exc:
+        logger.debug("Sidecar /certs unavailable for %s: %s", sidecar_name, exc)
+        return None
 @shared_task(
     name="apps.mtls.tasks.sync_svid_metadata_task",
     soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
     time_limit=TASK_TIME_LIMIT_QUICK[1],
 )
 def sync_svid_metadata_task():
-    """Sync SVID expiry metadata from running workload containers."""
-    import docker
-    from apps.deployments.models import Service
-    from apps.mtls.models import MtlsConfig
+    """Sync SVID expiry metadata from Envoy sidecar admin APIs.
 
-    client = docker.from_env()
+    The primary source is each sidecar's ``GET /certs`` (SDS-issued
+    identity chain with expiry). The legacy workload
+    ``/opt/spire/svids/cert.pem`` openssl probe is kept as a fallback
+    for setups without a sidecar — but most app images mount no SVID
+    files at all, which is why the page showed "missing" forever.
+    """
+    from apps.cloud.docker_client import get_docker_client
+    from apps.mtls.models import MtlsConfig
+    from apps.mtls.services.envoy_sidecar import EnvoySidecar
+
+    client = get_docker_client()
     synced = 0
+    checked = 0
     for config in MtlsConfig.objects.filter(enabled=True).select_related("service"):
         service = config.service
+        checked += 1
+        uri, expiry = None, None
+        try:
+            certs = _read_sidecar_certs(
+                client, EnvoySidecar.get_sidecar_name(service)
+            )
+            if certs:
+                uri, expiry = _parse_sidecar_identity(certs)
+        except Exception as exc:
+            logger.debug("Sidecar SVID read failed for %s: %s", service.name, exc)
+        if expiry is None:
+            uri, expiry = _read_workload_cert_expiry(client, service)
+        if expiry is None:
+            continue
+        config.svid_expiry = expiry
+        config.last_rotation = timezone.now()
+        config.save(update_fields=["svid_expiry", "last_rotation", "updated_at"])
+        synced += 1
+        logger.info(
+            "SVID metadata synced for %s (uri=%s expiry=%s)",
+            service.name, uri or "n/a", expiry.isoformat(),
+        )
+    return {"synced": synced, "checked": checked}
+
+
+def _read_workload_cert_expiry(client, service):
+    """Legacy fallback: openssl probe of cert.pem inside the workload."""
+    try:
         container = next(iter(client.containers.list(
             filters={"label": f"smsly.blue_green.canonical_name={service.name}"}
         )), None)
         if not container:
-            continue
-        try:
-            result = container.exec_run([
-                "sh", "-c",
-                "openssl x509 -in /opt/spire/svids/cert.pem -noout -enddate -startdate",
-            ])
-            if result.exit_code != 0:
-                continue
-            values = {}
-            for line in result.output.decode(errors="replace").splitlines():
-                key, _, value = line.partition("=")
-                values[key.lower()] = value.strip()
-            expiry = datetime.datetime.strptime(values["notafter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=datetime.timezone.utc)
-            config.svid_expiry = expiry
-            config.last_rotation = timezone.now()
-            config.save(update_fields=["svid_expiry", "last_rotation", "updated_at"])
-            synced += 1
-        except Exception as exc:
-            logger.debug("SVID metadata unavailable for %s: %s", service.name, exc)
-    return {"synced": synced}
+            return None, None
+        result = container.exec_run([
+            "sh", "-c",
+            "openssl x509 -in /opt/spire/svids/cert.pem -noout -enddate -startdate",
+        ])
+        if result.exit_code != 0:
+            return None, None
+        values = {}
+        for line in result.output.decode(errors="replace").splitlines():
+            key, _, value = line.partition("=")
+            values[key.lower()] = value.strip()
+        expiry = datetime.datetime.strptime(
+            values["notafter"], "%b %d %H:%M:%S %Y %Z"
+        ).replace(tzinfo=datetime.timezone.utc)
+        return None, expiry
+    except Exception as exc:
+        logger.debug("SVID metadata unavailable for %s: %s", service.name, exc)
+        return None, None
 
 
 @shared_task(

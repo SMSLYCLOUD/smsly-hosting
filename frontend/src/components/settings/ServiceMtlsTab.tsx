@@ -85,6 +85,10 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
                             ['Trust domain', status.trust_domain || 'ecosystem.local'],
                             ['SPIFFE ID', status.spiffe_id || 'Not issued'],
                             ['SVID', status.svid_status === 'missing' ? 'Missing' : status.svid_status === 'expired' ? 'Expired' : 'Valid'],
+                            ['SVID expiry', status.svid_expiry ? new Date(status.svid_expiry).toLocaleString() : '—'],
+                            ['SVID TTL', status.svid_ttl_remaining != null ? `${Math.floor(status.svid_ttl_remaining / 3600)}h ${Math.floor((status.svid_ttl_remaining % 3600) / 60)}m` : '—'],
+                            ['Sidecar', status.sidecar?.status === 'running' ? (status.sidecar?.healthy ? `Healthy (${status.sidecar.name})` : `Running, unhealthy (${status.sidecar.name})`) : status.sidecar?.status || 'Not running'],
+                            ['Last rotation', status.last_rotation ? new Date(status.last_rotation).toLocaleString() : '—'],
                         ].map(([label, value]) => (
                             <div key={label} className="rounded-lg border bg-muted/30 p-3">
                                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
