@@ -89,11 +89,17 @@ def recover_stale_ecosystem_plans(self):
         if plan.project_id:
             # Activity must be scoped to this plan's own ecosystem
             # deployments, otherwise a normal project build can keep a
-            # ghost plan alive forever.
+            # ghost plan alive forever. Match the creation marker as well
+            # as the hash: the build pipeline rewrites commit_hash to the
+            # real git SHA once cloning starts, so in-flight builds would
+            # otherwise be invisible here (2026-09-07 incident).
+            from django.db.models import Q
             recent_activity = Deployment.objects.filter(
                 service__project_id=plan.project_id,
-                commit_hash="ecosystem-deploy",
                 updated_at__gte=activity_cutoff,
+            ).filter(
+                Q(commit_hash="ecosystem-deploy")
+                | Q(build_logs__contains="Ecosystem deploy:"),
             ).exists()
             if recent_activity:
                 skipped_alive += 1

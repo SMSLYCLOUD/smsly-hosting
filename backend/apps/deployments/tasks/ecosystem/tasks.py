@@ -1483,6 +1483,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 and Deployment.objects.filter(
                     service=service, commit_hash="ecosystem-deploy",
                 ).exists()
+            ) or (
+                # The build pipeline rewrites commit_hash to the real git
+                # SHA once cloning starts, so a previously-built ecosystem
+                # row no longer matches the hash above. build_logs keeps
+                # the creation marker — match on it so re-dispatches reuse
+                # the service instead of suffixing duplicates (backend →
+                # backend-bfb1 → backend-30c7 incident, 2026-09-07).
+                service is not None
+                and Deployment.objects.filter(
+                    service=service,
+                    build_logs__contains="Ecosystem deploy:",
+                ).exists()
             )
             if service is not None and not _is_ecosystem_owned:
                 final_name = _next_available_service_name(Service, requested_name)

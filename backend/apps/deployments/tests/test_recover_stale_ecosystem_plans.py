@@ -49,7 +49,7 @@ class TestRecoverStaleEcosystemPlansFreshness(TestCase):
         """An old, untouched plan with no activity is still failed."""
         plan = _plan(updated_minutes_ago=60)
         mock_plan_filter.return_value = [plan]
-        mock_dep_filter.return_value.exists.return_value = False
+        mock_dep_filter.return_value.filter.return_value.exists.return_value = False
 
         res = recover_stale_ecosystem_plans.run()
 
@@ -82,10 +82,14 @@ class TestRecoverStaleEcosystemPlansFreshness(TestCase):
         """Recent ecosystem deployment activity still protects an old plan row."""
         plan = _plan(updated_minutes_ago=60)
         mock_plan_filter.return_value = [plan]
-        mock_dep_filter.return_value.exists.return_value = True
+        mock_dep_filter.return_value.filter.return_value.exists.return_value = True
 
         res = recover_stale_ecosystem_plans.run()
 
         self.assertEqual(res["recovered"], 0)
         self.assertEqual(res["kept_alive"], 1)
         plan.save.assert_not_called()
+        # The activity check must scope to ecosystem rows (hash OR
+        # creation marker — the pipeline rewrites commit_hash to the
+        # real SHA once cloning starts).
+        mock_dep_filter.return_value.filter.assert_called_once()
