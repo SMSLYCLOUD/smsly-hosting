@@ -730,12 +730,18 @@ install_agent_stack() {
     else
         mkdir -p "$ai_dir/models" "$ai_dir/voices" "$ai_dir/hf-cache"
         chown -R smsly:smsly "$ai_dir"
+        # Ubuntu venvs need python3-venv for ensurepip — without it the venv
+        # has no pip and every install below silently no-ops (once cost us
+        # a crashlooping daemon).
+        if ! python3 -c "import ensurepip" 2>/dev/null; then
+            apt-get install -y -qq python3-venv 2>&1 | tail -1 || true
+        fi
         if [ ! -x "$ai_dir/venv/bin/python" ]; then
             python3 -m venv "$ai_dir/venv"
         fi
-        # Ubuntu venvs can ship without pip — bootstrap it or every
-        # install below silently no-ops (once cost us a crashlooping daemon).
-        "$ai_dir/venv/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
+        if [ ! -x "$ai_dir/venv/bin/pip" ]; then
+            "$ai_dir/venv/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
+        fi
         "$ai_dir/venv/bin/pip" install -q -r "$ai_src/requirements.txt"
         # Verify (a silent pip failure once shipped a venv without numpy —
         # the daemon then crashlooped). Retry verbosely once before moving on.
