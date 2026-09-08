@@ -586,6 +586,16 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/stop/`);
     return response.data;
   },
+  pruneDocker: async (id: string): Promise<{
+    message: string;
+    deployments_deleted: number;
+    addons_deleted: number;
+    containers_removed: number;
+    space_reclaimed_mb: number;
+  }> => {
+    const response = await api.post(`/services/${id}/prune-docker/`);
+    return response.data;
+  },
   delete: async (id: string, force: boolean = false): Promise<void> => {
     const url = force ? `/services/${id}/?force=true` : `/services/${id}/`;
     await api.delete(url);

@@ -390,6 +390,101 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
             'deployments_cancelled': count,
         })
 
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='prune-docker',
+        throttle_classes=[BurstRateThrottle, DeploymentRateThrottle],
+    )
+    def prune_docker(self, request, pk=None):
+        """Remove this service's failed Docker/deployment residue only.
+
+        This deliberately does not call global ``docker system prune`` or
+        remove active images/containers. It targets failed/cancelled rows
+        owned by this service, failed addon containers attached to it, and
+        dangling layers. Admins can use the existing global deployment prune
+        endpoint when host-wide cleanup is explicitly intended.
+        """
+        service = self.get_object()
+        assert_can_write(request.user, service)
+
+        from apps.cloud.docker_client import get_docker_client
+        from apps.deployments.models.addons import Addon
+
+        failed_statuses = [
+            Deployment.Status.FAILED,
+            Deployment.Status.BUILD_FAILED,
+            Deployment.Status.BACKUP_FAILED,
+            Deployment.Status.MIGRATION_FAILED,
+            Deployment.Status.HEALTH_CHECK_FAILED,
+            Deployment.Status.CANCELLED,
+        ]
+        deployments = list(
+            service.deployments.filter(status__in=failed_statuses)
+            .only('id', 'container_id', 'green_container_id')
+        )
+        failed_addons = list(
+            Addon.objects.filter(service=service, status=Addon.Status.FAILED)
+            .only('id', 'addon_type', 'name')
+        )
+
+        containers_removed = 0
+        images_removed = 0
+        client = get_docker_client(timeout=60)
+        for deployment in deployments:
+            for container_id in {deployment.container_id, deployment.green_container_id} - {None, ''}:
+                try:
+                    client.containers.get(container_id).remove(force=True)
+                    containers_removed += 1
+                except Exception:
+                    logger.debug("Service prune: container %s already absent", container_id)
+
+        for addon in failed_addons:
+            for name in {
+                f"smsly-addon-{addon.addon_type.lower()}-{addon.id}",
+                addon.name,
+            } - {None, ''}:
+                try:
+                    client.containers.get(name).remove(force=True)
+                    containers_removed += 1
+                except Exception:
+                    logger.debug("Service prune: addon container %s already absent", name)
+
+        # Dangling layers are not attributable to another active tenant and
+        # are safe for a service-level cleanup request.
+        try:
+            result = client.images.prune(filters={'dangling': ['true']}) or {}
+            images_removed = result.get('SpaceReclaimed', 0)
+        except Exception as exc:
+            logger.warning("Service prune: dangling image cleanup failed: %s", exc)
+
+        deleted_deployments = service.deployments.filter(
+            status__in=failed_statuses,
+        ).delete()[0]
+        deleted_addons = Addon.objects.filter(
+            service=service, status=Addon.Status.FAILED,
+        ).delete()[0]
+
+        AuditLog(
+            actor=request.user.get_username(),
+            action='SERVICE_DOCKER_PRUNE',
+            target=f'Service: {service.name}',
+            metadata={
+                'service_id': str(service.id),
+                'deployments_deleted': deleted_deployments,
+                'addons_deleted': deleted_addons,
+                'containers_removed': containers_removed,
+                'space_reclaimed_bytes': images_removed,
+            },
+        ).save()
+        return Response({
+            'message': f'Pruned failed Docker state for {service.name}',
+            'deployments_deleted': deleted_deployments,
+            'addons_deleted': deleted_addons,
+            'containers_removed': containers_removed,
+            'space_reclaimed_mb': round(images_removed / (1024 * 1024), 2),
+        })
+
 
     @action(detail=True, methods=['post'])
     def restart(self, request, pk=None):

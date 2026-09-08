@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Save, AlertTriangle, Check, Loader2, Search, FileText, Code2 } from 'lucide-react';
+import { Save, AlertTriangle, Check, Loader2, Search, FileText, Code2, Trash2 } from 'lucide-react';
 
 export function AdvancedTab({ service }: { service: Service }) {
     const confirm = useConfirm();
@@ -31,6 +31,8 @@ export function AdvancedTab({ service }: { service: Service }) {
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [error, setError] = useState('');
+    const [pruning, setPruning] = useState(false);
+    const [pruned, setPruned] = useState('');
 
     const handleSave = async () => {
         setSaving(true);
@@ -72,6 +74,27 @@ export function AdvancedTab({ service }: { service: Service }) {
         } catch (err: any) {
             setError(err?.response?.data?.detail || 'Failed to delete service');
             setSaving(false);
+        }
+    };
+
+    const handlePruneDocker = async () => {
+        if (!await confirm({
+            title: 'Prune service Docker state?',
+            message: `Remove failed/cancelled deployment containers, failed addons, and dangling images for "${service.name}"? Active containers and images are preserved.`,
+            variant: 'destructive',
+            confirmText: 'Prune Service',
+        })) return;
+
+        setPruning(true);
+        setError('');
+        setPruned('');
+        try {
+            const result = await servicesApi.pruneDocker(service.id);
+            setPruned(`Removed ${result.containers_removed} containers and ${result.deployments_deleted} deployment records; reclaimed ${result.space_reclaimed_mb} MB.`);
+        } catch (err: any) {
+            setError(err?.response?.data?.detail || 'Failed to prune service Docker state');
+        } finally {
+            setPruning(false);
         }
     };
 
@@ -263,12 +286,22 @@ export function AdvancedTab({ service }: { service: Service }) {
                     Irreversible actions that affect your service availability.
                 </p>
                 <div className="flex gap-4">
+                    <Button
+                        variant="outline"
+                        className="border-amber-500 text-amber-600 hover:bg-amber-500/10"
+                        onClick={() => void handlePruneDocker()}
+                        disabled={saving || pruning}
+                    >
+                        {pruning ? <Loader2 size={16} className="animate-spin mr-2" /> : <Trash2 size={16} className="mr-2" />}
+                        {pruning ? 'Pruning...' : 'Prune Docker State'}
+                    </Button>
                     <Button variant="outline" className="border-destructive text-destructive hover:bg-destructive/10">Force Redeploy</Button>
                     <Button variant="destructive" className="bg-red-600 hover:bg-red-700" onClick={handleDelete} disabled={saving}>
                         {saving ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
                         Delete Service
                     </Button>
                 </div>
+                {pruned && <p className="mt-3 text-sm text-emerald-600">{pruned}</p>}
             </Card>
         </div>
     );
