@@ -563,6 +563,29 @@ def _another_deploy_attempt_running(task_self, plan_id) -> bool:
     return False
 
 
+def _ensure_valid_fernet_env_value(key_upper: str, value_text: str) -> str:
+    """Return a boot-safe value for Fernet-typed env vars.
+
+    The AI planner (and legacy generators) sometimes invent
+    FIELD_ENCRYPTION_KEY / FERNET_KEY values that are not valid Fernet
+    keys (e.g. 50-char strings). Django apps crash at boot with
+    "Fernet key must be 32 url-safe base64-encoded bytes" and the
+    deployment fails health check (2026-09-07: backend-green). Validate
+    here at provisioning time and regenerate invalid values — this also
+    repairs already-stored bad values since the upsert below overwrites.
+    Non-Fernet keys pass through untouched.
+    """
+    if key_upper == "FERNET_KEY" or key_upper.endswith("_ENCRYPTION_KEY"):
+        try:
+            from cryptography.fernet import Fernet
+            Fernet(value_text.encode() if isinstance(value_text, str) else value_text)
+            return value_text
+        except Exception:  # pylint: disable=broad-exception-caught
+            from cryptography.fernet import Fernet as _Fernet
+            return _Fernet.generate_key().decode()
+    return value_text
+
+
 @shared_task(
     bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_deploy_task", queue='deploy',
     soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1],
@@ -1663,6 +1686,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     # Leave it unset so the codebase default applies; the user
                     # can fill it from the dashboard.
                     continue
+                # Repair AI-invented/legacy crypto keys that would crash
+                # the app at boot (Fernet key must be 32 urlsafe-b64 bytes).
+                value_text = _ensure_valid_fernet_env_value(key_upper, value_text)
                 from apps.cloud.services.build_constants import is_secret_env_var
                 is_secret = is_secret_env_var(key_upper)
                 EnvironmentVariable.objects.update_or_create(

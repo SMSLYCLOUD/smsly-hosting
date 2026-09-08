@@ -630,7 +630,15 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         for key, val in env_map.items():
             if val == "{{GENERATE}}":
                 if key not in _generate_pool:
-                    _generate_pool[key] = secrets.token_urlsafe(48)
+                    # Fernet-typed keys (FIELD_ENCRYPTION_KEY, FERNET_KEY,
+                    # *_ENCRYPTION_KEY) must be 32 urlsafe-b64 bytes —
+                    # token_urlsafe() output crashes Django apps at boot
+                    # (2026-09-07: backend-green failed health check).
+                    if key == "FERNET_KEY" or key.endswith("_ENCRYPTION_KEY"):
+                        from cryptography.fernet import Fernet
+                        _generate_pool[key] = Fernet.generate_key().decode()
+                    else:
+                        _generate_pool[key] = secrets.token_urlsafe(48)
     for svc in deployable:
         env_map = svc.get("env_vars", {})
         for key in list(env_map.keys()):

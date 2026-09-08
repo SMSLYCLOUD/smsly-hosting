@@ -13,6 +13,7 @@ from apps.deployments.tasks.ecosystem.tasks import (
     _fail_plan_record,
     _finalize_ecosystem_plan,
     _another_deploy_attempt_running,
+    _ensure_valid_fernet_env_value,
     _rollback_ecosystem_deploy,
     ecosystem_deferred_build_task,
     ecosystem_deploy_task,
@@ -640,6 +641,43 @@ class TestEcosystemGuardRecovery(TestCase):
             active_exists=False, other_live=False, failed_exists=False,
         )
         self.assertEqual(res["status"], "already_deployed")
+
+
+class TestFernetEnvRepair(TestCase):
+    """_ensure_valid_fernet_env_value: invalid crypto keys are regenerated.
+
+    Regression (2026-09-07): a 50-char FIELD_ENCRYPTION_KEY crashed the
+    backend container at boot (Fernet key must be 32 url-safe b64 bytes).
+    """
+
+    def test_valid_fernet_key_passes_through(self):
+        from cryptography.fernet import Fernet
+
+        good = Fernet.generate_key().decode()
+        self.assertEqual(
+            _ensure_valid_fernet_env_value("FIELD_ENCRYPTION_KEY", good), good
+        )
+        self.assertEqual(_ensure_valid_fernet_env_value("FERNET_KEY", good), good)
+
+    def test_invalid_fernet_key_is_regenerated(self):
+        from cryptography.fernet import Fernet
+
+        fixed = _ensure_valid_fernet_env_value(
+            "FIELD_ENCRYPTION_KEY", "x" * 50,
+        )
+        self.assertNotEqual(fixed, "x" * 50)
+        Fernet(fixed.encode())  # must not raise
+        fixed2 = _ensure_valid_fernet_env_value("BACKUP_ENCRYPTION_KEY", "nope")
+        Fernet(fixed2.encode())  # must not raise
+
+    def test_non_crypto_keys_untouched(self):
+        self.assertEqual(
+            _ensure_valid_fernet_env_value("SECRET_KEY", "x" * 50), "x" * 50
+        )
+        self.assertEqual(
+            _ensure_valid_fernet_env_value("DATABASE_URL", "postgres://x"),
+            "postgres://x",
+        )
 
 
 class TestQueueWaveDispatch(TestCase):
