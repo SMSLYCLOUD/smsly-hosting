@@ -91,6 +91,25 @@ def _health_paths(primary_path: str | None) -> list[str]:
     return values
 
 
+def _traefik_hc_hostname(env: dict | None) -> str:
+    """Host header for Traefik health checks.
+
+    Traefik defaults to the backend container IP, which vhost-aware
+    apps (Django ALLOWED_HOSTS) reject with 400 — marking healthy
+    containers DOWN forever. Prefer the service's public domain (it
+    is in ALLOWED_HOSTS by construction), else localhost which apps
+    near-universally allow.
+    """
+    for key in ("PUBLIC_DOMAIN", "PUBLIC_HOST", "DOMAIN", "HOST"):
+        try:
+            val = str((env or {}).get(key) or "").strip().split(",")[0].strip()
+        except Exception:
+            continue
+        if val and "." in val and val.lower() not in ("localhost",):
+            return val
+    return "localhost"
+
+
 def _localhost_free_healthcheck(image_healthcheck):
     """Rewrite localhost to 127.0.0.1 in an inherited image HEALTHCHECK.
 
@@ -745,6 +764,7 @@ class LocalAdapter(BaseCloudAdapter):
                 labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.path'] = hc_path_primary
                 labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
                 labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
+                labels[f'traefik.http.services.{staging_router}.loadbalancer.healthcheck.hostname'] = staging_domain or _traefik_hc_hostname(env)
             # Also store the staging domain metadata for promote-time cleanup
             labels['smsly.blue_green.staging_domain'] = staging_domain
         else:
@@ -757,6 +777,7 @@ class LocalAdapter(BaseCloudAdapter):
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_path_primary
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
+                labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.hostname'] = _traefik_hc_hostname(env)
 
         # For preview environments on remote nodes, neutralize parent router labels
         # to prevent Traefik from routing the parent's domain to the preview container.
@@ -1380,6 +1401,8 @@ class LocalAdapter(BaseCloudAdapter):
                 live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
             if hc_timeout:
                 live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
+            # Probe with a Host the app accepts (IP hosts get Django 400s).
+            live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.hostname'] = _traefik_hc_hostname(promoted_env)
 
         green_cmd = green_config.get('Cmd')
         green_entrypoint = green_config.get('Entrypoint')
