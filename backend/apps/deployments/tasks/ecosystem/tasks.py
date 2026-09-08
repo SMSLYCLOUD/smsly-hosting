@@ -1540,6 +1540,21 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     service=service,
                     build_logs__contains="Ecosystem deploy:",
                 ).exists()
+            ) or (
+                # Adopt a same-name row with ZERO deployments when it
+                # tracks the same repo (or no repo yet): a previous
+                # ecosystem attempt created it but failed prep before any
+                # deployment existed. Without this every re-run suffixes
+                # another duplicate (transaction-chain → -fc67, 2026-09-08).
+                # A manual service tracking a DIFFERENT repo keeps the
+                # suffix protection below.
+                service is not None
+                and not Deployment.objects.filter(service=service).exists()
+                and (
+                    not (service.repository_url or "").strip()
+                    or _canonical_repo_ref(service.repository_url)
+                    == _canonical_repo_ref(repo)
+                )
             )
             if service is not None and not _is_ecosystem_owned:
                 final_name = _next_available_service_name(Service, requested_name)
