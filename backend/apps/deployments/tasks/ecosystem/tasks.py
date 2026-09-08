@@ -10,23 +10,21 @@ def _configure_ecosystem_mtls(service, enabled: bool) -> None:
 
     Service creation signals default every service to platform.local. An
     ecosystem deploy can reuse an existing Service row, so only updating new
-    rows leaves reused services on the platform trust domain. Use the same
-    canonical domain for both new and existing rows; the deployment adapter
-    then mounts the ecosystem SPIRE volumes.
+    rows leaves reused services on the platform trust domain. The trust
+    domain is always normalized to ecosystem.local; ``enabled`` (the
+    per-service internal flag) controls mTLS + sidecar. Non-internal
+    services get plain HTTP with no SPIFFE env or sidecar.
     """
     try:
         from apps.mtls.models import MtlsConfig
 
-        # Ecosystem deployment is authoritative: user services always use
-        # ecosystem.local with SPIFFE/Envoy enabled. PlatformConfig flags are
-        # for platform workloads and must not disable this path.
-        enabled = True
+        enabled = bool(enabled)
         config, _created = MtlsConfig.objects.get_or_create(
             service=service,
             defaults={
                 "enabled": enabled,
                 "trust_domain": ECOSYSTEM_TRUST_DOMAIN,
-                "sidecar_enabled": True,
+                "sidecar_enabled": enabled,
             },
         )
         changed = []
@@ -36,8 +34,8 @@ def _configure_ecosystem_mtls(service, enabled: bool) -> None:
         if config.trust_domain != ECOSYSTEM_TRUST_DOMAIN:
             config.trust_domain = ECOSYSTEM_TRUST_DOMAIN
             changed.extend(["trust_domain", "spiffe_id"])
-        if not config.sidecar_enabled:
-            config.sidecar_enabled = True
+        if bool(config.sidecar_enabled) != enabled:
+            config.sidecar_enabled = enabled
             changed.append("sidecar_enabled")
         if changed:
             config.save(update_fields=sorted(set(changed + ["updated_at"])))
@@ -1134,6 +1132,25 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     ordered_keys = [key for wave in waves_repo_keys for key in wave]
     results = []
     created_services: dict[str, Any] = {}
+    # Per-service mesh membership: entries flagged internal (default True)
+    # are called over mTLS HTTPS via Envoy; all other references resolve
+    # to plain internal HTTP. The set holds every alias form so
+    # {{SERVICE:any-alias}} matches regardless of spelling.
+    internal_names: set[str] = set()
+    for _ikey, _ientry in entries_by_key.items():
+        _iplan = _ientry.get("plan", {}) if isinstance(_ientry, dict) else {}
+        if bool(_iplan.get("internal", True)):
+            for _alias in {
+                _ikey,
+                str(_ientry.get("repo") or ""),
+                str(_ientry.get("name") or ""),
+                str(_ientry.get("requested_name") or ""),
+                _repo_short_name(_ientry.get("repo")),
+                _slugify_name(_ientry.get("name") or ""),
+            }:
+                _alias = str(_alias or "").strip().lower()
+                if _alias:
+                    internal_names.add(_alias)
     # Load previously persisted shared secrets so retries and partial
     # re-deploys REUSE the same values. Regenerating them would rotate every
     # {{SHARED_SECRET:*}} and break auth between already-running services.
@@ -1222,7 +1239,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     env_scan_depth=_env_scan_depth,
                 )
                 _configure_ecosystem_mtls(
-                    addon_anchor_service, bool(mtls_config.get("enabled")),
+                    addon_anchor_service, bool(mtls_config.get("enabled", True)),
                 )
                 _rollback_services.append(str(addon_anchor_service.id))
                 _apply_service_profile(addon_anchor_service, {**svc_plan, "repo": repo}, provider, anchor_port)
@@ -1498,6 +1515,11 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             continue
 
         try:
+            # Per-service mesh membership: internal services (default True)
+            # communicate over mTLS HTTPS via Envoy; the flag also gates
+            # SPIFFE env/sidecar below and the URL scheme in env resolution.
+            svc_internal = bool(svc_plan.get("internal", True))
+            svc_mtls_enabled = svc_internal and bool(mtls_config.get("enabled", True))
             # Service.name is globally unique — check all owners, not just the current user.
             service = Service.objects.filter(
                 name=requested_name,
@@ -1574,7 +1596,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     env_scan_depth=_env_scan_depth,
                 )
                 _configure_ecosystem_mtls(
-                    service, bool(mtls_config.get("enabled")),
+                    service, svc_mtls_enabled,
                 )
                 _rollback_services.append(str(service.id))
             elif service is None:
@@ -1597,7 +1619,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     env_scan_depth=_env_scan_depth,
                 )
                 _configure_ecosystem_mtls(
-                    service, bool(mtls_config.get("enabled")),
+                    service, svc_mtls_enabled,
                 )
                 _rollback_services.append(str(service.id))
             # Services outside this user's project are never adopted or moved
@@ -1611,7 +1633,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # platform.local by default, but ecosystem workloads belong to
             # the isolated ecosystem SPIRE trust domain.
             _configure_ecosystem_mtls(
-                service, True,
+                service, svc_mtls_enabled,
             )
             _apply_service_profile(service, service_profile, provider, port, server=server)
 
@@ -1696,6 +1718,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 shared_addons=active_addon_urls,
                 shared_secrets=shared_secrets,
                 stack=stack,
+                internal_names=internal_names,
             )
             _inject_addon_env_defaults(resolved_env, service_addon_types, active_addon_urls)
 

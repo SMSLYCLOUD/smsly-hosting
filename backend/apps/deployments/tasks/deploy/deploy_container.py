@@ -401,6 +401,9 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             # Inject Envoy only after the application itself is healthy. This
             # preserves the normal CPU/memory/network deployment path and
             # prevents a sidecar startup failure from masking app readiness.
+            # The sidecar must then be READY (admin up + SVID issued) before
+            # the deployment goes live — otherwise mTLS traffic fails until
+            # SDS delivers the identity.
             try:
                 from apps.mtls.models import MtlsConfig
                 from apps.mtls.services.envoy_sidecar import EnvoySidecar
@@ -409,6 +412,11 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 ).first()
                 if mtls_config:
                     EnvoySidecar.inject_sidecar(service)
+                    if not EnvoySidecar.wait_sidecar_ready(service):
+                        raise RuntimeError(
+                            f"Envoy sidecar for {service.name} did not become "
+                            f"ready with an issued SVID before go-live"
+                        )
             except Exception as exc:
                 raise RuntimeError(
                     f"mTLS sidecar injection failed for {service.name}: {exc}"

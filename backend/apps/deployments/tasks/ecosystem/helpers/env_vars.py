@@ -214,14 +214,35 @@ def _service_placeholder_target(
 
 
 
+def _is_internal_ref(ref_name: str, internal_names) -> bool:
+    """True when a {{SERVICE:name}} reference targets an internal service.
+
+    Internal services are called over mTLS HTTPS via their Envoy
+    sidecar; anything else uses plain internal HTTP. A missing set
+    means legacy plain-HTTP behavior (callers that don't track the
+    flag); the ecosystem task always builds an explicit set where an
+    absent per-service flag defaults to internal.
+    """
+    if internal_names is None:
+        return False
+    return str(ref_name or "").strip().lower() in internal_names
+
+
 def _service_placeholder_url(
     ref_name: str,
     created_services: dict[str, Any],
     *,
     as_authority: bool = False,
+    internal_names=None,
 ) -> str:
-    """Resolve a service reference to an internal URL or URL authority."""
+    """Resolve a service reference to a URL.
+
+    Internal targets resolve to mTLS HTTPS via Envoy
+    (https://name:80); all others resolve to plain internal HTTP.
+    """
     host, port = _service_placeholder_target(ref_name, created_services)
+    if _is_internal_ref(ref_name, internal_names):
+        return f"{host}:80" if as_authority else f"https://{host}:80"
     authority = f"{host}:{port}"
     if as_authority:
         return authority
@@ -254,6 +275,7 @@ def _resolve_single_placeholder(
     created_services: dict[str, Any],
     shared_addons: dict[str, str],
     shared_secrets: dict[str, str],
+    internal_names=None,
 ) -> str | None:
     """Resolve a single {{...}} token to a concrete value.
 
@@ -281,7 +303,9 @@ def _resolve_single_placeholder(
     # {{SERVICE:ref}}
     if token.upper().startswith("SERVICE:"):
         ref_name = token[8:].strip()
-        return _service_placeholder_url(ref_name, created_services)
+        return _service_placeholder_url(
+            ref_name, created_services, internal_names=internal_names
+        )
 
     # Addon URL placeholders (POSTGRES_URL, REDIS_URL, DATABASE_URL, etc.)
     addon_type = _addon_type_from_placeholder(token)
@@ -312,6 +336,7 @@ def _resolve_from_manifest_or_fallback(
     shared_addons: dict[str, str],
     shared_secrets: dict[str, str],
     stack: str = "",
+    internal_names=None,
 ) -> dict[str, str]:
     """Resolve env vars from actual source files when available.
 
@@ -344,6 +369,7 @@ def _resolve_from_manifest_or_fallback(
                 if any(placeholder in str(value) for placeholder in _ADDON_PLACEHOLDERS):
                     manifest_resolved[key] = _resolve_env_placeholders(
                         {key: value}, created_services, shared_addons, shared_secrets,
+                        internal_names,
                     ).get(key, value)
                 else:
                     manifest_resolved[key] = value
@@ -387,6 +413,7 @@ def _resolve_from_manifest_or_fallback(
             env_vars, created_services,
             shared_addons=shared_addons,
             shared_secrets=shared_secrets,
+            internal_names=internal_names,
         )
 
     _is_frontend = stack in {"nextjs", "nuxt"} or "frontend" in service_name.lower()
@@ -515,6 +542,7 @@ def _resolve_env_placeholders(
     created_services: dict[str, Any],
     shared_addons: dict[str, str] | None = None,
     shared_secrets: dict[str, str] | None = None,
+    internal_names=None,
 ) -> dict[str, str]:
     """Resolve known placeholders into concrete values.
 
@@ -577,9 +605,11 @@ def _resolve_env_placeholders(
                             ref_name,
                             created_services,
                             as_authority=True,
+                            internal_names=internal_names,
                         )
                 resolved_val = _resolve_single_placeholder(
                     token, _key, created_services, shared_addons, shared_secrets,
+                    internal_names,
                 )
                 return resolved_val if resolved_val is not None else match.group(0)
 

@@ -304,6 +304,58 @@ class EnvoySidecar:
             }
 
     @staticmethod
+    def wait_sidecar_ready(service, timeout_seconds: int = 120) -> bool:
+        """Wait until the sidecar is serving with an issued SVID.
+
+        Polls Envoy admin /ready, then verifies /certs actually carries
+        this service's SPIFFE identity. Deployments must gate go-live on
+        this — otherwise traffic hits Envoy before SDS delivers the
+        identity and mTLS handshakes fail.
+        """
+        from apps.cloud.docker_client import get_docker_client
+
+        client = get_docker_client()
+        sidecar_name = EnvoySidecar.get_sidecar_name(service)
+        safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "", service.name)[:80]
+        want = f"service/{safe_name}"
+        deadline = time.time() + max(10, int(timeout_seconds or 120))
+        last_state = "unknown"
+        while time.time() < deadline:
+            try:
+                container = client.containers.get(sidecar_name)
+                if getattr(container, "status", "") != "running":
+                    last_state = f"container {getattr(container, 'status', '?')}"
+                    time.sleep(5)
+                    continue
+                ready = container.exec_run(
+                    ["/bin/sh", "-c", "curl -fsS --max-time 5 http://127.0.0.1:9901/ready"],
+                    demux=False,
+                )
+                if ready.exit_code != 0:
+                    last_state = "admin not ready"
+                    time.sleep(5)
+                    continue
+                certs = container.exec_run(
+                    ["/bin/sh", "-c", "curl -fsS --max-time 5 http://127.0.0.1:9901/certs"],
+                    demux=False,
+                )
+                output = certs.output
+                if isinstance(output, (bytes, bytearray)):
+                    output = output.decode(errors="replace")
+                if certs.exit_code == 0 and want in (output or ""):
+                    logger.info("Envoy sidecar ready with SVID for %s", service.name)
+                    return True
+                last_state = "SVID not issued yet"
+            except Exception as exc:
+                last_state = str(exc)[:120]
+            time.sleep(5)
+        logger.warning(
+            "Envoy sidecar not ready for %s after %ss (last: %s)",
+            service.name, timeout_seconds, last_state,
+        )
+        return False
+
+    @staticmethod
     def _find_main_container(client, service):
         """Find the main container for a service."""
         containers = client.containers.list(

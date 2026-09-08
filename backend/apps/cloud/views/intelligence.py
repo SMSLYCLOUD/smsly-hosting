@@ -777,7 +777,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         # Harden browser-submitted plan: strip untrusted passthrough keys
         # and validate service entries before persisting/dispatching.
         _allowed_top = {"services", "addons", "wave_size", "env_scan_depth", "project_name", "name", "use_shared_addons", "cancel_others_on_failure", "shared_addon_config"}
-        _allowed_svc = {"name", "repo", "branch", "port", "stack", "build", "depends_on", "env_vars", "addons", "server_id", "skip", "deploy_order"}
+        _allowed_svc = {"name", "repo", "branch", "port", "stack", "build", "depends_on", "env_vars", "addons", "server_id", "skip", "deploy_order", "internal"}
         if not isinstance(plan.get("services", []), list) or len(plan.get("services", [])) > 50:
             return Response({'error': 'Invalid plan services list.'}, status=status.HTTP_400_BAD_REQUEST)
         _clean_services = []
@@ -790,7 +790,11 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                     raise ValueError()
             except (TypeError, ValueError):
                 return Response({'error': f"Invalid port for service {_svc.get('name')}"}, status=status.HTTP_400_BAD_REQUEST)
-            _clean_services.append({k: _svc.get(k) for k in _allowed_svc if k in _svc})
+            _cleaned = {k: _svc.get(k) for k in _allowed_svc if k in _svc}
+            # Internal defaults True (mesh-internal over mTLS). Stored
+            # explicitly so later re-dispatches keep the operator's choice.
+            _cleaned["internal"] = bool(_svc.get("internal", True))
+            _clean_services.append(_cleaned)
         plan = {k: v for k, v in plan.items() if k in _allowed_top}
         plan["services"] = _clean_services
         if plan_record:

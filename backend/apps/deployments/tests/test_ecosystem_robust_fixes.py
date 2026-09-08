@@ -20,6 +20,10 @@ from apps.deployments.tasks.ecosystem.tasks import (
     ecosystem_deploy_task,
     ecosystem_release_wave_task,
 )
+from apps.deployments.tasks.ecosystem.helpers.env_vars import (
+    _resolve_env_placeholders,
+    _service_placeholder_url,
+)
 from apps.deployments.tasks.ecosystem.helpers.lifecycle import (
     _count_active_ecosystem_builds,
     _queue_wave,
@@ -728,6 +732,101 @@ class TestUnknownPlanServiceRef(TestCase):
     def test_unrelated_error_is_none(self):
         ref = _unknown_plan_service_ref("boom", self._entries(), {})
         self.assertIsNone(ref)
+
+
+class TestInternalServiceUrls(TestCase):
+    """Internal {{SERVICE:x}} refs resolve to mTLS HTTPS; others to HTTP."""
+
+    def _created(self):
+        svc = MagicMock()
+        svc.name = "smsly-backend"
+        svc.internal_port = 8080
+        return {"smsly-backend": svc}
+
+    def test_internal_target_uses_mtls_https(self):
+        url = _service_placeholder_url(
+            "smsly-backend", self._created(),
+            internal_names={"smsly-backend"},
+        )
+        self.assertEqual(url, "https://smsly-backend:80")
+
+    def test_internal_authority_uses_sidecar_port(self):
+        url = _service_placeholder_url(
+            "smsly-backend", self._created(),
+            as_authority=True, internal_names={"smsly-backend"},
+        )
+        self.assertEqual(url, "smsly-backend:80")
+
+    def test_external_target_uses_plain_http(self):
+        url = _service_placeholder_url(
+            "smsly-backend", self._created(), internal_names=set()
+        )
+        self.assertEqual(url, "http://smsly-backend:8080")
+
+    def test_legacy_default_stays_http(self):
+        url = _service_placeholder_url("smsly-backend", self._created())
+        self.assertEqual(url, "http://smsly-backend:8080")
+
+    def test_resolve_env_mixes_schemes(self):
+        created = self._created()
+        fe = MagicMock()
+        fe.name = "smsly-frontend"
+        fe.internal_port = 3000
+        created["smsly-frontend"] = fe
+        out = _resolve_env_placeholders(
+            {
+                "API_URL": "{{SERVICE:smsly-backend}}",
+                "FE_URL": "{{SERVICE:smsly-frontend}}",
+            },
+            created,
+            internal_names={"smsly-backend"},
+        )
+        self.assertEqual(out["API_URL"], "https://smsly-backend:80")
+        self.assertEqual(out["FE_URL"], "http://smsly-frontend:3000")
+
+
+class TestWaitSidecarReady(TestCase):
+    """wait_sidecar_ready gates go-live on admin + issued SVID."""
+
+    def _service(self):
+        svc = MagicMock()
+        svc.name = "smsly-backend"
+        return svc
+
+    @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.get_sidecar_name",
+           return_value="envoy-smsly-backend")
+    @patch("apps.cloud.docker_client.get_docker_client")
+    def test_ready_when_admin_up_and_svid_present(self, mock_client_fn, _mock_name):
+        from apps.mtls.services.envoy_sidecar import EnvoySidecar
+
+        container = MagicMock()
+        container.status = "running"
+        ready = MagicMock(exit_code=0, output=b"OK")
+        certs = MagicMock(
+            exit_code=0,
+            output=b'{"certificates": [{"cert_chain": [{"subject_alt_names": '
+                   b'[{"uri": "spiffe://ecosystem.local/service/smsly-backend"}]}]}]}',
+        )
+        container.exec_run.side_effect = [ready, certs]
+        mock_client_fn.return_value.containers.get.return_value = container
+
+        self.assertTrue(EnvoySidecar.wait_sidecar_ready(self._service(), timeout_seconds=30))
+        self.assertEqual(container.exec_run.call_count, 2)
+
+    @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.get_sidecar_name",
+           return_value="envoy-smsly-backend")
+    @patch("apps.cloud.docker_client.get_docker_client")
+    @patch("apps.mtls.services.envoy_sidecar.time")
+    def test_false_when_never_ready(self, mock_time, mock_client_fn, _mock_name):
+        from apps.mtls.services.envoy_sidecar import EnvoySidecar
+
+        container = MagicMock()
+        container.status = "running"
+        container.exec_run.return_value = MagicMock(exit_code=1, output=b"")
+        mock_client_fn.return_value.containers.get.return_value = container
+        mock_time.time.side_effect = [0, 0, 0, 100]
+
+        self.assertFalse(EnvoySidecar.wait_sidecar_ready(self._service(), timeout_seconds=10))
 
 
 class TestQueueWaveDispatch(TestCase):

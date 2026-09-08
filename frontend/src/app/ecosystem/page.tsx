@@ -34,6 +34,7 @@ interface ServicePlan {
     depends_on?: string[];
     deploy_order: number;
     skip?: boolean;
+    internal?: boolean;
     server_id?: string;
     cpu_cores?: number;
     memory_mb?: number;
@@ -550,11 +551,14 @@ export default function EcosystemPage() {
 
         // Ensure every service has server_id defaulting to 'local'
         // so the backend doesn't fall through to auto-node-selection.
+        // Internal defaults to true: mesh-internal services talk mTLS
+        // HTTPS via Envoy; untoggle for plain-HTTP services.
         const normalizedPlan = {
             ...plan,
             services: (plan.services ?? []).map(s => ({
                 ...s,
                 server_id: s.server_id || 'local',
+                internal: s.internal ?? true,
             })),
         };
 
@@ -598,6 +602,16 @@ export default function EcosystemPage() {
             skip: !updated.services[index].skip,
         };
         setPlan(updated);
+    };
+
+    // Toggle mesh-internal (mTLS HTTPS via Envoy) on a service.
+    // Matched by repo: the review list is sorted, so positional
+    // indexes don't map back to plan.services.
+    const toggleInternal = (repo: string) => {
+        setPlan((current) => current ? {
+            ...current,
+            services: current.services.map((item) => item.repo === repo ? { ...item, internal: (item.internal ?? true) ? false : true } : item),
+        } : current);
     };
 
     // Update env var
@@ -1469,6 +1483,18 @@ export default function EcosystemPage() {
                                                         >
                                                             {svc.skip ? 'Skipped' : 'Include'}
                                                         </button>
+                                                        {!svc.skip && (
+                                                            <button
+                                                                onClick={() => toggleInternal(svc.repo)}
+                                                                title={(svc.internal ?? true) ? 'Mesh-internal: talks mTLS HTTPS via Envoy' : 'External: plain HTTP, no sidecar'}
+                                                                className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${(svc.internal ?? true)
+                                                                        ? 'border-sky-500/30 text-sky-400 bg-sky-500/10'
+                                                                        : 'border-border text-muted-foreground hover:text-foreground'
+                                                                    }`}
+                                                            >
+                                                                {(svc.internal ?? true) ? 'Internal' : 'External'}
+                                                            </button>
+                                                        )}
                                                     </div>
                                                 </motion.div>
                                                 {expandedEnv === idx && !svc.skip && (
