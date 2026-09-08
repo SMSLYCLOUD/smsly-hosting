@@ -179,6 +179,7 @@ def _service_plan_addon_types(svc_plan: dict[str, Any], plan_addons: Any = None)
 def _service_placeholder_target(
     ref_name: str,
     created_services: dict[str, Any],
+    project_id=None,
 ) -> tuple[str, int]:
     """Return the internal host and port for a service placeholder."""
     ref_service = (
@@ -196,6 +197,8 @@ def _service_placeholder_target(
                 if getattr(s, "owner_id", None)
             }
             qs = Service.objects.filter(name__iexact=ref_name)
+            if project_id:
+                qs = qs.filter(project_id=project_id)
             if owner_ids:
                 qs = qs.filter(owner_id__in=owner_ids)
             ref_service = qs.first()
@@ -234,13 +237,16 @@ def _service_placeholder_url(
     *,
     as_authority: bool = False,
     internal_names=None,
+    project_id=None,
 ) -> str:
     """Resolve a service reference to a URL.
 
     Internal targets resolve to mTLS HTTPS via Envoy
     (https://name:80); all others resolve to plain internal HTTP.
     """
-    host, port = _service_placeholder_target(ref_name, created_services)
+    host, port = _service_placeholder_target(
+        ref_name, created_services, project_id=project_id,
+    )
     if _is_internal_ref(ref_name, internal_names):
         return f"{host}:80" if as_authority else f"https://{host}:80"
     authority = f"{host}:{port}"
@@ -276,6 +282,7 @@ def _resolve_single_placeholder(
     shared_addons: dict[str, str],
     shared_secrets: dict[str, str],
     internal_names=None,
+    project_id=None,
 ) -> str | None:
     """Resolve a single {{...}} token to a concrete value.
 
@@ -304,7 +311,8 @@ def _resolve_single_placeholder(
     if token.upper().startswith("SERVICE:"):
         ref_name = token[8:].strip()
         return _service_placeholder_url(
-            ref_name, created_services, internal_names=internal_names
+            ref_name, created_services, internal_names=internal_names,
+            project_id=project_id,
         )
 
     # Addon URL placeholders (POSTGRES_URL, REDIS_URL, DATABASE_URL, etc.)
@@ -337,6 +345,7 @@ def _resolve_from_manifest_or_fallback(
     shared_secrets: dict[str, str],
     stack: str = "",
     internal_names=None,
+    project_id=None,
 ) -> dict[str, str]:
     """Resolve env vars from actual source files when available.
 
@@ -543,6 +552,7 @@ def _resolve_env_placeholders(
     shared_addons: dict[str, str] | None = None,
     shared_secrets: dict[str, str] | None = None,
     internal_names=None,
+    project_id=None,
 ) -> dict[str, str]:
     """Resolve known placeholders into concrete values.
 
@@ -606,10 +616,12 @@ def _resolve_env_placeholders(
                             created_services,
                             as_authority=True,
                             internal_names=internal_names,
+                            project_id=project_id,
                         )
                 resolved_val = _resolve_single_placeholder(
                     token, _key, created_services, shared_addons, shared_secrets,
                     internal_names,
+                    project_id,
                 )
                 return resolved_val if resolved_val is not None else match.group(0)
 
@@ -650,4 +662,3 @@ def _validate_required_env(resolved_env: dict[str, str], addon_types: set[str] |
             missing.append(f"{addon_type} ({'/'.join(keys)})")
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
-

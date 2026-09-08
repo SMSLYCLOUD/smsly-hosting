@@ -701,6 +701,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                             "status": "already_in_progress",
                             "plan_id": str(plan_id),
                             "in_flight": _active.count(),
+                            "failed": 0,
                         }
                     # Dead attempt: rows are QUEUED but no task is driving
                     # them (worker died / recovery failed the plan). Fall
@@ -763,6 +764,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                         return {
                             "status": "already_deployed",
                             "plan_id": str(plan_id),
+                            "failed": 0,
                         }
 
     # SEC-ZT-007: Validate plan structure before creating any records
@@ -1520,12 +1522,22 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # SPIFFE env/sidecar below and the URL scheme in env resolution.
             svc_internal = bool(svc_plan.get("internal", True))
             svc_mtls_enabled = svc_internal and bool(mtls_config.get("enabled", True))
+            repo_identity = _canonical_repo_ref(repo).lower()
             # Service.name is globally unique — check all owners, not just the current user.
             service = Service.objects.filter(
                 name=requested_name,
                 owner=user,
                 project=project,
             ).first()
+            if project and repo_identity:
+                service = (
+                    Service.objects.filter(
+                        project=project,
+                        owner=user,
+                        ecosystem_repo_key=repo_identity,
+                    ).first()
+                    or service
+                )
             global_name_taken = Service.objects.filter(name=requested_name).exists()
             # If the service already exists but was NOT created by ecosystem,
             # create a new service with a unique name instead of overwriting
@@ -1635,6 +1647,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             _configure_ecosystem_mtls(
                 service, svc_mtls_enabled,
             )
+            service.managed_by = "ECOSYSTEM"
+            service.ecosystem_repo_key = repo_identity
             _apply_service_profile(service, service_profile, provider, port, server=server)
 
             if all(getattr(existing, "id", None) != getattr(service, "id", None) for existing in created_service_records):
@@ -1719,6 +1733,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 shared_secrets=shared_secrets,
                 stack=stack,
                 internal_names=internal_names,
+                project_id=project.id if project else None,
             )
             _inject_addon_env_defaults(resolved_env, service_addon_types, active_addon_urls)
 
@@ -2124,6 +2139,17 @@ def _fail_plan_record(plan_id: str | None, error_message: str) -> None:
             error_message=error_message[:2000],
             updated_at=timezone.now(),
         )
+
+        # Ephemeral projects are created solely for this plan. Once rollback
+        # removed its partial resources, delete the empty project so retries
+        # do not accumulate one project per failed deploy.
+        if rollback_record and rollback_record.get("project_id"):
+            from apps.deployments.models.service import Project
+            project = Project.objects.filter(
+                id=rollback_record["project_id"], is_ephemeral=True,
+            ).first()
+            if project and not project.services.exists():
+                project.delete()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.debug("Failed to mark plan %s as failed: %s", plan_id, exc)
 

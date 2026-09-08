@@ -706,32 +706,10 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         if env_scan_depth in ('shallow', 'standard', 'deep'):
             plan['env_scan_depth'] = env_scan_depth
 
-        # ── Concurrent-deploy guard (atomic) ────────────────────────────
-        # Use a row lock so two concurrent requests cannot both pass the
-        # in-process check before either commits. Rejecting early here is
-        # cheaper and clearer than letting the task duplicate the work.
-        from django.db import transaction as _transaction
-        try:
-            with _transaction.atomic():
-                locked = EcosystemPlan.objects.select_for_update().get(id=plan_id)
-                if locked.status in (
-                    EcosystemPlan.Status.SCANNING,
-                    EcosystemPlan.Status.DEPLOYING,
-                ):
-                    return Response(
-                        {
-                            'error': (
-                                'Another ecosystem scan or deploy is already in '
-                                'progress. Wait for it to finish or cancel it '
-                                'before starting a new one.'
-                            )
-                        },
-                        status=status.HTTP_429_TOO_MANY_REQUESTS,
-                    )
-        except EcosystemPlan.DoesNotExist:
-            pass
-
-        # Resolve project — from explicit param, or from existing plan
+        # Resolve project before claiming the plan. The claim and status
+        # transition below must happen in the same transaction as the row
+        # lock; checking first and updating later allowed two requests to
+        # dispatch the same ecosystem plan concurrently.
         project = None
         if project_id:
             try:
@@ -746,12 +724,59 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             except Project.DoesNotExist:
                 return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        # ── Concurrent-deploy guard and claim (atomic) ──────────────────
+        from django.db import transaction as _transaction
+        try:
+            with _transaction.atomic():
+                if not plan_id:
+                    locked = None
+                else:
+                    locked = EcosystemPlan.objects.select_for_update().get(
+                        id=plan_id, user=request.user,
+                    )
+                if locked is None:
+                    raise EcosystemPlan.DoesNotExist
+                if locked.status in (
+                    EcosystemPlan.Status.SCANNING,
+                    EcosystemPlan.Status.DEPLOYING,
+                ):
+                    return Response(
+                        {
+                            'error': (
+                                'Another ecosystem scan or deploy is already in '
+                                'progress. Wait for it to finish or cancel it '
+                                'before starting a new one.'
+                            )
+                        },
+                        status=status.HTTP_429_TOO_MANY_REQUESTS,
+                    )
+                if not project and locked.project:
+                    project = locked.project
+                elif project and locked.project and locked.project_id != project.id:
+                    return Response(
+                        {'error': 'Plan is assigned to a different project.'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                locked.project = project
+                locked.status = EcosystemPlan.Status.DEPLOYING
+                locked.save(update_fields=['project', 'status', 'updated_at'])
+        except EcosystemPlan.DoesNotExist:
+            if not plan_id:
+                # A new browser-submitted plan has no row to claim yet;
+                # it is created below after project resolution.
+                pass
+            else:
+                return Response({'error': 'Ecosystem plan not found.'}, status=status.HTTP_404_NOT_FOUND)
+
         try:
             plan_record = EcosystemPlan.objects.get(id=plan_id, user=request.user)
             if not project and plan_record.project:
                 project = plan_record.project
-            elif project and not plan_record.project:
-                plan_record.project = project
+            elif project and plan_record.project_id != project.id:
+                return Response(
+                    {'error': 'Plan is assigned to a different project.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
         except EcosystemPlan.DoesNotExist:
             plan_record = None
 
@@ -807,11 +832,10 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             plan['cancel_others_on_failure'] = cancel_others_on_failure
             plan['shared_addon_config'] = shared_addon_config
             plan_record.plan = plan
-            plan_record.status = EcosystemPlan.Status.DEPLOYING
             plan_record.use_shared_addons = use_shared_addons
             plan_record.cancel_others_on_failure = cancel_others_on_failure
             plan_record.shared_addon_config = shared_addon_config
-            plan_record.save(update_fields=['plan', 'status', 'use_shared_addons', 'cancel_others_on_failure', 'shared_addon_config', 'project', 'updated_at'])
+            plan_record.save(update_fields=['plan', 'use_shared_addons', 'cancel_others_on_failure', 'shared_addon_config', 'project', 'updated_at'])
         else:
             plan_record = EcosystemPlan.objects.create(
                 user=request.user,

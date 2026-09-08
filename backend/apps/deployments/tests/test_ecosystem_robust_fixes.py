@@ -784,6 +784,24 @@ class TestInternalServiceUrls(TestCase):
         self.assertEqual(out["API_URL"], "https://smsly-backend:80")
         self.assertEqual(out["FE_URL"], "http://smsly-frontend:3000")
 
+    @patch("apps.deployments.models.Service.objects.filter")
+    def test_fallback_service_lookup_is_project_scoped(self, mock_filter):
+        from apps.deployments.tasks.ecosystem.helpers.env_vars import (
+            _service_placeholder_target,
+        )
+
+        qs = MagicMock()
+        qs.filter.return_value.first.return_value = None
+        mock_filter.return_value = qs
+
+        with self.assertRaises(ValueError):
+            _service_placeholder_target(
+                "shared-name", {}, project_id="project-a",
+            )
+
+        mock_filter.assert_called_once_with(name__iexact="shared-name")
+        qs.filter.assert_called_once_with(project_id="project-a")
+
 
 class TestWaitSidecarReady(TestCase):
     """wait_sidecar_ready gates go-live on admin + issued SVID."""
@@ -936,6 +954,12 @@ class TestEcosystemServicePorts(TestCase):
             svc, {"repo": "org/x", "build": "docker"}, provider, 8080
         )
         self.assertEqual(svc.internal_port, 8080)
+
+    def test_service_model_has_ecosystem_identity_fields(self):
+        from apps.deployments.models import Service
+
+        self.assertEqual(Service._meta.get_field("managed_by").default, "USER")
+        self.assertEqual(Service._meta.get_field("ecosystem_repo_key").default, "")
 
 
 class TestQueueWaveDispatch(TestCase):

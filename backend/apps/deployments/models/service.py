@@ -242,6 +242,20 @@ class Service(TimeStampedModel):
         related_name='services',
         help_text="Project this service belongs to (null = ungrouped)")
 
+    managed_by = models.CharField(  # type: ignore[var-annotated]
+        max_length=20,
+        choices=[("USER", "User"), ("ECOSYSTEM", "Ecosystem"), ("PLATFORM", "Platform")],
+        default="USER",
+        db_index=True,
+    )
+    ecosystem_repo_key = models.CharField(  # type: ignore[var-annotated]
+        max_length=512,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="Canonical repository identity within the owning project.",
+    )
+
     # Build & Run Config
     build_command = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
     start_command = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
@@ -659,6 +673,7 @@ class Service(TimeStampedModel):
             models.Index(fields=["status"], name="svc_status_idx"),
             models.Index(fields=["owner", "status"], name="svc_owner_status_idx"),
             models.Index(fields=["project", "status"], name="svc_project_status_idx"),
+            models.Index(fields=["project", "ecosystem_repo_key"], name="svc_project_repo_idx"),
             models.Index(fields=["server", "status"], name="svc_server_status_idx"),
         ]
 
