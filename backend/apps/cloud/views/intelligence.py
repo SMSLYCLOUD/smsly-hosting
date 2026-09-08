@@ -786,10 +786,13 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 return Response({'error': 'Each service needs name and repo.'}, status=status.HTTP_400_BAD_REQUEST)
             try:
                 _p = int(_svc.get("port", 8000))
-                if not 1 <= _p <= 65535:
+                if not 1024 <= _p <= 65535:
                     raise ValueError()
             except (TypeError, ValueError):
-                return Response({'error': f"Invalid port for service {_svc.get('name')}"}, status=status.HTTP_400_BAD_REQUEST)
+                # Don't fail the whole plan on a garbage port (AI once
+                # emitted port: 1): drop it so repo/stack detection fills
+                # a sane default instead (2026-09-08 incident).
+                _svc.pop("port", None)
             _cleaned = {k: _svc.get(k) for k in _allowed_svc if k in _svc}
             # Internal defaults True (mesh-internal over mTLS). Stored
             # explicitly so later re-dispatches keep the operator's choice.

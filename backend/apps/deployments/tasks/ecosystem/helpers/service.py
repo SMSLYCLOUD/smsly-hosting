@@ -51,12 +51,14 @@ def _detect_service_port(svc_plan: dict, stack: str = "") -> int:
       5. Stack-aware default (e.g. Django=8000, Next.js=3000)
       6. Global fallback (3000)
     """
-    # 1. Explicit port in plan
+    # 1. Explicit port in plan (user-provided). Privileged/garbage
+    # values (AI once emitted port: 1) fall through to detection
+    # instead of bricking health checks (2026-09-08 incident).
     explicit = svc_plan.get("port")
     if explicit is not None:
         try:
             p = int(explicit)
-            if _VALID_PORT_RANGE[0] <= p <= _VALID_PORT_RANGE[1]:
+            if 1024 <= p <= _VALID_PORT_RANGE[1]:
                 return p
         except (TypeError, ValueError):
             pass
@@ -183,9 +185,17 @@ def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: in
     ).strip() or "main"
     service.branch = resolved_branch
 
-    # The ecosystem plan is the source of truth for auto-managed services.
-    # Keep Service.internal_port aligned with the injected runtime PORT.
-    service.internal_port = int(port)
+    # The ecosystem plan is the source of truth for auto-managed services,
+    # but never clobber a corrected/detected port with a re-run: only
+    # adopt the plan port while the record still holds the model default
+    # (or garbage). The image-EXPOSE check at build time remains the final
+    # authority for apps that hardcode their bind port.
+    try:
+        _current_port = int(service.internal_port or 0)
+    except (TypeError, ValueError):
+        _current_port = 0
+    if _current_port in (0, 8000):
+        service.internal_port = int(port)
 
     service.buildpack = buildpack
     service.deploy_mode = deploy_mode

@@ -884,6 +884,60 @@ class TestSpiffeAgentParent(TestCase):
         self.assertIn("spiffe://ecosystem.local/spire/agent/join_token/new", cmd)
 
 
+class TestEcosystemServicePorts(TestCase):
+    """Plan garbage ports must not brick health checks (2026-09-08:
+    AI emitted port: 1 and the record kept it)."""
+
+    def test_detect_rejects_privileged_ports(self):
+        from apps.deployments.tasks.ecosystem.helpers.service import (
+            _detect_service_port,
+        )
+
+        self.assertEqual(
+            _detect_service_port({"port": 1}, "python"), 8000
+        )
+        self.assertEqual(
+            _detect_service_port({"port": 8080}, "python"), 8080
+        )
+
+    def test_apply_profile_freezes_corrected_ports(self):
+        from apps.deployments.tasks.ecosystem.helpers.service import (
+            _apply_service_profile,
+        )
+
+        svc = MagicMock()
+        svc.internal_port = 8002
+        svc.branch = "main"
+        svc.root_directory = "/"
+        svc.provider = MagicMock()
+        svc.health_check_path = "/health"
+        svc.server = None
+        provider = MagicMock()
+        _apply_service_profile(
+            svc, {"repo": "org/x", "build": "docker"}, provider, 8080
+        )
+        # Record held a corrected port: plan must not clobber it.
+        self.assertEqual(svc.internal_port, 8002)
+
+    def test_apply_profile_adopts_plan_port_from_default(self):
+        from apps.deployments.tasks.ecosystem.helpers.service import (
+            _apply_service_profile,
+        )
+
+        svc = MagicMock()
+        svc.internal_port = 8000
+        svc.branch = "main"
+        svc.root_directory = "/"
+        svc.provider = MagicMock()
+        svc.health_check_path = "/health"
+        svc.server = None
+        provider = MagicMock()
+        _apply_service_profile(
+            svc, {"repo": "org/x", "build": "docker"}, provider, 8080
+        )
+        self.assertEqual(svc.internal_port, 8080)
+
+
 class TestQueueWaveDispatch(TestCase):
     """_queue_wave must flip QUEUED→REVIEW with a Postgres-safe update."""
 

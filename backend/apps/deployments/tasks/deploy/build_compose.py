@@ -266,7 +266,22 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
             except ValueError:
                 pass
         elif service.internal_port and int(service.internal_port) != 8000:
-            env_vars['PORT'] = str(service.internal_port)
+            # If the built image EXPOSEs a single different port, the app
+            # hardcodes its bind (e.g. uvicorn --port 8002) and ignores
+            # PORT — adopt the image port or health checks probe a dead
+            # port forever (2026-09-08: policy-service serves 8002).
+            detected_port = _detect_exposed_port(service, image_name=image_name)
+            if detected_port and int(detected_port) != int(service.internal_port):
+                logger.warning(
+                    "Service %s record port %s disagrees with image EXPOSE %s — "
+                    "adopting image port (app hardcodes its bind)",
+                    service.name, service.internal_port, detected_port,
+                )
+                env_vars['PORT'] = str(detected_port)
+                service.internal_port = int(detected_port)
+                service.save(update_fields=['internal_port'])
+            else:
+                env_vars['PORT'] = str(service.internal_port)
         else:
             detected_port = _detect_exposed_port(service, image_name=image_name)
             if detected_port:
