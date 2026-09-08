@@ -198,8 +198,9 @@ ERROR_PATTERNS: list[dict[str, Any]] = [
     },
     {
         'regex': re.compile(
-            r'Listening on.*?:(\d+)|Server started on.*?:(\d+)|'
-            r'Running on.*?:(\d+)|Started on port (\d+)',
+            r'Listening on.*?:(\d+)|Listening at.*?:(\d+)|Server started on.*?:(\d+)|'
+            r'Running on.*?:(\d+)|Started on port (\d+)|'
+            r'Uvicorn running on.*?(\d+)|Hypercorn running on.*?(\d+)',
             re.IGNORECASE
         ),
         'category': 'Port Detection',
@@ -401,18 +402,34 @@ def _apply_fix(
         groups = match.groups()
         port = next((g for g in groups if g), None)
         if port and service:
+            applied = []
             current_port = EnvironmentVariable.objects.filter(
                 service=service, key='PORT'
             ).first()
             if current_port and current_port.value != port:
                 current_port.value = port
                 current_port.save()
-                return f"Corrected PORT: {current_port.value} → {port}"
+                applied.append(f"Corrected PORT: {current_port.value} → {port}")
             elif not current_port:
                 EnvironmentVariable.objects.create(
                     service=service, key='PORT', value=port, is_secret=False
                 )
-                return f"Auto-set PORT={port} (detected from logs)"
+                applied.append(f"Auto-set PORT={port} (detected from logs)")
+            # The service record drives health checks, Traefik and future
+            # PORT assembly — a corrected EnvVar alone never takes effect
+            # (2026-09-08: policy serves 8002, record said 8080).
+            try:
+                if int(service.internal_port or 0) != int(port):
+                    old_port = service.internal_port
+                    service.internal_port = int(port)
+                    service.save(update_fields=['internal_port'])
+                    applied.append(
+                        f"Corrected internal_port: {old_port} → {port}"
+                    )
+            except (TypeError, ValueError):
+                pass
+            if applied:
+                return "; ".join(applied)
         return None
 
     # ── Resource boost ──
