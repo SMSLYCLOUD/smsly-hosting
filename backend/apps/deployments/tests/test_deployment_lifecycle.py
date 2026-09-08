@@ -1,5 +1,6 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from apps.deployments.models.core import Service, Deployment
 
 User = get_user_model()
@@ -62,3 +63,27 @@ class DeploymentLifecycleTests(TestCase):
         d1.refresh_from_db()
         self.assertEqual(d1.status, Deployment.Status.INACTIVE)
         self.assertEqual(d2.status, Deployment.Status.ACTIVE)
+
+    def test_failed_activation_preserves_previous_active(self):
+        previous = Deployment.objects.create(
+            service=self.service,
+            status=Deployment.Status.ACTIVE,
+            commit_hash='previous',
+        )
+        replacement = Deployment(
+            service=self.service,
+            status=Deployment.Status.ACTIVE,
+            commit_hash='x' * 41,
+        )
+
+        with self.assertRaises(ValidationError):
+            replacement.save()
+
+        previous.refresh_from_db()
+        self.assertEqual(previous.status, Deployment.Status.ACTIVE)
+        self.assertFalse(
+            Deployment.objects.filter(
+                service=self.service,
+                status=Deployment.Status.ACTIVE,
+            ).exclude(pk=previous.pk).exists()
+        )

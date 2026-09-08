@@ -1,4 +1,3 @@
-import contextlib
 import logging
 import uuid
 
@@ -234,14 +233,17 @@ class Deployment(TimeStampedModel):
         if self.status == self.Status.ACTIVE and self.service_id:
             from django.db import transaction
             with transaction.atomic():
+                # Serialize activation per service and persist the new
+                # deployment before retiring the previous one. If the new
+                # row cannot be saved, the transaction rolls back and the
+                # previous ACTIVE deployment remains live.
+                Service.objects.select_for_update().get(pk=self.service_id)
+                super().save(*args, **kwargs)
                 locked = Deployment.objects.select_for_update().filter(
                     service_id=self.service_id,
                     status=self.Status.ACTIVE,
                 )
-                if self.pk:
-                    locked = locked.exclude(pk=self.pk)
-                if self.remote_deployment_id:
-                    with contextlib.suppress(ValueError, TypeError):
-                        locked = locked.exclude(pk=uuid.UUID(self.remote_deployment_id))
+                locked = locked.exclude(pk=self.pk)
                 locked.update(status=self.Status.INACTIVE)
+            return
         super().save(*args, **kwargs)
