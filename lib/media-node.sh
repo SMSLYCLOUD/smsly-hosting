@@ -733,7 +733,16 @@ install_agent_stack() {
         if [ ! -x "$ai_dir/venv/bin/python" ]; then
             python3 -m venv "$ai_dir/venv"
         fi
+        # Ubuntu venvs can ship without pip — bootstrap it or every
+        # install below silently no-ops (once cost us a crashlooping daemon).
+        "$ai_dir/venv/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
         "$ai_dir/venv/bin/pip" install -q -r "$ai_src/requirements.txt"
+        # Verify (a silent pip failure once shipped a venv without numpy —
+        # the daemon then crashlooped). Retry verbosely once before moving on.
+        if ! sudo -u smsly "$ai_dir/venv/bin/python" -c "import numpy, faster_whisper, piper" 2>/dev/null; then
+            echo -e "${YELLOW}  ⚠ ai-services venv incomplete — retrying pip install verbosely...${NC}"
+            sudo -u smsly "$ai_dir/venv/bin/pip" install -r "$ai_src/requirements.txt" 2>&1 | tail -3 || true
+        fi
         cp -f "$ai_src/server.py" "$ai_dir/server.py"
         chown smsly:smsly "$ai_dir/server.py"
         # Pre-download models so first calls never block on network.
