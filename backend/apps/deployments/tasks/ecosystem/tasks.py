@@ -586,6 +586,42 @@ def _ensure_valid_fernet_env_value(key_upper: str, value_text: str) -> str:
     return value_text
 
 
+def _unknown_plan_service_ref(exc_text, entries_by_key, deployment_by_repo_key):
+    """Return the referenced service name if a prep failure is a forward
+    reference to a plan service created later in the loop (2026-09-08).
+
+    Matches "Service placeholder references unknown service 'X'" against
+    not-yet-prepared plan entries. Returns None for genuinely unknown
+    refs (still hard-fail) and for refs to already-prepared entries
+    (resolvable — a repeat failure is real).
+    """
+    import re as _re
+
+    match = _re.search(r"unknown service '(.+?)'", str(exc_text or ""))
+    if not match:
+        return None
+    ref = match.group(1).strip().lower()
+    if not ref:
+        return None
+    for key, entry in (entries_by_key or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if key in (deployment_by_repo_key or {}):
+            continue
+        aliases = {
+            str(entry.get("name") or "").strip().lower(),
+            str(entry.get("requested_name") or "").strip().lower(),
+            str(key or "").strip().lower(),
+            str(entry.get("repo") or "").strip().lower(),
+            _repo_short_name(entry.get("repo")).lower(),
+            _slugify_name(entry.get("name") or "").lower(),
+        }
+        aliases.discard("")
+        if ref in aliases:
+            return match.group(1).strip()
+    return None
+
+
 @shared_task(
     bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_deploy_task", queue='deploy',
     soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1],
@@ -1377,7 +1413,16 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         except Exception as exc:
             logger.warning("Failed to write communication rules: %s", exc)
 
-    for repo_key in ordered_keys:
+    # Two-pass creation: a service whose {{SERVICE:x}} placeholder names
+    # a plan service created LATER in this loop fails resolution on the
+    # first attempt (the target row doesn't exist yet). Re-queue it at
+    # the end for one retry pass instead of failing it (2026-09-08:
+    # transaction-chain/identity/backoffice failed on smsly-frontend).
+    # Bounded: each key is re-queued at most once, so genuinely unknown
+    # refs still fail instead of looping forever.
+    _requeued_unknown_service_keys: set[str] = set()
+    creation_order = list(ordered_keys)
+    for repo_key in creation_order:
         entry = entries_by_key[repo_key]
         svc_plan = entry["plan"]
         repo = entry["repo"]
@@ -1793,6 +1838,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 except Exception:
                     pass
         except Exception as exc:  # pylint: disable=broad-exception-caught
+            _unknown_ref = _unknown_plan_service_ref(
+                str(exc), entries_by_key, deployment_by_repo_key,
+            )
+            if _unknown_ref and repo_key not in _requeued_unknown_service_keys:
+                _requeued_unknown_service_keys.add(repo_key)
+                creation_order.append(repo_key)
+                logger.warning(
+                    "Deferring %s to end of creation queue "
+                    "(service '%s' not created yet)",
+                    repo, _unknown_ref,
+                )
+                continue
             logger.error("Failed to prepare deploy for %s: %s", repo, exc)
             results.append({
                 "repo": repo,

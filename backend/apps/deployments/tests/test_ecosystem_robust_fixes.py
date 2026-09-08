@@ -14,6 +14,7 @@ from apps.deployments.tasks.ecosystem.tasks import (
     _finalize_ecosystem_plan,
     _another_deploy_attempt_running,
     _ensure_valid_fernet_env_value,
+    _unknown_plan_service_ref,
     _rollback_ecosystem_deploy,
     ecosystem_deferred_build_task,
     ecosystem_deploy_task,
@@ -678,6 +679,55 @@ class TestFernetEnvRepair(TestCase):
             _ensure_valid_fernet_env_value("DATABASE_URL", "postgres://x"),
             "postgres://x",
         )
+
+
+class TestUnknownPlanServiceRef(TestCase):
+    """_unknown_plan_service_ref: only forward refs to unprepared plan
+    entries qualify for the creation retry (2026-09-08)."""
+
+    def _entries(self):
+        return {
+            "smslycloud/smsly-frontend": {
+                "repo": "smslycloud/smsly-frontend",
+                "name": "smsly-frontend",
+                "requested_name": "smsly-frontend",
+            },
+            "smslycloud/smsly-backend": {
+                "repo": "smslycloud/smsly-backend",
+                "name": "smsly-backend",
+                "requested_name": "smsly-backend",
+            },
+        }
+
+    def test_forward_ref_to_unprepared_entry_matches(self):
+        ref = _unknown_plan_service_ref(
+            "Service placeholder references unknown service 'smsly-frontend'. "
+            "Declare it in the ecosystem plan before deployment.",
+            self._entries(),
+            {"smslycloud/smsly-backend": "dep-1"},
+        )
+        self.assertEqual(ref, "smsly-frontend")
+
+    def test_ref_to_prepared_entry_is_none(self):
+        ref = _unknown_plan_service_ref(
+            "Service placeholder references unknown service 'smsly-backend'. Declare it.",
+            self._entries(),
+            {"smslycloud/smsly-backend": "dep-1",
+             "smslycloud/smsly-frontend": "dep-2"},
+        )
+        self.assertIsNone(ref)
+
+    def test_genuinely_unknown_ref_is_none(self):
+        ref = _unknown_plan_service_ref(
+            "Service placeholder references unknown service 'nope'. Declare it.",
+            self._entries(),
+            {},
+        )
+        self.assertIsNone(ref)
+
+    def test_unrelated_error_is_none(self):
+        ref = _unknown_plan_service_ref("boom", self._entries(), {})
+        self.assertIsNone(ref)
 
 
 class TestQueueWaveDispatch(TestCase):
