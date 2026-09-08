@@ -133,6 +133,15 @@ TURN_SECRET=${turn_secret}
 # LiveKit SFU (rendered into /etc/livekit/livekit.yaml by install_livekit)
 LIVEKIT_API_KEY=${livekit_api_key}
 LIVEKIT_API_SECRET=${livekit_api_secret}
+LIVEKIT_URL=ws://127.0.0.1:7880
+
+# AI voice agent stack (all self-hosted, no cloud APIs)
+WHISPER_MODEL=${WHISPER_MODEL:-base}
+WHISPER_URL=http://127.0.0.1:8091
+PIPER_URL=http://127.0.0.1:8091
+LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+LLM_BASE_URL=${LLM_BASE_URL:-http://127.0.0.1:11434}
+LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
 
     # Node identity
 PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip  || echo "")}
@@ -178,9 +187,8 @@ install_media_packages() {
     apt-get update -qq
     # NOTE: `postgresql` (no version) tracks the distro default (14 on
     # jammy, 16 on noble) — every media component talks stock SQL, so no
-    # PGDG pin is needed. freeswitch/fs_cli/openresty are NOT in Ubuntu
-    # archives; their repos are added below (warn-tolerant: the node still
-    # provisions without voice switching / edge proxy).
+    # PGDG pin is needed. Asterisk ships in Ubuntu archives (fully OSS,
+    # no token). openresty needs its own repo (warn-tolerant).
     # Never prompt on conffiles: Phase 3 deploys our configs over stock
     # paths, so re-runs must keep them (conffold) without asking.
     local -a apt_conf=(
@@ -224,28 +232,15 @@ install_media_packages() {
         fi
     fi
 
-    # ── FreeSWITCH (SignalWire repo; voice switching) ──
-    # SignalWire's apt repo needs a free Personal Access Token
-    # (id.signalwire.com): pass FREESWITCH_REPO_TOKEN in the environment.
-    # Debian bookworm binaries run fine on Ubuntu noble. Without a token
-    # there is no public binary source, so this stays warn-and-continue.
-    if ! command -v freeswitch >/dev/null 2>&1; then
-        if [ -n "${FREESWITCH_REPO_TOKEN:-}" ]; then
-            echo -e "${BLUE}  → Adding authenticated SignalWire repository...${NC}"
-            if curl -fsSL https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-repo.gpg 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/signalwire-freeswitch-repo.gpg 2>/dev/null; then
-                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/signalwire-freeswitch-repo.gpg] https://${FREESWITCH_REPO_TOKEN}@freeswitch.signalwire.com/repo/deb/debian-release/ bookworm main" > /etc/apt/sources.list.d/freeswitch.list
-                chmod 600 /etc/apt/sources.list.d/freeswitch.list
-                if apt-get update -qq; then
-                    apt-get install -y -qq "${apt_conf[@]}" freeswitch-meta-vanilla fs_cli || echo -e "${YELLOW}  ⚠ FreeSWITCH install failed — voice switching unavailable (non-fatal)${NC}"
-                else
-                    echo -e "${YELLOW}  ⚠ FreeSWITCH repo update failed — check FREESWITCH_REPO_TOKEN (non-fatal)${NC}"
-                fi
-            else
-                echo -e "${YELLOW}  ⚠ SignalWire key download failed — voice switching unavailable (non-fatal)${NC}"
-            fi
-        else
-            echo -e "${YELLOW}  ⚠ FREESWITCH_REPO_TOKEN not set — skipping FreeSWITCH (create a free PAT at id.signalwire.com to enable)${NC}"
-        fi
+    # ── Asterisk (Ubuntu archive, no token/repo needed; fully OSS) ──
+    # This stack is 100% token-free: Asterisk is the on-box B2BUA
+    # (voicemail, conferencing, PSTN interop) behind Kamailio. It binds
+    # 127.0.0.1:5080 only — Kamailio owns public :5060 and relays the
+    # 5xx extension range to it (see infrastructure/media/kamailio).
+    if ! command -v asterisk >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Installing Asterisk PBX...${NC}"
+        apt-get install -y -qq "${apt_conf[@]}" asterisk \
+            || echo -e "${YELLOW}  ⚠ Asterisk install failed — on-box PBX unavailable (non-fatal)${NC}"
     fi
         
 
@@ -274,7 +269,7 @@ install_media_packages() {
 # only what the media configs define.
 stop_stale_media_listeners() {
     echo -e "${BLUE}  → Clearing stale listeners from media ports...${NC}"
-    for squat in kamailio coturn rtpengine freeswitch livekit-server openresty nginx apache2; do
+    for squat in kamailio coturn rtpengine asterisk freeswitch openresty nginx apache2; do
         systemctl stop "$squat" 2>/dev/null || true
         systemctl disable "$squat" 2>/dev/null || true
     done
@@ -305,6 +300,16 @@ deploy_media_configs() {
     # FreeSWITCH
     [ -d /etc/freeswitch ] && cp -f "$infra_dir/freeswitch/freeswitch.xml" /etc/freeswitch/  || true
 
+    # Asterisk (on-box B2BUA behind Kamailio; binds loopback only)
+    [ -d /etc/asterisk ] || mkdir -p /etc/asterisk
+    cp -f "$infra_dir/asterisk/pjsip.conf" /etc/asterisk/  || true
+    cp -f "$infra_dir/asterisk/extensions.conf" /etc/asterisk/  || true
+
+    # coturn (was silently skipped before — stock config has no auth secret,
+    # so TURN allocate always failed). Debian coturn reads
+    # /etc/turnserver.conf by default.
+    cp -f "$infra_dir/coturn/turnserver.conf" /etc/turnserver.conf  || true
+
     # RTPEngine
     [ -d /etc/rtpengine ] || mkdir -p /etc/rtpengine
     cp -f "$infra_dir/rtpengine/rtpengine.conf" /etc/rtpengine/  || true
@@ -328,7 +333,7 @@ deploy_media_systemd_units() {
     fi
 
     local installed=0
-    for unit in coturn.service rtpengine.service livekit-server.service smsly-media-mgmt.service smsly-voice-api.service smsly-video.service; do
+    for unit in coturn.service rtpengine.service livekit-server.service smsly-media-mgmt.service smsly-voice-api.service smsly-video.service smsly-ai-services.service smsly-voicebot-orchestrator.service; do
         if [ -f "$units_dir/$unit" ]; then
             cp -f "$units_dir/$unit" /etc/systemd/system/
             echo -e "  → Installed ${unit}"
@@ -361,15 +366,25 @@ template_media_configs() {
             /etc/kamailio/kamailio.cfg
     fi
 
-    # coturn
-    if [ -f /etc/coturn/turnserver.conf ]; then
+    # coturn (Debian default path)
+    if [ -f /etc/turnserver.conf ]; then
         sed -i \
             -e "s|\${PUBLIC_IP}|${PUBLIC_IP}|g" \
             -e "s|\${PRIVATE_IP}|${PRIVATE_IP:-127.0.0.1}|g" \
             -e "s|\${TURN_SECRET}|${TURN_SECRET}|g" \
             -e "s|\${DOMAIN}|${DOMAIN}|g" \
-            /etc/coturn/turnserver.conf
+            /etc/turnserver.conf
     fi
+
+    # Asterisk trunk contact (Kamailio's IP)
+    for _f in /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf; do
+        if [ -f "$_f" ]; then
+            sed -i \
+                -e "s|\${PUBLIC_IP}|${PUBLIC_IP}|g" \
+                -e "s|\${PRIVATE_IP}|${PRIVATE_IP:-127.0.0.1}|g" \
+                "$_f"
+        fi
+    done
 
     # RTPEngine
     if [ -f /etc/rtpengine/rtpengine.conf ]; then
@@ -402,8 +417,9 @@ start_media_services() {
     systemctl reset-failed 2>/dev/null || true
 
     local infra_services=(postgresql redis-server wireguard)
-    local media_services=(kamailio rtpengine freeswitch coturn livekit-server)
+    local media_services=(kamailio rtpengine asterisk coturn livekit-server)
     local app_services=(smsly-voice-api smsly-video)
+    local agent_services=(smsly-ai-services smsly-voicebot-orchestrator)
     local mgmt_services=(smsly-media-mgmt openresty)
 
     for svc in "${infra_services[@]}"; do
@@ -417,6 +433,10 @@ start_media_services() {
     sleep 1
 
     for svc in "${app_services[@]}"; do
+        systemctl enable --now "$svc" || echo -e "${YELLOW}    ⚠ systemctl enable --now $svc failed${NC}"
+    done
+
+    for svc in "${agent_services[@]}"; do
         systemctl enable --now "$svc" || echo -e "${YELLOW}    ⚠ systemctl enable --now $svc failed${NC}"
     done
 
@@ -436,7 +456,10 @@ verify_media_services() {
         "postgresql:pg_isready -q"
         "redis:redis-cli ping"
         "kamailio:ss -ulnp | grep -q ':5060 '"
+        "asterisk:asterisk -rx 'core show version' >/dev/null 2>&1"
         "livekit-server:nc -z 127.0.0.1 7880"
+        "smsly-ai-services:curl -sf http://127.0.0.1:8091/health"
+        "smsly-voicebot-orchestrator:curl -sf http://127.0.0.1:3001/health"
         "smsly-media-mgmt:curl -sf http://127.0.0.1:9090/health"
     )
 
@@ -674,6 +697,94 @@ EOF
     echo -e "${GREEN}  ✓ LiveKit config rendered${NC}"
 }
 
+# ─── Install AI voice agent stack (all self-hosted) ───────────────────────
+# Three OSS pieces, zero cloud APIs:
+#   1. Ollama + open model (default qwen2.5:3b) for the LLM leg.
+#   2. smsly-ai-services: one Python daemon serving faster-whisper STT
+#      (/inference) and Piper TTS (/synthesize) on 127.0.0.1:8091.
+#   3. smsly-voicebot-orchestrator (Rust): joins LiveKit rooms and runs
+#      the listen → STT → LLM → TTS → speak loop.
+install_agent_stack() {
+    local script_dir="$1"
+    echo -e "${BLUE}  → Installing AI voice agent stack...${NC}"
+
+    # 1. Ollama (official install script, no token needed)
+    if ! command -v ollama >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Installing Ollama...${NC}"
+        curl -fsSL https://ollama.com/install.sh | sh
+    fi
+    systemctl enable --now ollama 2>/dev/null || true
+    local llm_model="${LLM_MODEL:-qwen2.5:3b}"
+    echo -e "${BLUE}  → Pulling LLM model ${llm_model} (one-time, ~2GB)...${NC}"
+    if ! ollama pull "$llm_model" 2>&1 | tail -2; then
+        echo -e "${YELLOW}  ⚠ LLM model pull failed — agent falls back when Ollama is ready (non-fatal)${NC}"
+    fi
+
+    # 2. STT+TTS daemon (venv keeps apt Python pristine). Source lives in
+    # the staged voice tree; /opt/smsly-voice-src is the canonical path
+    # the provisioner stages (GitHub App fetch, no node-side credentials).
+    local ai_dir="/opt/smsly-ai"
+    local ai_src="/opt/smsly-voice-src/infrastructure/voicebot/ai-services"
+    if [ ! -f "$ai_src/server.py" ]; then
+        echo -e "${YELLOW}  ⚠ ai-services source not found — skipping STT/TTS daemon (non-fatal)${NC}"
+    else
+        mkdir -p "$ai_dir/models" "$ai_dir/voices" "$ai_dir/hf-cache"
+        chown -R smsly:smsly "$ai_dir"
+        if [ ! -x "$ai_dir/venv/bin/python" ]; then
+            python3 -m venv "$ai_dir/venv"
+        fi
+        "$ai_dir/venv/bin/pip" install -q -r "$ai_src/requirements.txt"
+        cp -f "$ai_src/server.py" "$ai_dir/server.py"
+        chown smsly:smsly "$ai_dir/server.py"
+        # Pre-download models so first calls never block on network.
+        sudo -u smsly HF_HOME="$ai_dir/hf-cache" "$ai_dir/venv/bin/python" -c \
+            "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL:-base}')" 2>&1 | tail -1 || true
+        if [ ! -f "$ai_dir/voices/en_US-lessac-medium.onnx" ]; then
+            curl -fsSL --max-time 300 \
+                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx" \
+                -o "$ai_dir/voices/en_US-lessac-medium.onnx" || true
+            curl -fsSL --max-time 120 \
+                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json" \
+                -o "$ai_dir/voices/en_US-lessac-medium.onnx.json" || true
+            chown smsly:smsly "$ai_dir/voices/"* 2>/dev/null || true
+        fi
+        echo -e "${GREEN}  ✓ AI speech services staged${NC}"
+    fi
+
+    # 3. Orchestrator binary (built from the staged voice tree). Its WebRTC
+    # dependency needs clang 21+ (Ubuntu noble ships 18): bootstrap it from
+    # apt.llvm.org once, then reuse for every later build on this box.
+    # webrtc-sys also needs glib/ALSA headers for its build scripts.
+    local orch_src="/opt/smsly-voice-src/infrastructure/voicebot/ai-orchestrator"
+    if [ ! -f "$orch_src/Cargo.toml" ]; then
+        echo -e "${YELLOW}  ⚠ orchestrator source not found — skipping build (non-fatal)${NC}"
+    else
+        apt-get install -y -qq libglib2.0-dev libasound2-dev 2>&1 | tail -1 || true
+        if ! command -v clang++-21 >/dev/null 2>&1; then
+            echo -e "${BLUE}  → Installing clang-21 (WebRTC build requirement)...${NC}"
+            curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key 2>/dev/null \
+                | gpg --dearmor -o /usr/share/keyrings/llvm.gpg 2>/dev/null || true
+            echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" \
+                > /etc/apt/sources.list.d/llvm.list
+            apt-get update -qq && apt-get install -y -qq clang-21 || true
+        fi
+        export PATH="$HOME/.cargo/bin:$PATH"
+        export CC=clang-21 CXX=clang++-21
+        echo -e "${BLUE}  → Building voicebot orchestrator (one-time, ~25 min, mostly WebRTC C++)...${NC}"
+        if (cd "$orch_src" && cargo build --release 2>&1 | tail -5); then
+            # Stop first: overwriting a running binary fails with ETXTBSY.
+            # start_media_services (later phase) brings it back up.
+            systemctl stop smsly-voicebot-orchestrator 2>/dev/null || true
+            install -o smsly -g smsly -m 0755 \
+                "$orch_src/target/release/smsly-voicebot-orchestrator" \
+                /usr/local/bin/smsly-voicebot-orchestrator
+            echo -e "${GREEN}  ✓ Orchestrator installed${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Orchestrator build failed — agent calls unavailable until rebuilt (non-fatal)${NC}"
+        fi
+    fi
+}
+
 install_media_node() {
     local script_dir="$1"
     echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
@@ -741,7 +852,7 @@ update_media_node() {
 
     # Restart all media services
     echo -e "${BLUE}  → Restarting media services...${NC}"
-    for svc in smsly-media-mgmt smsly-voice-api smsly-video livekit-server rtpengine freeswitch kamailio coturn openresty; do
+    for svc in smsly-media-mgmt smsly-voice-api smsly-video livekit-server rtpengine asterisk kamailio coturn openresty; do
         systemctl restart "$svc" || echo -e "${YELLOW}    ⚠ systemctl restart $svc failed${NC}"
     done
 

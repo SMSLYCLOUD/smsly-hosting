@@ -1,0 +1,26 @@
+[Unit]
+Description=SMSLY AI Speech Services (Whisper STT + Piper TTS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smsly
+Group=smsly
+ExecStart=/opt/smsly-ai/venv/bin/python /opt/smsly-ai/server.py
+Environment=AI_BIND=127.0.0.1
+Environment=AI_PORT=8091
+Environment=HF_HOME=/opt/smsly-ai/hf-cache
+Environment=XDG_CACHE_HOME=/opt/smsly-ai/hf-cache
+EnvironmentFile=-/opt/smsly-hosting-media/.env
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smsly /run/smsly /opt/smsly-ai
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+[Unit]
+Description=SMSLY Voicebot Orchestrator (AI agent call loop)
+After=network-online.target smsly-ai-services.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smsly
+Group=smsly
+ExecStart=/usr/local/bin/smsly-voicebot-orchestrator
+# ORCHESTRATOR_PORT (not PORT): the shared node .env carries PORT=8002 for
+# the voice API and EnvironmentFile wins over Environment= entries here.
+EnvironmentFile=-/opt/smsly-hosting-media/.env
+Environment=ORCHESTRATOR_PORT=3001
+Environment=LIVEKIT_URL=ws://127.0.0.1:7880
+Environment=WHISPER_URL=http://127.0.0.1:8091
+Environment=PIPER_URL=http://127.0.0.1:8091
+Environment=LLM_PROVIDER=ollama
+Environment=LLM_BASE_URL=http://127.0.0.1:11434
+Environment=LLM_MODEL=qwen2.5:3b
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smsly /run/smsly
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
