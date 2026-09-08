@@ -102,6 +102,8 @@ generate_media_secrets() {
     jwt_secret="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
     local webhook_secret
     webhook_secret="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    local attestation_api_key
+    attestation_api_key="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
     cat > "$env_file" <<EOF
 # SMSLY Media Node — Auto-generated secrets
@@ -125,6 +127,8 @@ DATABASE_URL=postgresql://smsly_voice:${postgres_password}@127.0.0.1:5432/smsly_
 REDIS_URL=redis://127.0.0.1:6379
 JWT_SECRET=${jwt_secret}
 WEBHOOK_SECRET=${webhook_secret}
+# Attestation engine API key (its middleware denies everything without it)
+ATTESTATION_API_KEY=${attestation_api_key}
 PORT=8002
 
 # TURN
@@ -333,7 +337,7 @@ deploy_media_systemd_units() {
     fi
 
     local installed=0
-    for unit in coturn.service rtpengine.service livekit-server.service smsly-media-mgmt.service smsly-voice-api.service smsly-video.service smsly-ai-services.service smsly-voicebot-orchestrator.service; do
+    for unit in coturn.service rtpengine.service livekit-server.service smsly-media-mgmt.service smsly-voice-api.service smsly-video.service smsly-ai-services.service smsly-voicebot-orchestrator.service smsly-attestation.service; do
         if [ -f "$units_dir/$unit" ]; then
             cp -f "$units_dir/$unit" /etc/systemd/system/
             echo -e "  → Installed ${unit}"
@@ -403,6 +407,19 @@ template_media_configs() {
             -e "s|\${MASTER_API_URL}|${MASTER_API_URL}|g" \
             -e "s|\${GATEWAY_SECRET}|${GATEWAY_SECRET}|g" \
             /etc/smsly/attestation.json
+        # The engine runs as smsly and must read its config.
+        chown smsly:smsly /etc/smsly/attestation.json 2>/dev/null || true
+        chmod 640 /etc/smsly/attestation.json 2>/dev/null || true
+    fi
+
+    # Backfill secrets introduced after this node was provisioned (fresh
+    # installs get them from generate_media_secrets; existing .env files
+    # keep their values — never rotate here).
+    if [ -n "$env_file" ] && [ -f "$env_file" ] && ! grep -q '^ATTESTATION_API_KEY=' "$env_file"; then
+        local _k
+        _k="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+        printf '\nATTESTATION_API_KEY=%s\n' "$_k" >> "$env_file"
+        echo -e "${BLUE}  → Backfilled ATTESTATION_API_KEY into node .env${NC}"
     fi
 
     echo -e "${GREEN}  ✓ Configs templated${NC}"
@@ -418,7 +435,7 @@ start_media_services() {
 
     local infra_services=(postgresql redis-server wireguard)
     local media_services=(kamailio rtpengine asterisk coturn livekit-server)
-    local app_services=(smsly-voice-api smsly-video)
+    local app_services=(smsly-voice-api smsly-video smsly-attestation)
     local agent_services=(smsly-ai-services smsly-voicebot-orchestrator)
     local mgmt_services=(smsly-media-mgmt openresty)
 
@@ -460,6 +477,7 @@ verify_media_services() {
         "livekit-server:nc -z 127.0.0.1 7880"
         "smsly-ai-services:curl -sf http://127.0.0.1:8091/health"
         "smsly-voicebot-orchestrator:curl -sf http://127.0.0.1:3001/health"
+        "smsly-attestation:curl -sf http://127.0.0.1:9091/health"
         "smsly-media-mgmt:curl -sf http://127.0.0.1:9090/health"
     )
 
@@ -626,6 +644,17 @@ build_media_applications() {
         return 1
     }
     install -o smsly -g smsly -m 0755 target/release/smsly-api /usr/local/bin/smsly-api
+
+    echo -e "${BLUE}  → Building smsly-attestation-engine...${NC}"
+    cd "$attestation_dir/engine"
+    cargo build --release >/tmp/smsly-attestation-build.log 2>&1 || {
+        tail -60 /tmp/smsly-attestation-build.log
+        return 1
+    }
+    # Stop first: overwriting a running binary fails with ETXTBSY.
+    # start_media_services (later phase) brings it back up.
+    systemctl stop smsly-attestation 2>/dev/null || true
+    install -o smsly -g smsly -m 0755 target/release/smsly-attestation-engine /usr/local/bin/smsly-attestation-engine
 }
 
 # ─── Install LiveKit SFU server ────────────────────────────────────────────

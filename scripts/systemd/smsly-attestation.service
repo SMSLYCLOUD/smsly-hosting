@@ -1,0 +1,23 @@
+[Unit]
+Description=SMSLY Attestation Engine (chain-stamp intake + MIP v2)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smsly
+Group=smsly
+ExecStart=/usr/local/bin/smsly-attestation-engine --config /etc/smsly/attestation.json
+Environment=RUST_LOG=smsly_attestation_engine=info
+EnvironmentFile=-/opt/smsly-hosting-media/.env
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smsly /run/smsly
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
