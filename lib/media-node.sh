@@ -398,7 +398,25 @@ template_media_configs() {
             /etc/rtpengine/rtpengine.conf
     fi
 
-    # Attestation
+    # Attestation ENGINE config (chain-stamp intake service, :9091).
+    # NOTE: this path belongs to the engine. The similarly-named template
+    # under infrastructure/media/attestation/ is the MGMT daemon config
+    # (installed as media-mgmt.json) — do not confuse the two.
+    if [ ! -f /etc/smsly/attestation.json ]; then
+        cat > /etc/smsly/attestation.json <<EOF
+{
+  "node_id": "${NODE_ID}",
+  "port": 9091,
+  "backend": {"type": "software", "tpm2_device": "/dev/tpm0", "key_hierarchy": "owner", "counter_id": "mip-stamp-counter"},
+  "algorithm_suite": "hybrid",
+  "db_url": "postgresql://smsly_voice:${POSTGRES_PASSWORD}@127.0.0.1:5432/smsly_voice",
+  "redis_url": "redis://127.0.0.1:6379",
+  "master_api_url": "${MASTER_API_URL}",
+  "gateway_secret": "${GATEWAY_SECRET}"
+}
+EOF
+        echo -e "${BLUE}  → Wrote attestation engine config${NC}"
+    fi
     if [ -f /etc/smsly/attestation.json ]; then
         sed -i \
             -e "s|\${NODE_ID}|${NODE_ID}|g" \
