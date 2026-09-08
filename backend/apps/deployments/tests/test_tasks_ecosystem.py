@@ -309,7 +309,11 @@ class DependencyWaveTests(SimpleTestCase):
         self.assertEqual(flat.index("api") < flat.index("frontend"), True)
         self.assertEqual(len(unresolved), 0)
 
-    def test_service_env_references_create_dependencies(self):
+    def test_service_env_references_do_not_create_dependencies(self):
+        # {{SERVICE:x}} resolves to a deterministic internal URL from
+        # service records — deploy order is irrelevant, so placeholders
+        # must not form ordering edges (2026-09-08: mutual frontend↔
+        # identity URL refs hard-failed a plan as "cyclic").
         entries = {
             "owner/backend": {
                 "repo": "owner/backend",
@@ -330,12 +334,51 @@ class DependencyWaveTests(SimpleTestCase):
         }
 
         deps = _resolve_dependency_map(entries)
-        self.assertEqual(deps["owner/frontend"], {"owner/backend"})
+        self.assertEqual(deps["owner/frontend"], set())
 
         waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
-        self.assertEqual(waves[0], ["owner/backend"])
-        self.assertEqual(waves[1], ["owner/frontend"])
+        self.assertEqual(len(waves), 1)
+        self.assertEqual(set(waves[0]), {"owner/backend", "owner/frontend"})
         self.assertEqual(unresolved, [])
+
+    def test_mutual_service_url_refs_are_not_cyclic(self):
+        entries = {
+            "owner/identity-service": {
+                "repo": "owner/identity-service",
+                "name": "identity-service",
+                "requested_name": "identity-service",
+                "deploy_order": 1,
+                "depends_on": [],
+                "plan": {"env_vars": {"FRONTEND_URL": "{{SERVICE:frontend}}"}},
+            },
+            "owner/frontend": {
+                "repo": "owner/frontend",
+                "name": "frontend",
+                "requested_name": "frontend",
+                "deploy_order": 1,
+                "depends_on": [],
+                "plan": {"env_vars": {
+                    "API_URL": "{{SERVICE:backend}}",
+                    "IDENTITY_URL": "{{SERVICE:identity-service}}",
+                }},
+            },
+            "owner/backend": {
+                "repo": "owner/backend",
+                "name": "backend",
+                "requested_name": "backend",
+                "deploy_order": 1,
+                "depends_on": [],
+                "plan": {"env_vars": {}},
+            },
+        }
+
+        deps = _resolve_dependency_map(entries)
+        waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
+        self.assertEqual(unresolved, [])
+        self.assertEqual(
+            {k for wave in waves for k in wave},
+            {"owner/identity-service", "owner/frontend", "owner/backend"},
+        )
 
     def test_independent_services_in_same_wave(self):
         entries = {

@@ -11,7 +11,6 @@ from apps.deployments.tasks.ecosystem.constants import (
     _VALID_PORT_RANGE,
 )
 
-from .env_vars import _service_placeholder_refs
 from .repo import (
     _canonical_repo_ref,
     _slugify_name,
@@ -259,9 +258,16 @@ def _resolve_dependency_map(
     resolved: dict[str, set[str]] = {}
     for key, entry in entries_by_key.items():
         deps: set[str] = set()
+        # NOTE: only explicit depends_on forms ordering edges.
+        # {{SERVICE:x}} env placeholders resolve to deterministic
+        # internal URLs (http://name:port) from service records that
+        # are all created BEFORE any wave runs — deploy order is
+        # irrelevant to them. Treating mutual URL refs (frontend
+        # needs the API URL, identity needs the frontend URL for
+        # CORS) as edges false-flagged every such plan as "cyclic
+        # dependencies" and hard-failed it (2026-09-08 incident).
         raw_tokens = [
             *_extract_dependencies(entry.get("depends_on", [])),
-            *_service_placeholder_refs(entry.get("plan", {}).get("env_vars", {})),
         ]
         for token in raw_tokens:
             token_text = token.strip().lower()
