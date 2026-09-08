@@ -916,6 +916,7 @@ services:
     - backups_data:/app/backups
     - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
+    - ./infrastructure/envoy/envoy.yaml.template:/opt/smsly/envoy.yaml.template:ro,z
     healthcheck:
       test:
       - CMD-SHELL
@@ -1056,6 +1057,7 @@ services:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
+      ENVOY_TEMPLATE_PATH: /opt/smsly/envoy.yaml.template
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
@@ -1078,6 +1080,7 @@ services:
     - backups_data:/app/backups
     - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
+    - ./infrastructure/envoy/envoy.yaml.template:/opt/smsly/envoy.yaml.template:ro,z
     healthcheck:
       test:
       - CMD-SHELL
@@ -1121,6 +1124,7 @@ services:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
+      ENVOY_TEMPLATE_PATH: /opt/smsly/envoy.yaml.template
 
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
@@ -1147,6 +1151,7 @@ services:
     - backups_data:/app/backups
     - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
+    - ./infrastructure/envoy/envoy.yaml.template:/opt/smsly/envoy.yaml.template:ro,z
     healthcheck:
       test:
       - CMD-SHELL
