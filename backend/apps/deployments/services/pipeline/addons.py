@@ -610,6 +610,10 @@ class AddonMixin:
 
             # Re-provision/verify existing addons to ensure they are running and connected
             # to the network before deployment resumes.
+            # NOTE: addon_urls is method-local (the grid.addons path has its
+            # own dict) — it must be initialised here, otherwise the shared
+            # reuse below raises NameError (2026-09-09 incident).
+            addon_urls: dict[str, str] = {}
             existing_addons = Addon.objects.filter(
                 service=self.service,
                 addon_type__in=existing,

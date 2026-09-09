@@ -29,12 +29,15 @@ from apps.deployments.utils import log_event
 logger = logging.getLogger(__name__)
 
 
-def _env_int(name: str, default: int, minimum: int = 0) -> int:
+def _env_int(name: str, default: int, minimum: int = 0, maximum: int | None = None) -> int:
     try:
         value = int(os.environ.get(name, default))
     except (TypeError, ValueError):
         value = default
-    return max(minimum, value)
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
 def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
@@ -73,6 +76,29 @@ LOW_RESOURCE_MEMORY_THRESHOLD_MB = _env_int(
     768,
     minimum=64,
 )
+
+# ── Timeout hardening (2026-09-09: monitor_health_task repeatedly hit its
+# 120s soft / 150s hard limits because a single down service probes hundreds
+# of targets sequentially. Bound the work so one stuck service can never kill
+# a worker process) ──
+# Max seconds spent probing a single service (wall-clock budget).
+HEALTH_PER_SERVICE_BUDGET_SECONDS = _env_int(
+    "HEALTH_PER_SERVICE_BUDGET_SECONDS", 20, minimum=5, maximum=60,
+)
+# Cap applied to each individual HTTP probe (min() with the service's own
+# health_check_timeout, so operator-tuned timeouts still win below the cap).
+HEALTH_PER_REQUEST_TIMEOUT_SECONDS = _env_int(
+    "HEALTH_PER_REQUEST_TIMEOUT_SECONDS", 8, minimum=1, maximum=30,
+)
+# Max probe targets evaluated per service. When the target list is longer,
+# keep the first half (public/internal) and the last half (container-local)
+# so both the external and the most reliable paths stay covered.
+HEALTH_MAX_TARGETS_PER_SERVICE = _env_int(
+    "HEALTH_MAX_TARGETS_PER_SERVICE", 24, minimum=4, maximum=100,
+)
+# Overlap guard: beat fires every 30s; a previous run still holding the lock
+# means workers are saturated — skip instead of piling up.
+HEALTH_MONITOR_LOCK_SECONDS = 28
 
 # Keep state long enough to survive process restarts and long cooldown windows.
 _MAX_COOLDOWN_SECONDS = int(
@@ -424,33 +450,59 @@ def monitor_health_task(self) -> None:
     Check health for all services with configured health paths.
 
     Uses per-service interval gating to avoid over-checking.
+    Bounded by an overlap lock and an overall wall-clock deadline so the
+    run always finishes inside its Celery soft time limit (AGENTS.md #6).
     """
+    from celery.exceptions import SoftTimeLimitExceeded
+
     from apps.deployments.models import Deployment, Service
 
-    services = Service.objects.exclude(health_check_path="").only(
-        "id", "name", "health_check_path", "health_check_port", "health_check_interval",
-        "health_check_timeout", "health_check_retries", "auto_restart",
-        "health_status", "internal_port", "public_domain", "public_domain_hidden",
-        "cpu_cores", "memory_mb", "auto_rollback_threshold",
-        "server__id", "server__is_lite_agent", "server__private_ip", "server__verify_tls",
-    )
-    checked = 0
-    skipped = 0
+    lock_key = "health:monitor:lock"
+    if not cache.add(lock_key, True, timeout=HEALTH_MONITOR_LOCK_SECONDS):
+        logger.warning("Health monitor: previous run still active, skipping overlap")
+        return
+    try:
+        # Leave headroom for the infra checks + graceful exit below.
+        soft_budget = max(30, TASK_TIME_LIMIT_QUICK[0] - 20)
+        deadline = time.monotonic() + soft_budget
 
-    for service in services:
+        services = Service.objects.exclude(health_check_path="").only(
+            "id", "name", "health_check_path", "health_check_port", "health_check_interval",
+            "health_check_timeout", "health_check_retries", "auto_restart",
+            "health_status", "internal_port", "public_domain", "public_domain_hidden",
+            "cpu_cores", "memory_mb", "auto_rollback_threshold",
+            "server__id", "server__is_lite_agent", "server__private_ip", "server__verify_tls",
+        )
+        checked = 0
+        skipped = 0
+
+        for service in services:
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "Health monitor: overall budget exhausted, deferring remaining services",
+                )
+                break
+            try:
+                if not _check_due(service):
+                    skipped += 1
+                    continue
+                _check_service_health(service, Deployment)
+                checked += 1
+            except SoftTimeLimitExceeded:
+                logger.warning("Health monitor: soft time limit hit, stopping run")
+                break
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("Health check failed for %s: %s", service.name, exc)
+
+        logger.info("Health monitor checked=%d skipped=%d", checked, skipped)
+
+        # ── Infrastructure health (Falco + fail2ban) ──
         try:
-            if not _check_due(service):
-                skipped += 1
-                continue
-            _check_service_health(service, Deployment)
-            checked += 1
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("Health check failed for %s: %s", service.name, exc)
-
-    logger.info("Health monitor checked=%d skipped=%d", checked, skipped)
-
-    # ── Infrastructure health (Falco + fail2ban) ──
-    _check_infrastructure_health()
+            _check_infrastructure_health()
+        except SoftTimeLimitExceeded:
+            logger.warning("Health monitor: soft time limit during infra checks")
+    finally:
+        cache.delete(lock_key)
 
 
 
@@ -553,11 +605,24 @@ def _check_service_health(service: object, Deployment: object) -> None:
     targets = _build_targets(service, active)
     if not targets:
         return
+    if len(targets) > HEALTH_MAX_TARGETS_PER_SERVICE:
+        half = HEALTH_MAX_TARGETS_PER_SERVICE // 2
+        targets = targets[:half] + targets[-half:]
 
-    timeout = max(2, int(service.health_check_timeout or 15))
+    try:
+        user_timeout = int(service.health_check_timeout or 15)
+    except (TypeError, ValueError):
+        user_timeout = 15
+    timeout = max(2, min(user_timeout, HEALTH_PER_REQUEST_TIMEOUT_SECONDS))
     failure_reason = "Health target not reachable"
+    service_deadline = time.monotonic() + HEALTH_PER_SERVICE_BUDGET_SECONDS
 
     for target in targets:
+        if time.monotonic() >= service_deadline:
+            failure_reason = (
+                f"Health probe budget exceeded ({HEALTH_PER_SERVICE_BUDGET_SECONDS}s)"
+            )
+            break
         url = target["url"]
         try:
             response = requests.get(
@@ -619,7 +684,12 @@ def _fetch_container_logs(service) -> str:
 
 
 def _save_container_logs_to_deployment(service, exit_code=None):
-    """Save container runtime logs to the latest deployment's build_logs."""
+    """Save container runtime logs to the latest deployment's runtime_logs.
+
+    Runtime output must never go into build_logs (AGENTS.md #22) — the Build
+    tab would surface runtime errors and the Runtime tab scrapes the wrong
+    field.
+    """
     try:
         from apps.deployments.models import Deployment as D
         latest = D.objects.filter(service=service).order_by("-created_at").first()
@@ -627,12 +697,13 @@ def _save_container_logs_to_deployment(service, exit_code=None):
             return
         logs = _fetch_container_logs(service)
         if logs:
-            latest.build_logs += (
-                f"\n--- Runtime Failure Logs (exit code: {exit_code}) ---\n"
+            latest.runtime_logs = (
+                (latest.runtime_logs or "")
+                + f"\n--- Runtime Failure Logs (exit code: {exit_code}) ---\n"
                 f"{logs[-4000:]}\n"
                 f"--- End Failure Logs ---\n"
             )
-            latest.save(update_fields=["build_logs", "updated_at"])
+            latest.save(update_fields=["runtime_logs", "updated_at"])
     except Exception as exc:
         logger.warning("Failed to save container logs to deployment: %s", exc)
 

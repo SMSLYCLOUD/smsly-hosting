@@ -53,12 +53,18 @@ def _addon_env_keys(addon_type: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(k for k in keys if k))
 
 
+def _addon_primary_env_key(addon_type: str) -> str:
+    """Return the one env key Grid generates for an addon connection."""
+    addon_type = str(addon_type or "").strip().upper()
+    return _addon_env_key_map().get(addon_type, f"{addon_type}_URL")
+
+
 def _addon_type_from_placeholder(token: str) -> str:
     """Map {{FOO_URL}} style placeholders back to addon types."""
     token = str(token or "").strip().upper()
     if token in {"DATABASE_URL", "POSTGRES_URL"}:
         return "POSTGRES"
-    if token in {"CACHE_URL", "REDIS_URL"}:
+    if token in {"CACHE_URL", "REDIS_URL", "REDIS_URI"}:
         return "REDIS"
 
     addon_map = _addon_env_key_map()
@@ -93,8 +99,7 @@ def _inject_addon_env_defaults(
         url = provisioned_addon_urls.get(addon_type)
         if not url:
             continue
-        for env_key in _addon_env_keys(addon_type):
-            resolved_env.setdefault(env_key, url)
+        resolved_env.setdefault(_addon_primary_env_key(addon_type), url)
 
 
 def _select_shared_addon_anchor(services: list):

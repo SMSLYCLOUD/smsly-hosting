@@ -35,6 +35,7 @@ from apps.deployments.tasks.ecosystem.helpers.lifecycle import (
 class TestEcosystemRobustFixes(TestCase):
     """Test suite for robust wave orchestration and EcosystemPlan finalization."""
 
+
     @patch("apps.deployments.models.ecosystem.EcosystemPlan.objects.filter")
     @patch("apps.deployments.models.Deployment.objects.filter")
     def test_finalize_ecosystem_plan_completed(self, mock_dep_filter, mock_plan_filter):
@@ -686,6 +687,33 @@ class TestFernetEnvRepair(TestCase):
         )
 
 
+class TestMinSecretLengthRepair(TestCase):
+    """_ensure_min_secret_length: short app secrets are regenerated.
+
+    Regression (2026-09-09): the AI planner invented a short
+    gateway_secret and the identity container crash-looped at boot
+    (``gateway_secret must be at least 32 chars in production``).
+    """
+
+    def test_short_gateway_secret_is_regenerated(self):
+        from apps.deployments.tasks.ecosystem.tasks import _ensure_min_secret_length
+
+        fixed = _ensure_min_secret_length("GATEWAY_SECRET", "short")
+        self.assertGreaterEqual(len(fixed), 32)
+        self.assertNotEqual(fixed, "short")
+
+    def test_long_secret_passes_through(self):
+        from apps.deployments.tasks.ecosystem.tasks import _ensure_min_secret_length
+
+        self.assertEqual(
+            _ensure_min_secret_length("GATEWAY_SECRET", "x" * 44), "x" * 44
+        )
+        self.assertEqual(
+            _ensure_min_secret_length("DATABASE_URL", "postgres://x"),
+            "postgres://x",
+        )
+
+
 class TestUnknownPlanServiceRef(TestCase):
     """_unknown_plan_service_ref: only forward refs to unprepared plan
     entries qualify for the creation retry (2026-09-08)."""
@@ -940,6 +968,151 @@ class TestSpiffeAgentParent(TestCase):
         cmd = mock_run.call_args[0][0]
         self.assertIn("update", cmd)
         self.assertIn("spiffe://ecosystem.local/spire/agent/join_token/new", cmd)
+
+
+class TestSpiffeConvergence(TestCase):
+    """SPIRE sync must converge to one canonical entry per service.
+
+    Regression (2026-09-09): duplicate entries (legacy spire-server
+    parent + live-agent parent) accumulated, the list-failure path
+    reported a false success, and backend's sidecar was denied SDS
+    ("not authorized for [default]") because no entry matched.
+    """
+
+    _LIVE = "spiffe://ecosystem.local/spire/agent/join_token/new"
+    _LEGACY = "spiffe://ecosystem.local/spire-server"
+
+    def _entry(self, eid, name, parent, selectors=None):
+        trust, _, path = parent.partition("ecosystem.local")
+        return {
+            "id": eid,
+            "spiffe_id": {"trust_domain": "ecosystem.local",
+                          "path": f"/service/{name}"},
+            "parent": {"trust_domain": "ecosystem.local",
+                       "path": path},
+            "selectors": [{"type": "docker", "value": s}
+                          for s in (selectors if selectors is not None
+                                    else [f"docker:label:com.paas.service:{name}"])],
+        }
+
+    def _sync(self, entries, live_names):
+        """Run the sync task with a mocked SPIRE server + DB layer."""
+        from apps.deployments import tasks_spiffe as spiffe
+
+        deleted, reparented, created = [], [], []
+        cfgs = []
+        for name in live_names:
+            cfg = MagicMock()
+            cfg.service.name = name
+            cfgs.append(cfg)
+        mock_mtls_models = MagicMock()
+        (mock_mtls_models.MtlsConfig.objects.filter.return_value
+         .select_related.return_value) = cfgs
+        mock_platform_models = MagicMock()
+        (mock_platform_models.PlatformConfig.load.return_value
+         .mtls_ecosystem_enabled) = True
+        with patch.object(spiffe, "_list_spire_entries", return_value=entries), \
+             patch.object(spiffe, "_live_ecosystem_agent_id", return_value=self._LIVE), \
+             patch.object(spiffe, "_create_spire_entry",
+                          side_effect=lambda n, parent_id=None: created.append(n) or True), \
+             patch.object(spiffe, "_reparent_spire_entry",
+                          side_effect=lambda eid, p, s, par: reparented.append(eid) or True), \
+             patch.object(spiffe, "_delete_spire_entry_by_id",
+                          side_effect=lambda eid: deleted.append(eid) or True), \
+             patch.dict("sys.modules", {"apps.mtls.models": mock_mtls_models,
+                                        "apps.deployments.models.platform": mock_platform_models}):
+            # The task imports MtlsConfig/PlatformConfig from the modules
+            # above; sys.modules patching redirects those imports.
+            result = spiffe.sync_spiffe_entries_task.run()
+        return result, deleted, reparented, created
+
+    def test_duplicate_entries_converge_to_canonical(self):
+        entries = [self._entry("e-live", "svc-a", self._LIVE),
+                   self._entry("e-legacy", "svc-a", self._LEGACY)]
+        result, deleted, reparented, created = self._sync(entries, {"svc-a"})
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(sorted(deleted), ["e-legacy"])
+        self.assertEqual(reparented, [])
+        self.assertEqual(created, [])
+        self.assertEqual(result["duplicates_removed"], 1)
+
+    def test_stale_parent_reparented_when_no_canonical(self):
+        entries = [self._entry("e-legacy", "svc-a", self._LEGACY)]
+        result, deleted, reparented, created = self._sync(entries, {"svc-a"})
+        self.assertEqual(reparented, ["e-legacy"])
+        self.assertEqual(deleted, [])
+        self.assertEqual(result["reparented"], 1)
+
+    def test_stale_names_remove_every_duplicate(self):
+        entries = [self._entry("e1", "old", self._LIVE),
+                   self._entry("e2", "old", self._LEGACY)]
+        result, deleted, reparented, created = self._sync(entries, {"svc-a"})
+        self.assertEqual(sorted(deleted), ["e1", "e2"])
+        self.assertEqual(result["removed"], 2)
+
+    def test_catchall_for_live_name_is_removed(self):
+        entries = [self._entry("e-live", "svc-a", self._LIVE),
+                   self._entry("e-catch", "svc-a", self._LIVE,
+                               selectors=["docker:label:com.paas.service:svc-a",
+                                          "docker:label:other:yes"])]
+        result, deleted, reparented, created = self._sync(entries, {"svc-a"})
+        self.assertEqual(deleted, ["e-catch"])
+
+    def test_blind_list_aborts_without_writes(self):
+        from apps.deployments import tasks_spiffe as spiffe
+
+        mock_mtls_models = MagicMock()
+        (mock_mtls_models.MtlsConfig.objects.filter.return_value
+         .select_related.return_value) = []
+        mock_platform_models = MagicMock()
+        (mock_platform_models.PlatformConfig.load.return_value
+         .mtls_ecosystem_enabled) = True
+        with patch.object(spiffe, "_list_spire_entries", return_value=None), \
+             patch.object(spiffe, "_live_ecosystem_agent_id", return_value=self._LIVE), \
+             patch.object(spiffe, "_create_spire_entry") as mock_create, \
+             patch.object(spiffe, "_delete_spire_entry_by_id") as mock_delete, \
+             patch.dict("sys.modules", {"apps.mtls.models": mock_mtls_models,
+                                        "apps.deployments.models.platform": mock_platform_models}):
+            # List failure must abort (retry) instead of reporting a false
+            # success with zero entries.
+            with self.assertRaises(Exception):
+                spiffe.sync_spiffe_entries_task.run()
+        mock_create.assert_not_called()
+        mock_delete.assert_not_called()
+
+    @patch("apps.deployments.tasks_spiffe.subprocess.run")
+    def test_list_failure_returns_none(self, mock_run):
+        from apps.deployments.tasks_spiffe import _list_spire_entries
+
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
+        self.assertIsNone(_list_spire_entries())
+
+    def test_delete_removes_all_duplicates(self):
+        from apps.deployments.tasks_spiffe import _delete_spire_entries_by_path
+
+        entries = [self._entry("e1", "old", self._LIVE),
+                   self._entry("e2", "old", self._LEGACY)]
+        with patch("apps.deployments.tasks_spiffe.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            removed = _delete_spire_entries_by_path("/service/old", entries)
+        self.assertEqual(removed, 2)
+
+    def test_canonical_helpers(self):
+        from apps.deployments.tasks_spiffe import (
+            _entry_parent_id,
+            _entry_path,
+            _entry_selectors,
+        )
+
+        entry = self._entry("e1", "svc-a", self._LIVE)
+        self.assertEqual(_entry_path(entry), "/service/svc-a")
+        self.assertEqual(
+            _entry_selectors(entry), ["docker:label:com.paas.service:svc-a"]
+        )
+        self.assertEqual(_entry_parent_id(entry), self._LIVE)
+        self.assertEqual(_entry_path({}), "")
+        self.assertEqual(_entry_selectors({}), [])
+        self.assertEqual(_entry_parent_id({}), "spiffe://")
 
 
 class TestEcosystemServicePorts(TestCase):

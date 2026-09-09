@@ -349,7 +349,7 @@ def _post_bitbucket(deployment, state: str, description: str, target_url: str) -
 
 # ── Dispatcher Task ───────────────────────────────────────────────────────────
 
-@shared_task(bind=True, max_retries=2, soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
+@shared_task(bind=True, max_retries=2, soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1], name="apps.deployments.tasks.cicd.tasks_commit_status.update_commit_status")
 def update_commit_status(
     self,
     deployment_id: str,

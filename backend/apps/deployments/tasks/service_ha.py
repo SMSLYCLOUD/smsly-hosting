@@ -13,14 +13,16 @@ import logging
 
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
+
 logger = logging.getLogger(__name__)
 
 
 @shared_task(
     bind=True,
     name="apps.deployments.tasks.service_ha_pass",
-    soft_time_limit=90,
-    time_limit=120,
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
 )
 def service_ha_pass(self):
     """Beat task (60s): one idempotent HA evaluation pass."""

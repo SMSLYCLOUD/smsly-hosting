@@ -27,6 +27,8 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
+
 logger = logging.getLogger(__name__)
 
 # containerd corruption patterns that warrant auto-recovery
@@ -54,8 +56,8 @@ def is_build_corruption_error(error_text: str) -> bool:
 @shared_task(
     bind=True,
     name="apps.deployments.tasks.recover_corrupt_docker_state",
-    soft_time_limit=300,
-    time_limit=360,
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1],
 )
 def recover_corrupt_docker_state(self, deployment_id: str = ""):
     """Auto-recover from Docker/containerd state corruption.
@@ -139,8 +141,8 @@ def recover_corrupt_docker_state(self, deployment_id: str = ""):
 @shared_task(
     bind=True,
     name="apps.deployments.tasks.ensure_migrations_applied",
-    soft_time_limit=180,
-    time_limit=240,
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1],
 )
 def ensure_migrations_applied(self):
     """Detect and apply pending migrations.

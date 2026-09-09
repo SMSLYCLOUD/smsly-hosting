@@ -73,51 +73,77 @@ def sync_spiffe_entries_task(self):
         service_names = {cfg.service.name for cfg in enabled_configs}
 
         existing_entries = _list_spire_entries()
-        existing_services = set()
+        if existing_entries is None:
+            # The list call failed (server unreachable, exec error). Aborting
+            # here is critical: the old code treated failure as "zero
+            # entries", reported a false success, and silently skipped every
+            # create (2026-09-09: backend sidecar denied SDS for hours while
+            # the sync logged existing=0/created=0).
+            raise RuntimeError("Failed to list SPIRE entries; aborting sync")
+        by_path: dict[str, list] = {}
         for entry in existing_entries:
-            path = entry.get("spiffe_id", {}).get("path", "")
+            path = _entry_path(entry)
             if path.startswith("/service/"):
-                existing_services.add(path[len("/service/"):])
+                by_path.setdefault(path, []).append(entry)
+        existing_services = {path[len("/service/"):] for path in by_path}
+
+        live_agent = _live_ecosystem_agent_id()
 
         created = 0
-        live_agent = _live_ecosystem_agent_id()
         for name in service_names - existing_services:
             if _create_spire_entry(name, parent_id=live_agent):
                 created += 1
 
+        # Converge: exactly ONE canonical entry per live service —
+        # selectors == [docker:label:com.paas.service:<name>] and parented
+        # to the live agent. Extra entries for the same SPIFFE ID (legacy
+        # spire-server parents, rotated-agent parents, exact duplicates)
+        # are deleted, never left to accumulate. A stale-parented entry is
+        # re-parented ONLY when no canonical entry already exists —
+        # otherwise reparenting manufactures an exact duplicate.
         reparented = 0
-        if live_agent:
-            # Self-heal parent drift: entries parented to a stale/rotated
-            # agent (or the legacy static path) never sync, so their
-            # workloads silently stop receiving SVIDs. Move canonical
-            # single-selector entries under the live agent.
-            for entry in existing_entries:
-                path = entry.get("spiffe_id", {}).get("path", "")
-                if not path.startswith("/service/"):
-                    continue
-                selectors = [
-                    s.get("value", "")
-                    for s in entry.get("selectors", [])
-                    if isinstance(s, dict)
-                ]
-                name = path[len("/service/"):]
-                expected = f"docker:label:com.paas.service:{name}"
-                if selectors != [expected]:
-                    continue
-                parent = entry.get("parent", {})
-                parent_id = (
-                    f"spiffe://{parent.get('trust_domain', '')}{parent.get('path', '')}"
-                    if isinstance(parent, dict) else ""
-                )
-                if parent_id != live_agent and _reparent_spire_entry(
-                    entry.get("id", ""), path, expected, live_agent
-                ):
-                    reparented += 1
+        duplicates_removed = 0
+        for name in service_names:
+            path = f"/service/{name}"
+            entries = by_path.get(path, [])
+            if not entries:
+                continue
+            expected = f"docker:label:com.paas.service:{name}"
+            canonical = [
+                e for e in entries
+                if _entry_selectors(e) == [expected]
+                and _entry_parent_id(e) == live_agent
+            ] if live_agent else []
+            if canonical:
+                for extra in entries:
+                    if extra is not canonical[0] and _delete_spire_entry_by_id(
+                        extra.get("id", "")
+                    ):
+                        duplicates_removed += 1
+                continue
+            if live_agent:
+                moved = False
+                for entry in entries:
+                    selectors = _entry_selectors(entry)
+                    if selectors != [expected]:
+                        # Non-canonical entry for a live name (stale
+                        # catch-all/multi-selector): it can issue this
+                        # service's SVID to unrelated workloads
+                        # (2026-09-08 incident). Remove it.
+                        if _delete_spire_entry_by_id(entry.get("id", "")):
+                            duplicates_removed += 1
+                        continue
+                    if not moved and _reparent_spire_entry(
+                        entry.get("id", ""), path, expected, live_agent
+                    ):
+                        reparented += 1
+                        moved = True
+                    elif _delete_spire_entry_by_id(entry.get("id", "")):
+                        duplicates_removed += 1
 
         removed = 0
         for name in existing_services - service_names:
-            if _delete_spire_entry(name, existing_entries):
-                removed += 1
+            removed += _delete_spire_entries_by_path(f"/service/{name}")
 
         result = {
             "status": "ok",
@@ -126,6 +152,7 @@ def sync_spiffe_entries_task(self):
             "existing_entries": len(existing_services),
             "created": created,
             "reparented": reparented,
+            "duplicates_removed": duplicates_removed,
             "removed": removed,
         }
         logger.info("SPIRE ecosystem sync complete: %s", result)
@@ -136,8 +163,36 @@ def sync_spiffe_entries_task(self):
         raise self.retry(exc=exc)
 
 
-def _list_spire_entries() -> list:
-    """List all SPIRE registration entries from ecosystem server."""
+def _entry_path(entry: dict) -> str:
+    """Return the SPIFFE ID path of a listed entry ('' when malformed)."""
+    spiffe_id = entry.get("spiffe_id", {})
+    if not isinstance(spiffe_id, dict):
+        return ""
+    return str(spiffe_id.get("path", "") or "")
+
+
+def _entry_selectors(entry: dict) -> list:
+    """Return the selector values of a listed entry."""
+    selectors = entry.get("selectors", [])
+    if not isinstance(selectors, list):
+        return []
+    return [s.get("value", "") for s in selectors if isinstance(s, dict)]
+
+
+def _entry_parent_id(entry: dict) -> str:
+    """Return the full parent SPIFFE ID of a listed entry."""
+    parent = entry.get("parent", {})
+    if not isinstance(parent, dict):
+        return ""
+    return f"spiffe://{parent.get('trust_domain', '')}{parent.get('path', '')}"
+
+
+def _list_spire_entries() -> list | None:
+    """List all SPIRE registration entries from ecosystem server.
+
+    Returns None when the list call itself fails — callers must abort
+    rather than treat failure as "no entries" (blind-sync incident).
+    """
     try:
         result = subprocess.run(
             [
@@ -152,9 +207,13 @@ def _list_spire_entries() -> list:
             import json
             data = json.loads(result.stdout)
             return data.get("entries", [])
+        logger.warning(
+            "SPIRE entry list failed (rc=%s): %s",
+            result.returncode, (result.stderr or "")[:500],
+        )
     except Exception as e:
         logger.warning("Failed to list SPIRE ecosystem entries: %s", e)
-    return []
+    return None
 
 
 def _live_ecosystem_agent_id() -> str | None:
@@ -274,27 +333,50 @@ def _reparent_spire_entry(entry_id: str, path: str, selector: str, parent_id: st
         return False
 
 
-def _delete_spire_entry(service_name: str, entries: list | None = None) -> bool:
-    """Delete a SPIRE registration entry from the ecosystem server for a service."""
+def _delete_spire_entry_by_id(entry_id: str) -> bool:
+    """Delete a single SPIRE entry by ID. Returns True on success."""
+    if not entry_id:
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "docker", "exec", ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+                "/opt/spire/bin/spire-server", "entry", "delete",
+                "-socketPath", ECOSYSTEM_SPIRE_SERVER_SOCKET,
+                "-entryID", entry_id,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            logger.info("Deleted SPIRE ecosystem entry %s", entry_id)
+            return True
+        logger.warning(
+            "Failed to delete SPIRE entry %s: %s", entry_id, (result.stderr or "")[:300]
+        )
+    except Exception as e:
+        logger.warning("Failed to delete SPIRE entry %s: %s", entry_id, e)
+    return False
+
+
+def _delete_spire_entries_by_path(path: str, entries: list | None = None) -> int:
+    """Delete ALL entries for a SPIFFE ID path (dedup-safe). Returns count."""
     try:
         if entries is None:
-            entries = _list_spire_entries()
+            entries = _list_spire_entries() or []
+        removed = 0
         for entry in entries:
-            if entry.get("spiffe_id", {}).get("path", "") == f"/service/{service_name}":
-                entry_id = entry.get("id", "")
-                if entry_id:
-                    result = subprocess.run(
-                        [
-                            "docker", "exec", ECOSYSTEM_SPIRE_SERVER_CONTAINER,
-                            "/opt/spire/bin/spire-server", "entry", "delete",
-                            "-socketPath", ECOSYSTEM_SPIRE_SERVER_SOCKET,
-                            "-entryID", entry_id,
-                        ],
-                        capture_output=True, text=True, timeout=30,
-                    )
-                    if result.returncode == 0:
-                        logger.info("Deleted SPIRE ecosystem entry for %s", service_name)
-                        return True
+            if _entry_path(entry) == path and _delete_spire_entry_by_id(
+                entry.get("id", "")
+            ):
+                removed += 1
+        return removed
     except Exception as e:
-        logger.warning("Failed to delete SPIRE ecosystem entry for %s: %s", service_name, e)
-    return False
+        logger.warning("Failed to delete SPIRE entries for %s: %s", path, e)
+        return 0
+
+
+def _delete_spire_entry(service_name: str, entries: list | None = None) -> bool:
+    """Delete SPIRE registration entries for a service (all duplicates)."""
+    if entries is None:
+        entries = _list_spire_entries() or []
+    return _delete_spire_entries_by_path(f"/service/{service_name}", entries) > 0

@@ -789,8 +789,6 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                     if getattr(candidate, 'name', '') == service.name:
                         container = candidate
                         break
-                if container is None and candidates:
-                    container = candidates[0]
 
             if container is None:
                 return Response({
@@ -815,7 +813,11 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
             # Also fetch saved crash logs from latest deployment
             from apps.deployments.models import Deployment as DepModel
             latest_deploy = DepModel.objects.filter(service=service).order_by("-created_at").first()
-            saved_logs = latest_deploy.build_logs[-2000:] if latest_deploy and latest_deploy.build_logs else ""
+            saved_logs = (
+                latest_deploy.runtime_logs[-2000:]
+                if latest_deploy and latest_deploy.runtime_logs
+                else ""
+            )
 
             # Surface the container's IP and the Docker networks it is
             # attached to. Ecosystem services on smsly-net-a5f086aa
@@ -855,7 +857,7 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                 'primary_ip': primary_ip,
                 'networks': networks_info,
                 'saved_logs': saved_logs,
-                'saved_logs_source': 'build_logs' if saved_logs else None,
+                'saved_logs_source': 'runtime_logs' if saved_logs else None,
             })
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("Service runtime status failed for %s: %s", service.id, exc)

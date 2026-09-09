@@ -9,6 +9,7 @@ from django.utils import timezone
 from apps.cloud.models import CloudProvider
 from apps.cloud.services.compute import ComputeService
 from apps.deployments.models import Deployment
+from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
 from apps.deployments.utils import (
     append_log,
     broadcast_status,
@@ -100,8 +101,8 @@ def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
 
 @shared_task(
     name="apps.deployments.tasks.auto_promote_staged_deployments",
-    soft_time_limit=300,
-    time_limit=330,
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1],
 )
 def auto_promote_staged_deployments():
     """Auto-promote deployments in STAGED status for longer than configured hours."""
@@ -158,8 +159,8 @@ def auto_promote_staged_deployments():
 
 @shared_task(
     name="apps.deployments.tasks.auto_review_deployments",
-    soft_time_limit=300,
-    time_limit=330,
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1],
 )
 def auto_review_deployments():
     """Auto-approve deployments stuck in REVIEW status for longer than configured hours."""

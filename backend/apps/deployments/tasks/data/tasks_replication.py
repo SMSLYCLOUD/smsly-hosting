@@ -92,11 +92,17 @@ def check_replication_health_task():
                 try:
                     from apps.deployments.services.election_service import ElectionService
                     cluster = ElectionService.get_or_create_cluster(mesh=mesh)
-                    if cluster.leader_server is not None:
+                    # ClusterState has `leader` (FK) + `leader_wg_address` —
+                    # there is no `leader_server` field (2026-09-09 incident:
+                    # AttributeError spammed every 30s).
+                    cluster_leader = getattr(cluster, "leader", None) or getattr(
+                        cluster, "leader_wg_address", None
+                    )
+                    if cluster_leader is not None:
                         logger.warning(
                             "C3: Patroni reports no leader but election leader "
                             "is %s — triggering re-election check",
-                            cluster.leader_server,
+                            cluster_leader,
                         )
                         cluster.state = "ELECTION_NEEDED"
                         cluster.save(update_fields=["state"])

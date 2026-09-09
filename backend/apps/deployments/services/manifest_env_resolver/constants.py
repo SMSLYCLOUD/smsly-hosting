@@ -12,7 +12,6 @@ ADDON_ENV_PATTERNS: dict[str, str] = {
     "POSTGRES_URL": "{{POSTGRES_URL}}",
     "DB_URL": "{{POSTGRES_URL}}",
     "REDIS_URL": "{{REDIS_URL}}",
-    "REDIS_URI": "{{REDIS_URL}}",
     "CELERY_BROKER_URL": "{{RABBITMQ_URL}}",
     "RABBITMQ_URL": "{{RABBITMQ_URL}}",
     "AMQP_URL": "{{RABBITMQ_URL}}",

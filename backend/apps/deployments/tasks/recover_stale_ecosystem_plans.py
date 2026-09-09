@@ -34,6 +34,8 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
+
 logger = logging.getLogger(__name__)
 
 # Plans younger than this are presumed genuinely still running.
@@ -51,8 +53,8 @@ ECOSYSTEM_ACTIVITY_MINUTES = 30
 @shared_task(
     bind=True,
     name="apps.deployments.tasks.recover_stale_ecosystem_plans",
-    soft_time_limit=60,
-    time_limit=90,
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
 )
 def recover_stale_ecosystem_plans(self):
     """Beat task (10m): clear ghost scanning/deploying EcosystemPlans."""

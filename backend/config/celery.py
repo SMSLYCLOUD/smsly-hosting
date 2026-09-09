@@ -80,6 +80,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.infra.tasks_container_hygiene  # noqa: F401  # restart-loop watchdog, orphan addon GC
     import apps.deployments.tasks.tasks_network  # noqa: F401  # scoped Docker network cleanup
     import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
+    import apps.deployments.tasks.cicd.tasks_commit_status  # noqa: F401  # update_commit_status (AGENTS.md #3)
     import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
     import apps.mtls.tasks  # noqa: F401  # inject_mtls_task
     import apps.mcp.tasks  # noqa: F401  # ensure_mcp_server_running
@@ -213,6 +214,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.ai.tasks_ai.analyze_failure_task': {'queue': 'deploy'},
     'apps.deployments.tasks.ai.tasks_code_intelligence.deep_scan_and_verify_task': {'queue': 'deploy'},
     'apps.deployments.tasks.check_agent_heartbeats_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.cicd.tasks_commit_status.update_commit_status': {'queue': 'fast'},
 }
 
 app.conf.beat_schedule = {

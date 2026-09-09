@@ -1458,7 +1458,11 @@ services:
       RABBITMQ_MEMORY_WATERMARK: ${RABBITMQ_MEMORY_WATERMARK:-0.6}
     volumes:
     - rabbitmq_data:/var/lib/rabbitmq
-    command: sh -c 'echo "vm_memory_high_watermark.relative = $${RABBITMQ_MEMORY_WATERMARK:-0.6}" > /etc/rabbitmq/conf.d/10-smsly.conf && exec docker-entrypoint.sh rabbitmq-server'
+    # consumer_timeout (ms) must exceed the longest Celery task limit
+    # (TASK_TIME_LIMIT_HEAVY = 7500s). The broker default (1800000ms = 30m)
+    # kills the channel of any deploy/backup task running longer, causing
+    # PRECONDITION_FAILED + ConnectionResetError ack storms (2026-09-09).
+    command: sh -c 'printf "vm_memory_high_watermark.relative = $${RABBITMQ_MEMORY_WATERMARK:-0.6}\nconsumer_timeout = $${RABBITMQ_CONSUMER_TIMEOUT:-10800000}\n" > /etc/rabbitmq/conf.d/10-smsly.conf && exec docker-entrypoint.sh rabbitmq-server'
     healthcheck:
       test:
       - CMD-SHELL

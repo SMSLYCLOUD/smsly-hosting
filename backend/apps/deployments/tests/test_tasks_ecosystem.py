@@ -27,11 +27,45 @@ from apps.deployments.tasks.ecosystem.helpers import (
     _select_shared_addon_anchor,
     _service_placeholder_target,
     _validate_resolved_env,
+    _addon_env_keys,
+    _addon_primary_env_key,
+    _inject_addon_env_defaults,
 )
 from apps.deployments.tasks.ecosystem.tasks import (
     ecosystem_deploy_task,
     ecosystem_scan_task,
 )
+
+
+class TestAddonGeneratedEnvKeys(SimpleTestCase):
+    def test_redis_generates_only_canonical_url_key(self):
+        env = {}
+        _inject_addon_env_defaults(env, {"REDIS"}, {"REDIS": "redis://cache:6379/0"})
+        self.assertEqual(env, {"REDIS_URL": "redis://cache:6379/0"})
+        self.assertEqual(_addon_primary_env_key("REDIS"), "REDIS_URL")
+        self.assertIn("REDIS_URI", _addon_env_keys("REDIS"))
+
+    def test_redis_uri_placeholder_still_provisions_redis(self):
+        from apps.deployments.tasks.ecosystem.helpers.addons import (
+            _addon_type_from_placeholder,
+        )
+
+        self.assertEqual(_addon_type_from_placeholder("REDIS_URI"), "REDIS")
+
+    def test_env_int_maximum_clamps(self):
+        import os
+        from unittest.mock import patch
+
+        from apps.deployments.tasks.deploy.env import _env_int
+
+        with patch.dict(os.environ, {"TEST_MAX_INT": "999"}):
+            self.assertEqual(
+                _env_int("TEST_MAX_INT", 200, minimum=100, maximum=599), 599
+            )
+        with patch.dict(os.environ, {"TEST_MAX_INT": "150"}):
+            self.assertEqual(
+                _env_int("TEST_MAX_INT", 200, minimum=100, maximum=599), 150
+            )
 
 
 class TasksEcosystemHelpersTests(SimpleTestCase):

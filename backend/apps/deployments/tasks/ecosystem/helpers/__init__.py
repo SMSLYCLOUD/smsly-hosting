@@ -10,6 +10,7 @@ from .repo import (
 from .addons import (
     _addon_env_key_map,
     _addon_env_keys,
+    _addon_primary_env_key,
     _addon_type_from_placeholder,
     _coerce_addon_type,
     _inject_addon_env_defaults,

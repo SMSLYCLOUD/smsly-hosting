@@ -1393,6 +1393,28 @@ export default function EcosystemPage() {
                                                                 <GitBranch size={14} className="text-muted-foreground" />
                                                                 {svc.repo}
                                                             </p>
+                                                            <div className="mt-2 flex items-center gap-2">
+                                                                <label htmlFor={`ecosystem-name-${idx}`} className="text-xs text-muted-foreground whitespace-nowrap">
+                                                                    Runtime name
+                                                                </label>
+                                                                <input
+                                                                    id={`ecosystem-name-${idx}`}
+                                                                    value={svc.name}
+                                                                    onChange={(e) => {
+                                                                        const value = e.target.value;
+                                                                        setPlan((current) => current ? {
+                                                                            ...current,
+                                                                            services: current.services.map((item) => item.repo === svc.repo ? { ...item, name: value } : item),
+                                                                        } : current);
+                                                                    }}
+                                                                    placeholder="service-name"
+                                                                    maxLength={63}
+                                                                    className="w-48 px-2 py-1 rounded border border-border bg-background text-xs font-mono"
+                                                                />
+                                                                <span className="text-[10px] text-muted-foreground">
+                                                                    Used for internal URLs and service identity
+                                                                </span>
+                                                            </div>
                                                             <div className="flex items-center gap-2 mt-1 flex-wrap">
                                                                 {(svc.languages && svc.languages.length > 0 ? svc.languages : [svc.stack]).map((lang) => (
                                                                     <span key={lang} className={`text-xs px-2 py-0.5 rounded-md border font-medium ${STACK_COLORS[lang] || STACK_COLORS.unknown}`}>

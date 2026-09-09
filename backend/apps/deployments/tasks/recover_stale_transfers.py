@@ -19,6 +19,8 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
+
 logger = logging.getLogger(__name__)
 
 TRANSFER_STALE_HOURS = 2
@@ -28,8 +30,8 @@ ACTIVE_STATUSES = ['PREPARING', 'UPLOADING', 'RESTORING', 'DNS_CUTOVER', 'VERIFY
 @shared_task(
     bind=True,
     name="apps.deployments.tasks.recover_stale_transfers",
-    soft_time_limit=60,
-    time_limit=90,
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
 )
 def recover_stale_transfers(self):
     """Beat task (15m): clear ghost ServerTransfers in active states."""

@@ -16,7 +16,7 @@ def _find_container_for_logs(deployment: object) -> tuple[object, str]:
     Tries in order:
       1. deployment.container_id (direct lookup)
       2. smsly.service_id label (matches any deploy type)
-      3. service.name substring match (legacy fallback)
+      3. exact service container name (legacy fallback)
 
     Returns (container, source_string) or (None, reason_string).
     """
@@ -57,13 +57,15 @@ def _find_container_for_logs(deployment: object) -> tuple[object, str]:
     except Exception as exc:
         logger.debug("Container lookup by label service_id=%s failed: %s", service_id, exc)
 
-    # Strategy 3: Name substring match (legacy fallback)
+    # Strategy 3: exact name only. A service called ``backend`` must not read
+    # logs from the platform backend container.
     try:
         containers = client.containers.list(
             filters={'name': service_name, 'status': 'running'},
         )
-        if containers:
-            return containers[0], f"found by name substring={service_name}"
+        for container in containers:
+            if getattr(container, 'name', '') == service_name:
+                return container, f"found by exact name={service_name}"
     except Exception as exc:
         logger.debug("Container lookup by name substring %s failed: %s", service_name, exc)
 
@@ -187,7 +189,7 @@ class LogsActionsMixin:
                     fallback_logs = (
                         crash_match.group(1).strip()
                         if crash_match
-                        else (saved_logs[-4000:] if saved_logs else "")
+                        else ""
                     )
                 return Response({
                     'id': str(deployment.id),
@@ -224,14 +226,13 @@ class LogsActionsMixin:
             err_msg = str(e)
             if any(term in err_msg.lower() for term in ["nameresolutionerror", "socket-proxy", "connection", "maxretryerror", "getaddrinfo"]):
                 err_msg = "Cannot connect to Docker daemon or socket-proxy. Please verify Docker is running and reachable."
-            # Fallback to saved build_logs
-            saved_logs = deployment.build_logs or ""
-            fallback_logs = saved_logs[-4000:] if saved_logs else ""
+            # Build output is never a runtime-log fallback.
+            fallback_logs = getattr(deployment, 'runtime_logs', '') or ''
             return Response({
                 'id': str(deployment.id),
                 'runtime_logs': fallback_logs,
-                'source': 'build_logs',
-                'message': f'Could not fetch live runtime logs: {err_msg}. Showing saved crash logs.',
+                'source': 'saved_runtime_logs',
+                'message': f'Could not fetch live runtime logs: {err_msg}. Showing saved runtime logs.',
             })
 
 

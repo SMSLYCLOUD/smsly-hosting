@@ -22,6 +22,8 @@ _LAZY_REEXPORTS = {
     'recover_stalled_queued_deployments': '.queue',
     'should_skip_review_for_commit_message': '.queue',
     'AUTO_APPROVE_COMMIT_MARKERS': '.queue',
+    '_probe_addon_connectivity': '.addons',
+    '_ensure_addons_ready': '.addons',
     '_is_traefik_not_ready': '.health',
     '_route_misroute_reason': '.health',
     '_is_low_resource_service': '.health',

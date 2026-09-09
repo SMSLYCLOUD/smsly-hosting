@@ -74,6 +74,7 @@ from .constants import (
 )
 from .helpers import (
     _addon_env_keys,
+    _addon_primary_env_key,
     _alias_ambiguity_report,
     _apply_service_profile,
     _build_dependency_waves,
@@ -582,6 +583,23 @@ def _ensure_valid_fernet_env_value(key_upper: str, value_text: str) -> str:
         except Exception:  # pylint: disable=broad-exception-caught
             from cryptography.fernet import Fernet as _Fernet
             return _Fernet.generate_key().decode()
+    return value_text
+
+
+def _ensure_min_secret_length(key_upper: str, value_text: str) -> str:
+    """Regenerate short app-secret values that would crash apps at boot.
+
+    Customer apps commonly validate secrets (e.g. ``gateway_secret must be
+    at least 32 chars in production``). The AI planner sometimes invents
+    short literals (2026-09-09: identity-green crash-loop, exit 3). Repair
+    here at provisioning time — {{SHARED_SECRET:*}} values are 44 chars
+    and pass through untouched, so cross-service shared secrets stay in
+    sync.
+    """
+    if key_upper in {"SECRET_KEY", "GATEWAY_SECRET"} or key_upper.endswith("_SECRET"):
+        if len(value_text or "") < 32:
+            from apps.deployments.tasks.ecosystem.helpers.env_vars import _generate_secret
+            return _generate_secret()
     return value_text
 
 
@@ -1194,7 +1212,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             repo = _canonical_repo_ref(svc_plan.get("repo"))
             if not repo:
                 continue
-            anchor_name = _slugify_name(svc_plan.get("name") or _repo_short_name(repo))
+            anchor_name = _slugify_name(
+                svc_plan.get("name") or _repo_short_name(repo)
+            )
             anchor_branch = str(
                 svc_plan.get("branch") or svc_plan.get("default_branch") or "main"
             ).strip() or "main"
@@ -1209,7 +1229,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 # SECURITY (addon-theft): NEVER move an existing service into
                 # the ecosystem project. When the anchor name matches a
                 # MANUALLY-deployed service (e.g. the operator deployed
-                # smsly-backend by hand before running an ecosystem deploy),
+                # a manually deployed service by hand before running an
+                # ecosystem deploy),
                 # claiming it silently reassigns its project — and once it
                 # lives in the ecosystem project, its PRIVATE addons become
                 # eligible for the shared-addon reuse below and get stolen
@@ -1799,8 +1820,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     # can fill it from the dashboard.
                     continue
                 # Repair AI-invented/legacy crypto keys that would crash
-                # the app at boot (Fernet key must be 32 urlsafe-b64 bytes).
+                # the app at boot (Fernet key must be 32 urlsafe-b64 bytes;
+                # app secrets such as gateway_secret need >= 32 chars).
                 value_text = _ensure_valid_fernet_env_value(key_upper, value_text)
+                value_text = _ensure_min_secret_length(key_upper, value_text)
                 from apps.cloud.services.build_constants import is_secret_env_var
                 is_secret = is_secret_env_var(key_upper)
                 EnvironmentVariable.objects.update_or_create(
@@ -1964,19 +1987,21 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             svc_addon_types = _service_plan_addon_types(entry.get("plan", {}), plan.get("addons", []))
             for addon_type, url in provisioned_addon_urls.items():
                 if addon_type in svc_addon_types:
-                    for env_key in _addon_env_keys(addon_type):
-                        existing = EnvironmentVariable.objects.filter(
-                            service=svc, key=env_key,
-                        ).first()
-                        if existing and existing.value and not re.search(r"\{\{.*?\}\}", existing.value):
-                            # Already resolved (possibly with embedded suffix) — skip
-                            continue
-                        EnvironmentVariable.objects.update_or_create(
-                            service=svc,
-                            key=env_key,
-                            defaults={"value": url, "is_secret": True},
-                        )
-                        logger.info("Reconciled %s %s with provisioned %s URL", svc.name, env_key, addon_type)
+                    env_key = _addon_primary_env_key(addon_type)
+                    if not env_key:
+                        continue
+                    existing = EnvironmentVariable.objects.filter(
+                        service=svc, key=env_key,
+                    ).first()
+                    if existing and existing.value and not re.search(r"\{\{.*?\}\}", existing.value):
+                        # Already resolved (possibly with embedded suffix) — skip
+                        continue
+                    EnvironmentVariable.objects.update_or_create(
+                        service=svc,
+                        key=env_key,
+                        defaults={"value": url, "is_secret": True},
+                    )
+                    logger.info("Reconciled %s %s with provisioned %s URL", svc.name, env_key, addon_type)
             updated_service_ids.add(svc.id)
 
     queued_now = 0

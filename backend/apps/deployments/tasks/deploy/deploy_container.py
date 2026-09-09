@@ -411,6 +411,32 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     service=service, enabled=True, sidecar_enabled=True,
                 ).first()
                 if mtls_config:
+                    # Ensure the SPIRE registration entry exists BEFORE the
+                    # sidecar requests an SVID: with no matching entry the
+                    # agent denies the workload ("not authorized for the
+                    # requested identities [default]") and the readiness
+                    # gate below fails an otherwise healthy deployment
+                    # (2026-09-09 backend incident). Best-effort — the gate
+                    # still reports clearly if the entry cannot be created.
+                    try:
+                        from apps.deployments.tasks_spiffe import (
+                            _create_spire_entry,
+                            _entry_path,
+                            _list_spire_entries,
+                            _live_ecosystem_agent_id,
+                        )
+                        want_path = f"/service/{service.name}"
+                        listed = _list_spire_entries() or []
+                        if not any(_entry_path(e) == want_path for e in listed):
+                            _create_spire_entry(
+                                service.name,
+                                parent_id=_live_ecosystem_agent_id(),
+                            )
+                    except Exception as entry_exc:
+                        logger.warning(
+                            "SPIRE entry ensure failed for %s: %s",
+                            service.name, entry_exc,
+                        )
                     EnvoySidecar.inject_sidecar(service)
                     if not EnvoySidecar.wait_sidecar_ready(service):
                         raise RuntimeError(
