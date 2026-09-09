@@ -160,6 +160,11 @@ urlpatterns = [
     path('services/<uuid:service_id>/addons-all/', service_addons_unified, name='service-addons-unified'),
     path('services/check-domain/', ServiceViewSet.as_view({'get': 'check_domain'}), name='service-check-domain-direct'),
     path('services/check-domain', ServiceViewSet.as_view({'get': 'check_domain'}), name='service-check-domain-direct-noslash'),
+    path(
+        'services/<uuid:pk>/prune-docker',
+        ServiceViewSet.as_view({'post': 'prune_docker'}),
+        name='service-prune-docker-noslash',
+    ),
     path('topology/ecosystem/', TopologyViewSet.as_view({'get': 'ecosystem'}), name='topology-ecosystem'),
     path('topology/ecosystem', TopologyViewSet.as_view({'get': 'ecosystem'}), name='topology-ecosystem-noslash'),
 ] + router.urls + [
