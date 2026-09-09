@@ -74,6 +74,30 @@ class ServiceSerializerTests(TestCase):
         self.assertIn("https://", data["service_url"])
         self.assertNotIn("app.example.com", data["service_url"])
 
+    def test_detail_includes_project_and_effective_registry(self):
+        from apps.deployments.models import Project
+        from apps.deployments.models.registry_scope import ScopedRegistry
+        from django.contrib.contenttypes.models import ContentType
+
+        project = Project.objects.create(
+            owner=self.user,
+            name="Serializer Project",
+            slug="serializer-project",
+        )
+        self.service.project = project
+        self.service.save(update_fields=["project"])
+        ScopedRegistry.objects.create(
+            content_type=ContentType.objects.get_for_model(project),
+            object_id=project.id,
+            registry_url="registry.example.com",
+        )
+
+        data = ServiceSerializer(self.service).data
+
+        self.assertEqual(data["project_name"], "Serializer Project")
+        self.assertEqual(data["project_slug"], "serializer-project")
+        self.assertEqual(data["effective_registry"], "registry.example.com")
+
     def test_create_with_valid_data_and_env_vars(self):
         payload = {
             "name": "new-service",

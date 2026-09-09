@@ -829,12 +829,22 @@ export default function ServiceDetailPage() {
                             {service.project && (
                                 <div className="flex justify-between border-b border-border pb-3">
                                     <span className="text-muted-foreground font-medium">Scope</span>
-                                    <a href={`/project/${service.project}`} className="text-primary hover:underline flex items-center gap-1">
+                                    <a href={`/projects/${service.project}`} className="text-primary hover:underline flex items-center gap-1">
                                         <FolderKanban className="w-3 h-3" />
                                         {service.project_name || 'Project'}
                                     </a>
                                 </div>
                             )}
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Effective Registry</span>
+                                {service.effective_registry ? (
+                                    <a href="/settings?tab=registry" className="font-mono text-xs text-primary hover:underline truncate ml-4 max-w-[250px]">
+                                        {service.effective_registry}
+                                    </a>
+                                ) : (
+                                    <span className="font-mono text-xs text-muted-foreground">Platform default</span>
+                                )}
+                            </div>
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Registry Credentials</span>
                                 <a href={`/settings?tab=registry`} className="text-xs text-primary hover:underline flex items-center gap-1">
