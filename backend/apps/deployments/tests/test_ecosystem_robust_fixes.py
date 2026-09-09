@@ -784,6 +784,17 @@ class TestInternalServiceUrls(TestCase):
         self.assertEqual(out["API_URL"], "https://smsly-backend:80")
         self.assertEqual(out["FE_URL"], "http://smsly-frontend:3000")
 
+    def test_service_placeholder_never_leaks_literal_port_token(self):
+        created = self._created()
+        out = _resolve_env_placeholders(
+            {"API_URL": "{{SERVICE:smsly-backend}}"},
+            created,
+            internal_names={"smsly-backend"},
+            project_id="project-a",
+        )
+        self.assertEqual(out["API_URL"], "https://smsly-backend:80")
+        self.assertNotIn(":PORT", out["API_URL"])
+
     @patch("apps.deployments.models.Service.objects.filter")
     def test_fallback_service_lookup_is_project_scoped(self, mock_filter):
         from apps.deployments.tasks.ecosystem.helpers.env_vars import (

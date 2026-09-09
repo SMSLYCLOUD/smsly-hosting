@@ -51,7 +51,12 @@ class InjectionMixin:
         if val == "{{GENERATED}}":
             return generate_strong_secret(48)
         if val == f"{{{{SERVICE:{self.service_name}}}}}":
-            return f"http://{self.service_name}:{self.port}"
+            # Keep service references symbolic until the ecosystem task
+            # resolves them. That is where the project knows whether the
+            # target is internal (mTLS HTTPS via Envoy :80) or external
+            # (plain HTTP on the target port). Resolving here bypassed that
+            # policy and produced wrong URLs in generated env files.
+            return val
         return val
 
     def _resolve_service_url(self, var_name: str) -> str | None:
