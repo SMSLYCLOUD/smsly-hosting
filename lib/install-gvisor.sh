@@ -138,4 +138,8 @@ main() {
     fi
 }
 
-[ "${BASH_SOURCE[0]}" = "$0" ] && main "$@"
+# NOTE: `if` (not `&&`) so sourcing this file under `set -e` never kills
+# the parent shell — the false branch exits 0.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

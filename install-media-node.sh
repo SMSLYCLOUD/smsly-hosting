@@ -292,6 +292,15 @@ if [ "$(state_get phase2d)" != "done" ]; then
     state_set phase2d done
 fi
 
+# Phase 2.8: Install AI voice agent stack (Ollama + STT/TTS + orchestrator).
+# All self-hosted OSS: no cloud API keys involved. Runs before unit
+# deployment so Phase 3 picks up the agent units.
+if [ "$(state_get phase2e)" != "done" ]; then
+    echo -e "\n${BLUE}Phase 2.8: Installing AI voice agent stack${NC}"
+    install_agent_stack "$SCRIPT_DIR"
+    state_set phase2e done
+fi
+
 # Phase 3: Deploy configs + systemd
 if [ "$(state_get phase3)" != "done" ]; then
     echo -e "\n${BLUE}Phase 3: Deploying configs and systemd units${NC}"
