@@ -121,13 +121,14 @@ def _desired_proxied_state(domain: str | None = None) -> bool:
     """Resolve whether a record should be Cloudflare-proxied.
 
     Edge Shield: when `edge_proxy_records` is enabled, records are
-    proxied (orange cloud) for BGP-hijack defense. Third-level
-    wildcards (*.grid.example.com) are the exception — Cloudflare
-    Universal SSL does not cover them and every service behind the
-    wildcard gets ERR_SSL_VERSION_OR_CIPHER_MISMATCH when proxied.
-    Wildcards therefore respect `edge_proxy_wildcards` (default False,
-    DNS-only), which the PlatformConfig help text marks DANGEROUS for
-    third-level wildcards. Non-wildcard records still follow
+    proxied (orange cloud) for BGP-hijack defense — except names at or
+    below the platform wildcard level. Cloudflare edge certificates only
+    ever cover a single wildcard level, so a service hostname sitting
+    exactly on `*.<platform-domain>` gets ERR_SSL_VERSION_OR_CIPHER_MISMATCH
+    when proxied (unless the operator explicitly opts into
+    `edge_proxy_wildcards`, e.g. with Advanced Certificates), and names
+    deeper than the wildcard can never terminate at Cloudflare at all —
+    those are always DNS-only. The platform apex itself keeps following
     `edge_proxy_records`.
 
     Read lazily per-call so tests can toggle flags.
@@ -135,8 +136,17 @@ def _desired_proxied_state(domain: str | None = None) -> bool:
     try:
         from apps.deployments.models import PlatformConfig
         cfg = PlatformConfig.load()
-        if domain and domain.strip().startswith("*."):
-            return bool(getattr(cfg, "edge_proxy_wildcards", False))
+    except Exception:
+        return False
+    name = (domain or "").strip().lower().rstrip(".")
+    if name.startswith("*."):
+        return bool(getattr(cfg, "edge_proxy_wildcards", False))
+    platform = (getattr(cfg, "domain", "") or "").strip().lower().rstrip(".")
+    if platform and name != platform and name.endswith("." + platform):
+        if len(name.split(".")) > len(platform.split(".")) + 1:
+            return False
+        return bool(getattr(cfg, "edge_proxy_wildcards", False))
+    try:
         return bool(cfg.edge_proxy_records)
     except Exception:
         return False
