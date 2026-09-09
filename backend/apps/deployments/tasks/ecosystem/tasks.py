@@ -94,6 +94,7 @@ from .helpers import (
     _inject_addon_env_defaults,
     _next_available_service_name,
     _normalize_env_vars,
+    normalize_plan_env_vars,
     _order_key,
     _plan_addon_types,
     _queue_wave,
@@ -1103,6 +1104,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             "depends_on": svc_plan.get("depends_on", []),
             "plan": svc_plan,
         }
+        svc_plan["env_vars"] = normalize_plan_env_vars(svc_plan.get("env_vars", {}))
         entries_by_key[repo_key] = entry
 
     if not entries_by_key:
