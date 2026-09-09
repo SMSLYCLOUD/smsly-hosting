@@ -20,6 +20,7 @@ from .addons import (
 from .env_vars import (
     _find_cloned_source_for_repo,
     _generate_secret,
+    normalize_plan_env_vars,
     _normalize_env_vars,
     _placeholder_addon_types,
     _resolve_env_placeholders,

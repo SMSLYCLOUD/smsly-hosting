@@ -15,6 +15,7 @@ from apps.deployments.tasks.ecosystem.constants import (
 from apps.deployments.services.ecosystem.ecosystem_heuristics import (
     _is_external_api_key,
 )
+from apps.deployments.utils.env_sanitizer import sanitize_env_value
 
 from .addons import (
     _addon_env_keys,
@@ -50,6 +51,41 @@ def _generate_secret(length: int = 44) -> str:
     """
     alphabet = string.ascii_letters + string.digits + "-_"
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+_SERVICE_URL_KEY_MAP = {}
+
+
+def normalize_plan_env_vars(raw_env: Any) -> dict[str, str]:
+    """Normalize generated plan URLs before plan persistence/export."""
+    values = _normalize_env_vars(raw_env)
+    normalized: dict[str, str] = {}
+    for key, value in values.items():
+        key_upper = key.upper()
+        if key_upper in {"SPIFFE_TRUST_DOMAIN", "TRUST_DOMAIN"}:
+            normalized[key] = "ecosystem.local"
+            continue
+        target = _SERVICE_URL_KEY_MAP.get(key_upper)
+        text = str(value or "").strip()
+        lowered = text.lower()
+        if target and (
+            not text
+            or "localhost" in lowered
+            or "127.0.0.1" in lowered
+            or ":PORT" in text.upper()
+            or "audit-service" in lowered
+            or "identity-service:" in lowered
+            or "policy-service:" in lowered
+        ):
+            text = f"{{{{SERVICE:{target}}}}}"
+        # Keep symbolic service placeholders intact; the runtime resolver
+        # needs the braces to apply project scope, internal/external policy,
+        # and the target's actual port later.
+        if text.startswith("{{SERVICE:") and text.endswith("}}"):
+            normalized[key] = text
+        else:
+            normalized[key] = sanitize_env_value(text, key=key, allow_empty=True) or ""
+    return normalized
 
 
 def _normalize_env_vars(raw_env: Any) -> dict[str, str]:

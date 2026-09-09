@@ -24,6 +24,7 @@ from apps.deployments.tasks.ecosystem.helpers.env_vars import (
     _resolve_env_placeholders,
     _service_placeholder_url,
 )
+from apps.deployments.services.ecosystem_graph import resolve_service_url
 from apps.deployments.tasks.ecosystem.helpers.lifecycle import (
     _count_active_ecosystem_builds,
     _queue_wave,
@@ -794,6 +795,34 @@ class TestInternalServiceUrls(TestCase):
         )
         self.assertEqual(out["API_URL"], "https://smsly-backend:80")
         self.assertNotIn(":PORT", out["API_URL"])
+
+    def test_legacy_sibling_linker_uses_envoy_port_for_mtls(self):
+        self.assertEqual(
+            resolve_service_url({
+                "name": "gateway",
+                "container": "gateway",
+                "port": 8080,
+                "mtls_enabled": True,
+                "sidecar_enabled": True,
+            }, prefer_public=False),
+            "https://gateway:80",
+        )
+
+    def test_plan_normalizer_does_not_invent_platform_service_names(self):
+        from apps.deployments.tasks.ecosystem.helpers.env_vars import (
+            normalize_plan_env_vars,
+        )
+
+        out = normalize_plan_env_vars({
+            "BACKEND_URL": "http://localhost:8000",
+            "IDENTITY_SERVICE_URL": "http://localhost:8010",
+            "CUSTOM_URL": "{{SERVICE:customer-api}}",
+            "SPIFFE_TRUST_DOMAIN": "platform.example",
+        })
+        self.assertNotIn("smsly-backend", out["BACKEND_URL"])
+        self.assertNotIn("smsly-identity-service", out["IDENTITY_SERVICE_URL"])
+        self.assertEqual(out["CUSTOM_URL"], "{{SERVICE:customer-api}}")
+        self.assertEqual(out["SPIFFE_TRUST_DOMAIN"], "ecosystem.local")
 
     @patch("apps.deployments.models.Service.objects.filter")
     def test_fallback_service_lookup_is_project_scoped(self, mock_filter):

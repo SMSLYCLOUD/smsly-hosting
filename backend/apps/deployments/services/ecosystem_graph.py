@@ -101,6 +101,13 @@ def build_ecosystem_graph(service) -> dict[str, Any]:
             'container': getattr(sib, 'container_name', '') or _slugify(sib.name),
             'addons': {},
         }
+        try:
+            mtls = sib.mtls_config
+            sib_info['mtls_enabled'] = bool(mtls.enabled)
+            sib_info['sidecar_enabled'] = bool(mtls.sidecar_enabled)
+        except Exception:
+            sib_info['mtls_enabled'] = False
+            sib_info['sidecar_enabled'] = False
 
         for addon in sib.addons.filter(status='ACTIVE'):
             conn_url = addon.connection_url or ''
@@ -170,6 +177,10 @@ def resolve_service_url(sib_info: dict, prefer_public: bool = True) -> str:
     if prefer_public and sib_info.get('domain'):
         return f"https://{sib_info['domain']}"
     container = sib_info.get('container') or sib_info.get('name', 'localhost')
+    if sib_info.get('mtls_enabled') or sib_info.get('sidecar_enabled'):
+        # Envoy owns the internal TLS listener. The application port is
+        # behind Envoy and must never be used for an mTLS URL.
+        return f"https://{container}:80"
     port = sib_info.get('port', 8000)
     return f"http://{container}:{port}"
 

@@ -127,16 +127,9 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the Grid AI Senate
     For EVERY env var ending in _URL, _SERVICE_URL, _ENDPOINT, _BACKEND_URL, _API_URL, _BASE_URL:
     - Determine which service it points to by reading the code (how the URL is used).
     - Use {{SERVICE:target-service-name}} for ALL inter-service URLs.
-    - Examples from the ecosystem:
-      * AUDIT_SERVICE_URL → {{SERVICE:smsly-audit-log-service}}
-      * IDENTITY_SERVICE_URL → {{SERVICE:smsly-identity-service}}
-      * SECURITY_GATEWAY_URL → {{SERVICE:smsly-security-gateway}}
-      * PLATFORM_API_URL → {{SERVICE:smsly-platform-api}}
-      * POLICY_SERVICE_URL → {{SERVICE:smsly-policy-service}}
-      * RATE_LIMIT_SERVICE_URL → {{SERVICE:smsly-rate-limit-service}}
-      * TRANSACTION_CHAIN_URL → {{SERVICE:smsly-transaction-chain}}
-      * BACKEND_URL → {{SERVICE:smsly-backend}}
-      * FRONTEND_URL → {{SERVICE:smsly-frontend}}
+     - Use the exact service name/repository name from THIS submitted plan as
+       the placeholder target. Never invent or copy platform-internal service
+       names, domains, or trust-domain values.
     - If you cannot determine the target, use {{SERVICE:closest-match}} based on the URL var name.
     - NEVER use {{GENERATE}} for service URLs — they MUST be {{SERVICE:...}} placeholders.
 
@@ -173,8 +166,8 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the Grid AI Senate
     8. ZERO EMPTY VARS POLICY: You are a DEEP CODE ANALYST. For EVERY env var:
        - Read the service's actual config files, Dockerfile, docker-compose.yml, package.json, settings.py, .env.example to determine the REAL value.
        - PORT values MUST come from the actual config (Dockerfile EXPOSE, docker-compose ports, config files) — NEVER random.
-       - HOST values MUST be the actual service name for internal communication (e.g., "postgres", "redis", "smsly-core-api") — NOT "localhost".
-       - URL values MUST use the correct service name and port (e.g., http://smsly-core-api:8000) — NOT placeholders.
+        - HOST values MUST be the actual service name from the submitted plan for internal communication — NOT "localhost".
+        - URL values MUST use the correct submitted-plan service name and detected port — NOT placeholders.
        - DATABASE names MUST be specific to the service (e.g., smsly_core_db, smsly_policy_db) — NOT generic "default".
        - LOG_LEVEL, NODE_ENV, DEBUG etc. MUST match what the config files show (e.g., if settings.py has DEBUG=False, use "false").
        - ONLY use {{GENERATE}} for INTERNAL app secrets you have no source for (JWT_SECRET, internal passwords). NEVER use {{GENERATE}} for external provider keys or internal infra values.

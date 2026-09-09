@@ -1572,7 +1572,7 @@ export default function EcosystemPage() {
                                                 value={mtlsConfig.trust_domain}
                                                 onChange={(e) => setMtlsConfig(prev => ({ ...prev, trust_domain: e.target.value }))}
                                                 className="text-xs font-mono bg-background border border-border rounded px-2 py-1.5 flex-1"
-                                                placeholder="trulay.co"
+                                                 placeholder="example.com"
                                             />
                                         </div>
 

@@ -378,10 +378,10 @@ _HEURISTIC_DEFAULTS: dict[str, str] = {
     "APP_ENV": "production",
     "VERSION": "1.0.0",
     "VITE_PUBLIC": "",
-    "VITE_API_URL": "{{SERVICE:smsly-platform-api}}",
+    "VITE_API_URL": "",
     "VITE_AI_SERVICE_URL": "",
     "VITE_DEV_SERVER_URL": "",
-    "VITE_PLATFORM_API_URL": "{{SERVICE:smsly-platform-api}}",
+    "VITE_PLATFORM_API_URL": "",
     "VITE_VIDEO_SIGNALING_URL": "",
     "ML_MODEL_DIR": "/app/ml-models",
     "SENTIMENT_MODEL": "/app/ml-models/sentiment.pkl",
@@ -433,19 +433,7 @@ _HEURISTIC_DEFAULTS: dict[str, str] = {
     "GF_USERS_ALLOW_SIGN_UP": "false",
 }
 
-_SERVICE_NAME_MAP: dict[str, str] = {
-    "PLATFORM_API": "smsly-platform-api",
-    "IDENTITY_SERVICE": "smsly-identity-service",
-    "POLICY_SERVICE": "smsly-policy-service",
-    "AUDIT_SERVICE": "smsly-audit-log-service",
-    "SECURITY_GATEWAY": "smsly-security-gateway",
-    "RATE_LIMIT_SERVICE": "smsly-rate-limit-service",
-    "BACKEND": "smsly-backend",
-    "TRANSACTION_CHAIN": "smsly-transaction-chain",
-    "GATEWAY": "smsly-security-gateway",
-    "FRONTEND": "smsly-frontend",
-    "BACKOFFICE": "smsly-backoffice-web",
-}
+_SERVICE_NAME_MAP: dict[str, str] = {}
 
 _SERVICE_URL_SUFFIX_RE = re.compile(
     r"_(URL|ENDPOINT|HOST|BASE_URL|API_URL|GATEWAY_URL|SERVICE_URL|HEALTH_URL)$",
