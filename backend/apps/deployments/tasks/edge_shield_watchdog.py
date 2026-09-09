@@ -18,8 +18,9 @@ Even with Cloudflare-proxied records, two hijack windows remain:
      RIPEstat. A transition to 'invalid' or a sudden new more-specific
      announcement of our origin prefix is the classic hijack signal.
 
-Alerts go through the existing alert pipeline (alert_user_task) so the
-operator is paged exactly like a crash-loop incident.
+Alerts go through the shared notification dispatcher
+(dispatch_notification) so the operator is paged exactly like a
+crash-loop incident.
 """
 from __future__ import annotations
 
@@ -135,17 +136,32 @@ def edge_shield_watchdog(self):
 
     logger.warning("edge_shield_watchdog: %d finding(s): %s", len(findings), findings)
 
-    # Page through the standard alert pipeline — same channel as
-    # crash-loop incidents so hijack symptoms are impossible to miss.
+    # Page the platform operators. This check is platform-scoped (no
+    # deployment exists), so alert_user_task — which requires a
+    # deployment_id — cannot be used here (2026-09-09: TypeError every
+    # 5 min). Fan out to active superusers via the shared dispatcher.
     try:
-        from apps.core.tasks.alerts import alert_user_task
-        alert_user_task.delay(
-            error_message=(
-                f"EDGE SHIELD WARNING — possible BGP/DNS hijack symptom "
-                f"on {domain} (origin {origin_ip}):\n"
-                + "\n".join(f"- {f}" for f in findings[:6])
-            ),
+        from django.contrib.auth import get_user_model
+
+        from apps.notifications.tasks import dispatch_notification
+
+        admins = get_user_model().objects.filter(
+            is_superuser=True, is_active=True
+        ).values_list("id", flat=True)
+        if not admins:
+            logger.warning("edge_shield_watchdog: no active superusers to notify")
+        message = (
+            f"EDGE SHIELD WARNING — possible BGP/DNS hijack symptom "
+            f"on {domain} (origin {origin_ip}):\n"
+            + "\n".join(f"- {f}" for f in findings[:6])
         )
+        for admin_id in admins:
+            dispatch_notification.delay(
+                event_type="edge_shield",
+                user_id=admin_id,
+                title=f"Edge Shield warning: {domain}",
+                message=message,
+            )
     except Exception as exc:
         logger.error("edge_shield_watchdog: alert dispatch failed: %s", exc)
 

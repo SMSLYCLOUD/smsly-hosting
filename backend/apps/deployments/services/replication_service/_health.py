@@ -76,11 +76,16 @@ class HealthMixin:
 
         node_results.sort(key=lambda x: x["wg_address"])
         results["nodes"] = node_results
+        # Who Patroni itself considers primary (wg address), if any node
+        # answered. Consumers (C3 election bridge) use this to detect a
+        # leaderless Patroni — absent entirely when Patroni isn't deployed.
+        results["patroni_leader"] = None
 
         for node_info in node_results:
             if node_info.get("status") == "OK":
                 if node_info.get("role") in {"master", "primary", "leader"}:
                     results["primary"] = node_info
+                    results["patroni_leader"] = node_info.get("wg_address")
                 else:
                     results["replicas"].append(node_info)
 

@@ -138,6 +138,60 @@ class WatchdogLogicTests(SimpleTestCase):
         self.assertTrue(_is_cloudflare_ip("104.16.132.229"))
 
 
+class WatchdogDispatchTests(SimpleTestCase):
+    """Watchdog alerts must reach operators without a deployment.
+
+    Regression (2026-09-09): the watchdog called alert_user_task without
+    the required deployment_id, so every finding ended in TypeError and
+    no alert was ever sent.
+    """
+
+    def _run(self, answers, admins=(7,)):
+        from apps.deployments.tasks import edge_shield_watchdog as watchdog
+
+        cfg = mock.MagicMock()
+        cfg.domain = "app.example.com"
+        cfg.server_ip = "203.0.113.10"
+        cfg.edge_shield_enabled = True
+
+        doh = mock.MagicMock()
+        doh.json.return_value = {"Answer": [{"type": 1, "data": a} for a in answers]}
+        ripestat = mock.MagicMock()
+        ripestat.json.return_value = {"data": {"validity": {"state": "valid"}}}
+
+        def _fake_get(url, **kwargs):
+            return ripestat if "ripe.net" in url else doh
+
+        mock_users = mock.MagicMock()
+        mock_users.objects.filter.return_value.values_list.return_value = list(admins)
+        with mock.patch.object(watchdog.requests, "get", side_effect=_fake_get), \
+             mock.patch("apps.deployments.models.PlatformConfig") as mock_pc, \
+             mock.patch("django.contrib.auth.get_user_model", return_value=mock_users), \
+             mock.patch("apps.notifications.tasks.dispatch_notification") as mock_dispatch:
+            mock_pc.load.return_value = cfg
+            result = watchdog.edge_shield_watchdog.run()
+        return result, mock_dispatch
+
+    def test_origin_exposure_pages_superusers(self):
+        result, mock_dispatch = self._run(["203.0.113.10"])
+        self.assertEqual(result["status"], "warn")
+        self.assertTrue(mock_dispatch.delay.called)
+        kwargs = mock_dispatch.delay.call_args[1]
+        self.assertEqual(kwargs["event_type"], "edge_shield")
+        self.assertEqual(kwargs["user_id"], 7)
+        self.assertIn("203.0.113.10", kwargs["message"])
+
+    def test_clean_answers_send_nothing(self):
+        result, mock_dispatch = self._run(["104.16.132.229"])
+        self.assertEqual(result["status"], "ok")
+        mock_dispatch.delay.assert_not_called()
+
+    def test_no_admins_does_not_crash(self):
+        result, mock_dispatch = self._run(["203.0.113.10"], admins=())
+        self.assertEqual(result["status"], "warn")
+        mock_dispatch.delay.assert_not_called()
+
+
 class VerificationPassTests(SimpleTestCase):
     """verify_edge_shield is read-only and safe in beat context."""
 

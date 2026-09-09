@@ -49,13 +49,28 @@ def check_replication_health_task():
 
         try:
             health = ReplicationService.check_replication_health(mesh)
+            nodes = health.get("nodes", [])
+            any_ok = any(n.get("status") == "OK" for n in nodes)
 
-            for node in health.get("nodes", []):
+            for node in nodes:
                 if "UNREACHABLE" in node.get("status", ""):
-                    logger.error(
-                        f"Replication node {node['name']} ({node['wg_address']}) "
-                        f"is UNREACHABLE"
+                    # Rate-limit the log line like the alert below: when
+                    # Patroni was never deployed, every 30s ERROR spam
+                    # buries real worker failures (2026-09-09 incident).
+                    log_key = (
+                        f"{RATE_LIMIT_KEY_PREFIX}log:{node['wg_address']}"
                     )
+                    if not cache.get(log_key):
+                        logger.error(
+                            f"Replication node {node['name']} ({node['wg_address']}) "
+                            f"is UNREACHABLE"
+                        )
+                        cache.set(log_key, True, timeout=RATE_LIMIT_SECONDS)
+                    else:
+                        logger.debug(
+                            f"Replication node {node['name']} ({node['wg_address']}) "
+                            f"still UNREACHABLE (rate-limited)"
+                        )
                     _dispatch_replication_alert(
                         mesh, node,
                         event_type="replication_node_down",
@@ -87,8 +102,12 @@ def check_replication_health_task():
             # C3: Bridge Patroni → ElectionService.
             # If Patroni says there's no leader but our Raft state thinks there is,
             # force an election re-check so stale leaders are demoted.
+            # Gate on any_ok: when NO node answered, Patroni isn't deployed
+            # (or the whole mesh is down) — there is no "Patroni reports no
+            # leader" signal, so bridging would flap elections every 30s
+            # (2026-09-09: terms racing past 26600 on a Patroni-less host).
             patroni_leader = health.get("patroni_leader")
-            if patroni_leader is None or patroni_leader == "":
+            if any_ok and (patroni_leader is None or patroni_leader == ""):
                 try:
                     from apps.deployments.services.election_service import ElectionService
                     cluster = ElectionService.get_or_create_cluster(mesh=mesh)
