@@ -172,11 +172,23 @@ def _entry_path(entry: dict) -> str:
 
 
 def _entry_selectors(entry: dict) -> list:
-    """Return the selector values of a listed entry."""
+    """Return the selector values of a listed entry.
+
+    The server splits selectors into type/value ({"type": "docker",
+    "value": "label:..."}), while creation uses the combined
+    "docker:label:..." form — recombine here so comparisons match.
+    """
     selectors = entry.get("selectors", [])
     if not isinstance(selectors, list):
         return []
-    return [s.get("value", "") for s in selectors if isinstance(s, dict)]
+    out = []
+    for s in selectors:
+        if not isinstance(s, dict):
+            continue
+        sel_type = str(s.get("type", "") or "")
+        value = str(s.get("value", "") or "")
+        out.append(f"{sel_type}:{value}" if sel_type else value)
+    return out
 
 
 def _entry_parent_id(entry: dict) -> str:
@@ -197,7 +209,9 @@ def _list_spire_entries() -> list | None:
         result = subprocess.run(
             [
                 "docker", "exec", ECOSYSTEM_SPIRE_SERVER_CONTAINER,
-                "/opt/spire/bin/spire-server", "entry", "list",
+                # NOTE: this image (spire 1.9.6) has `entry show`, not
+                # `entry list` — list prints fallback usage with rc!=0.
+                "/opt/spire/bin/spire-server", "entry", "show",
                 "-socketPath", ECOSYSTEM_SPIRE_SERVER_SOCKET,
                 "-output", "json",
             ],

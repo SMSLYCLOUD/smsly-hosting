@@ -983,16 +983,18 @@ class TestSpiffeConvergence(TestCase):
     _LEGACY = "spiffe://ecosystem.local/spire-server"
 
     def _entry(self, eid, name, parent, selectors=None):
+        # Mirrors real `entry show -output json`: the server splits
+        # selectors into type/value (value has NO type prefix).
         trust, _, path = parent.partition("ecosystem.local")
+        if selectors is None:
+            selectors = [f"label:com.paas.service:{name}"]
         return {
             "id": eid,
             "spiffe_id": {"trust_domain": "ecosystem.local",
                           "path": f"/service/{name}"},
             "parent": {"trust_domain": "ecosystem.local",
                        "path": path},
-            "selectors": [{"type": "docker", "value": s}
-                          for s in (selectors if selectors is not None
-                                    else [f"docker:label:com.paas.service:{name}"])],
+            "selectors": [{"type": "docker", "value": s} for s in selectors],
         }
 
     def _sync(self, entries, live_names):
@@ -1053,10 +1055,20 @@ class TestSpiffeConvergence(TestCase):
     def test_catchall_for_live_name_is_removed(self):
         entries = [self._entry("e-live", "svc-a", self._LIVE),
                    self._entry("e-catch", "svc-a", self._LIVE,
-                               selectors=["docker:label:com.paas.service:svc-a",
-                                          "docker:label:other:yes"])]
+                               selectors=["label:com.paas.service:svc-a",
+                                          "label:other:yes"])]
         result, deleted, reparented, created = self._sync(entries, {"svc-a"})
         self.assertEqual(deleted, ["e-catch"])
+
+    def test_server_selector_shape_recombines(self):
+        # Real server output splits type/value; comparisons use the
+        # combined "docker:label:..." form used at creation.
+        from apps.deployments.tasks_spiffe import _entry_selectors
+
+        entry = self._entry("e1", "svc-a", self._LIVE)
+        self.assertEqual(
+            _entry_selectors(entry), ["docker:label:com.paas.service:svc-a"]
+        )
 
     def test_blind_list_aborts_without_writes(self):
         from apps.deployments import tasks_spiffe as spiffe
