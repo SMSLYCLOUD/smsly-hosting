@@ -56,6 +56,8 @@ _MOCK_PATTERNS: Final[tuple[str, ...]] = (
     "localhost:8080", "127.0.0.1:8080",
 )
 
+_UNRESOLVED_PORT_RE = re.compile(r":PORT(?:\b|/|$)", re.IGNORECASE)
+
 
 # ---------------------------------------------------------------------------
 # 2. Tokens that *wrap* a value and must be stripped
@@ -181,6 +183,21 @@ def _strip_wrappers(v: str) -> str:
     return v
 
 
+def _strip_unmatched_trailing_quote(v: str) -> str:
+    """Remove one closing quote leaked after an unquoted scalar.
+
+    AI/JSON output commonly turns ``https://service:80`` into
+    ``https://service:80"``. Balanced wrappers are handled separately;
+    only remove a quote when it occurs exactly once and is not the
+    opening character of the value.
+    """
+    if len(v) > 1 and v[-1] in ('"', "'", "`", "\u2019", "\u201d"):
+        quote = v[-1]
+        if v.count(quote) == 1 and not v.startswith(quote):
+            return v[:-1].rstrip()
+    return v
+
+
 def _strip_trailing_comment(v: str) -> str:
     """Strip a trailing JS / C-style comment that follows a closing quote.
 
@@ -255,12 +272,20 @@ def sanitize_env_value(
     # Strip trailing comma artifacts (JSON / JS array leaks like ``"*",``)
     v = v.rstrip(',').strip()
     v = _strip_wrappers(v)
+    v = _strip_unmatched_trailing_quote(v)
 
     # 5. Collapse newlines (would break .env file format)
     if _NEWLINE_RE.search(v):
         v = _NEWLINE_RE.sub(" ", v).strip()
 
     # 6. Literal placeholder
+    # URL templates such as http://service:PORT are not runnable env
+    # values. They must be resolved from the target service's real port;
+    # never persist the literal token.
+    if _UNRESOLVED_PORT_RE.search(v) and key and key.upper().endswith(("URL", "URI", "HOST")):
+        default = _default_for_key(key or "")
+        return default if default is not None else ("" if allow_empty else None)
+
     if v in PLACEHOLDER_EXACT:
         default = _default_for_key(key or "")
         if default is not None:

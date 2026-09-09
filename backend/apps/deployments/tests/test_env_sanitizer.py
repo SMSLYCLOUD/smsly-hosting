@@ -52,8 +52,17 @@ class SanitizeBackticksTests(SimpleTestCase):
             "value",
         )
 
-    def test_strips_only_one_side_does_nothing(self):
-        # Unbalanced — leave as-is (it's a real value, not wrapper noise).
+    def test_strips_unmatched_trailing_quote_from_scalar(self):
+        # AI/JSON output leaked a closing quote after URLs and service
+        # authorities, e.g. ADMIN_BACKEND_URL=https://service:80".
+        self.assertEqual(
+            sanitize_env_value('https://service:80"', key="FOO"),
+            "https://service:80",
+        )
+
+    def test_preserves_leading_quote_when_it_is_not_a_trailing_leak(self):
+        # A leading quote alone may be intentional content; only the
+        # unmatched trailing wrapper is removed.
         self.assertEqual(
             sanitize_env_value('"unclosed', key="FOO"),
             '"unclosed',
@@ -184,6 +193,18 @@ class SanitizeAllowedHostsTests(SimpleTestCase):
 
 
 class SanitizePlaceholderTests(SimpleTestCase):
+    def test_rejects_unresolved_port_token_in_url(self):
+        self.assertEqual(
+            sanitize_env_value("http://smsly-service:PORT/health", key="HEALTH_URL"),
+            "",
+        )
+
+    def test_keeps_numeric_port_url(self):
+        self.assertEqual(
+            sanitize_env_value("http://smsly-service:8080/health", key="HEALTH_URL"),
+            "http://smsly-service:8080/health",
+        )
+
     def test_exact_generate(self):
         self.assertEqual(
             sanitize_env_value("GENERATE", key="FOO"),

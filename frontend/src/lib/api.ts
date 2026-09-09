@@ -2411,6 +2411,11 @@ export const ecosystemApi = {
 
   downloadEnv: () =>
     api.get('/cloud/ecosystem/download-env/', { responseType: 'blob' }).then(r => r.data),
+  downloadRuntimeEnv: (projectId: string, reveal = false) =>
+    api.get('/cloud/intelligence/runtime-env/', {
+      params: { project_id: projectId, ...(reveal ? { reveal: 'true' } : {}) },
+      responseType: 'blob',
+    }).then(r => r.data),
 
   // ── Plan history ──
   listPlans: (params?: { status?: string; page?: number }) =>

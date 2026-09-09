@@ -1264,6 +1264,63 @@ MIGRATION_PHASE=phase4
         response['Content-Disposition'] = 'attachment; filename="ecosystem-env.json"'
         return response
 
+    @action(detail=False, methods=['get'], url_path='runtime-env')
+    def runtime_env(self, request):
+        """Export persisted, generated runtime env values for a project.
+
+        ``download_env`` exports the AI plan draft, which can differ from
+        the values actually persisted during service preparation. This
+        endpoint reads the encrypted EnvironmentVariable rows instead.
+        Values are masked by default; reveal=true requires project write
+        access and never logs the returned secrets.
+        """
+        from django.http import JsonResponse
+        from apps.deployments.models import EnvironmentVariable, Service
+        from apps.deployments.models.service import Project
+        from apps.teams.permissions import assert_can_write
+        from apps.cloud.services.build_constants import is_secret_env_var
+
+        project_id = request.query_params.get('project_id')
+        if not project_id:
+            return Response(
+                {'error': 'project_id is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            assert_can_write(request.user, project, action='export runtime environment for')
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        reveal = str(request.query_params.get('reveal', '')).lower() in {
+            '1', 'true', 'yes',
+        }
+        services = {}
+        for service in Service.objects.filter(project=project).order_by('name'):
+            values = {}
+            for row in EnvironmentVariable.objects.filter(service=service).order_by('key'):
+                secret = bool(row.is_secret or is_secret_env_var(row.key))
+                values[row.key] = row.value if reveal else ('********' if secret else row.value)
+            services[service.name] = {
+                'service_id': str(service.id),
+                'repository_url': service.repository_url,
+                'internal_port': service.internal_port,
+                'env_vars': values,
+            }
+
+        response = JsonResponse({
+            'project_id': str(project.id),
+            'project_name': project.name,
+            'generated_at': timezone.now().isoformat(),
+            'revealed': reveal,
+            'services': services,
+        }, json_dumps_params={'indent': 2})
+        response['Content-Disposition'] = 'attachment; filename="ecosystem-runtime-env.json"'
+        return response
+
     @action(detail=False, methods=['post'])
     def analyze_repo(self, request):
         """
