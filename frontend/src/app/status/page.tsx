@@ -132,6 +132,12 @@ export default function StatusPage() {
     : [];
   const isHealthy = coreOffline.length === 0;
 
+  // Edge warnings (e.g. a failed Caddy reload leaves the edge serving a
+  // stale config — new domains get no certificates). Surfaced loudly so
+  // a broken edge config can never go unnoticed again.
+  const edgeWarnings: Array<{ code?: string; severity?: string; message?: string; detail?: string; since?: string }> =
+    Array.isArray((systemConfig as any)?.edge_warnings) ? (systemConfig as any).edge_warnings : [];
+
   return (
     <DashboardShell>
       <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:py-10 relative z-10 space-y-6">
@@ -183,6 +189,27 @@ export default function StatusPage() {
             {isHealthy ? "Operational" : "Degraded"}
           </Badge>
         </div>
+
+        {/* Edge warnings — failed Caddy reloads, stale edge config, etc. */}
+        {edgeWarnings.map((warning, index) => (
+          <div
+            key={`${warning.code || "edge"}-${index}`}
+            className="p-4 rounded-xl border flex items-start gap-3 bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300"
+          >
+            <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <div className="font-semibold text-sm">
+                Edge Warning: {warning.message || "Edge configuration issue detected."}
+              </div>
+              {warning.detail ? (
+                <div className="mt-1 break-all font-mono text-xs opacity-80">{warning.detail}</div>
+              ) : null}
+              {warning.since ? (
+                <div className="mt-1 text-xs opacity-70">Since: {warning.since}</div>
+              ) : null}
+            </div>
+          </div>
+        ))}
 
         {/* Live Host Metrics */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

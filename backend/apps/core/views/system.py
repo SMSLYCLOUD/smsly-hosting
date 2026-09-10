@@ -282,9 +282,44 @@ class SystemConfigView(GenericAPIView):
             'disk_total_gb': 0.0,
             'disk_used_gb': 0.0,
             'disk_percent': 0.0,
-            'uptime_seconds': 0,
-            'services': {},
-        }
+        'uptime_seconds': 0,
+        'services': {},
+        'edge_warnings': [],
+    }
+
+        # ── Edge (Caddy) reload health ──────────────────────────────────
+        # A failed Caddy reload leaves the edge serving a STALE config —
+        # new domains get no certificate while everything looks green.
+        # The failure is recorded persistently by the reload path (and by
+        # the host-side watcher); surface it here so the dashboard can
+        # warn loudly instead of failing silently (2026-09-10 incident).
+        try:
+            from apps.deployments.services.caddy_manager.apply import (
+                read_caddy_reload_failure,
+            )
+            _reload_failure = read_caddy_reload_failure()
+            if _reload_failure:
+                import datetime as _dt
+                _ts = _reload_failure.get("ts") or 0
+                try:
+                    _when = _dt.datetime.fromtimestamp(
+                        float(_ts), tz=_dt.timezone.utc,
+                    ).isoformat()
+                except (TypeError, ValueError):
+                    _when = "unknown time"
+                infra['edge_warnings'].append({
+                    'code': 'caddy_reload_failed',
+                    'severity': 'critical',
+                    'message': (
+                        'Caddy failed to reload its configuration and is '
+                        'serving a stale config. New domains will not get '
+                        'TLS certificates.'
+                    ),
+                    'detail': str(_reload_failure.get("error") or "")[:300],
+                    'since': _when,
+                })
+        except Exception as exc:
+            logger.debug("Edge reload-health check failed: %s", exc)
 
         # ── Host metrics ──────────────────────────────────────────
         try:

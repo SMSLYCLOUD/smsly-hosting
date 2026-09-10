@@ -20,9 +20,56 @@ logger = logging.getLogger(__name__)
 
 CADDY_FILE_PATH = os.path.join(CADDY_CONFIG_DIR, "Caddyfile")
 CADDY_RELOAD_FLAG = os.path.join(CADDY_CONFIG_DIR, ".reload")
+# Persistent marker written whenever a Caddy reload is known to have
+# FAILED (docker-exec validation error or watcher rejection). The edge
+# keeps serving the previous config, so without this marker a broken
+# Caddyfile goes unnoticed until a domain stops working (2026-09-10:
+# stale config served for hours — new domain got no cert, Cloudflare
+# reported SSL handshake failure). Cleared on the next successful
+# reload. The host-side watcher writes the same file on its own
+# validation failures.
+CADDY_RELOAD_FAILED = os.path.join(CADDY_CONFIG_DIR, ".reload-failed")
 CADDY_RELOAD_COOLDOWN_SECONDS = 10
 _last_caddy_reload_ts: float = 0.0
 _last_caddy_content_hash: str = ""
+
+
+def _record_caddy_reload_failure(error: str) -> None:
+    """Persist a reload-failure marker for the dashboard health feed."""
+    try:
+        payload = json.dumps({
+            "ts": time.time(),
+            "error": str(error or "")[:500],
+        })
+        with open(CADDY_RELOAD_FAILED, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        logger.error("Caddy reload FAILED and was recorded: %s", str(error or "")[:300])
+    except Exception as exc:
+        logger.debug("Could not write caddy reload-failure marker: %s", exc)
+
+
+def _clear_caddy_reload_failure() -> None:
+    """Remove the reload-failure marker after a successful reload."""
+    try:
+        if os.path.exists(CADDY_RELOAD_FAILED):
+            os.remove(CADDY_RELOAD_FAILED)
+    except Exception as exc:
+        logger.debug("Could not clear caddy reload-failure marker: %s", exc)
+
+
+def read_caddy_reload_failure() -> dict | None:
+    """Return the recorded reload failure, or None when healthy."""
+    try:
+        if not os.path.exists(CADDY_RELOAD_FAILED):
+            return None
+        with open(CADDY_RELOAD_FAILED, encoding="utf-8") as handle:
+            payload = json.loads(handle.read() or "{}")
+        if not isinstance(payload, dict) or not payload.get("error"):
+            return None
+        return payload
+    except Exception as exc:
+        logger.debug("Could not read caddy reload-failure marker: %s", exc)
+        return None
 
 
 def _ensure_caddy_dir_writable():
@@ -274,13 +321,19 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                 result["ok"] = True
                 result["message"] = "Caddyfile written and reloaded via Docker"
                 logger.info("Caddy reloaded via docker exec on %s", CONTAINER_NAME)
+                _clear_caddy_reload_failure()
             else:
-                logger.info(
-                    "Docker exec reload not available (%s) — host-side watcher will handle it",
-                    dock_res.stderr.strip()[:200],
+                err = dock_res.stderr.strip()[:500]
+                logger.error(
+                    "Caddy reload FAILED via docker exec on %s: %s — "
+                    "the edge keeps serving the previous config; new "
+                    "domains will not get certificates until this is fixed",
+                    CONTAINER_NAME, err[:300],
                 )
+                _record_caddy_reload_failure(err)
                 result["ok"] = True
-                result["message"] = "Caddyfile written; reload pending via host-side watcher"
+                result["reload_error"] = err
+                result["message"] = "Caddyfile written; reload FAILED via Docker — recorded for the dashboard"
         except FileNotFoundError:
             logger.info("Docker CLI not found in container — host-side watcher will handle reload")
             result["ok"] = True

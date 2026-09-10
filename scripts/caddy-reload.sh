@@ -243,6 +243,16 @@ while true; do
             done
             if [ $attempts -ge 4 ]; then
                 echo "$LOG_PREFIX ERROR: Caddyfile validation failed after retries — NOT applying"
+                # Record the failure where the backend health feed reads it
+                # ($WATCH_DIR/.reload-failed): the edge keeps serving the
+                # previous config, so the dashboard must warn loudly instead
+                # of failing silently (2026-09-10 stale-config incident).
+                _reload_fail_ts="$(date +%s 2>/dev/null || echo 0)"
+                printf '{"ts": %s, "error": "host-side watcher: Caddyfile validation failed after retries; previous config still serving"}' \
+                    "$_reload_fail_ts" > "$WATCH_DIR/.reload-failed" 2>/dev/null || true
+            else
+                # Success clears any previous failure marker.
+                rm -f "$WATCH_DIR/.reload-failed" 2>/dev/null || true
             fi
         else
             echo "$LOG_PREFIX WARNING: No Caddyfile found in $WATCH_DIR"
