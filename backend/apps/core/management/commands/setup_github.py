@@ -132,8 +132,14 @@ class Command(BaseCommand):
         if app_id:
             env_updates["GITHUB_APP_ID"] = app_id
         if private_key:
-            # Escape newlines for .env file
-            env_updates["GITHUB_APP_PRIVATE_KEY"] = private_key.replace("\n", "\\n")
+            # Escape newlines for .env and QUOTE the value: an unquoted
+            # PEM contains spaces, so bash sourcing (. .env) would execute
+            # "RSA ..." as a command, fail under `set -e`, and kill
+            # install.sh --update at startup (2026-09-10 live incident).
+            # Django un-escapes the \n sequences at read time.
+            env_updates["GITHUB_APP_PRIVATE_KEY"] = (
+                '"' + private_key.replace("\n", "\\n") + '"'
+            )
         if oauth_id:
             env_updates["GITHUB_CLIENT_ID"] = oauth_id
         if oauth_secret:
