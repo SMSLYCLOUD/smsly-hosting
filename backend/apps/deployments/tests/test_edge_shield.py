@@ -56,12 +56,16 @@ class DnsProxiedStateTests(SimpleTestCase):
             return _desired_proxied_state()
 
     def test_shield_off_means_dns_only(self):
-        self.assertFalse(self._state(edge_proxy_records=False))
+        self.assertFalse(self._state(
+            edge_proxy_records=False, domain="grid.smsly.cloud"))
 
     def test_shield_on_means_proxied(self):
         # This is the property that closes the origin-IP exposure: with
         # the shield on, every managed record must be orange-clouded.
-        self.assertTrue(self._state(edge_proxy_records=True))
+        # NOTE: domain must be a real string — the wildcard-depth logic
+        # calls str methods on it (2026-09-09: MagicMock broke endswith).
+        self.assertTrue(self._state(
+            edge_proxy_records=True, domain="grid.smsly.cloud"))
 
     def test_config_error_falls_back_safe(self):
         with mock.patch(

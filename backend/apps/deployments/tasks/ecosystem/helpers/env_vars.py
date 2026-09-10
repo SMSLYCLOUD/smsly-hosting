@@ -56,9 +56,38 @@ def _generate_secret(length: int = 44) -> str:
 _SERVICE_URL_KEY_MAP = {}
 
 
+def _rebrace_bare_placeholder(text: str) -> str:
+    """Re-wrap placeholder tokens that lost their {{...}} braces.
+
+    Older plan persistence ran every value through ``sanitize_env_value``,
+    whose rule 3 strips {{...}} wrappers. Plans stored that way contain
+    literal garbage like ``RABBITMQ_URL`` or ``SHARED_SECRET:platform_api_secret``
+    which is then persisted verbatim and crashes apps at boot (a broker
+    URL of "RABBITMQ_URL" is not connectable). Re-wrap anything that is
+    clearly a placeholder so provisioning-time resolution sees it again.
+    """
+    stripped = str(text or "").strip()
+    if not stripped or stripped.startswith("{{"):
+        return text
+    upper = stripped.upper()
+    if upper == "GENERATE":
+        return "{{GENERATE}}"
+    if upper.startswith(("SHARED_SECRET:", "SERVICE:")):
+        return f"{{{{{stripped}}}}}"
+    if _addon_type_from_placeholder(stripped):
+        return f"{{{{{stripped}}}}}"
+    return text
+
+
 def normalize_plan_env_vars(raw_env: Any) -> dict[str, str]:
     """Normalize generated plan URLs before plan persistence/export."""
     values = _normalize_env_vars(raw_env)
+    # Canonical generated key names: the AI planner sometimes emits the
+    # legacy alias (REDIS_URI). Fold it to the canonical REDIS_URL — but
+    # only when the plan doesn't define REDIS_URL explicitly, so a
+    # deliberate user override is never clobbered (2026-09-09).
+    if "REDIS_URI" in values and "REDIS_URL" not in values:
+        values["REDIS_URL"] = values.pop("REDIS_URI")
     normalized: dict[str, str] = {}
     for key, value in values.items():
         key_upper = key.upper()
@@ -78,10 +107,19 @@ def normalize_plan_env_vars(raw_env: Any) -> dict[str, str]:
             or "policy-service:" in lowered
         ):
             text = f"{{{{SERVICE:{target}}}}}"
-        # Keep symbolic service placeholders intact; the runtime resolver
-        # needs the braces to apply project scope, internal/external policy,
-        # and the target's actual port later.
-        if text.startswith("{{SERVICE:") and text.endswith("}}"):
+        # Repair legacy brace-stripped tokens before the wrapper check so
+        # e.g. the literal 'RABBITMQ_URL' becomes '{{RABBITMQ_URL}}' again
+        # and is resolved from the provisioned addon instead of persisting
+        # a bogus URL (2026-09-09 live incident).
+        text = _rebrace_bare_placeholder(text)
+        # Keep ALL symbolic placeholders intact ({{SERVICE:x}},
+        # {{POSTGRES_URL}}, {{SHARED_SECRET:x}}, {{GENERATE}}, ...).
+        # sanitize_env_value strips {{...}} wrappers (rule 3), which is
+        # correct for final container-ready values but destroys tokens
+        # that must survive until provisioning-time resolution (2026-09-09:
+        # {{POSTGRES_URL}} persisted literally as "POSTGRES_URL").
+        # The runtime resolver needs the braces.
+        if text.startswith("{{") and text.endswith("}}"):
             normalized[key] = text
         else:
             normalized[key] = sanitize_env_value(text, key=key, allow_empty=True) or ""

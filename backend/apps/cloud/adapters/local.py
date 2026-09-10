@@ -159,6 +159,13 @@ def _build_docker_healthcheck_cmd(url_or_urls: str | list[str], timeout_seconds:
     2. curl
     3. python3/python urllib
 
+    Any HTTP response below 500 counts as "the app is serving": mTLS /
+    auth-guarded apps (401/403) and 404s on fallback paths mean the
+    process IS listening — previously these failed the check, so guarded
+    apps stayed "starting" until the long start_period fallback accepted
+    them (13+ minute stalls, no Envoy sidecar injected — 2026-09-09 live
+    incident). 5xx and connection failures keep the container unhealthy.
+
     If none of these tools exist in the image, return success so the
     container is not marked unhealthy purely due missing probe tooling.
     """
@@ -171,35 +178,42 @@ def _build_docker_healthcheck_cmd(url_or_urls: str | list[str], timeout_seconds:
         urls = ["http://127.0.0.1/"]
     quoted_urls = " ".join(f"\"{url}\"" for url in urls)
 
-    return (
+    # One shared body: capture the status code from the first tool that
+    # ships, and accept any 1xx-4xx answer from any candidate URL.
+    probe_body = (
+        f"code=000; "
+        f"for u in {quoted_urls}; do "
+        "code=000; "
         "if command -v wget >/dev/null 2>&1; then "
-        f"for u in {quoted_urls}; do "
-        "wget -q -O /dev/null \"$u\" >/dev/null 2>&1 && exit 0; "
-        "done; exit 1; "
-        "fi; "
-        "if command -v curl >/dev/null 2>&1; then "
-        f"for u in {quoted_urls}; do "
-        "curl -fsS \"$u\" >/dev/null 2>&1 && exit 0; "
-        "done; exit 1; "
-        "fi; "
-        "if command -v python3 >/dev/null 2>&1; then "
-        f"for u in {quoted_urls}; do "
-        "U=\"$u\" python3 -c "
-        "\"import os,urllib.request;urllib.request.urlopen(os.environ['U'], timeout="
+        f"code=$(wget -S -O /dev/null -T {timeout} \"$u\" 2>&1 "
+        "| grep -m1 'HTTP/' | tail -1 | awk '{print $2}'); "
+        "elif command -v curl >/dev/null 2>&1; then "
+        f"code=$(curl -s -o /dev/null -w '%{{http_code}}' -m {timeout} \"$u\"); "
+        "elif command -v python3 >/dev/null 2>&1; then "
+        f"code=$(U=\"$u\" python3 -c "
+        "\"import os,urllib.request;"
+        "r=urllib.request.urlopen(os.environ['U'], timeout="
         f"{timeout}"
-        ")\" >/dev/null 2>&1 && exit 0; "
-        "done; exit 1; "
-        "fi; "
-        "if command -v python >/dev/null 2>&1; then "
-        f"for u in {quoted_urls}; do "
-        "U=\"$u\" python -c "
-        "\"import os,urllib.request;urllib.request.urlopen(os.environ['U'], timeout="
+        ");print(r.getcode())\" 2>/dev/null); "
+        "elif command -v python >/dev/null 2>&1; then "
+        f"code=$(U=\"$u\" python -c "
+        "\"import os,urllib.request;"
+        "r=urllib.request.urlopen(os.environ['U'], timeout="
         f"{timeout}"
-        ")\" >/dev/null 2>&1 && exit 0; "
-        "done; exit 1; "
+        ");print(r.getcode())\" 2>/dev/null); "
         "fi; "
+        "if [ \"$code\" != \"\" ] && [ \"$code\" != \"000\" ] && [ \"$code\" -ge 100 ] 2>/dev/null && [ \"$code\" -lt 500 ] 2>/dev/null; then exit 0; fi; "
+        "done; exit 1"
+    )
+
+    return (
+        "if command -v wget >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || "
+        "command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then "
+        + probe_body +
+        "; fi; "
         "exit 0"
     )
+
 def _health_status_range() -> tuple[int, int]:
     """Configurable acceptable HTTP status range for health probes.
 
@@ -215,6 +229,77 @@ def _health_status_range() -> tuple[int, int]:
     lo = _env_int("HEALTH_CHECK_STATUS_MIN", 200, minimum=100, maximum=599)
     hi = _env_int("HEALTH_CHECK_STATUS_MAX", 399, minimum=lo, maximum=599)
     return lo, hi
+
+
+def _probe_health_status(
+    docker_client,
+    container,
+    port: str,
+    path: str,
+    timeout_seconds: int = 3,
+) -> int:
+    """Return the HTTP status code a path answers, or 0 when unknown.
+
+    Executes inside the container (docker exec) so the probe uses the
+    container's own network stack. Tries wget, curl, then node.
+    """
+    url = f"http://127.0.0.1:{port}{path}"
+    script = (
+        "code=000; "
+        "if command -v wget >/dev/null 2>&1; then "
+        f"code=$(wget -S -O /dev/null -T {timeout_seconds} '{url}' 2>&1 "
+        "| grep -m1 'HTTP/' | tail -1 | awk '{print $2}'); "
+        "elif command -v curl >/dev/null 2>&1; then "
+        f"code=$(curl -s -o /dev/null -w '%{{http_code}}' -m {timeout_seconds} '{url}'); "
+        "fi; "
+        "if [ \"$code\" = \"000\" ] && command -v node >/dev/null 2>&1; then "
+        "code=$(node -e \"const u=URL('{url}');const x=require('http').get(u,r=>"
+        "{console.log(r.statusCode);process.exit(0)});"
+        "x.on('error',()=>{console.log(0);process.exit(0)})\"); "
+        "fi; "
+        "echo $code"
+    )
+    try:
+        exec_result = container.exec_run(["sh", "-c", script], demux=True)
+        raw = (exec_result[1] or b'').decode(errors='replace').strip()
+        code_str = raw.splitlines()[-1].strip() if raw else ''
+        return int(code_str) if code_str.isdigit() else 0
+    except Exception:
+        return 0
+
+
+def _all_paths_auth_locked(
+    docker_client,
+    container,
+    port: str,
+    candidate_paths: list[str],
+    timeout_seconds: int = 3,
+) -> bool:
+    """True when every answering candidate path returns 401/403.
+
+    Apps whose mTLS/gateway guards 401/403 every probe path (e.g.
+    gateway_guard 'mTLS required but no valid SPIFFE identity') are
+    ALIVE but can never satisfy a Traefik healthcheck — leaving the label
+    on marks the backend DOWN forever ("no available server"). Callers
+    should drop the Traefik healthcheck label so the backend defaults to
+    UP (2026-09-09 live incident).
+    """
+    answered = 0
+    auth_locked = 0
+    for path in candidate_paths:
+        code = _probe_health_status(
+            docker_client, container, port, path,
+            timeout_seconds=timeout_seconds,
+        )
+        if code in (0,):
+            continue
+        answered += 1
+        if code in (401, 403):
+            auth_locked += 1
+        else:
+            # A 2xx/3xx/404/5xx answer exists — not every path is locked.
+            return False
+    return answered > 0 and auth_locked == answered
 
 
 def _detect_working_health_path(
@@ -239,45 +324,21 @@ def _detect_working_health_path(
         pointing a probe at an auth-locked endpoint guarantees false
         DOWNs, so this path is skipped like a 404. (If EVERY candidate
         is auth-locked the caller should DROP the healthcheck label so
-        Traefik defaults the backend to UP.)
+        Traefik defaults the backend to UP; see _all_paths_auth_locked.)
       * 404 — wrong path, try the next candidate.
       * 5xx — the app is genuinely broken; keep the primary path so the
         instance gets pulled from rotation (we do not "hunt" for a
         green path through a red app).
 
     Returns None when no candidate path answers acceptably — the caller
-    keeps its recorded primary path in that case (or drops the
-    healthcheck when everything was auth-locked; see
-    _all_paths_auth_locked).
+    keeps its recorded primary path in that case.
     """
     lo, hi = _health_status_range()
     for path in candidate_paths:
-        url = f"http://127.0.0.1:{port}{path}"
-        # Probe with whichever HTTP tool the image ships; capture the
-        # status code so we can apply the verdict rules above.
-        script = (
-            "code=000; "
-            "if command -v wget >/dev/null 2>&1; then "
-            f"code=$(wget -S -O /dev/null -T {timeout_seconds} '{url}' 2>&1 "
-            "| grep -m1 'HTTP/' | tail -1 | awk '{print $2}'); "
-            "elif command -v curl >/dev/null 2>&1; then "
-            f"code=$(curl -s -o /dev/null -w '%{{http_code}}' -m {timeout_seconds} '{url}'); "
-            "fi; "
-            "if [ \"$code\" = \"000\" ] && command -v node >/dev/null 2>&1; then "
-            "code=$(node -e \"const u=URL('{url}');const x=require('http').get(u,r=>"
-            "{console.log(r.statusCode);process.exit(0)});"
-            "x.on('error',()=>{console.log(0);process.exit(0)})\"); "
-            "fi; "
-            "echo $code"
+        code = _probe_health_status(
+            docker_client, container, port, path,
+            timeout_seconds=timeout_seconds,
         )
-        try:
-            exec_result = container.exec_run(["sh", "-c", script], demux=True)
-            raw = (exec_result[1] or b'').decode(errors='replace').strip()
-            # The last line is our echoed code (wget -S headers may precede).
-            code_str = raw.splitlines()[-1].strip() if raw else ''
-            code = int(code_str) if code_str.isdigit() else 0
-        except Exception:
-            continue
 
         if code == 0:
             # Probe tooling missing or connection failed — cannot judge.
@@ -1245,8 +1306,9 @@ class LocalAdapter(BaseCloudAdapter):
         # no traffic yet, so the recreate is invisible to users.
         if platform_hc_enabled and docker_healthcheck is not None and not stage_before_cutover:
             try:
+                hc_paths = _health_paths(hc_primary_path)
                 detected_path = _detect_working_health_path(
-                    self.docker_client, new_container, str(port), _health_paths(hc_primary_path)
+                    self.docker_client, new_container, str(port), hc_paths
                 )
                 if detected_path and detected_path != hc_primary_path:
                     logger.info(
@@ -1269,6 +1331,37 @@ class LocalAdapter(BaseCloudAdapter):
                     ):
                         raise RuntimeError(
                             f"Container {container_name} failed health check after health-path recreate"
+                        )
+                elif _all_paths_auth_locked(
+                    self.docker_client, new_container, str(port), hc_paths,
+                ):
+                    # Every candidate answers 401/403 — the app is guarded
+                    # and Traefik would mark the backend DOWN forever.
+                    # Recreate once without the healthcheck label so the
+                    # backend defaults to UP.
+                    logger.info(
+                        "Direct start %s is auth-locked on every health "
+                        "path — recreating once without the Traefik "
+                        "healthcheck label",
+                        name,
+                    )
+                    fixed_labels = dict(labels)
+                    fixed_labels.pop(
+                        f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path',
+                        None,
+                    )
+                    with contextlib.suppress(Exception):
+                        new_container.stop(timeout=5)
+                        new_container.remove(force=True)
+                    create_kwargs = dict(create_kwargs)
+                    create_kwargs["labels"] = fixed_labels
+                    new_container = self.docker_client.containers.create(**create_kwargs)
+                    new_container.start()
+                    if not self._wait_container_healthy(
+                        new_container.id, timeout_seconds=health_timeout
+                    ):
+                        raise RuntimeError(
+                            f"Container {container_name} failed health check after auth-lock recreate"
                         )
             except Exception as exc:
                 logger.warning(
@@ -1381,6 +1474,7 @@ class LocalAdapter(BaseCloudAdapter):
             router_name = name.replace('.', '-').replace('_', '-')
             hc_paths = _health_paths(hc_path)
             hc_path_primary = hc_paths[0] if hc_paths else hc_path or "/"
+            auth_locked = False
             try:
                 detected = _detect_working_health_path(
                     self.docker_client, green, str(hc_port), hc_paths
@@ -1392,20 +1486,40 @@ class LocalAdapter(BaseCloudAdapter):
                         name, detected, hc_path_primary,
                     )
                     hc_path_primary = detected
+                # Every candidate is guarded (401/403): a Traefik
+                # healthcheck label would mark the backend DOWN forever
+                # ("no available server") even though the app is serving.
+                # Drop the label so Traefik defaults the backend to UP.
+                auth_locked = _all_paths_auth_locked(
+                    self.docker_client, green, str(hc_port), hc_paths,
+                )
             except Exception as exc:
                 logger.debug(
                     "Promote health-path probe failed for %s: %s", name, exc
                 )
-            live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_path_primary
-            # Keep the metadata label in sync so the next promote round-trip
-            # starts from the known-working path.
-            live_labels['smsly.blue_green.hc_path'] = hc_path_primary
-            if hc_interval:
-                live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
-            if hc_timeout:
-                live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
-            # Probe with a Host the app accepts (IP hosts get Django 400s).
-            live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.hostname'] = _traefik_hc_hostname(promoted_env)
+            if auth_locked:
+                logger.info(
+                    "Promote health-path: every candidate for %s is "
+                    "auth-locked (401/403) — dropping Traefik healthcheck "
+                    "label so the backend defaults to UP",
+                    name,
+                )
+                live_labels.pop(
+                    f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path',
+                    None,
+                )
+                live_labels['smsly.blue_green.hc_path'] = hc_path_primary
+            else:
+                live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_path_primary
+                # Keep the metadata label in sync so the next promote round-trip
+                # starts from the known-working path.
+                live_labels['smsly.blue_green.hc_path'] = hc_path_primary
+                if hc_interval:
+                    live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
+                if hc_timeout:
+                    live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
+                # Probe with a Host the app accepts (IP hosts get Django 400s).
+                live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.hostname'] = _traefik_hc_hostname(promoted_env)
 
         green_cmd = green_config.get('Cmd')
         green_entrypoint = green_config.get('Entrypoint')

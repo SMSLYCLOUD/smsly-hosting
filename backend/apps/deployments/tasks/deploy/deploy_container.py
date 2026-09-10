@@ -33,6 +33,34 @@ from .state import _mark_deployment_active, _post_deploy_success
 logger = logging.getLogger(__name__)
 
 
+def _resolve_live_container(resource_id: str, service_name: str) -> tuple[str, bool]:
+    """Return ``(container_id, promoted)`` for the container that is live.
+
+    The local adapter's ``promote_container`` removes the green container
+    and creates a NEW canonical container, and some adapter paths return
+    the pre-promotion id. A blind ``containers.get(resource_id)`` then
+    raises NotFound while the canonical container is running healthy —
+    the post-deploy monitor falsely reports "Container disappeared" and
+    fails the deployment (2026-09-09 live incident: 4 ecosystem rows
+    FAILED while their containers were Up and healthy).
+    """
+    try:
+        client = docker.from_env()
+        try:
+            container = client.containers.get(resource_id)
+            container.reload()
+            return container.id, container.name == service_name
+        except docker.errors.NotFound:
+            try:
+                canonical = client.containers.get(service_name)
+                canonical.reload()
+                return canonical.id, True
+            except (docker.errors.NotFound, docker.errors.DockerException):
+                return resource_id, False
+    except Exception:
+        return resource_id, False
+
+
 def _cancel_previous_staged(deployment: Deployment) -> None:
     """Cancel any prior STAGED deployments for the same service.
 
@@ -364,16 +392,22 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             service_id=str(service.id),
         )
 
+        # The local adapter's promote_container removes the green and
+        # creates a NEW canonical container. Some adapter paths return the
+        # pre-promotion id, so a blind `containers.get(resource_id)` raises
+        # NotFound while the canonical container is running healthy — the
+        # post-deploy monitor then falsely reports "Container disappeared"
+        # and fails the deployment (2026-09-09 live incident: 4 ecosystem
+        # rows FAILED while their containers were Up and healthy).
+        live_container_id = resource.resource_id
         auto_promoted = False
-        if staged_only and provider.provider_type == CloudProvider.ProviderType.LOCAL:
-            try:
-                promoted = docker.from_env().containers.get(resource.resource_id)
-                auto_promoted = promoted.name == service.name
-            except Exception:
-                pass
+        if provider.provider_type == CloudProvider.ProviderType.LOCAL:
+            live_container_id, auto_promoted = _resolve_live_container(
+                resource.resource_id, service.name,
+            )
 
         deployment.status = Deployment.Status.HEALTH_CHECK
-        deployment.green_container_id = resource.resource_id
+        deployment.green_container_id = live_container_id
         deployment.save(update_fields=['status', 'green_container_id'])
         # The local adapter may auto-promote after the staging hold. Refresh
         # before the staged-only branch so it cannot overwrite ACTIVE.
@@ -390,7 +424,7 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             container_timeout = _local_container_timeout_seconds(service)
             container_ready = _wait_for_local_container_healthy(
                 deployment,
-                resource.resource_id,
+                live_container_id,
                 timeout_seconds=container_timeout,
             )
             if not container_ready:
@@ -493,7 +527,7 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 resource.resource_id,
             )
 
-        addon_errors = _probe_addon_connectivity(service, resource.resource_id)
+        addon_errors = _probe_addon_connectivity(service, live_container_id)
         if addon_errors:
             err_summary = "; ".join(addon_errors)
             append_log(
@@ -525,7 +559,7 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             _cancel_previous_staged(deployment)
             deployment.status = Deployment.Status.STAGED
             deployment.staged_at = timezone.now()
-            deployment.container_id = resource.resource_id
+            deployment.container_id = live_container_id
             deployment.save(update_fields=['status', 'staged_at', 'container_id'])
             broadcast_status(deployment)
             _post_deploy_success(deployment, service)
@@ -533,20 +567,20 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 deployment,
                 f"[STAGED] Deployment staged for review.\n"
                 f"Preview URL: {deployment.staging_url}\n"
-                f"Container: {resource.resource_id}\n"
+                f"Container: {live_container_id}\n"
             )
             return
 
-        _mark_deployment_active(deployment, "local", "127.0.0.1", resource.resource_id)
+        _mark_deployment_active(deployment, "local", "127.0.0.1", live_container_id)
 
         deployment.status = Deployment.Status.ACTIVE
-        deployment.container_id = resource.resource_id
+        deployment.container_id = live_container_id
         deployment.finished_at = timezone.now()
         deployment.save()
 
         service.active_target_type = "local"
         service.active_host_ip = "127.0.0.1"
-        service.active_runtime_id = resource.resource_id
+        service.active_runtime_id = live_container_id
         service.save(update_fields=['active_target_type', 'active_host_ip', 'active_runtime_id'])
 
 
@@ -568,7 +602,7 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
         _post_deploy_monitor.delay(
             deployment_id=str(deployment.id),
             provider_id=str(provider.id),
-            container_id=resource.resource_id,
+            container_id=live_container_id,
             image_name=image_name,
         )
 

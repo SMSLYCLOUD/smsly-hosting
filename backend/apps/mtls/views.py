@@ -869,3 +869,222 @@ def policy_update_delete(request, policy_id):
         "created_at": policy.created_at.isoformat(),
         "updated_at": policy.updated_at.isoformat(),
     })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mtls_repair(request, service_id):
+    """One-click repair for the ecosystem issues the platform can fix live.
+
+    POST /api/v1/services/{service_id}/mtls/repair/
+
+    Scoped to the service's ecosystem project (all
+    ``managed_by=ECOSYSTEM`` services in the same project, plus the
+    service itself). Repairs, in order:
+
+      1. Brace-stripped env placeholders — legacy persistence stripped
+         ``{{...}}`` wrappers (CELERY_BROKER_URL was literally
+         "RABBITMQ_URL"); re-wrap them and resolve to the real shared
+         addon URL / shared secret value.
+      2. mTLS config drift — normalize trust domain + sidecar flag.
+      3. Missing Envoy sidecars — inject where mTLS is enabled and the
+         app container is running but no sidecar exists.
+      4. Orphan containers — remove platform-managed containers whose
+         Service row no longer exists.
+
+    Everything is idempotent and safe to run repeatedly. Returns a
+    structured report of what changed.
+    """
+    import re as _re
+
+    from apps.deployments.models import EnvironmentVariable, Service
+    from apps.deployments.models.addons import Addon
+    from apps.deployments.models.ecosystem import EcosystemSharedSecret
+    from apps.deployments.tasks.ecosystem.helpers.addons import (
+        _addon_type_from_placeholder,
+    )
+    from apps.deployments.tasks.ecosystem.helpers.env_vars import (
+        _generate_secret,
+        _rebrace_bare_placeholder,
+    )
+    from apps.deployments.tasks.ecosystem.tasks import (
+        _configure_ecosystem_mtls,
+    )
+
+    service = get_object_or_404(Service, id=service_id)
+    if not _user_can_access_service(request.user, service):
+        return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+
+    # ── Scope: ecosystem services in this service's project ────────────
+    scope_qs = Service.objects.filter(owner=request.user)
+    if service.project_id:
+        scope_qs = scope_qs.filter(
+            project_id=service.project_id,
+            managed_by="ECOSYSTEM",
+        )
+    scope = list(scope_qs)
+    if service not in scope:
+        scope.append(service)
+    project = service.project
+
+    # ── Shared addon URLs + shared secrets (for env resolution) ────────
+    shared_urls: dict[str, str] = {}
+    if project:
+        for addon in Addon.objects.filter(
+            service__project=project,
+            status=Addon.Status.ACTIVE,
+            name__endswith="-shared",
+        ):
+            if addon.connection_url:
+                shared_urls.setdefault(addon.addon_type, addon.connection_url)
+    secret_cache: dict[str, str] = dict(
+        EcosystemSharedSecret.objects.filter(user=request.user).values_list(
+            "name", "value",
+        )
+    )
+
+    def _resolve_value(raw: str, owner_service: Service) -> str:
+        """Resolve {{TOKEN}} tokens inside a value using shared resources."""
+        text = _rebrace_bare_placeholder(raw)
+        if "{{" not in text:
+            return text
+
+        def _repl(match: "_re.Match") -> str:
+            token = match.group(1).strip()
+            upper = token.upper()
+            if upper == "GENERATE":
+                return match.group(0)
+            if upper.startswith("SHARED_SECRET:"):
+                name = token.split(":", 1)[1].strip().lower() or "shared"
+                if name not in secret_cache:
+                    secret_cache[name] = _generate_secret()
+                    EcosystemSharedSecret.objects.update_or_create(
+                        user=request.user, name=name,
+                        defaults={"value": secret_cache[name]},
+                    )
+                return secret_cache[name]
+            if upper.startswith("SERVICE:"):
+                # Needs full ecosystem context — leave for the deploy task.
+                return match.group(0)
+            addon_type = _addon_type_from_placeholder(token)
+            if addon_type:
+                url = shared_urls.get(addon_type)
+                if url:
+                    return url
+                own = Addon.objects.filter(
+                    service=owner_service,
+                    addon_type=addon_type,
+                    status=Addon.Status.ACTIVE,
+                ).exclude(connection_url="").first()
+                if own and own.connection_url:
+                    return own.connection_url
+            return match.group(0)
+
+        return _re.sub(r"\{\{(.+?)\}\}", _repl, text)
+
+    # ── 1. Env repair ───────────────────────────────────────────────────
+    env_repaired = []
+    for svc in scope:
+        changed: list[str] = []
+        for env in EnvironmentVariable.objects.filter(service=svc):
+            old = str(env.value or "")
+            new = _resolve_value(old, svc)
+            if new != old:
+                env.value = new
+                env.save(update_fields=["value", "updated_at"])
+                changed.append(env.key)
+        if changed:
+            env_repaired.append(
+                {"service": svc.name, "keys": sorted(changed)},
+            )
+
+    # ── 2. mTLS config normalization ────────────────────────────────────
+    mtls_normalized = []
+    for svc in scope:
+        try:
+            if svc.managed_by == "ECOSYSTEM":
+                _configure_ecosystem_mtls(svc, enabled=True)
+                mtls_normalized.append(svc.name)
+        except Exception as exc:
+            logger.warning("mTLS repair normalize failed for %s: %s", svc.name, exc)
+
+    # ── 3. Missing sidecars ─────────────────────────────────────────────
+    sidecars_injected = []
+    sidecar_errors = []
+    for svc in scope:
+        try:
+            config = MtlsConfig.objects.filter(
+                service=svc, enabled=True, sidecar_enabled=True,
+            ).first()
+            if not config:
+                continue
+            from apps.mtls.services.envoy_sidecar import EnvoySidecar
+
+            sidecar = EnvoySidecar.get_sidecar_status(svc)
+            if sidecar.get("status") == "running":
+                continue
+            try:
+                from apps.cloud.docker_client import get_docker_client
+                client = get_docker_client()
+                app_container = client.containers.get(svc.name)
+                if app_container.status != "running":
+                    continue
+            except Exception:
+                # No running app container — sidecar injection would fail.
+                continue
+            result = EnvoySidecar.inject_sidecar(svc)
+            sidecars_injected.append(svc.name)
+            logger.info(
+                "mTLS repair: injected sidecar for %s: %s",
+                svc.name, result.get("status"),
+            )
+        except Exception as exc:
+            logger.warning("mTLS repair sidecar failed for %s: %s", svc.name, exc)
+            sidecar_errors.append({"service": svc.name, "error": str(exc)})
+
+    # ── 4. Orphan containers (service row missing) ──────────────────────
+    orphan_containers_removed = []
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        client = get_docker_client()
+        live_ids = {
+            str(sid) for sid in Service.objects.values_list("id", flat=True)
+        }
+        for container in (client.containers.list(all=True) or []):
+            try:
+                labels = getattr(container, "labels", None) or {}
+                if labels.get("managed_by") != "smsly-hosting":
+                    continue
+                svc_label = str(labels.get("smsly.service_id") or "").strip()
+                if not svc_label:
+                    continue
+                if svc_label in live_ids:
+                    continue
+                name = getattr(container, "name", "") or ""
+                if name.startswith("smsly-hosting-"):
+                    continue
+                container.remove(force=True)
+                orphan_containers_removed.append(name)
+                logger.info(
+                    "mTLS repair: removed orphan container %s "
+                    "(service row missing)", name,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "mTLS repair orphan sweep skipped %s: %s",
+                    getattr(container, "name", "?"), exc,
+                )
+    except Exception as exc:
+        logger.warning("mTLS repair orphan sweep unavailable: %s", exc)
+
+    return Response({
+        "status": "ok",
+        "scope_services": [s.name for s in scope],
+        "env_repaired": env_repaired,
+        "mtls_normalized": mtls_normalized,
+        "sidecars_injected": sidecars_injected,
+        "sidecar_errors": sidecar_errors,
+        "orphan_containers_removed": orphan_containers_removed,
+    })
+
+

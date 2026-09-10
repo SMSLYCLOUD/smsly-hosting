@@ -20,6 +20,7 @@ from .ecosystem_heuristics import (
 from .ecosystem_intelligence import (
     _apply_generic_ecosystem_intelligence,
     _build_deploy_sequence,
+    _is_core_service,
     _rebuild_addons_manifest,
     _safe_order,
 )
@@ -149,13 +150,17 @@ def _build_heuristic_plan(repos_data: list[dict], error: str = "") -> dict:
             "(user should set stack manually in the dashboard).", skipped
         )
 
-    # Sort: backends before frontends
+    # Sort: core backends first (APIs others depend on), then other
+    # backends, then frontends — so deploy waves and the review UI lead
+    # with the services the rest of the ecosystem links against.
     backend_stacks = {"django", "python", "rust", "go", "java", "ruby", "elixir", "php"}
     backends = [s for s in services if s["stack"] in backend_stacks]
     frontends = [s for s in services if s["stack"] not in backend_stacks]
+    core_backends = [s for s in backends if _is_core_service(s)]
+    other_backends = [s for s in backends if not _is_core_service(s)]
 
     sorted_services = []
-    for i, s in enumerate(backends + frontends, 1):
+    for i, s in enumerate(core_backends + other_backends + frontends, 1):
         s["deploy_order"] = i
         sorted_services.append(s)
 

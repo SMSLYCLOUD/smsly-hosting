@@ -1,7 +1,7 @@
 """Unit tests for ecosystem task normalization helpers."""
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
@@ -38,12 +38,66 @@ from apps.deployments.tasks.ecosystem.tasks import (
 
 
 class TestAddonGeneratedEnvKeys(SimpleTestCase):
-    def test_redis_generates_only_canonical_url_key(self):
+    def test_redis_generates_canonical_url_key_first(self):
+        # Canonical REDIS_URL first, legacy REDIS_URI alias kept for
+        # apps reading either conventional name (2026-09-09).
         env = {}
         _inject_addon_env_defaults(env, {"REDIS"}, {"REDIS": "redis://cache:6379/0"})
-        self.assertEqual(env, {"REDIS_URL": "redis://cache:6379/0"})
+        self.assertEqual(
+            env,
+            {"REDIS_URL": "redis://cache:6379/0", "REDIS_URI": "redis://cache:6379/0"},
+        )
         self.assertEqual(_addon_primary_env_key("REDIS"), "REDIS_URL")
         self.assertIn("REDIS_URI", _addon_env_keys("REDIS"))
+
+    def test_plan_normalizer_folds_redis_uri_to_url(self):
+        from apps.deployments.tasks.ecosystem.helpers import normalize_plan_env_vars
+
+        out = normalize_plan_env_vars({"REDIS_URI": "redis://cache:6379/0"})
+        self.assertEqual(out.get("REDIS_URL"), "redis://cache:6379/0")
+        self.assertNotIn("REDIS_URI", out)
+
+    def test_plan_normalizer_preserves_addon_placeholders(self):
+        # Regression (2026-09-09): sanitize_env_value stripped {{...}}
+        # wrappers, so {{POSTGRES_URL}} persisted literally as
+        # "POSTGRES_URL" and provisioning-time resolution never ran.
+        from apps.deployments.tasks.ecosystem.helpers import normalize_plan_env_vars
+
+        out = normalize_plan_env_vars({
+            "DATABASE_URL": "{{POSTGRES_URL}}",
+            "JWT_SECRET": "{{SHARED_SECRET:jwt}}",
+        })
+        self.assertEqual(out.get("DATABASE_URL"), "{{POSTGRES_URL}}")
+        self.assertEqual(out.get("JWT_SECRET"), "{{SHARED_SECRET:jwt}}")
+
+    def test_plan_normalizer_keeps_explicit_redis_url(self):
+        from apps.deployments.tasks.ecosystem.helpers import normalize_plan_env_vars
+
+        out = normalize_plan_env_vars({
+            "REDIS_URL": "redis://primary:6379/0",
+            "REDIS_URI": "redis://legacy:6379/1",
+        })
+        self.assertEqual(out.get("REDIS_URL"), "redis://primary:6379/0")
+        self.assertEqual(out.get("REDIS_URI"), "redis://legacy:6379/1")
+
+    def test_plan_normalizer_rebraces_stripped_legacy_tokens(self):
+        # Plans persisted before the preservation fix contain brace-less
+        # literals (2026-09-09 live incident: CELERY_BROKER_URL was the
+        # literal 'RABBITMQ_URL'). Re-deploys must repair them so
+        # provisioning-time resolution runs again.
+        from apps.deployments.tasks.ecosystem.helpers import normalize_plan_env_vars
+
+        out = normalize_plan_env_vars({
+            "CELERY_BROKER_URL": "RABBITMQ_URL",
+            "PLATFORM_API_SECRET": "SHARED_SECRET:platform_api_secret",
+            "SECRET_KEY": "GENERATE",
+            "DATABASE_URL": "postgresql://user:pass@db:5432/app",
+        })
+        self.assertEqual(out.get("CELERY_BROKER_URL"), "{{RABBITMQ_URL}}")
+        self.assertEqual(out.get("PLATFORM_API_SECRET"), "{{SHARED_SECRET:platform_api_secret}}")
+        self.assertEqual(out.get("SECRET_KEY"), "{{GENERATE}}")
+        # Real URLs must never be re-wrapped.
+        self.assertEqual(out.get("DATABASE_URL"), "postgresql://user:pass@db:5432/app")
 
     def test_redis_uri_placeholder_still_provisions_redis(self):
         from apps.deployments.tasks.ecosystem.helpers.addons import (
@@ -454,6 +508,12 @@ class EcosystemScanTaskTests(TestCase):
         self.assertTrue(result["retryable"])
         self.assertIn("timed out", result["error"])
 
+    def test_scan_timeout_is_never_autoretried(self):
+        # A blind retry would rerun a 1-hour GitHub/AI scan from scratch.
+        # The task handles SoftTimeLimitExceeded explicitly and must be
+        # excluded from autoretry_for (2026-09-09 gap).
+        self.assertIn(SoftTimeLimitExceeded, ecosystem_scan_task.dont_autoretry_for)
+
     # Patch targets must be the module the call site resolves through:
     # fetch_* are bound in ecosystem_pipeline's namespace; analyze_ecosystem_chunked
     # is imported LOCALLY inside _scan_and_analyze_impl from ecosystem_ai_analysis.
@@ -518,6 +578,26 @@ class EcosystemDeployTaskTests(TestCase):
             provider_type=CloudProvider.ProviderType.LOCAL,
             is_active=True,
         )
+        # Hermetic: the deploy task gates on live SPIRE infrastructure
+        # (docker + spire-server). Unit tests must not depend on it —
+        # without this every test below exits early with {"error": ...}
+        # instead of the {"failed": ...} result shape under test.
+        self._spire_patcher = patch(
+            "apps.mtls.views.ensure_ecosystem_spire", return_value="ready"
+        )
+        self._spire_patcher.start()
+        # Hermetic: the wave-engine kickoff uses app.send_task, which
+        # ignores task_always_eager and needs a live broker. Mock the
+        # transport; the wave task itself is covered by its own tests.
+        self._send_task_patcher = patch(
+            "celery.app.base.Celery.send_task",
+            return_value=MagicMock(id="test-task-id"),
+        )
+        self._send_task_patcher.start()
+
+    def tearDown(self):
+        self._send_task_patcher.stop()
+        self._spire_patcher.stop()
 
     @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     def test_local_provider_without_managed_server_queues_local_deployment(self, _queue_wave):

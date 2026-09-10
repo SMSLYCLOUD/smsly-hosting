@@ -144,7 +144,8 @@ class TestEcosystemRobustFixes(TestCase):
     def test_ecosystem_release_wave_task_timeout(
         self, mock_counter, mock_dep_filter, mock_cancel_unreleased, mock_finalize
     ):
-        """When wave recheck count exceeds max, remaining deployments are cancelled and plan is finalized."""
+        """When the wall-clock wait deadline passes, remaining deployments are
+        cancelled and the plan is finalized."""
         mock_dep_filter.return_value.values.return_value = [
             {"id": "dep-1", "status": Deployment.Status.BUILDING}
         ]
@@ -158,6 +159,7 @@ class TestEcosystemRobustFixes(TestCase):
             recheck_count=10,
             max_rechecks=10,
             plan_id="plan-123",
+            deadline_ts=0,  # deadline already passed
         )
 
         self.assertEqual(res["status"], "timed_out")
@@ -267,6 +269,7 @@ class TestWaveTimeoutOrphanFixes(TestCase):
             recheck_count=10,
             max_rechecks=10,
             plan_id="plan-123",
+            deadline_ts=0,  # deadline already passed
         )
 
         self.assertEqual(res["status"], "timed_out")
@@ -302,6 +305,7 @@ class TestWaveTimeoutOrphanFixes(TestCase):
             recheck_count=10,
             max_rechecks=10,
             plan_id="plan-123",
+            deadline_ts=0,  # deadline already passed
         )
 
         self.assertEqual(res["status"], "timed_out")

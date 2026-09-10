@@ -19,6 +19,8 @@ from apps.deployments.tasks.ecosystem.constants import (
     _MAX_CONCURRENT_BUILDS,
     _MAX_WAVE_SIZE,
     _MIN_FREE_MEMORY_MB,
+    _WAVE_FAST_RECHECK_SECONDS,
+    _WAVE_INITIAL_CHECK_SECONDS,
     _WAVE_RECHECK_SECONDS,
 )
 
@@ -338,6 +340,91 @@ def _wave_recheck_countdown() -> int:
     return _get_ecosystem_build_config()["wave_recheck_seconds"]
 
 
+def _wave_initial_check_countdown() -> int:
+    """Countdown for the FIRST check of the previous wave's status.
+
+    Never waits the full recheck window up front: a wave that finishes in
+    minutes must release the next wave promptly. The operator's
+    ``wave_recheck_seconds`` still caps the interval; it is just not
+    allowed to exceed the platform's initial-check ceiling.
+    """
+    return min(_wave_recheck_countdown(), _WAVE_INITIAL_CHECK_SECONDS)
+
+
+def _wave_fast_recheck_countdown() -> int:
+    """Countdown between consecutive rechecks while a wave is in flight.
+
+    Once the wave engine is awake it polls quickly so terminal waves are
+    noticed within a minute. The overall wait budget is preserved by the
+    deadline carried in the release task (see ecosystem_release_wave_task).
+    """
+    return min(_wave_recheck_countdown(), _WAVE_FAST_RECHECK_SECONDS)
+
+
+def _release_eligible_next_wave(
+    app,
+    waves: list[list[str]],
+    wave_index: int,
+    dependencies: dict[str, set[str]],
+    deployment_by_repo_key: dict[str, str],
+    provider_id: str,
+    plan_id: str | None = None,
+) -> int:
+    """Queue next-wave deployments whose dependencies are all terminal.
+
+    One slow service in the previous wave must not block unrelated
+    services in the next wave (2026-09-09 live incident: 4 services sat
+    QUEUED for hours behind one 13-minute health check). A deployment is
+    eligible once every dependency it declares is terminal-success
+    (ACTIVE or STAGED); rows whose dependencies failed are handled by the
+    dependency-cancellation logic in the release task itself.
+    """
+    if not dependencies or not deployment_by_repo_key:
+        return 0
+    if wave_index >= len(waves):
+        return 0
+
+    repo_key_by_deployment = {v: k for k, v in deployment_by_repo_key.items()}
+    released_ids = [str(dep_id) for w in waves[:wave_index] for dep_id in w]
+    if not released_ids:
+        return 0
+
+    try:
+        status_by_id = {
+            str(dep_id): status
+            for dep_id, status in Deployment.objects.filter(
+                id__in=released_ids,
+            ).values_list("id", "status")
+        }
+    except Exception as exc:
+        logger.debug("Partial wave release status lookup failed: %s", exc)
+        return 0
+
+    success_states = {Deployment.Status.ACTIVE, Deployment.Status.STAGED}
+    queued = 0
+    for dep_id in waves[wave_index]:
+        key = repo_key_by_deployment.get(str(dep_id))
+        if not key:
+            continue
+        dep_keys = dependencies.get(key, set())
+        if dep_keys:
+            blocked = any(
+                status_by_id.get(deployment_by_repo_key.get(dk)) not in success_states
+                for dk in dep_keys
+                if dk in deployment_by_repo_key
+            )
+            if blocked:
+                continue
+        queued += _queue_wave(app, [str(dep_id)], provider_id, wave_index, plan_id=plan_id)
+    if queued:
+        logger.info(
+            "Dependency-aware release: queued %d eligible deployment(s) from "
+            "wave %d while earlier wave still in flight",
+            queued, wave_index + 1,
+        )
+    return queued
+
+
 def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: int, plan_id: str | None = None) -> int:
     """Queue QUEUED deployments in this wave with dynamic concurrency control.
 
@@ -589,10 +676,17 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
             if isinstance(item, dict) and item.get("status") in {"failed", "pending"}
         ]
         if not waves:
-            plan_rec.status = EcosystemPlan.Status.COMPLETED
+            # No waves at all: nothing ever queued. Marking COMPLETED here
+            # would hide a silently empty deploy — a plan with zero
+            # deployments is a failure. services_status must not be read
+            # before assignment (previous NameError aborted finalization
+            # and left the plan DEPLOYING forever).
+            plan_rec.status = EcosystemPlan.Status.FAILED
             plan_rec.completed_at = timezone.now()
-            plan_rec.error_message = ""
-            plan_rec.services_status = services_status
+            plan_rec.error_message = (
+                "Ecosystem deploy produced no service deployments."
+            )
+            plan_rec.services_status = {}
             plan_rec.save(update_fields=[
                 "status", "completed_at", "error_message",
                 "services_status", "updated_at",

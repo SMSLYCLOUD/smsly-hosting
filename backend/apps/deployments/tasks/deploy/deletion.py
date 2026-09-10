@@ -88,6 +88,7 @@ def _is_stale_maintenance_container(
     active_service_names: set,
     live_container_ids: set | None = None,
     live_container_names: set | None = None,
+    any_service_ids: set | None = None,
 ) -> tuple[bool, str]:
     name = str(getattr(container, "name", "") or "")
     labels = getattr(container, "labels", None) or {}
@@ -155,6 +156,17 @@ def _is_stale_maintenance_container(
             pass
         return False, "rollback (age unknown)"
 
+    # ── Containers whose Service row no longer exists ──────────────────
+    # RUNNING or stopped: a platform-managed container whose
+    # smsly.service_id resolves to no Service row at all is an orphan left
+    # by ecosystem rollback (rows deleted, containers left running —
+    # 2026-09-09: 'audit-log-service' ran unhealthy for hours while its
+    # row was gone). The generic stopped-only guard below must not
+    # protect these.
+    if service_id and labels.get("managed_by") == "smsly-hosting":
+        if any_service_ids is not None and service_id not in any_service_ids:
+            return True, "service row missing from DB"
+
     if not stopped:
         return False, "container is not stopped"
 
@@ -191,6 +203,13 @@ def _clear_orphaned_runtime_resources() -> dict:
     active_addon_ids = {
         str(value)
         for value in Addon.objects.exclude(status="DELETED").values_list("id", flat=True)
+    }
+    # ALL Service ids regardless of status: a container whose row exists
+    # in ANY state (including DELETION_PENDING — the deletion task owns
+    # it) must never be swept.
+    any_service_ids = {
+        str(value)
+        for value in Service.objects.values_list("id", flat=True)
     }
 
     # Containers that live deployments actually reference (container_id /
@@ -232,6 +251,7 @@ def _clear_orphaned_runtime_resources() -> dict:
             active_service_names=active_service_names,
             live_container_ids=live_container_ids,
             live_container_names=live_container_names,
+            any_service_ids=any_service_ids,
         )
         if not should_remove:
             skipped.append({"name": container.name, "reason": reason})

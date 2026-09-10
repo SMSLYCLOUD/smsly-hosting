@@ -29,6 +29,11 @@ urlpatterns = [
         name="mtls-sidecar-toggle",
     ),
     path(
+        "services/<uuid:service_id>/mtls/repair/",
+        views.mtls_repair,
+        name="mtls-repair",
+    ),
+    path(
         "mtls/health/",
         views.mtls_health,
         name="mtls-health",

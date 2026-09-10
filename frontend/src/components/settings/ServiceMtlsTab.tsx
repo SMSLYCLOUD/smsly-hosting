@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Copy, ExternalLink, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Copy, ExternalLink, Loader2, RefreshCw, ShieldCheck, Wrench } from 'lucide-react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -17,6 +17,8 @@ type Props = {
 export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDomain }: Props) {
     const [status, setStatus] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    const [repairing, setRepairing] = useState(false);
+    const [repairReport, setRepairReport] = useState<any>(null);
 
     const load = async () => {
         setLoading(true);
@@ -35,6 +37,34 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
     };
 
     useEffect(() => { void load(); }, [serviceId]);
+
+    const handleRepair = async () => {
+        setRepairing(true);
+        setRepairReport(null);
+        try {
+            const response = await api.post(`/services/${serviceId}/mtls/repair/`);
+            const report = response.data;
+            setRepairReport(report);
+            const fixedCount =
+                (report.env_repaired?.length ?? 0) +
+                (report.mtls_normalized?.length ?? 0) +
+                (report.sidecars_injected?.length ?? 0) +
+                (report.orphan_containers_removed?.length ?? 0);
+            toast({
+                title: fixedCount > 0 ? `Repair complete — ${fixedCount} fix(es) applied` : 'Repair complete — nothing to fix',
+                description: 'Env placeholders, mTLS config, sidecars, and orphan containers were checked.',
+            });
+            void load();
+        } catch (error: any) {
+            toast({
+                title: 'Repair failed',
+                description: error?.response?.data?.detail || 'Could not run the repair suite.',
+                variant: 'destructive',
+            });
+        } finally {
+            setRepairing(false);
+        }
+    };
 
     const urls = [
         ['Status API', `/api/v1/services/${serviceId}/mtls/status/`],
@@ -72,11 +102,59 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
                             SPIFFE identity, SVID, and Envoy sidecar configuration for {serviceName}.
                         </p>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
-                        {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                        Refresh
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => void handleRepair()}
+                            disabled={repairing || loading}
+                            title="Fix all ecosystem issues: env placeholders, mTLS config drift, missing Envoy sidecars, orphan containers"
+                        >
+                            {repairing
+                                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                : <Wrench className="mr-2 h-4 w-4" />}
+                            Fix All Issues
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+                            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                            Refresh
+                        </Button>
+                    </div>
                 </div>
+
+                {repairReport && (
+                    <div className="mt-5 rounded-lg border bg-muted/30 p-4">
+                        <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                            Repair report
+                        </h4>
+                        <ul className="mt-2 space-y-1 text-xs">
+                            <li>
+                                <span className="font-semibold">Env placeholders repaired:</span>{' '}
+                                {repairReport.env_repaired?.length
+                                    ? repairReport.env_repaired.map((item: any) => `${item.service} (${item.keys?.join(', ')})`).join('; ')
+                                    : 'none'}
+                            </li>
+                            <li>
+                                <span className="font-semibold">mTLS config normalized:</span>{' '}
+                                {repairReport.mtls_normalized?.length ? repairReport.mtls_normalized.join(', ') : 'none'}
+                            </li>
+                            <li>
+                                <span className="font-semibold">Envoy sidecars injected:</span>{' '}
+                                {repairReport.sidecars_injected?.length ? repairReport.sidecars_injected.join(', ') : 'none'}
+                            </li>
+                            <li>
+                                <span className="font-semibold">Orphan containers removed:</span>{' '}
+                                {repairReport.orphan_containers_removed?.length ? repairReport.orphan_containers_removed.join(', ') : 'none'}
+                            </li>
+                            {repairReport.sidecar_errors?.length ? (
+                                <li className="text-destructive">
+                                    <span className="font-semibold">Sidecar errors:</span>{' '}
+                                    {repairReport.sidecar_errors.map((item: any) => `${item.service}: ${item.error}`).join('; ')}
+                                </li>
+                            ) : null}
+                        </ul>
+                    </div>
+                )}
 
                 {status && (
                     <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

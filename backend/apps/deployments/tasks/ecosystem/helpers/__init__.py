@@ -59,6 +59,9 @@ from .lifecycle import (
     _increment_active_ecosystem_builds,
     _queue_wave,
     _rebuild_ecosystem_build_counter,
+    _release_eligible_next_wave,
+    _wave_fast_recheck_countdown,
+    _wave_initial_check_countdown,
     _wave_recheck_countdown,
 )
 

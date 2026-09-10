@@ -74,7 +74,6 @@ from .constants import (
 )
 from .helpers import (
     _addon_env_keys,
-    _addon_primary_env_key,
     _alias_ambiguity_report,
     _apply_service_profile,
     _build_dependency_waves,
@@ -100,6 +99,7 @@ from .helpers import (
     _plan_addon_types,
     _queue_wave,
     _rebuild_ecosystem_build_counter,
+    _release_eligible_next_wave,
     _repo_short_name,
     _repository_url,
     _resolve_dependency_map,
@@ -113,11 +113,13 @@ from .helpers import (
     _validate_plan_structure,
     _validate_required_env,
     _validate_resolved_env,
+    _wave_fast_recheck_countdown,
+    _wave_initial_check_countdown,
     _wave_recheck_countdown,
 )
 
 
-@shared_task(bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_scan_task", queue='deploy', soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], max_retries=2, default_retry_delay=RETRY_DELAY_FAST, autoretry_for=(Exception,))
+@shared_task(bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_scan_task", queue='deploy', soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], max_retries=2, default_retry_delay=RETRY_DELAY_FAST, autoretry_for=(Exception,), dont_autoretry_for=(SoftTimeLimitExceeded,))
 def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str | None = None, selected_repos: list | None = None, plan_id: str | None = None, project_id: str | None = None) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
@@ -291,12 +293,18 @@ def ecosystem_release_wave_task(
     deployment_by_repo_key: dict[str, str] | None = None,
     cancel_others_on_failure: bool = False,
     plan_id: str | None = None,
+    deadline_ts: float | None = None,
 ) -> dict:
     """Release next wave, continuing successful branches and cancelling failed branches.
 
     When *cancel_others_on_failure* is ``True``, ANY failure in a wave causes
     ALL remaining queued deployments across all future waves to be cancelled
     (not just the ones that transitively depend on the failed node).
+
+    ``deadline_ts`` (epoch seconds) is the wall-clock deadline for waiting on
+    the previous wave. Rechecks poll fast (60s), so the timeout is measured
+    against the deadline — preserving the operator's total wait window
+    (wave_recheck_seconds * max_rechecks) regardless of poll cadence.
     """
 
     if dependencies:
@@ -304,6 +312,16 @@ def ecosystem_release_wave_task(
 
     # Rebuild build counter from actual deployment statuses to prevent drift
     _rebuild_ecosystem_build_counter()
+
+    # First dispatch: pin the wait deadline. Later re-dispatches carry it
+    # in kwargs so the wall-clock budget survives fast recheck polling.
+    import time as _time
+    if deadline_ts is None:
+        _recheck_cfg = _get_ecosystem_build_config()
+        _window_seconds = int(
+            _recheck_cfg.get("wave_recheck_seconds") or _WAVE_RECHECK_SECONDS
+        ) * int(max_rechecks or _MAX_WAVE_RECHECKS)
+        deadline_ts = _time.time() + _window_seconds
 
     if not waves or wave_index > len(waves):
         _finalize_ecosystem_plan(plan_id, waves or [])
@@ -319,7 +337,7 @@ def ecosystem_release_wave_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[provider_id, waves, 0, recheck_count, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
                 kwargs={"plan_id": plan_id},
-                countdown=_wave_recheck_countdown(),
+                countdown=_wave_initial_check_countdown(),
             )
             return {"status": "deferred", "wave": 0, "reason": "low_memory"}
         queued = _queue_wave(self.app, waves[0], provider_id, wave_index=0, plan_id=plan_id)
@@ -328,7 +346,7 @@ def ecosystem_release_wave_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[provider_id, waves, 1, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
                 kwargs={"plan_id": plan_id},
-                countdown=_wave_recheck_countdown(),
+                countdown=_wave_initial_check_countdown(),
             )
         return {"status": "released", "wave": 1, "queued": queued}
 
@@ -406,7 +424,7 @@ def ecosystem_release_wave_task(
     in_progress = any(status in in_progress_states for status in statuses)
 
     if in_progress:
-        if recheck_count >= max_rechecks:
+        if _time.time() >= (deadline_ts or 0) or (deadline_ts is None and recheck_count >= max_rechecks):
             # Time out waiting for remaining ones. The hung rows below are
             # ones THIS task waited on and is now abandoning — mark them
             # CANCELLED so neither they nor the plan stay stuck forever
@@ -451,11 +469,21 @@ def ecosystem_release_wave_task(
                 "cancelled": cancelled,
             }
 
+        # Dependency-aware partial release: queue next-wave deployments
+        # whose dependencies are already terminal-success instead of
+        # waiting for the ENTIRE previous wave (one slow health check
+        # must not block unrelated services for hours).
+        if wave_index < len(waves):
+            _release_eligible_next_wave(
+                self.app, waves, wave_index, dependencies or {},
+                deployment_by_repo_key or {}, provider_id, plan_id=plan_id,
+            )
+
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index, recheck_count + 1, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
-            kwargs={"plan_id": plan_id},
-            countdown=_wave_recheck_countdown(),
+            kwargs={"plan_id": plan_id, "deadline_ts": deadline_ts},
+            countdown=_wave_fast_recheck_countdown(),
         )
         return {
             "status": "waiting",
@@ -500,7 +528,7 @@ def ecosystem_release_wave_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
             kwargs={"plan_id": plan_id},
-            countdown=_wave_recheck_countdown(),
+            countdown=_wave_initial_check_countdown(),
         )
         return {"status": "deferred", "wave": wave_index, "reason": "low_memory"}
 
@@ -511,7 +539,7 @@ def ecosystem_release_wave_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index + 1, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
             kwargs={"plan_id": plan_id},
-            countdown=_wave_recheck_countdown(),
+            countdown=_wave_initial_check_countdown(),
         )
     return {
         "status": "released",
@@ -1128,6 +1156,60 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if not entries_by_key:
         _fail_plan_record(plan_id, "No deployable services in plan (all skipped or missing repos)")
         return {"error": "No deployable services in plan"}
+
+    # ── Cross-project adoption pre-pass ─────────────────────────────────
+    # Before shared-addon provisioning, adopt services created by PREVIOUS
+    # ecosystem deploys for the same repos (repo-key match, possibly under
+    # a different AI-generated name) from other ephemeral projects.
+    # Adoption must happen BEFORE addon provisioning so '{type}-shared'
+    # addons travel with the service and get reused instead of
+    # provisioning a second shared container (2026-09-09: duplicate
+    # 'audit-log-service' — the old container kept running while the new
+    # scan created a fresh 'smsly-audit-log-service').
+    if project:
+        try:
+            from apps.deployments.models.core import Project
+            for _adopt_key, _adopt_entry in entries_by_key.items():
+                _adopt_identity = _canonical_repo_ref(
+                    _adopt_entry.get("repo")
+                ).lower()
+                if not _adopt_identity:
+                    continue
+                try:
+                    _already_here = Service.objects.filter(
+                        project=project,
+                        owner=user,
+                        ecosystem_repo_key=_adopt_identity,
+                    ).exists()
+                    if _already_here:
+                        continue
+                    _adopt_svc = (
+                        Service.objects.filter(
+                            owner=user,
+                            managed_by="ECOSYSTEM",
+                            ecosystem_repo_key=_adopt_identity,
+                            project__is_ephemeral=True,
+                        )
+                        .exclude(project=project)
+                        .select_related("project")
+                        .order_by("-created_at")
+                        .first()
+                    )
+                    if _adopt_svc is not None:
+                        logger.info(
+                            "Adopting ecosystem service %s (%s) from ephemeral "
+                            "project %s into %s (same repo key)",
+                            _adopt_svc.name, _adopt_svc.id,
+                            _adopt_svc.project.name, project.name,
+                        )
+                        _adopt_svc.project = project
+                        _adopt_svc.save(update_fields=["project", "updated_at"])
+                except Exception as exc:
+                    logger.debug(
+                        "Cross-project ecosystem service adoption failed: %s", exc,
+                    )
+        except Exception as exc:
+            logger.debug("Ecosystem adoption pre-pass unavailable: %s", exc)
 
     dependencies = _resolve_dependency_map(entries_by_key)
     waves_repo_keys, unresolved = _build_dependency_waves(
@@ -1987,21 +2069,21 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             svc_addon_types = _service_plan_addon_types(entry.get("plan", {}), plan.get("addons", []))
             for addon_type, url in provisioned_addon_urls.items():
                 if addon_type in svc_addon_types:
-                    env_key = _addon_primary_env_key(addon_type)
-                    if not env_key:
-                        continue
-                    existing = EnvironmentVariable.objects.filter(
-                        service=svc, key=env_key,
-                    ).first()
-                    if existing and existing.value and not re.search(r"\{\{.*?\}\}", existing.value):
-                        # Already resolved (possibly with embedded suffix) — skip
-                        continue
-                    EnvironmentVariable.objects.update_or_create(
-                        service=svc,
-                        key=env_key,
-                        defaults={"value": url, "is_secret": True},
-                    )
-                    logger.info("Reconciled %s %s with provisioned %s URL", svc.name, env_key, addon_type)
+                    # Canonical key first, then aliases — apps reading any
+                    # conventional name stay connected.
+                    for env_key in _addon_env_keys(addon_type):
+                        existing = EnvironmentVariable.objects.filter(
+                            service=svc, key=env_key,
+                        ).first()
+                        if existing and existing.value and not re.search(r"\{\{.*?\}\}", existing.value):
+                            # Already resolved (possibly with embedded suffix) — skip
+                            continue
+                        EnvironmentVariable.objects.update_or_create(
+                            service=svc,
+                            key=env_key,
+                            defaults={"value": url, "is_secret": True},
+                        )
+                        logger.info("Reconciled %s %s with provisioned %s URL", svc.name, env_key, addon_type)
             updated_service_ids.add(svc.id)
 
     queued_now = 0
@@ -2018,7 +2100,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[str(provider.id), waves, 0, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key, cancel_on_failure],
                 kwargs={"plan_id": plan_id},
-                countdown=_wave_recheck_countdown(),
+                countdown=_wave_initial_check_countdown(),
             )
         else:
             queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0, plan_id=plan_id)
@@ -2027,7 +2109,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                     args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key, cancel_on_failure],
                     kwargs={"plan_id": plan_id},
-                    countdown=_wave_recheck_countdown(),
+                    countdown=_wave_initial_check_countdown(),
                 )
 
     deploy_result = {
@@ -2203,6 +2285,23 @@ def _rollback_ecosystem_deploy(
         len(service_ids), len(deployment_ids), len(addon_ids),
     )
 
+    # Collect container identities BEFORE deleting rows so the Docker
+    # cleanup below can remove the containers these rows own. Ecosystem
+    # rollback previously deleted only DB rows, leaving every container
+    # running forever as an untracked orphan (2026-09-09:
+    # 'audit-log-service' ran unhealthy for hours with no Service row).
+    container_specs: list[tuple[str, str]] = []
+    if service_ids:
+        try:
+            container_specs = [
+                (str(_sid), str(_name))
+                for _sid, _name in Service.objects.filter(
+                    id__in=service_ids,
+                ).values_list("id", "name")
+            ]
+        except Exception as exc:
+            logger.debug("Rollback container identity lookup failed: %s", exc)
+
     if deployment_ids:
         Deployment.objects.filter(id__in=deployment_ids).exclude(
             status__in=safe_statuses,
@@ -2226,6 +2325,59 @@ def _rollback_ecosystem_deploy(
         if project_id:
             service_qs = service_qs.filter(project_id=project_id)
         service_qs.delete()
+
+    # Remove Docker containers for rolled-back services. Skip services
+    # that still have deployments (ACTIVE/BUILDING rows were preserved —
+    # their containers are live and must never be touched).
+    if container_specs:
+        try:
+            _still_deployed: set[str] = set(
+                str(_sid)
+                for _sid in Deployment.objects.filter(
+                    service_id__in=[_sid for _sid, _ in container_specs],
+                ).values_list("service_id", flat=True)
+            )
+        except Exception:
+            _still_deployed = set()
+        _rollback_container_names = {
+            _name for _sid, _name in container_specs if _sid not in _still_deployed
+        }
+        _rollback_service_ids = {
+            _sid for _sid, _name in container_specs if _sid not in _still_deployed
+        }
+        if _rollback_container_names:
+            try:
+                import docker as _docker
+
+                _client = _docker.from_env()
+                for _cid in (_client.containers.list(all=True) or []):
+                    try:
+                        _cname = str(getattr(_cid, "name", "") or "")
+                        _labels = getattr(_cid, "labels", None) or {}
+                        _svc_label = str(_labels.get("smsly.service_id") or "").strip()
+                        _paas_label = str(_labels.get("com.paas.service") or "").strip()
+                        _owned = (
+                            (_svc_label and _svc_label in _rollback_service_ids)
+                            or _cname in _rollback_container_names
+                            or (
+                                _cname.startswith("envoy-")
+                                and _cname[len("envoy-"):] in _rollback_container_names
+                            )
+                            or _paas_label in _rollback_container_names
+                        )
+                        if not _owned:
+                            continue
+                        _cid.remove(force=True)
+                        logger.info(
+                            "Rollback removed orphaned container %s", _cname,
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "Rollback container cleanup failed for %s: %s",
+                            getattr(_cid, "name", "?"), exc,
+                        )
+            except Exception as exc:
+                logger.debug("Rollback Docker cleanup unavailable: %s", exc)
 
     if project_id:
         try:

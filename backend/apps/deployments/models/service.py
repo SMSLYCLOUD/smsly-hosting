@@ -666,6 +666,8 @@ class Service(TimeStampedModel):
     )
 
     def __str__(self):
+        if not self.slug or self.slug == self.name:
+            return str(self.name)
         return f"{self.name} ({self.slug})"
 
     class Meta:

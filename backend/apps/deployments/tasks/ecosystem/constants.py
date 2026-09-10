@@ -7,6 +7,13 @@ _WAVE_RECHECK_SECONDS = _DEFAULT_WAVE_RECHECK_SECONDS
 _MAX_WAVE_RECHECKS = (
     _DEFAULT_MAX_WAVE_WAIT_SECONDS // _DEFAULT_WAVE_RECHECK_SECONDS
 )
+# The first check for the previous wave should not wait the full recheck
+# window — a wave that finishes in minutes must release the next one
+# quickly (2026-09-09: 4 services sat QUEUED for hours behind one slow
+# health check). Once the engine is awake, rechecks are fast polls; the
+# total wait window is preserved by scaling max_rechecks.
+_WAVE_INITIAL_CHECK_SECONDS = 300
+_WAVE_FAST_RECHECK_SECONDS = 60
 _MAX_WAVE_SIZE = 5
 _DEFAULT_WAVE_SIZE = 3
 _VALID_PORT_RANGE = (1, 65535)

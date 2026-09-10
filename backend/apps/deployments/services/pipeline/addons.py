@@ -47,8 +47,23 @@ class AddonMixin:
     }
 
     def _is_ecosystem_deployment(self) -> bool:
-        """Return True only for deployments released by the ecosystem wave engine."""
-        return str(getattr(self.deployment, "commit_hash", "") or "") == "ecosystem-deploy"
+        """Return True only for deployments released by the ecosystem wave engine.
+
+        The ``commit_hash`` marker is rewritten to the real git SHA as soon
+        as cloning starts (pipeline/clone.py), so by the time addon
+        provisioning runs it can never match. The Service row's
+        ``managed_by`` flag is the durable marker; the build_logs creation
+        marker covers rows created before ``managed_by`` existed, and the
+        hash check keeps pre-existing legacy behaviour (2026-09-09:
+        shared-addon reuse never fired, so every ecosystem build
+        provisioned a private postgres/redis per service).
+        """
+        if str(getattr(self.service, "managed_by", "") or "").upper() == "ECOSYSTEM":
+            return True
+        if str(getattr(self.deployment, "commit_hash", "") or "") == "ecosystem-deploy":
+            return True
+        build_logs = getattr(self.deployment, "build_logs", None)
+        return isinstance(build_logs, str) and "Ecosystem deploy:" in build_logs
 
     def _get_ecosystem_shared_addon(self, addon_type: str):
         """Find an active project-shared addon without provisioning it."""
@@ -659,6 +674,13 @@ class AddonMixin:
             )
 
             for addon_type in to_provision:
+                # Ecosystem builds must prefer the project-shared addon.
+                # Previously this loop had NO shared check, so every
+                # ecosystem service provisioned a private postgres/redis
+                # at build time even when '{type}-shared' already existed
+                # (7 postgres + 7 redis containers on the live host).
+                if self._reuse_ecosystem_shared_addon(addon_type, addon_urls):
+                    continue
                 addon = Addon.objects.create(
                     service=self.service,
                     name=f"{addon_type.lower()}-{self.service.name}"[:255],

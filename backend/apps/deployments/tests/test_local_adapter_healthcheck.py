@@ -356,9 +356,13 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         adapter, docker_client, _existing = self._build_adapter_with_mock_docker()
         mock_load.return_value = SimpleNamespace(use_ssl=True)
 
-        # Mock Service object returning a preview service with a parent service
+        # Preview on a REMOTE (non-primary) node — the parent's router
+        # labels must be neutralized there.
         mock_parent = SimpleNamespace(name="parent-service")
-        mock_svc = SimpleNamespace(is_preview=True, parent_service=mock_parent)
+        mock_remote = SimpleNamespace(is_primary=False)
+        mock_svc = SimpleNamespace(
+            is_preview=True, parent_service=mock_parent, server=mock_remote,
+        )
         mock_filter.return_value.first.return_value = mock_svc
 
         adapter._deploy_docker(
@@ -421,9 +425,13 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         )
         docker_client.networks.get.return_value = MagicMock()
 
-        # Mock Service object returning a preview service with a parent service
+        # Mock Service object returning a preview service with a parent
+        # service on a REMOTE (non-primary) node.
         mock_parent = SimpleNamespace(name="parent-service")
-        mock_svc = SimpleNamespace(is_preview=True, parent_service=mock_parent)
+        mock_remote = SimpleNamespace(is_primary=False)
+        mock_svc = SimpleNamespace(
+            is_preview=True, parent_service=mock_parent, server=mock_remote,
+        )
         mock_filter.return_value.first.return_value = mock_svc
 
         result = adapter.promote_container("preview-service", "green-id")
@@ -443,7 +451,10 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         adapter, docker_client, _existing = self._build_adapter_with_mock_docker()
         mock_load.return_value = SimpleNamespace(use_ssl=True)
 
-        # Mock Service object returning a local preview service
+        # LOCAL preview (primary server): local previews KEEP their
+        # Traefik labels so they route consistently with remote services
+        # (Caddy -> Traefik -> container). Neutralization only applies on
+        # remote non-primary nodes.
         mock_server = SimpleNamespace(is_primary=True)
         mock_parent = SimpleNamespace(name="parent-service")
         mock_svc = SimpleNamespace(is_preview=True, parent_service=mock_parent, server=mock_server)
@@ -459,11 +470,13 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         )
 
         labels = docker_client.containers.create.call_args.kwargs["labels"]
-        # Ensure Traefik is completely disabled and all Traefik labels are removed
-        self.assertEqual(labels.get("traefik.enable"), "false")
-        for k in labels:
-            if k.startswith("traefik.") and k != "traefik.enable":
-                self.fail(f"Found unexpected Traefik label: {k}")
+        # Local preview: routing labels stay enabled.
+        self.assertEqual(labels.get("traefik.enable"), "true")
+        self.assertNotIn(
+            "traefik.http.routers.parent-service.rule",
+            labels,
+        )
+        self.assertIn("traefik.http.routers.preview-service.rule", labels)
 
     @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
     @patch("apps.deployments.models.Service.objects.filter")
@@ -509,7 +522,8 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         )
         docker_client.networks.get.return_value = MagicMock()
 
-        # Mock Service object returning a local preview service
+        # Mock Service object returning a LOCAL preview service (primary
+        # server) — local previews keep their routing labels.
         mock_server = SimpleNamespace(is_primary=True)
         mock_parent = SimpleNamespace(name="parent-service")
         mock_svc = SimpleNamespace(is_preview=True, parent_service=mock_parent, server=mock_server)
@@ -519,11 +533,13 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
 
         self.assertEqual(result, "promoted-id")
         labels = docker_client.containers.create.call_args.kwargs["labels"]
-        # Ensure Traefik is completely disabled and all Traefik labels are removed
-        self.assertEqual(labels.get("traefik.enable"), "false")
-        for k in labels:
-            if k.startswith("traefik.") and k != "traefik.enable":
-                self.fail(f"Found unexpected Traefik label: {k}")
+        # Local preview: routing labels stay enabled.
+        self.assertEqual(labels.get("traefik.enable"), "true")
+        self.assertNotIn(
+            "traefik.http.routers.parent-service.rule",
+            labels,
+        )
+        self.assertIn("traefik.http.routers.preview-service.rule", labels)
 class LocalhostHealthcheckRewriteTests(SimpleTestCase):
     """Inherited image probes using the hostname localhost fail on
     IPv6-first containers even when the app is healthy."""

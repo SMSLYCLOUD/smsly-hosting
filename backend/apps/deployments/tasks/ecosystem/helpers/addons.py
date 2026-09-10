@@ -94,12 +94,19 @@ def _inject_addon_env_defaults(
     addon_types: set[str],
     provisioned_addon_urls: dict[str, str],
 ) -> None:
-    """Populate standard addon URL env vars when a service requests an addon."""
+    """Populate standard addon URL env vars when a service requests an addon.
+
+    Fills the canonical key AND accepted aliases with the same URL so
+    apps reading any conventional name (DATABASE_URL or POSTGRES_URL,
+    REDIS_URL or REDIS_URI) connect. The canonical key is always first
+    (see _addon_primary_env_key).
+    """
     for addon_type in sorted(addon_types):
         url = provisioned_addon_urls.get(addon_type)
         if not url:
             continue
-        resolved_env.setdefault(_addon_primary_env_key(addon_type), url)
+        for env_key in _addon_env_keys(addon_type):
+            resolved_env.setdefault(env_key, url)
 
 
 def _select_shared_addon_anchor(services: list):

@@ -406,6 +406,24 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                     break
 
         except docker.errors.NotFound:
+            # The adapter's promote_container removes the green container
+            # and creates a new canonical one — the id we were handed can
+            # go stale without any crash. If the canonical container for
+            # this service is running, switch to monitoring it instead of
+            # falsely failing the deployment (2026-09-09 live incident:
+            # healthy canonical containers reported as "disappeared").
+            try:
+                canonical = client.containers.get(service.name)
+                if canonical.status == "running":
+                    append_log(
+                        deployment,
+                        "\nℹ️ Container id changed after promotion — "
+                        f"monitoring canonical {service.name} instead.\n",
+                    )
+                    container_id = canonical.id
+                    continue
+            except Exception:
+                pass
             crash_detected = True
             append_log(deployment, "\n🔴 Container disappeared after deploy\n")
             break
