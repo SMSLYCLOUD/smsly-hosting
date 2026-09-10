@@ -114,19 +114,30 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
   };
 
   // One-click GitHub App creation via the manifest flow (like Railway):
-  // backend builds a signed manifest -> GitHub pre-fills the App form ->
-  // user clicks Create -> GitHub redirects back with a one-time code ->
-  // backend exchanges it and stores ALL credentials automatically.
-  // The user never pastes an App ID, secret, key, or webhook secret.
+  // backend returns the raw manifest JSON -> we auto-submit it as a form
+  // POST to github.com (the documented manifest flow) -> user clicks
+  // Create -> GitHub redirects to our setup-callback page with a
+  // one-time code -> the page POSTs it back and the backend stores ALL
+  // credentials automatically. The user never pastes anything.
   const [manifestLoading, setManifestLoading] = useState(false);
   const startGitHubAppManifest = async () => {
     setManifestLoading(true);
     setInstallError(null);
     try {
       const res = await api.get("/integrations/github/app-manifest/url/");
-      const target = res.data?.url;
-      if (!target) throw new Error("No manifest URL returned");
-      window.location.assign(target);
+      const manifest = res.data?.manifest;
+      const postUrl: string = res.data?.post_url || "https://github.com/settings/apps/new";
+      if (!manifest) throw new Error("No manifest returned");
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = postUrl;
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "manifest";
+      input.value = JSON.stringify(manifest);
+      form.appendChild(input);
+      document.body.appendChild(form);
+      form.submit();
     } catch (e: any) {
       const message =
         e?.response?.data?.error || "Unable to start GitHub App creation.";

@@ -45,6 +45,54 @@ _GH_API = "https://api.github.com"
 _MANIFEST_JWT_TTL = 600
 
 
+def _write_github_env(app_id: str, client_id: str, client_secret: str,
+                      private_key: str, webhook_secret: str) -> None:
+    """Mirror GitHub App credentials into the platform .env file.
+
+    Values that contain spaces or newlines (the PEM) are double-quoted so
+    `source .env` under `set -e` keeps working. Existing keys are replaced
+    in place; missing keys are appended.
+    """
+    import os
+
+    env_path = os.environ.get(
+        "SMSLY_ENV_FILE", "/opt/smsly-hosting/.env",
+    )
+    try:
+        with open(env_path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        lines = []
+
+    updates = {
+        "GITHUB_APP_ID": app_id,
+        "GITHUB_CLIENT_ID": client_id,
+        "GITHUB_CLIENT_SECRET": client_secret,
+        # Escape real newlines to \n sequences AND quote: an unquoted PEM
+        # breaks bash sourcing (the shell executes "RSA ..." as a command).
+        "GITHUB_APP_PRIVATE_KEY": '"' + private_key.replace("\n", "\\n") + '"',
+        "GITHUB_WEBHOOK_SECRET": webhook_secret,
+    }
+    # Never persist empty values over good ones.
+    updates = {k: v for k, v in updates.items() if str(v or "").strip().strip('"')}
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates and key not in seen:
+                out.append(f"{key}={updates[key]}\n")
+                seen.add(key)
+                continue
+        out.append(line)
+    for key, value in updates.items():
+        if key not in seen:
+            out.append(f"{key}={value}\n")
+    with open(env_path, "w", encoding="utf-8") as fh:
+        fh.writelines(out)
+
+
 def _platform_base_url(request=None) -> str:
     """Resolve the platform's public base URL (scheme://host[:port])."""
     override = getattr(settings, "SITE_URL", None)
@@ -88,9 +136,12 @@ def _build_manifest(base_url: str, webhook_secret: str) -> dict:
             # already match — no paste, no drift.
             "active": True,
         },
-        "redirect_url": f"{base_url}/api/v1/integrations/github/app-manifest/setup/",
+        # After the operator clicks "Create", GitHub redirects the browser
+        # here with ?code=. This is a frontend page that POSTs the code
+        # back to app-manifest/setup/ with the operator's API token.
+        "redirect_url": f"{base_url}/auth/github/setup-callback",
         "callback_urls": [f"{base_url}/auth/github/callback"],
-        "setup_url": f"{base_url}/api/v1/integrations/github/app-manifest/setup/",
+        "setup_url": f"{base_url}/auth/github/setup-callback",
         "description": "Deploy pushes to SMSLY Cloud with zero configuration. Every branch gets an environment.",
         "public": False,
         # Webhook events that trigger deploys.
@@ -108,10 +159,12 @@ def _build_manifest(base_url: str, webhook_secret: str) -> dict:
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def github_app_manifest_url(request) -> Response:
-    """GET -> {"url": github.com/settings/apps/new?manifest=<jwt>}
+    """GET -> {"manifest": {...}, "post_url": "https://github.com/settings/apps/new"}.
 
-    The manifest is signed with the platform SECRET_KEY so the setup
-    endpoint can trust the code exchange it later receives. Admin-only:
+    The frontend auto-submits the manifest as a form POST to GitHub
+    (the documented manifest flow — GitHub validates the JSON schema
+    itself). After the user clicks "Create GitHub App", GitHub redirects
+    to our ``redirect_url`` with a one-time ``code``. Admin-only:
     creating the platform's GitHub App is an operator action.
     """
     if not request.user.is_superuser:
@@ -145,34 +198,35 @@ def github_app_manifest_url(request) -> Response:
     if webhook_secret:
         manifest["hook_attributes"]["secret"] = webhook_secret
 
-    payload = {
-        "manifest": manifest,
-        "iat": int(time.time()),
-        "exp": int(time.time()) + _MANIFEST_JWT_TTL,
-        "user_id": str(request.user.id),
-    }
-    manifest_token = pyjwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
-
     return Response({
-        "url": f"https://github.com/settings/apps/new?manifest={manifest_token}",
+        "manifest": manifest,
+        "post_url": "https://github.com/settings/apps/new",
         "expires_in": _MANIFEST_JWT_TTL,
     })
 
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def github_app_manifest_setup(request):
-    """GitHub redirects here after the user creates the App, with
-    ?code=<one-time code>. Exchange it for the full credential set and
-    store everything in PlatformConfig. This completes the flow — the
-    user never sees or pastes a single secret.
+    """Exchange a manifest ``code`` for the full credential set.
+
+    GitHub redirects the operator's browser to ``redirect_url`` with
+    ``?code=`` after App creation; the frontend setup-callback page POSTs
+    that code here with the API token. Direct GET with ``?code=`` also
+    works (browser flow). Stores everything in PlatformConfig, mirrors
+    .env, and ensures the allauth SocialApp — completing the flow with
+    zero manual steps.
 
     Accepts both browser redirects (returns a redirect to the frontend
-    integrations page) and API calls (returns JSON).
+    integrations page or the install step) and API calls (returns JSON).
     """
-    code = request.query_params.get("code") or ""
+    code = (
+        request.query_params.get("code")
+        or (request.data.get("code") if isinstance(request.data, dict) else "")
+        or ""
+    ).strip()
     if not code:
-        return Response({"error": "Missing ?code from GitHub."},
+        return Response({"error": "Missing manifest code from GitHub."},
                         status=status.HTTP_400_BAD_REQUEST)
 
     if not request.user.is_superuser:
@@ -241,8 +295,46 @@ def github_app_manifest_setup(request):
         app_name, app_id, app_slug,
     )
 
+    # ── Close the loop: user OAuth needs an allauth SocialApp ──────────
+    # Without this, `github_oauth_url` keeps answering "GitHub OAuth not
+    # configured. Add a SocialApp in admin." even though the App exists
+    # and PlatformConfig holds every credential. Create/update it from
+    # the conversion response so "Connect GitHub Account" works
+    # immediately with zero manual steps.
+    try:
+        from allauth.socialaccount.models import SocialApp
+        from django.contrib.sites.models import Site
+
+        social_app, _ = SocialApp.objects.update_or_create(
+            provider="github",
+            defaults={
+                "name": f"{app_name} (auto)",
+                "client_id": client_id,
+                "secret": client_secret,
+            },
+        )
+        try:
+            site = Site.objects.get_current()
+        except Exception:
+            site = Site.objects.first()
+        if site is not None:
+            social_app.sites.add(site)
+        logger.info("SocialApp for GitHub ensured (app id=%s)", app_id)
+    except Exception as exc:
+        logger.warning("Could not ensure GitHub SocialApp: %s", exc)
+
+    # ── Mirror credentials into .env (quoted) ──────────────────────────
+    # Workers and fresh processes read env first; PlatformConfig is the
+    # DB fallback. The private key MUST be \n-escaped and quoted or bash
+    # sourcing .env executes the PEM as commands (2026-09-10 incident).
+    try:
+        _write_github_env(app_id, client_id, client_secret, private_key, webhook_secret)
+    except Exception as exc:
+        logger.warning("Could not mirror GitHub credentials to .env: %s", exc)
+
     wants_json = (
-        request.headers.get("Accept") == "application/json"
+        request.method == "POST"
+        or "application/json" in (request.headers.get("Accept") or "")
         or request.query_params.get("format") == "json"
     )
     if wants_json:
