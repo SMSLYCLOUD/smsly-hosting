@@ -3438,38 +3438,6 @@ _harden_falco_verify() {
 }
 
 # --- end lib/harden_falco.sh ---
-# --- lib/harden_spire.sh ---
-#!/bin/bash
-
-_harden_spire_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
-    local compose_file="${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml"
-    [ -f "$compose_file" ] || return 1
-
-    local env_args=()
-    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
-    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
-    docker compose \
-        "${env_args[@]}" \
-        -f "$compose_file" \
-        up -d --no-deps spire-agent spire-agent-ecosystem 2>/dev/null || echo -e "${YELLOW}    ⚠ spire agent compose up failed${NC}"
-    for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent" && break
-        sleep 2
-    done
-}
-
-_harden_spire_verify() {
-    command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent"; then
-        _harden_log warn "spire-agent — container not running"
-        return 1
-    fi
-    _harden_log ok "spire deployed"
-    return 0
-}
-
-# --- end lib/harden_spire.sh ---
 # --- lib/harden_container_runtime.sh ---
 #!/bin/bash
 
@@ -3678,6 +3646,79 @@ _harden_infisical_verify() {
 }
 
 # --- end lib/harden_infisical.sh ---
+
+_harden_spire_start_agent() {
+    # Start one SPIRE agent with a freshly minted single-use join token
+    # (mirrors apps/mtls/views.py::_start_agent_with_token).
+    # $1 agent container, $2 server container, $3 agent.conf host path,
+    # $4 data volume, $5 socket volume, $6 svids volume.
+    local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+        return 0
+    fi
+    local token
+    token="$(docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    if [ -z "$token" ]; then
+        _harden_log warn "$agent — could not mint join token"
+        return 1
+    fi
+    docker rm -f "$agent" >/dev/null 2>&1 || true
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+        -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
+        -v /var/run/docker.sock:/var/run/docker.sock:ro \
+        -v "$conf:/etc/spire/agent.conf:ro,z" \
+        -e DOCKER_HOST=unix:///var/run/docker.sock \
+        ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
+        _harden_log warn "$agent — docker run failed"
+        return 1
+    }
+    return 0
+}
+
+_harden_spire_bootstrap() {
+    [ "${NODE_SPIRE:-1}" = "1" ] || { _harden_log info "spire skipped (NODE_SPIRE=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
+    local spire_file="$INSTALL_DIR/docker-compose.spire.yml"
+    [ -f "$spire_file" ] || { _harden_log warn "spire compose file missing"; return 1; }
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    # Servers are idempotent under compose (running services are kept).
+    docker compose -p smsly-spire -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+        _harden_log warn "spire servers failed to start"
+        return 1
+    }
+    local _i
+    for _i in $(seq 1 30); do
+        if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server 2>/dev/null)" = "true" ] && \
+           [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server-ecosystem 2>/dev/null)" = "true" ]; then
+            break
+        fi
+        sleep 2
+    done
+    sleep 5
+    _harden_spire_start_agent "smsly-spire-agent" "smsly-spire-server" "$INSTALL_DIR/infrastructure/spire/agent.conf" \
+        "smsly-hosting_spire-agent-data" "smsly-hosting_spire-agent-socket" "smsly-hosting_spire-agent-svids" || return 1
+    _harden_spire_start_agent "smsly-spire-agent-ecosystem" "smsly-spire-server-ecosystem" "$INSTALL_DIR/infrastructure/spire/agent-ecosystem.conf" \
+        "smsly-spire_spire-ecosystem-agent-data" "smsly-spire_spire-ecosystem-agent-socket" "smsly-spire_spire-ecosystem-agent-svids" || return 1
+    return 0
+}
+
+_harden_spire_verify() {
+    [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
+       [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then
+        # One self-heal attempt: resume runs can skip the bootstrap step.
+        _harden_spire_bootstrap >/dev/null 2>&1 || true
+    fi
+    local _fail=0
+    [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" = "true" ] || { _harden_log warn "spire-agent — container not running"; _fail=1; }
+    [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" = "true" ] || { _harden_log warn "spire-agent-ecosystem — container not running"; _fail=1; }
+    if [ "$_fail" = "0" ]; then
+        _harden_log ok "spire deployed"
+        return 0
+    fi
+    return 1
+}
 
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
@@ -5967,6 +6008,17 @@ ensure_env_runtime_defaults() {
     [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
     env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
     env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "Compose profiles to activate (matches the DB HA mode)"
+    # Registry public bind: without an explicit override the compose
+    # fallback is a hardcoded IP from another host and the registry port
+    # bind kills the whole install (2026-09-10 fresh-install incident).
+    # This runs on every update path (unlike the overrides step, which
+    # resume can skip), so the key is always repaired.
+    local _rt_bind
+    _rt_bind="$(env_get_value "$env_file" "REGISTRY_PUBLIC_BIND_IP")"
+    if [ -z "$_rt_bind" ] || ! _registry_bind_ip_is_local "$_rt_bind"; then
+        _rt_bind="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9][0-9.]*$' | grep -v '^127\.' | head -1 || true)"
+        [ -n "$_rt_bind" ] && env_set_value "$env_file" "REGISTRY_PUBLIC_BIND_IP" "$_rt_bind"
+    fi
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
@@ -6786,6 +6838,17 @@ ensure_env_runtime_defaults() {
     [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
     env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
     env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "Compose profiles to activate (matches the DB HA mode)"
+    # Registry public bind: without an explicit override the compose
+    # fallback is a hardcoded IP from another host and the registry port
+    # bind kills the whole install (2026-09-10 fresh-install incident).
+    # This runs on every update path (unlike the overrides step, which
+    # resume can skip), so the key is always repaired.
+    local _rt_bind
+    _rt_bind="$(env_get_value "$env_file" "REGISTRY_PUBLIC_BIND_IP")"
+    if [ -z "$_rt_bind" ] || ! _registry_bind_ip_is_local "$_rt_bind"; then
+        _rt_bind="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9][0-9.]*$' | grep -v '^127\.' | head -1 || true)"
+        [ -n "$_rt_bind" ] && env_set_value "$env_file" "REGISTRY_PUBLIC_BIND_IP" "$_rt_bind"
+    fi
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
@@ -8152,38 +8215,6 @@ _harden_falco_verify() {
 }
 
 # --- end lib/harden_falco.sh ---
-# --- lib/harden_spire.sh ---
-#!/bin/bash
-
-_harden_spire_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
-    local compose_file="${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml"
-    [ -f "$compose_file" ] || return 1
-
-    local env_args=()
-    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
-    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
-    docker compose \
-        "${env_args[@]}" \
-        -f "$compose_file" \
-        up -d --no-deps spire-agent spire-agent-ecosystem 2>/dev/null || echo -e "${YELLOW}    ⚠ spire agent compose up failed${NC}"
-    for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent" && break
-        sleep 2
-    done
-}
-
-_harden_spire_verify() {
-    command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent"; then
-        _harden_log warn "spire-agent — container not running"
-        return 1
-    fi
-    _harden_log ok "spire deployed"
-    return 0
-}
-
-# --- end lib/harden_spire.sh ---
 # --- lib/harden_container_runtime.sh ---
 #!/bin/bash
 
@@ -8392,6 +8423,79 @@ _harden_infisical_verify() {
 }
 
 # --- end lib/harden_infisical.sh ---
+
+_harden_spire_start_agent() {
+    # Start one SPIRE agent with a freshly minted single-use join token
+    # (mirrors apps/mtls/views.py::_start_agent_with_token).
+    # $1 agent container, $2 server container, $3 agent.conf host path,
+    # $4 data volume, $5 socket volume, $6 svids volume.
+    local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+        return 0
+    fi
+    local token
+    token="$(docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    if [ -z "$token" ]; then
+        _harden_log warn "$agent — could not mint join token"
+        return 1
+    fi
+    docker rm -f "$agent" >/dev/null 2>&1 || true
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+        -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
+        -v /var/run/docker.sock:/var/run/docker.sock:ro \
+        -v "$conf:/etc/spire/agent.conf:ro,z" \
+        -e DOCKER_HOST=unix:///var/run/docker.sock \
+        ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
+        _harden_log warn "$agent — docker run failed"
+        return 1
+    }
+    return 0
+}
+
+_harden_spire_bootstrap() {
+    [ "${NODE_SPIRE:-1}" = "1" ] || { _harden_log info "spire skipped (NODE_SPIRE=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
+    local spire_file="$INSTALL_DIR/docker-compose.spire.yml"
+    [ -f "$spire_file" ] || { _harden_log warn "spire compose file missing"; return 1; }
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    # Servers are idempotent under compose (running services are kept).
+    docker compose -p smsly-spire -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+        _harden_log warn "spire servers failed to start"
+        return 1
+    }
+    local _i
+    for _i in $(seq 1 30); do
+        if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server 2>/dev/null)" = "true" ] && \
+           [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server-ecosystem 2>/dev/null)" = "true" ]; then
+            break
+        fi
+        sleep 2
+    done
+    sleep 5
+    _harden_spire_start_agent "smsly-spire-agent" "smsly-spire-server" "$INSTALL_DIR/infrastructure/spire/agent.conf" \
+        "smsly-hosting_spire-agent-data" "smsly-hosting_spire-agent-socket" "smsly-hosting_spire-agent-svids" || return 1
+    _harden_spire_start_agent "smsly-spire-agent-ecosystem" "smsly-spire-server-ecosystem" "$INSTALL_DIR/infrastructure/spire/agent-ecosystem.conf" \
+        "smsly-spire_spire-ecosystem-agent-data" "smsly-spire_spire-ecosystem-agent-socket" "smsly-spire_spire-ecosystem-agent-svids" || return 1
+    return 0
+}
+
+_harden_spire_verify() {
+    [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
+       [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then
+        # One self-heal attempt: resume runs can skip the bootstrap step.
+        _harden_spire_bootstrap >/dev/null 2>&1 || true
+    fi
+    local _fail=0
+    [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" = "true" ] || { _harden_log warn "spire-agent — container not running"; _fail=1; }
+    [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" = "true" ] || { _harden_log warn "spire-agent-ecosystem — container not running"; _fail=1; }
+    if [ "$_fail" = "0" ]; then
+        _harden_log ok "spire deployed"
+        return 0
+    fi
+    return 1
+}
 
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
@@ -9197,38 +9301,6 @@ _harden_falco_verify() {
 }
 
 # --- end lib/harden_falco.sh ---
-# --- lib/harden_spire.sh ---
-#!/bin/bash
-
-_harden_spire_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
-    local compose_file="${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml"
-    [ -f "$compose_file" ] || return 1
-
-    local env_args=()
-    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
-    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
-    docker compose \
-        "${env_args[@]}" \
-        -f "$compose_file" \
-        up -d --no-deps spire-agent spire-agent-ecosystem 2>/dev/null || echo -e "${YELLOW}    ⚠ spire agent compose up failed${NC}"
-    for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent" && break
-        sleep 2
-    done
-}
-
-_harden_spire_verify() {
-    command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent"; then
-        _harden_log warn "spire-agent — container not running"
-        return 1
-    fi
-    _harden_log ok "spire deployed"
-    return 0
-}
-
-# --- end lib/harden_spire.sh ---
 # --- lib/harden_container_runtime.sh ---
 #!/bin/bash
 
@@ -9437,6 +9509,79 @@ _harden_infisical_verify() {
 }
 
 # --- end lib/harden_infisical.sh ---
+
+_harden_spire_start_agent() {
+    # Start one SPIRE agent with a freshly minted single-use join token
+    # (mirrors apps/mtls/views.py::_start_agent_with_token).
+    # $1 agent container, $2 server container, $3 agent.conf host path,
+    # $4 data volume, $5 socket volume, $6 svids volume.
+    local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+        return 0
+    fi
+    local token
+    token="$(docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    if [ -z "$token" ]; then
+        _harden_log warn "$agent — could not mint join token"
+        return 1
+    fi
+    docker rm -f "$agent" >/dev/null 2>&1 || true
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+        -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
+        -v /var/run/docker.sock:/var/run/docker.sock:ro \
+        -v "$conf:/etc/spire/agent.conf:ro,z" \
+        -e DOCKER_HOST=unix:///var/run/docker.sock \
+        ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
+        _harden_log warn "$agent — docker run failed"
+        return 1
+    }
+    return 0
+}
+
+_harden_spire_bootstrap() {
+    [ "${NODE_SPIRE:-1}" = "1" ] || { _harden_log info "spire skipped (NODE_SPIRE=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
+    local spire_file="$INSTALL_DIR/docker-compose.spire.yml"
+    [ -f "$spire_file" ] || { _harden_log warn "spire compose file missing"; return 1; }
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    # Servers are idempotent under compose (running services are kept).
+    docker compose -p smsly-spire -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+        _harden_log warn "spire servers failed to start"
+        return 1
+    }
+    local _i
+    for _i in $(seq 1 30); do
+        if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server 2>/dev/null)" = "true" ] && \
+           [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server-ecosystem 2>/dev/null)" = "true" ]; then
+            break
+        fi
+        sleep 2
+    done
+    sleep 5
+    _harden_spire_start_agent "smsly-spire-agent" "smsly-spire-server" "$INSTALL_DIR/infrastructure/spire/agent.conf" \
+        "smsly-hosting_spire-agent-data" "smsly-hosting_spire-agent-socket" "smsly-hosting_spire-agent-svids" || return 1
+    _harden_spire_start_agent "smsly-spire-agent-ecosystem" "smsly-spire-server-ecosystem" "$INSTALL_DIR/infrastructure/spire/agent-ecosystem.conf" \
+        "smsly-spire_spire-ecosystem-agent-data" "smsly-spire_spire-ecosystem-agent-socket" "smsly-spire_spire-ecosystem-agent-svids" || return 1
+    return 0
+}
+
+_harden_spire_verify() {
+    [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
+       [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then
+        # One self-heal attempt: resume runs can skip the bootstrap step.
+        _harden_spire_bootstrap >/dev/null 2>&1 || true
+    fi
+    local _fail=0
+    [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" = "true" ] || { _harden_log warn "spire-agent — container not running"; _fail=1; }
+    [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" = "true" ] || { _harden_log warn "spire-agent-ecosystem — container not running"; _fail=1; }
+    if [ "$_fail" = "0" ]; then
+        _harden_log ok "spire deployed"
+        return 0
+    fi
+    return 1
+}
 
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
@@ -10562,6 +10707,14 @@ if not created and not cp.is_active:
     # Group membership (docker group) is the correct access control mechanism.
     if ! groups smsly  | grep -q "docker"; then
         usermod -aG docker smsly || echo -e "${YELLOW}    ⚠ usermod docker group failed (non-fatal)${NC}"
+    fi
+    # The operator runs installs via sudo from their own login — without
+    # docker group membership every post-install docker command needs sudo
+    # (2026-09-10: ubuntu could not run `docker ps` on a fresh host).
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        if ! groups "${SUDO_USER}" 2>/dev/null | grep -q "docker"; then
+            usermod -aG docker "${SUDO_USER}" || echo -e "${YELLOW}    ⚠ usermod docker group failed for ${SUDO_USER} (non-fatal)${NC}"
+        fi
     fi
 
     # ─── Self-Healing: Cleanup Stale Resources ──────────────────────────────
@@ -12242,38 +12395,6 @@ _harden_falco_verify() {
 }
 
 # --- end lib/harden_falco.sh ---
-# --- lib/harden_spire.sh ---
-#!/bin/bash
-
-_harden_spire_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
-    local compose_file="${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml"
-    [ -f "$compose_file" ] || return 1
-
-    local env_args=()
-    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
-    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
-    docker compose \
-        "${env_args[@]}" \
-        -f "$compose_file" \
-        up -d --no-deps spire-agent spire-agent-ecosystem 2>/dev/null || echo -e "${YELLOW}    ⚠ spire agent compose up failed${NC}"
-    for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent" && break
-        sleep 2
-    done
-}
-
-_harden_spire_verify() {
-    command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}' | grep -q "smsly-spire-agent"; then
-        _harden_log warn "spire-agent — container not running"
-        return 1
-    fi
-    _harden_log ok "spire deployed"
-    return 0
-}
-
-# --- end lib/harden_spire.sh ---
 # --- lib/harden_container_runtime.sh ---
 #!/bin/bash
 
@@ -12482,6 +12603,79 @@ _harden_infisical_verify() {
 }
 
 # --- end lib/harden_infisical.sh ---
+
+_harden_spire_start_agent() {
+    # Start one SPIRE agent with a freshly minted single-use join token
+    # (mirrors apps/mtls/views.py::_start_agent_with_token).
+    # $1 agent container, $2 server container, $3 agent.conf host path,
+    # $4 data volume, $5 socket volume, $6 svids volume.
+    local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+        return 0
+    fi
+    local token
+    token="$(docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    if [ -z "$token" ]; then
+        _harden_log warn "$agent — could not mint join token"
+        return 1
+    fi
+    docker rm -f "$agent" >/dev/null 2>&1 || true
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+        -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
+        -v /var/run/docker.sock:/var/run/docker.sock:ro \
+        -v "$conf:/etc/spire/agent.conf:ro,z" \
+        -e DOCKER_HOST=unix:///var/run/docker.sock \
+        ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
+        _harden_log warn "$agent — docker run failed"
+        return 1
+    }
+    return 0
+}
+
+_harden_spire_bootstrap() {
+    [ "${NODE_SPIRE:-1}" = "1" ] || { _harden_log info "spire skipped (NODE_SPIRE=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
+    local spire_file="$INSTALL_DIR/docker-compose.spire.yml"
+    [ -f "$spire_file" ] || { _harden_log warn "spire compose file missing"; return 1; }
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    # Servers are idempotent under compose (running services are kept).
+    docker compose -p smsly-spire -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+        _harden_log warn "spire servers failed to start"
+        return 1
+    }
+    local _i
+    for _i in $(seq 1 30); do
+        if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server 2>/dev/null)" = "true" ] && \
+           [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server-ecosystem 2>/dev/null)" = "true" ]; then
+            break
+        fi
+        sleep 2
+    done
+    sleep 5
+    _harden_spire_start_agent "smsly-spire-agent" "smsly-spire-server" "$INSTALL_DIR/infrastructure/spire/agent.conf" \
+        "smsly-hosting_spire-agent-data" "smsly-hosting_spire-agent-socket" "smsly-hosting_spire-agent-svids" || return 1
+    _harden_spire_start_agent "smsly-spire-agent-ecosystem" "smsly-spire-server-ecosystem" "$INSTALL_DIR/infrastructure/spire/agent-ecosystem.conf" \
+        "smsly-spire_spire-ecosystem-agent-data" "smsly-spire_spire-ecosystem-agent-socket" "smsly-spire_spire-ecosystem-agent-svids" || return 1
+    return 0
+}
+
+_harden_spire_verify() {
+    [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
+       [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then
+        # One self-heal attempt: resume runs can skip the bootstrap step.
+        _harden_spire_bootstrap >/dev/null 2>&1 || true
+    fi
+    local _fail=0
+    [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" = "true" ] || { _harden_log warn "spire-agent — container not running"; _fail=1; }
+    [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" = "true" ] || { _harden_log warn "spire-agent-ecosystem — container not running"; _fail=1; }
+    if [ "$_fail" = "0" ]; then
+        _harden_log ok "spire deployed"
+        return 0
+    fi
+    return 1
+}
 
 harden_security_bootstrap() {
     echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
