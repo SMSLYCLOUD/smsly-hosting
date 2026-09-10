@@ -24,6 +24,7 @@ from .env_vars import (
     normalize_plan_env_vars,
     _normalize_env_vars,
     _placeholder_addon_types,
+    _rebrace_bare_placeholder,
     _resolve_env_placeholders,
     _resolve_from_manifest_or_fallback,
     _resolve_single_placeholder,
