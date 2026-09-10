@@ -3413,14 +3413,22 @@ _harden_falco_bootstrap() {
         "${env_args[@]}" \
         -f "$compose_file" \
         up -d --force-recreate --pull always || echo -e "${YELLOW}    ⚠ falco docker compose up failed${NC}"
-    for _i in $(seq 1 15); do
+    # First boot compiles/loads the eBPF probe and can take a couple of
+    # minutes on slow disks — poll generously before giving up.
+    for _i in $(seq 1 30); do
         docker ps --format '{{.Names}}'  | grep -q "smsly-falco" && break
-        sleep 2
+        sleep 5
     done
 }
 
 _harden_falco_verify() {
     command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
+        # One self-heal attempt: resume runs can skip the bootstrap step
+        # (checkpointed), and first-boot probe load can outlast the
+        # bootstrap wait — retry the start before reporting failure.
+        _harden_falco_bootstrap >/dev/null 2>&1 || true
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         _harden_log warn "falco — container not running"
         return 1
@@ -8119,14 +8127,22 @@ _harden_falco_bootstrap() {
         "${env_args[@]}" \
         -f "$compose_file" \
         up -d --force-recreate --pull always || echo -e "${YELLOW}    ⚠ falco docker compose up failed${NC}"
-    for _i in $(seq 1 15); do
+    # First boot compiles/loads the eBPF probe and can take a couple of
+    # minutes on slow disks — poll generously before giving up.
+    for _i in $(seq 1 30); do
         docker ps --format '{{.Names}}'  | grep -q "smsly-falco" && break
-        sleep 2
+        sleep 5
     done
 }
 
 _harden_falco_verify() {
     command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
+        # One self-heal attempt: resume runs can skip the bootstrap step
+        # (checkpointed), and first-boot probe load can outlast the
+        # bootstrap wait — retry the start before reporting failure.
+        _harden_falco_bootstrap >/dev/null 2>&1 || true
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         _harden_log warn "falco — container not running"
         return 1
@@ -9156,14 +9172,22 @@ _harden_falco_bootstrap() {
         "${env_args[@]}" \
         -f "$compose_file" \
         up -d --force-recreate --pull always || echo -e "${YELLOW}    ⚠ falco docker compose up failed${NC}"
-    for _i in $(seq 1 15); do
+    # First boot compiles/loads the eBPF probe and can take a couple of
+    # minutes on slow disks — poll generously before giving up.
+    for _i in $(seq 1 30); do
         docker ps --format '{{.Names}}'  | grep -q "smsly-falco" && break
-        sleep 2
+        sleep 5
     done
 }
 
 _harden_falco_verify() {
     command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
+        # One self-heal attempt: resume runs can skip the bootstrap step
+        # (checkpointed), and first-boot probe load can outlast the
+        # bootstrap wait — retry the start before reporting failure.
+        _harden_falco_bootstrap >/dev/null 2>&1 || true
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         _harden_log warn "falco — container not running"
         return 1
@@ -12193,14 +12217,22 @@ _harden_falco_bootstrap() {
         "${env_args[@]}" \
         -f "$compose_file" \
         up -d --force-recreate --pull always || echo -e "${YELLOW}    ⚠ falco docker compose up failed${NC}"
-    for _i in $(seq 1 15); do
+    # First boot compiles/loads the eBPF probe and can take a couple of
+    # minutes on slow disks — poll generously before giving up.
+    for _i in $(seq 1 30); do
         docker ps --format '{{.Names}}'  | grep -q "smsly-falco" && break
-        sleep 2
+        sleep 5
     done
 }
 
 _harden_falco_verify() {
     command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
+        # One self-heal attempt: resume runs can skip the bootstrap step
+        # (checkpointed), and first-boot probe load can outlast the
+        # bootstrap wait — retry the start before reporting failure.
+        _harden_falco_bootstrap >/dev/null 2>&1 || true
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         _harden_log warn "falco — container not running"
         return 1
