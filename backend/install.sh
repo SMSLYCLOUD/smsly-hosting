@@ -5777,7 +5777,11 @@ apply_env_platform_overrides() {
     # to this host's detected public IP in both cases.
     desired_registry_bind="$current_registry_bind"
     if [ -z "$desired_registry_bind" ] || ! _registry_bind_ip_is_local "$desired_registry_bind"; then
-        desired_registry_bind="$desired_public_ip"
+        if [ -n "$desired_public_ip" ] && _registry_bind_ip_is_local "$desired_public_ip"; then
+            desired_registry_bind="$desired_public_ip"
+        else
+            desired_registry_bind="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9][0-9.]*$' | grep -v '^127\.' | head -1 || true)"
+        fi
     fi
 
     if [ "$desired_domain" != "$current_domain" ]; then
@@ -6587,7 +6591,11 @@ apply_env_platform_overrides() {
     # to this host's detected public IP in both cases.
     desired_registry_bind="$current_registry_bind"
     if [ -z "$desired_registry_bind" ] || ! _registry_bind_ip_is_local "$desired_registry_bind"; then
-        desired_registry_bind="$desired_public_ip"
+        if [ -n "$desired_public_ip" ] && _registry_bind_ip_is_local "$desired_public_ip"; then
+            desired_registry_bind="$desired_public_ip"
+        else
+            desired_registry_bind="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9][0-9.]*$' | grep -v '^127\.' | head -1 || true)"
+        fi
     fi
 
     if [ "$desired_domain" != "$current_domain" ]; then
