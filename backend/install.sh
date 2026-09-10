@@ -5954,6 +5954,11 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
     env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
+    local _db_ha_mode
+    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
+    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
+    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "Compose profiles to activate (matches the DB HA mode)"
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
@@ -6768,6 +6773,11 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
     env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
+    local _db_ha_mode
+    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
+    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
+    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "Compose profiles to activate (matches the DB HA mode)"
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"

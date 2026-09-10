@@ -69,7 +69,14 @@ apply_env_platform_overrides() {
     # to this host's detected public IP in both cases.
     desired_registry_bind="$current_registry_bind"
     if [ -z "$desired_registry_bind" ] || ! _registry_bind_ip_is_local "$desired_registry_bind"; then
-        desired_registry_bind="$desired_public_ip"
+        if [ -n "$desired_public_ip" ] && _registry_bind_ip_is_local "$desired_public_ip"; then
+            desired_registry_bind="$desired_public_ip"
+        else
+            # Detection failed or disagrees with local interfaces — fall
+            # back to the first local non-loopback IPv4 so the bind always
+            # targets an address this host holds.
+            desired_registry_bind="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' | head -1 || true)"
+        fi
     fi
 
     if [ "$desired_domain" != "$current_domain" ]; then
@@ -265,6 +272,14 @@ ensure_env_runtime_defaults() {
     fi
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
     env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
+    # DB HA mode + compose profiles: without COMPOSE_PROFILES the profiled
+    # db/postgres services are never created and every backend crashes with
+    # "could not translate host name db" (2026-09-10 fresh-install incident).
+    local _db_ha_mode
+    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
+    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
+    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "Compose profiles to activate (matches the DB HA mode)"
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
