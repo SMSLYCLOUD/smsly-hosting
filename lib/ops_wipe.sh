@@ -105,6 +105,19 @@ fix_env_permissions() {
         fi
     done
 
+    # Caddy runs as UID 1000 and writes access.log into the caddy_logs
+    # Docker volume. If the volume root is root-owned (fresh volume),
+    # every config reload fails validation with "permission denied" and
+    # Caddy keeps serving a STALE config — new domains get no cert and
+    # Cloudflare reports SSL handshake failure (2026-09-10 incident).
+    local caddy_log_dir
+    caddy_log_dir="$(docker volume inspect smsly-hosting_caddy_logs --format '{{.Mountpoint}}' 2>/dev/null || true)"
+    if [ -n "$caddy_log_dir" ] && [ -d "$caddy_log_dir" ]; then
+        chown 1000:1000 "$caddy_log_dir"  || true
+        chmod u+rwx "$caddy_log_dir"  || true
+        echo -e "${GREEN}  ✓ caddy_logs permissions fixed${NC}"
+    fi
+
     # Fix builds and prometheus-targets directories
     for dir in builds prometheus-targets; do
         if [ -d "$INSTALL_DIR/$dir" ]; then
