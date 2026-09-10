@@ -1,8 +1,8 @@
 apply_env_platform_overrides() {
     local env_file="$1"
     local changed=false
-    local current_domain current_use_ssl current_acme_email current_wildcard current_cf_token current_public_ip
-    local desired_domain desired_use_ssl desired_acme_email desired_wildcard desired_cf_token desired_public_ip
+    local current_domain current_use_ssl current_acme_email current_wildcard current_cf_token current_public_ip current_registry_bind
+    local desired_domain desired_use_ssl desired_acme_email desired_wildcard desired_cf_token desired_public_ip desired_registry_bind
 
     [ -f "$env_file" ] || return 0
 
@@ -12,6 +12,7 @@ apply_env_platform_overrides() {
     current_wildcard="$(env_get_value "$env_file" "WILDCARD_SUBDOMAINS")"
     current_cf_token="$(env_get_value "$env_file" "CLOUDFLARE_API_TOKEN")"
     current_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+    current_registry_bind="$(env_get_value "$env_file" "REGISTRY_PUBLIC_BIND_IP")"
 
     if [ "${DOMAIN+x}" = "x" ]; then
         desired_domain="${DOMAIN}"
@@ -61,6 +62,16 @@ apply_env_platform_overrides() {
         desired_public_ip="$(detect_public_ip)"
     fi
 
+    # Registry public bind: the compose default is a hardcoded IP. When
+    # .env has no override — or the override points at ANOTHER host's IP
+    # (cloned .env during migration) — the registry port bind fails with
+    # "cannot assign requested address" and the whole install dies. Pin it
+    # to this host's detected public IP in both cases.
+    desired_registry_bind="$current_registry_bind"
+    if [ -z "$desired_registry_bind" ] || ! _registry_bind_ip_is_local "$desired_registry_bind"; then
+        desired_registry_bind="$desired_public_ip"
+    fi
+
     if [ "$desired_domain" != "$current_domain" ]; then
         env_set_value "$env_file" "DOMAIN" "$desired_domain"
         changed=true
@@ -83,6 +94,10 @@ apply_env_platform_overrides() {
     fi
     if [ "$desired_public_ip" != "$current_public_ip" ]; then
         env_set_value "$env_file" "PUBLIC_IP" "$desired_public_ip"
+        changed=true
+    fi
+    if [ -n "$desired_registry_bind" ] && [ "$desired_registry_bind" != "$current_registry_bind" ]; then
+        env_set_value "$env_file" "REGISTRY_PUBLIC_BIND_IP" "$desired_registry_bind"
         changed=true
     fi
 
@@ -113,6 +128,14 @@ apply_env_platform_overrides() {
         echo -e "${GREEN}  ✓ Applied platform/domain overrides to .env${NC}"
         echo -e "${BLUE}    DOMAIN=${DOMAIN} USE_SSL=${USE_SSL} WILDCARD_SUBDOMAINS=${WILDCARD_SUBDOMAINS}${NC}"
     fi
+}
+
+
+# True when $1 is an IPv4 address assigned to this host's interfaces.
+_registry_bind_ip_is_local() {
+    local ip="$1"
+    [ -n "$ip" ] || return 1
+    hostname -I 2>/dev/null | tr ' ' '\n' | grep -qxF "$ip"
 }
 
 ensure_env_runtime_defaults() {
