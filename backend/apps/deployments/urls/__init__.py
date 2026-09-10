@@ -49,6 +49,7 @@ from ..views.github_app import (
 )
 # One-click GitHub App creation (manifest flow) — no manual pasting.
 from apps.cloud.views.github_app_manifest import (
+    github_app_import,
     github_app_manifest_setup,
     github_app_manifest_url,
 )
@@ -229,6 +230,9 @@ urlpatterns = [
     # key, webhook secret). No manual pasting, ever.
     path('integrations/github/app-manifest/url/', github_app_manifest_url, name='github-app-manifest-url'),
     path('integrations/github/app-manifest/setup/', github_app_manifest_setup, name='github-app-manifest-setup'),
+    # Connect an already-created GitHub App by pasting its credentials once
+    # (verified against GitHub before anything is stored).
+    path('integrations/github/app-import/', github_app_import, name='github-app-import'),
     # GitLab integration
     path('integrations/gitlab/', gitlab_connection, name='gitlab-connection'),
     path('integrations/gitlab/oauth-url/', gitlab_oauth_url, name='gitlab-oauth-url'),

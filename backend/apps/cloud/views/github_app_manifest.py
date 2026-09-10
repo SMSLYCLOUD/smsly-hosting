@@ -32,7 +32,7 @@ import jwt as pyjwt
 import requests
 from django.conf import settings
 from django.shortcuts import redirect
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -269,68 +269,15 @@ def github_app_manifest_setup(request):
         return Response({"error": "GitHub response was missing required credentials."},
                         status=status.HTTP_502_BAD_GATEWAY)
 
-    from apps.deployments.models.core import PlatformConfig
-    cfg = PlatformConfig.objects.first()
-    if cfg is None:
-        cfg = PlatformConfig.objects.create()
-
-    cfg.github_app_id = app_id
-    if client_secret:
-        cfg.github_client_id = client_id
-        cfg.github_client_secret = client_secret
-    cfg.github_app_private_key = private_key
-    # GitHub generated this secret FOR our webhook URL and told us what
-    # it is — store it so the receiver's HMAC check matches immediately.
-    if webhook_secret:
-        cfg.github_webhook_secret = webhook_secret
-    cfg.save(update_fields=[
-        "github_app_id", "github_client_id",
-        "github_client_secret", "github_app_private_key", "github_webhook_secret",
-        "updated_at",
-    ])
-
-    logger.info(
-        "GitHub App '%s' (id=%s, slug=%s) created via manifest flow — all "
-        "credentials stored automatically.",
-        app_name, app_id, app_slug,
+    stored = _store_github_app_credentials(
+        app_id=app_id,
+        client_id=client_id,
+        client_secret=client_secret,
+        private_key=private_key,
+        webhook_secret=webhook_secret,
+        app_name=app_name,
+        source="manifest",
     )
-
-    # ── Close the loop: user OAuth needs an allauth SocialApp ──────────
-    # Without this, `github_oauth_url` keeps answering "GitHub OAuth not
-    # configured. Add a SocialApp in admin." even though the App exists
-    # and PlatformConfig holds every credential. Create/update it from
-    # the conversion response so "Connect GitHub Account" works
-    # immediately with zero manual steps.
-    try:
-        from allauth.socialaccount.models import SocialApp
-        from django.contrib.sites.models import Site
-
-        social_app, _ = SocialApp.objects.update_or_create(
-            provider="github",
-            defaults={
-                "name": f"{app_name} (auto)",
-                "client_id": client_id,
-                "secret": client_secret,
-            },
-        )
-        try:
-            site = Site.objects.get_current()
-        except Exception:
-            site = Site.objects.first()
-        if site is not None:
-            social_app.sites.add(site)
-        logger.info("SocialApp for GitHub ensured (app id=%s)", app_id)
-    except Exception as exc:
-        logger.warning("Could not ensure GitHub SocialApp: %s", exc)
-
-    # ── Mirror credentials into .env (quoted) ──────────────────────────
-    # Workers and fresh processes read env first; PlatformConfig is the
-    # DB fallback. The private key MUST be \n-escaped and quoted or bash
-    # sourcing .env executes the PEM as commands (2026-09-10 incident).
-    try:
-        _write_github_env(app_id, client_id, client_secret, private_key, webhook_secret)
-    except Exception as exc:
-        logger.warning("Could not mirror GitHub credentials to .env: %s", exc)
 
     wants_json = (
         request.method == "POST"
@@ -343,6 +290,7 @@ def github_app_manifest_setup(request):
             "app_id": app_id,
             "app_slug": app_slug,
             "webhook_configured": bool(webhook_secret),
+            "social_app_ready": stored["social_app_ready"],
             "next_step": "install",
             "install_url": f"https://github.com/apps/{app_slug}/installations/new"
             if app_slug else None,
@@ -364,3 +312,162 @@ def github_app_manifest_setup(request):
             f"?{urllib.parse.urlencode({'state': state})}"
         )
     return redirect(frontend)
+
+
+def _store_github_app_credentials(*, app_id: str, client_id: str,
+                                  client_secret: str, private_key: str,
+                                  webhook_secret: str = "",
+                                  app_name: str = "SMSLY Cloud",
+                                  source: str = "manual") -> dict:
+    """Persist a GitHub App's full credential set everywhere it is read.
+
+    Writes PlatformConfig (DB, incl. encrypted fields), mirrors .env
+    (quoted), and ensures the allauth SocialApp that powers user OAuth —
+    so both server-to-server calls and "Connect GitHub Account" work
+    immediately. Returns a summary dict.
+    """
+    from apps.deployments.models.core import PlatformConfig
+    cfg = PlatformConfig.objects.first()
+    if cfg is None:
+        cfg = PlatformConfig.objects.create()
+
+    cfg.github_app_id = app_id
+    if client_secret:
+        cfg.github_client_id = client_id
+        cfg.github_client_secret = client_secret
+    cfg.github_app_private_key = private_key
+    if webhook_secret:
+        cfg.github_webhook_secret = webhook_secret
+    cfg.save(update_fields=[
+        "github_app_id", "github_client_id",
+        "github_client_secret", "github_app_private_key", "github_webhook_secret",
+        "updated_at",
+    ])
+
+    logger.info(
+        "GitHub App '%s' (id=%s) stored via %s flow.",
+        app_name, app_id, source,
+    )
+
+    # ── Close the loop: user OAuth needs an allauth SocialApp ──────────
+    # Without this, `github_oauth_url` keeps answering "GitHub OAuth not
+    # configured. Add a SocialApp in admin." even though the App exists
+    # and PlatformConfig holds every credential.
+    social_app_ready = False
+    try:
+        from allauth.socialaccount.models import SocialApp
+        from django.contrib.sites.models import Site
+
+        social_app, _ = SocialApp.objects.update_or_create(
+            provider="github",
+            defaults={
+                "name": f"{app_name} (auto)",
+                "client_id": client_id,
+                "secret": client_secret,
+            },
+        )
+        try:
+            site = Site.objects.get_current()
+        except Exception:
+            site = Site.objects.first()
+        if site is not None:
+            social_app.sites.add(site)
+        social_app_ready = True
+        logger.info("SocialApp for GitHub ensured (app id=%s)", app_id)
+    except Exception as exc:
+        logger.warning("Could not ensure GitHub SocialApp: %s", exc)
+
+    # ── Mirror credentials into .env (quoted) ──────────────────────────
+    # Workers and fresh processes read env first; PlatformConfig is the
+    # DB fallback. The private key MUST be \n-escaped and quoted or bash
+    # sourcing .env executes the PEM as commands (2026-09-10 incident).
+    try:
+        _write_github_env(app_id, client_id, client_secret, private_key, webhook_secret)
+    except Exception as exc:
+        logger.warning("Could not mirror GitHub credentials to .env: %s", exc)
+
+    return {"social_app_ready": social_app_ready}
+
+
+class GitHubAppImportSerializer(serializers.Serializer):
+    """Pasted credentials for a GitHub App that already exists."""
+
+    app_id = serializers.CharField(required=True)
+    client_id = serializers.CharField(required=True)
+    client_secret = serializers.CharField(required=True)
+    private_key = serializers.CharField(required=True)
+    webhook_secret = serializers.CharField(required=False, allow_blank=True, default="")
+    app_name = serializers.CharField(required=False, allow_blank=True, default="SMSLY Cloud")
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def github_app_import(request):
+    """Connect the platform to an already-created GitHub App.
+
+    POST /api/v1/integrations/github/app-import/
+    {"app_id", "client_id", "client_secret", "private_key",
+     "webhook_secret"?, "app_name"?}
+
+    For operators who already have an App (created by hand or on a
+    previous host) and just want to point this platform at it. The
+    credentials are verified against GitHub (JWT -> GET /app) before
+    anything is stored, then saved exactly like the manifest flow.
+    Admin-only.
+    """
+    if not request.user.is_superuser:
+        return Response({"error": "Admin access required."},
+                        status=status.HTTP_403_FORBIDDEN)
+
+    serializer = GitHubAppImportSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({"error": serializer.errors},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    data = serializer.validated_data
+    app_id = str(data["app_id"]).strip()
+    client_id = str(data["client_id"]).strip()
+    client_secret = str(data["client_secret"]).strip()
+    private_key = str(data["private_key"]).strip()
+    webhook_secret = str(data.get("webhook_secret") or "").strip()
+    app_name = str(data.get("app_name") or "SMSLY Cloud").strip() or "SMSLY Cloud"
+
+    # Verify against GitHub before storing anything: sign a JWT with the
+    # pasted key and read the App back. A wrong key fails here instead of
+    # breaking deploys later.
+    try:
+        from apps.deployments.services.github_app import GitHubAppService
+        svc = GitHubAppService(app_id=app_id, private_key_pem=private_key)
+        info = svc.get_app_info()
+    except Exception as exc:
+        logger.warning("GitHub App import verification failed: %s", exc)
+        return Response(
+            {"error": "Could not verify these credentials with GitHub. "
+                      "Check the App ID and private key."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not info or str(info.get("id") or "") != app_id:
+        return Response(
+            {"error": "GitHub did not recognize this App ID / key pair."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    app_slug = str(info.get("slug") or "")
+
+    stored = _store_github_app_credentials(
+        app_id=app_id,
+        client_id=client_id,
+        client_secret=client_secret,
+        private_key=private_key,
+        webhook_secret=webhook_secret,
+        app_name=app_name,
+        source="import",
+    )
+    return Response({
+        "status": "connected",
+        "app_id": app_id,
+        "app_slug": app_slug,
+        "social_app_ready": stored["social_app_ready"],
+        "next_step": "install",
+        "install_url": f"https://github.com/apps/{app_slug}/installations/new"
+        if app_slug else None,
+    })

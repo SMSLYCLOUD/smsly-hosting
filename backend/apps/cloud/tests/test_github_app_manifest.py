@@ -128,3 +128,77 @@ class ManifestSetupTests(TestCase):
             self.assertNotIn("RSA PRIVATE KEY----- ", line)
         finally:
             os.unlink(path)
+
+
+class GitHubAppImportTests(TestCase):
+    def setUp(self):
+        self.client = _admin_client()
+
+    def _payload(self, **overrides):
+        data = {
+            "app_id": "123456",
+            "client_id": "Iv1.testclientid",
+            "client_secret": "testclientsecret",
+            "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIBTEST\n-----END RSA PRIVATE KEY-----\n",
+            "webhook_secret": "",
+            "app_name": "SMSLY Cloud",
+        }
+        data.update(overrides)
+        return data
+
+    def test_import_forbids_non_admin(self):
+        user = User.objects.create_user("pleb2", "pleb2@example.com", "pw")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            "/api/v1/integrations/github/app-import/",
+            self._payload(),
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_import_rejects_unverifiable_credentials(self):
+        with patch(
+            "apps.deployments.services.github_app.GitHubAppService.get_app_info",
+            return_value=None,
+        ):
+            resp = self.client.post(
+                "/api/v1/integrations/github/app-import/",
+                self._payload(),
+                format="json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_import_rejects_mismatched_app_id(self):
+        with patch(
+            "apps.deployments.services.github_app.GitHubAppService.get_app_info",
+            return_value={"id": 999, "slug": "other"},
+        ):
+            resp = self.client.post(
+                "/api/v1/integrations/github/app-import/",
+                self._payload(),
+                format="json",
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_import_stores_everything(self):
+        from allauth.socialaccount.models import SocialApp
+
+        with patch(
+            "apps.deployments.services.github_app.GitHubAppService.get_app_info",
+            return_value={"id": 123456, "slug": "smsly-cloud-test"},
+        ), patch.object(
+            manifest_views, "_write_github_env", return_value=None
+        ):
+            resp = self.client.post(
+                "/api/v1/integrations/github/app-import/",
+                self._payload(),
+                format="json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["status"], "connected")
+        cfg = PlatformConfig.objects.first()
+        self.assertEqual(str(cfg.github_app_id), "123456")
+        app = SocialApp.objects.filter(provider="github").first()
+        self.assertIsNotNone(app)
+        self.assertEqual(app.client_id, "Iv1.testclientid")

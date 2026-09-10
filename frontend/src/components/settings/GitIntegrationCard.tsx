@@ -120,6 +120,17 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
   // one-time code -> the page POSTs it back and the backend stores ALL
   // credentials automatically. The user never pastes anything.
   const [manifestLoading, setManifestLoading] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importForm, setImportForm] = useState({
+    app_id: "",
+    client_id: "",
+    client_secret: "",
+    private_key: "",
+    webhook_secret: "",
+    app_name: "",
+  });
   const startGitHubAppManifest = async () => {
     setManifestLoading(true);
     setInstallError(null);
@@ -154,6 +165,41 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
       await api.delete(`/integrations/github/app/installations/${installationId}/`);
     } catch {
       setInstallations(prev);
+    }
+  };
+
+  // Connect an already-created GitHub App by pasting its credentials once.
+  // The backend verifies them against GitHub (JWT -> GET /app) before
+  // storing anything, then wires up PlatformConfig + SocialApp exactly
+  // like the manifest flow.
+  const submitGitHubAppImport = async () => {
+    setImportError(null);
+    setImportLoading(true);
+    try {
+      const res = await api.post("/integrations/github/app-import/", {
+        app_id: importForm.app_id.trim(),
+        client_id: importForm.client_id.trim(),
+        client_secret: importForm.client_secret.trim(),
+        private_key: importForm.private_key.trim(),
+        webhook_secret: importForm.webhook_secret.trim(),
+        app_name: importForm.app_name.trim(),
+      });
+      setShowImport(false);
+      setInstallError(null);
+      await fetchStatus();
+      await fetchInstallations();
+      const slug = res.data?.app_slug;
+      if (res.data?.install_url) {
+        window.location.assign(res.data.install_url as string);
+      } else if (slug) {
+        window.location.assign(`https://github.com/apps/${slug}/installations/new`);
+      }
+    } catch (e: any) {
+      const message =
+        e?.response?.data?.error || "Unable to connect this GitHub App.";
+      setImportError(typeof message === "string" ? message : JSON.stringify(message));
+    } finally {
+      setImportLoading(false);
     }
   };
 
@@ -367,6 +413,83 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                       created under your account with webhooks for
                       push-to-deploy already wired.
                     </p>
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowImport((v) => !v)}
+                        className="text-[12px] text-primary underline hover:no-underline"
+                      >
+                        {showImport ? "Hide" : "Already have a GitHub App? Connect it instead"}
+                      </button>
+                    </div>
+                    {showImport && (
+                      <div className="space-y-2 rounded-lg border p-3">
+                        <p className="text-[11px] text-muted-foreground">
+                          Paste the credentials from your existing App
+                          (GitHub → Settings → Developer settings → GitHub
+                          Apps → your app). They&apos;re verified with GitHub
+                          before anything is stored.
+                        </p>
+                        {[
+                          { key: "app_id", label: "App ID", placeholder: "e.g. 123456", secret: false },
+                          { key: "client_id", label: "Client ID", placeholder: "Iv1.xxxxxxxxxxxx", secret: false },
+                          { key: "client_secret", label: "Client secret", placeholder: "••••••••", secret: true },
+                          { key: "webhook_secret", label: "Webhook secret (optional)", placeholder: "••••••••", secret: true },
+                          { key: "app_name", label: "App name (optional)", placeholder: "SMSLY Cloud", secret: false },
+                        ].map((field) => (
+                          <div key={field.key} className="flex items-center gap-2">
+                            <span className="w-36 shrink-0 text-[11px] font-medium text-muted-foreground">
+                              {field.label}
+                            </span>
+                            <input
+                              type={field.secret ? "password" : "text"}
+                              value={(importForm as any)[field.key]}
+                              onChange={(e) =>
+                                setImportForm((f) => ({ ...f, [field.key]: e.target.value }))
+                              }
+                              placeholder={field.placeholder}
+                              className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1.5 font-mono text-xs"
+                            />
+                          </div>
+                        ))}
+                        <div className="flex items-start gap-2">
+                          <span className="w-36 shrink-0 text-[11px] font-medium text-muted-foreground">
+                            Private key (.pem)
+                          </span>
+                          <textarea
+                            value={importForm.private_key}
+                            onChange={(e) =>
+                              setImportForm((f) => ({ ...f, private_key: e.target.value }))
+                            }
+                            placeholder="-----BEGIN RSA PRIVATE KEY----- ..."
+                            rows={4}
+                            className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1.5 font-mono text-xs"
+                          />
+                        </div>
+                        {importError && (
+                          <p className="text-xs text-red-500">{importError}</p>
+                        )}
+                        <Button
+                          onClick={submitGitHubAppImport}
+                          disabled={
+                            importLoading ||
+                            !importForm.app_id.trim() ||
+                            !importForm.client_id.trim() ||
+                            !importForm.client_secret.trim() ||
+                            !importForm.private_key.trim()
+                          }
+                          className="gap-2"
+                          size="sm"
+                        >
+                          {importLoading ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Github className="w-4 h-4" />
+                          )}
+                          Verify &amp; Connect App
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
