@@ -294,15 +294,13 @@ class DomainActionsMixin:
         # ── Per-apex daily cert issuance cap ────────────────────────
         # Limit blast radius if DNS verification is bypassed: a single
         # apex may not consume more than CADDY_DAILY_CERT_CAP (default 20)
-        # hostnames per UTC day.
+        # DISTINCT hostnames per UTC day.
         #
-        # The counter increments ONLY when the domain is actually
-        # authorized below. Counting every ask (including repeats for
-        # cert-less domains, which re-ask on every handshake) exhausts
-        # the budget in minutes and locks the domain out for the day.
-        # Apex extraction keeps 2-label domains whole ("trulay.co" is
-        # its own apex — stripping to "co" would pool every bare domain
-        # on the internet into one bucket).
+        # The budget counts hostnames, NOT asks: Caddy re-asks on many
+        # handshakes for the same cert-less domain, so counting asks
+        # exhausts the budget in minutes and locks the domain out for
+        # the day (2026-09-11 trulay.co incident — 16 rapid re-asks then
+        # a full lockout with zero certs issued).
         domain = request.query_params.get('domain', '')
         raw_domain_for_cap = domain.strip().lower()
         labels = raw_domain_for_cap.split('.') if '.' in raw_domain_for_cap else [raw_domain_for_cap]
@@ -311,21 +309,6 @@ class DomainActionsMixin:
         cap_limit = int(getattr(settings, 'CADDY_DAILY_CERT_CAP', 20))
         if apex:
             cap_key = f"certs_issued:{apex}:{timezone.now().strftime('%Y%m%d')}"
-            cap_value = cache.get(cap_key, 0)
-            if cap_value >= cap_limit:
-                logger.warning(
-                    "check_domain: daily cert cap reached for apex %s (%d)",
-                    apex, cap_value,
-                )
-                return Response(
-                    {
-                        'error': (
-                            f"Daily cert issuance cap reached for {apex}. "
-                            "Try again tomorrow."
-                        )
-                    },
-                    status=status.HTTP_429_TOO_MANY_REQUESTS,
-                )
 
         raw_domain = raw_domain_for_cap
         if not raw_domain:
@@ -343,13 +326,30 @@ class DomainActionsMixin:
                 return Response(status=status.HTTP_404_NOT_FOUND)
 
         def _authorize():
-            """Count one authorized hostname against the daily cap."""
+            """Count one DISTINCT authorized hostname against the daily cap."""
             if cap_key:
                 try:
-                    if cache.get(cap_key) is not None:
-                        cache.incr(cap_key, 1)
-                    else:
-                        cache.set(cap_key, 1, timeout=86400)
+                    seen = cache.get(cap_key) or {}
+                    if not isinstance(seen, dict):
+                        seen = {}
+                    if domain not in seen:
+                        if len(seen) >= cap_limit:
+                            logger.warning(
+                                "check_domain: daily cert cap reached for "
+                                "apex %s (%d distinct hostnames)",
+                                apex, len(seen),
+                            )
+                            return Response(
+                                {
+                                    'error': (
+                                        f"Daily cert issuance cap reached for {apex}. "
+                                        "Try again tomorrow."
+                                    )
+                                },
+                                status=status.HTTP_429_TOO_MANY_REQUESTS,
+                            )
+                        seen[domain] = 1
+                        cache.set(cap_key, seen, timeout=86400)
                 except Exception:
                     pass
             return Response(status=status.HTTP_200_OK)

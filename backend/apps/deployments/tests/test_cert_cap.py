@@ -24,8 +24,8 @@ REST_FRAMEWORK_LOOSE = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 100,
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "apps.deployments.models.api_token.APITokenAuthentication",
-        "apps.deployments.models.api_token.RemoteSyncHMACAuthentication",
+        "apps.core.models.api_token.APITokenAuthentication",
+        "apps.core.models.api_token.RemoteSyncHMACAuthentication",
         "rest_framework.authentication.TokenAuthentication",
         "apps.core.auth.CsrfExemptSessionAuthentication",
     ],
@@ -140,3 +140,18 @@ class PerApexCertCapTests(TestCase):
         # A different apex still works because the counter is per-apex.
         resp = self._get("authorized.other-apex.com")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_repeated_asks_for_same_host_do_not_consume_budget(self):
+        # Caddy re-asks on many handshakes for the same cert-less domain.
+        # The cap counts DISTINCT hostnames — repeats must never lock the
+        # domain out (2026-09-11 trulay.co incident).
+        from django.core.cache import cache
+        cache.clear()
+
+        for i in range(50):
+            resp = self._get("host0.example.com")
+            self.assertEqual(
+                resp.status_code,
+                status.HTTP_200_OK,
+                f"Repeat ask {i+1} returned {resp.status_code} (expected 200)",
+            )

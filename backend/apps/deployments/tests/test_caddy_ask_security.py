@@ -29,8 +29,8 @@ REST_FRAMEWORK_FAST = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 100,
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "apps.deployments.models.api_token.APITokenAuthentication",
-        "apps.deployments.models.api_token.RemoteSyncHMACAuthentication",
+        "apps.core.models.api_token.APITokenAuthentication",
+        "apps.core.models.api_token.RemoteSyncHMACAuthentication",
         "rest_framework.authentication.TokenAuthentication",
         "apps.core.auth.CsrfExemptSessionAuthentication",
     ],
