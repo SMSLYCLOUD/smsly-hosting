@@ -717,20 +717,25 @@ fi
 # =============================================================================
 # FRESH INSTALL (fallthrough)
 # =============================================================================
-# Prefer the regenerated, tested, self-contained backend/install.sh when it is
-# co-located (full repo checkout). A standalone curl'd install.sh has no
-# backend/install.sh next to it and falls back to lib/ bootstrap + fresh.sh.
-# The basename guard prevents recursion: backend/install.sh is generated from
-# this file, so it carries the same delegation block — running from it must
-# fall through to the inlined fresh.sh below.
+# Source of truth is ALWAYS the live lib/ tree in a full checkout:
+# backend/install.sh is a periodically-synced self-contained snapshot for
+# standalone (curl-pipe) installs only, and it drifts behind lib/ between
+# syncs (2026-09-12: fresh installs ran months-old installer code missing
+# the Envoy bootstrap and registry-login fixes). A full checkout therefore
+# NEVER delegates to the bundle — only standalone mode (no live lib/)
+# uses it. The basename guard prevents recursion: backend/install.sh
+# carries the same delegation block, so running from it must fall through
+# to the inlined fresh.sh below.
 if [ "$MODE_MEDIA_NODE" = "true" ]; then
     source "$LIB_DIR/media-node.sh"
     install_media_node "$INSTALL_DIR"
     exit 0
 fi
 
-if [ -f "$SCRIPT_DIR/backend/install.sh" ] && [ "$(basename "$SCRIPT_PATH")" != "backend/install.sh" ]; then
-    echo -e "${BLUE}  → Delegating fresh install to self-contained backend/install.sh${NC}"
+if [ -f "$SCRIPT_DIR/lib/fresh.sh" ] && [ "$(basename "$SCRIPT_PATH")" != "backend/install.sh" ]; then
+    echo -e "${BLUE}  → Running fresh install from live lib/ (always current)${NC}"
+elif [ -f "$SCRIPT_DIR/backend/install.sh" ] && [ "$(basename "$SCRIPT_PATH")" != "backend/install.sh" ]; then
+    echo -e "${YELLOW}  ⚠ No live lib/ found — delegating fresh install to self-contained backend/install.sh (may lag behind lib/)${NC}"
     release_install_lock 2>/dev/null || true
     exec bash "$SCRIPT_DIR/backend/install.sh" "$@"
 fi

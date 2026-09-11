@@ -111,6 +111,22 @@ else
     echo -e "${GREEN}  ✓ OOM Auto-Adjuster already scheduled${NC}"
 fi
 
+# Platform integrity guard (hourly): registry TLS pair, egress NIC rules,
+# SPIRE containers, edge lockdown, pending migrations, Traefik middleware
+# refs. Self-heals or ALERTs to the log; see the script header.
+INTEGRITY_SCRIPT="/opt/smsly-hosting/scripts/verify_platform_integrity.sh"
+INTEGRITY_CRON="0 * * * * root $INTEGRITY_SCRIPT >> /var/log/smsly-integrity.log 2>&1"
+if [ -x "$INTEGRITY_SCRIPT" ]; then
+    if ! grep -q "verify_platform_integrity.sh" /etc/crontab ; then
+        echo "$INTEGRITY_CRON" >> /etc/crontab
+        echo -e "${GREEN}  ✓ Platform integrity guard scheduled hourly via cron${NC}"
+    else
+        echo -e "${GREEN}  ✓ Platform integrity guard already scheduled${NC}"
+    fi
+else
+    echo -e "${YELLOW}  ⚠ verify_platform_integrity.sh missing/not executable — integrity guard NOT scheduled${NC}"
+fi
+
 # ─── Sysctl tuning (idempotent) ──────────────────────────────────────────────
 SYSCTL_UPDATED=false
 

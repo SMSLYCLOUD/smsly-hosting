@@ -31,10 +31,20 @@ _harden_envoy_registry_login() {
     # credentials" even though valid credentials exist. Reuses them
     # without ever printing the secret (all expansion stays local).
     local auth user pass
-    auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || return 1
-    [ -n "$auth" ] || return 1
-    user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || return 1
-    pass=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f2-) || return 1
+    auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || auth=""
+    if [ -n "$auth" ]; then
+        user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || user=""
+        pass=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f2-) || pass=""
+    fi
+    if [ -z "$user" ] || [ -z "$pass" ]; then
+        # Fresh hosts may have no daemon login yet — fall back to the
+        # install-time credentials in .env (written by the htpasswd
+        # bootstrap before this runs).
+        local _env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+        user=$(grep -m1 '^REGISTRY_USER=' "$_env_file" 2>/dev/null | cut -d= -f2- | tr -d '\r"'"'") || user=""
+        pass=$(grep -m1 '^REGISTRY_PASSWORD=' "$_env_file" 2>/dev/null | cut -d= -f2- | tr -d '\r"'"'") || pass=""
+        [ -n "$user" ] || user="smsly-registry"
+    fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
     printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
 }

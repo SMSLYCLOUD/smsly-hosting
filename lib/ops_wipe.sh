@@ -64,7 +64,7 @@ wipe_existing_install() {
     trap - EXIT
     release_install_lock
     echo -e "${GREEN}OK Wipe complete. The server is ready for a fresh install.${NC}"
-    echo -e "${YELLOW}  Run: curl -fsSL https://raw.githubusercontent.com/smsly/smsly-hosting/main/install.sh -o install.sh${NC}"
+    echo -e "${YELLOW}  Run: curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/master/install.sh -o install.sh${NC}"
     echo -e "${YELLOW}       gpg --verify install.sh  # if you have a signed copy${NC}"
     echo -e "${YELLOW}       sudo bash install.sh${NC}"
     exit 0

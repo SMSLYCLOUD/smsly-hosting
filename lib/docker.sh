@@ -133,6 +133,24 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
+    # The daemon matches credentials per registry hostname: a login for
+    # 127.0.0.1:5000 does NOT authenticate pulls of registry:5000/*,
+    # which 401 with "no basic auth credentials" (2026-09-12 sidecar
+    # incident). Log in to every local hostname form.
+    local _targets="$registry"
+    case " $_targets " in
+        *" registry:5000 "*) ;;
+        *) _targets="$_targets registry:5000" ;;
+    esac
+    local _target
+    for _target in $_targets; do
+        _docker_login_one "$_target" "$user" "$pass"
+    done
+    return 0
+}
+
+_docker_login_one() {
+    local registry="$1" user="$2" pass="$3"
     local _cacert="${INSTALL_DIR:-/opt/smsly-hosting}/certs/registry.crt"
     local _curl_args="--insecure"
     if [ -f "$_cacert" ]; then
