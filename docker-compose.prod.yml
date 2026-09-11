@@ -611,13 +611,19 @@ services:
     #   - 127.0.0.1:5000 — master-local (host tools, docker CLI)
     #   - ${REGISTRY_MESH_BIND_IP:-10.100.0.1}:5000 — WireGuard mesh
     #     (preferred for nodes; TLS cert SAN includes 10.100.0.1)
-    #   - ${REGISTRY_PUBLIC_BIND_IP:-176.31.201.181}:5000 — public IP
+    #   - ${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}:5000 — public IP
     #     fallback for nodes without WG (firewall should restrict to
     #     node IPs; TLS cert via registry.smsly.cloud + certs.d trust).
+    #     NOTE: the fallback here is deliberately loopback. The installer
+    #     always writes the host's real public IP into
+    #     REGISTRY_PUBLIC_BIND_IP (platform-env.sh); a hardcoded foreign
+    #     IP as fallback fails the entire compose deployment with
+    #     "cannot assign requested address" on any other host
+    #     (2026-09-10 fresh-install incident).
     # REGISTRY_BIND_IP=0.0.0.0 overrides everything (single-address mode).
     - "${REGISTRY_BIND_IP:-127.0.0.1}:5000:5000"
     - "${REGISTRY_MESH_BIND_IP:-10.100.0.1}:5000:5000"
-    - "${REGISTRY_PUBLIC_BIND_IP:-176.31.201.181}:5000:5000"
+    - "${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}:5000:5000"
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
@@ -1334,10 +1340,10 @@ services:
     - --providers.docker.endpoint=tcp://traefik-socket-proxy:2375
     - --providers.docker.httpClientTimeout=30s
     - --entrypoints.web.address=:80
-    - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
+    - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,100.64.0.0/10
     - --entrypoints.websecure.address=:443
     - --entrypoints.websecure.http.tls=true
-    - --entrypoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
+    - --entrypoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,100.64.0.0/10
     - --entrypoints.metrics.address=:8082
     # SECURITY: removed --api.insecure=true; the dashboard now requires auth
     # via a Traefik middleware (configure traefik.http.routers.api.middlewares
@@ -1365,7 +1371,7 @@ services:
     - --accesslog.fields.names.downstream.status=keep
     - --accesslog.fields.names.user-agent=drop
     - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
-    - --experimental.plugins.crowdsec-bouncer.version=v1.6.0
+    - --experimental.plugins.crowdsec-bouncer.version=v1.7.1
     ports:
     - "${TRAEFIK_HTTP_BIND:-127.0.0.1:8081}:80"
     - "${TRAEFIK_HTTPS_BIND:-127.0.0.1:8443}:443"
@@ -1387,10 +1393,20 @@ services:
     labels:
     - managed_by=smsly-hosting
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.enabled=true"
-    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecMode=live"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecMode=stream"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiScheme=http"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiHost=crowdsec:8080"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=${CROWDSEC_BOUNCER_KEY:-}"
+    # Fail-open: never block traffic when the LAPI is unreachable, and
+    # never block boot waiting for the first stream sync (availability
+    # over strictness — bans still enforce whenever the LAPI answers).
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.updateMaxFailure=-1"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.streamStartupBlock=false"
+    # Real client IP: all traffic arrives via Caddy/Docker proxies, so the
+    # plugin must read X-Forwarded-For from trusted proxies — otherwise
+    # every decision would apply to the proxy IP itself. Covers the full
+    # trusted internal set (docker, mesh, LAN, CGNAT, loopback v4+v6).
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.forwardedHeadersTrustedIPs=127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,100.64.0.0/10"
     networks:
     - smsly-net
     - traefik-proxy-net

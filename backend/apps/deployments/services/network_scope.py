@@ -595,6 +595,72 @@ def attach_container_to_platform_bridge(container_id: str, service_name: str) ->
         return False
 
 
+# ── Trusted internal ranges ─────────────────────────────────────────
+# Supernet ranges the platform treats as internal for X-Forwarded-For
+# trust decisions (Traefik forwardedHeaders, CrowdSec plugin,
+# Caddy @internal_src). Covers the WireGuard mesh (10.100.0.0/24),
+# Docker bridges (172.17-172.30…), the project scoped pool below, LANs
+# operators may use for custom bridges (192.168/16), CGNAT/Tailscale
+# space (100.64/10), loopback, and IPv6 ULA.
+#
+# Every project bridge subnet — pool-allocated or operator-overridden —
+# MUST fall inside these. A bridge outside them silently breaks client
+# IP attribution: proxies stop trusting X-Forwarded-For, so rate
+# limits and bans apply to PROXY IPs instead of attackers (one ban can
+# take the whole platform offline).
+TRUSTED_INTERNAL_RANGES = (
+    '127.0.0.1/32',
+    '::1/128',
+    '10.0.0.0/8',
+    '172.16.0.0/12',
+    '192.168.0.0/16',
+    '100.64.0.0/10',
+    'fd00::/8',
+)
+
+
+def is_trusted_internal_subnet(cidr: str) -> bool:
+    """True when *cidr* is a valid subnet inside the trusted ranges."""
+    import ipaddress
+
+    try:
+        network = ipaddress.ip_network(str(cidr or "").strip(), strict=False)
+    except ValueError:
+        return False
+    for raw in TRUSTED_INTERNAL_RANGES:
+        try:
+            if network.subnet_of(ipaddress.ip_network(raw)):
+                return True
+        except (ValueError, TypeError):
+            # v4-vs-v6 comparison (or bad range entry) — try next range.
+            continue
+    return False
+
+
+def validate_internal_subnet(cidr: str, *, where: str = "subnet") -> str:
+    """Validate an operator-provided bridge subnet, raising on misuse.
+
+    The value must be a valid CIDR inside TRUSTED_INTERNAL_RANGES (all
+    private by construction — a public range can never match). Fail fast
+    here: a bad bridge CIDR otherwise breaks IP attribution silently at
+    runtime.
+    """
+    import ipaddress
+
+    text = str(cidr or "").strip()
+    try:
+        network = ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        raise ValueError(f"Invalid {where} CIDR: {text!r}")
+    if not is_trusted_internal_subnet(text):
+        raise ValueError(
+            f"Invalid {where} CIDR {text!r}: outside the trusted internal "
+            f"ranges ({', '.join(TRUSTED_INTERNAL_RANGES)}). Proxies would "
+            f"stop trusting X-Forwarded-For from this bridge."
+        )
+    return str(network)
+
+
 # ── Project-scoped subnet allocation ────────────────────────────────────
 # Pool: 172.30.0.0/16 (IETF CGNAT range, deliberately outside Docker's
 # default 172.17-172.21 and our own 172.22 platform bridge). Each project
@@ -644,7 +710,11 @@ def allocate_project_subnet(project=None, requested: str = '') -> str:
     """
     requested = (requested or '').strip()
     if requested:
-        return requested
+        # Explicit operator override: validate before use. An out-of-range
+        # bridge would silently break client-IP attribution, so fail fast
+        # with a clear message instead of letting Docker fail obscurely
+        # (or worse, succeed outside the trusted ranges).
+        return validate_internal_subnet(requested, where="project subnet")
 
     existing = _existing_docker_subnets()
 
@@ -653,6 +723,12 @@ def allocate_project_subnet(project=None, requested: str = '') -> str:
         default_subnet = (PlatformConfig.load().default_internal_subnet or '').strip()
     except Exception:
         default_subnet = ''
+    if default_subnet:
+        try:
+            validate_internal_subnet(default_subnet, where="default internal subnet")
+        except ValueError as exc:
+            logger.warning("Ignoring misconfigured default internal subnet: %s", exc)
+            default_subnet = ''
     if default_subnet and default_subnet not in existing:
         return default_subnet
 

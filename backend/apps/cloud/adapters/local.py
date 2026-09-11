@@ -440,8 +440,30 @@ class LocalAdapter(BaseCloudAdapter):
             labels[f'traefik.http.routers.{router_name}.tls.certresolver'] = 'letsencrypt'
 
         labels[f'traefik.http.routers.{router_name}.entrypoints'] = ','.join(entrypoints)
+        self._apply_crowdsec_middleware(labels, name)
         return labels
 
+    def _apply_crowdsec_middleware(
+        self, labels: dict[str, str], name: str,
+    ) -> None:
+        """Attach the CrowdSec bouncer middleware to a service router.
+
+        Without this, CrowdSec detects attackers but nothing enforces the
+        bans (2026-09-11: decisions piled up, zero enforcement). Merges
+        with any middleware already on the router (e.g. ai-router
+        rewrites) instead of overwriting. Kill switch:
+        TRAEFIK_CROWDSEC_ENFORCE=false.
+        """
+        if str(os.getenv("TRAEFIK_CROWDSEC_ENFORCE", "true")).strip().lower() not in {
+            "1", "true", "yes", "on",
+        }:
+            return
+        router_name = name.replace('.', '-').replace('_', '-')
+        key = f'traefik.http.routers.{router_name}.middlewares'
+        existing = [m.strip() for m in str(labels.get(key, "") or "").split(",") if m.strip()]
+        if "crowdsec-bouncer@docker" not in existing:
+            existing.append("crowdsec-bouncer@docker")
+        labels[key] = ",".join(existing)
     def _apply_router_special_labels(
         self,
         labels: dict[str, str],
@@ -467,6 +489,8 @@ class LocalAdapter(BaseCloudAdapter):
         labels[f'traefik.http.middlewares.{middleware_name}.replacepathregex.replacement'] = '/v1/$1'
         labels[f'traefik.http.routers.{router_name}.middlewares'] = middleware_name
         labels[f'traefik.http.routers.{router_name}.priority'] = '1000'
+        # Keep CrowdSec enforcement alongside the rewrite middleware.
+        self._apply_crowdsec_middleware(labels, name)
 
     def authenticate(self) -> bool:
         return self.docker_client is not None

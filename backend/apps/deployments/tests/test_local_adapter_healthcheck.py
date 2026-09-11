@@ -33,6 +33,24 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         self.assertIn("exit 0", cmd)
         self.assertIn("exit 1", cmd)
 
+    def test_crowdsec_middleware_attached_by_default(self):
+        adapter = object.__new__(LocalAdapter)
+        labels = adapter._get_traefik_labels(
+            "myapp", "Host(`myapp.example.com`)", "8000",
+        )
+        self.assertEqual(
+            labels["traefik.http.routers.myapp.middlewares"],
+            "crowdsec-bouncer@docker",
+        )
+
+    def test_crowdsec_middleware_kill_switch(self):
+        adapter = object.__new__(LocalAdapter)
+        with patch.dict(os.environ, {"TRAEFIK_CROWDSEC_ENFORCE": "false"}):
+            labels = adapter._get_traefik_labels(
+                "myapp", "Host(`myapp.example.com`)", "8000",
+            )
+        self.assertNotIn("traefik.http.routers.myapp.middlewares", labels)
+
     def _build_adapter_with_mock_docker(self, has_old: bool = False):
         docker_client = MagicMock()
         docker_client.api.create_endpoint_config.return_value = {}
@@ -76,7 +94,11 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         self.assertEqual(labels["traefik.enable"], "true")
         self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "web")
         self.assertNotIn("traefik.http.routers.buyforfront.tls", labels)
-        self.assertNotIn("traefik.http.routers.buyforfront.middlewares", labels)
+        # CrowdSec enforcement attaches to every user-service router.
+        self.assertEqual(
+            labels["traefik.http.routers.buyforfront.middlewares"],
+            "crowdsec-bouncer@docker",
+        )
 
     @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
     @patch("apps.deployments.models.PlatformConfig.load")
@@ -198,7 +220,7 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         )
 
         labels = docker_client.containers.create.call_args.kwargs["labels"]
-        self.assertEqual(labels["traefik.http.routers.ai-router.middlewares"], "ai-router-api-base")
+        self.assertEqual(labels["traefik.http.routers.ai-router.middlewares"], "ai-router-api-base,crowdsec-bouncer@docker")
         self.assertEqual(
             labels["traefik.http.middlewares.ai-router-api-base.replacepathregex.regex"],
             r"^/api/v1/?(.*)$",
@@ -258,7 +280,7 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
 
         self.assertEqual(result, "promoted-id")
         labels = docker_client.containers.create.call_args.kwargs["labels"]
-        self.assertEqual(labels["traefik.http.routers.ai-router.middlewares"], "ai-router-api-base")
+        self.assertEqual(labels["traefik.http.routers.ai-router.middlewares"], "ai-router-api-base,crowdsec-bouncer@docker")
         self.assertEqual(
             labels["traefik.http.middlewares.ai-router-api-base.replacepathregex.regex"],
             r"^/api/v1/?(.*)$",
