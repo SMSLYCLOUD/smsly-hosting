@@ -48,13 +48,44 @@ print(f'PlatformConfig domain set to: {cfg.domain}')
         echo -e "${YELLOW}  ⚠ Backend not running; DB sync deferred to --update${NC}"
     fi
 
-    # 3. Generate self-signed cert + regenerate Caddyfile
+    # 3. Regenerative sync (preferred): rebuild the FULL Caddyfile from
+    # current DB state so service blocks, wildcard/custom redirects,
+    # path redirects and TLS survive the domain change. The static stub
+    # below is emergency fallback only (backend down): it deliberately
+    # drops everything except the platform domain, so it must never be
+    # the final state when the backend is available.
     ensure_selfsigned_cert
     local fix_ip
     fix_ip="$(detect_public_ip)"
-    if [ -d "caddy-config" ]; then
+    local _caddy_synced="false"
+    if docker compose -f "$COMPOSE_FILE" ps -q backend  | grep -q .; then
+        local _sync_out
+        _sync_out="$(timeout -k 5 300 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell <<'PYEOF' 2>&1 || true
+from apps.deployments.models import PlatformConfig
+from apps.deployments.services.caddy_manager import apply_caddyfile, generate_caddyfile
+config = PlatformConfig.load()
+content = generate_caddyfile(config)
+cf_token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
+result = apply_caddyfile(content, cloudflare_token=cf_token)
+print('CADDY_SYNC_OK' if result.get('ok') else 'CADDY_SYNC_FAIL: ' + str(result.get('message', ''))[:200])
+PYEOF
+)"
+        if echo "$_sync_out" | grep -q CADDY_SYNC_OK; then
+            echo -e "${GREEN}  ✓ Caddyfile regenerated from live state${NC}"
+            _caddy_synced="true"
+        else
+            echo -e "${YELLOW}    ⚠ Regenerative sync failed — falling back to minimal stub${NC}"
+            echo "$_sync_out" | tail -n 5 || true
+        fi
+    else
+        echo -e "${YELLOW}  ⚠ Backend not running; DB sync deferred, using minimal stub Caddyfile${NC}"
+    fi
+    if [ "$_caddy_synced" != "true" ] && [ -d "caddy-config" ]; then
         cat > caddy-config/Caddyfile <<CADDYFIX
-# SMSLY Caddyfile — Fixed by --fix-domain
+# SMSLY Caddyfile — EMERGENCY fallback written by --fix-domain (backend was
+# unavailable for a regenerative sync). Re-run install.sh --fix-domain or
+# trigger a routing sync once the backend is up; this stub routes ONLY the
+# platform domain and drops all service/custom routing until then.
 {
     on_demand_tls {
         ask http://backend:8000/api/v1/services/check-domain/
@@ -94,7 +125,7 @@ ${fix_ip} {
     }
 }
 CADDYFIX
-        echo -e "${GREEN}  ✓ Caddyfile regenerated${NC}"
+        echo -e "${YELLOW}  ⚠ Emergency stub Caddyfile written (service routing dropped until re-sync)${NC}"
     fi
 
     # 4. Reload Caddy
