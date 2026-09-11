@@ -1338,7 +1338,12 @@ services:
     - --providers.docker=true
     - --providers.docker.exposedbydefault=false
     - --providers.docker.endpoint=tcp://traefik-socket-proxy:2375
-    - --providers.docker.httpClientTimeout=30s
+    # NOTE: no httpClientTimeout here on purpose. That flag applies to
+    # EVERY provider call including the infinite Docker events stream,
+    # so any value kills the stream on schedule ("context deadline
+    # exceeded while reading body" every N seconds + reconnect churn).
+    # List calls to the local socket-proxy are sub-second; the default
+    # (no timeout) lets the events stream live forever (2026-09-11).
     - --entrypoints.web.address=:80
     - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,100.64.0.0/10
     - --entrypoints.websecure.address=:443
