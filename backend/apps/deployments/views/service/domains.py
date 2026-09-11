@@ -295,17 +295,23 @@ class DomainActionsMixin:
         # Limit blast radius if DNS verification is bypassed: a single
         # apex may not consume more than CADDY_DAILY_CERT_CAP (default 20)
         # hostnames per UTC day.
+        #
+        # The counter increments ONLY when the domain is actually
+        # authorized below. Counting every ask (including repeats for
+        # cert-less domains, which re-ask on every handshake) exhausts
+        # the budget in minutes and locks the domain out for the day.
+        # Apex extraction keeps 2-label domains whole ("trulay.co" is
+        # its own apex — stripping to "co" would pool every bare domain
+        # on the internet into one bucket).
         domain = request.query_params.get('domain', '')
         raw_domain_for_cap = domain.strip().lower()
-        apex = (
-            raw_domain_for_cap.split('.', 1)[-1]
-            if '.' in raw_domain_for_cap
-            else raw_domain_for_cap
-        )
+        labels = raw_domain_for_cap.split('.') if '.' in raw_domain_for_cap else [raw_domain_for_cap]
+        apex = '.'.join(labels[-2:]) if len(labels) >= 2 else raw_domain_for_cap
+        cap_key = ''
+        cap_limit = int(getattr(settings, 'CADDY_DAILY_CERT_CAP', 20))
         if apex:
             cap_key = f"certs_issued:{apex}:{timezone.now().strftime('%Y%m%d')}"
             cap_value = cache.get(cap_key, 0)
-            cap_limit = int(getattr(settings, 'CADDY_DAILY_CERT_CAP', 20))
             if cap_value >= cap_limit:
                 logger.warning(
                     "check_domain: daily cert cap reached for apex %s (%d)",
@@ -320,13 +326,6 @@ class DomainActionsMixin:
                     },
                     status=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
-            if cache.get(cap_key) is not None:
-                try:
-                    cache.incr(cap_key, 1)
-                except ValueError:
-                    cache.set(cap_key, cap_value + 1, timeout=86400)
-            else:
-                cache.set(cap_key, 1, timeout=86400)
 
         raw_domain = raw_domain_for_cap
         if not raw_domain:
@@ -343,11 +342,23 @@ class DomainActionsMixin:
             except ValueError:
                 return Response(status=status.HTTP_404_NOT_FOUND)
 
+        def _authorize():
+            """Count one authorized hostname against the daily cap."""
+            if cap_key:
+                try:
+                    if cache.get(cap_key) is not None:
+                        cache.incr(cap_key, 1)
+                    else:
+                        cache.set(cap_key, 1, timeout=86400)
+                except Exception:
+                    pass
+            return Response(status=status.HTTP_200_OK)
+
         # 1. Check against PlatformConfig primary domain
         try:
             cfg = PlatformConfig.load()
             if cfg.domain and domain == cfg.domain.strip().lower():
-                return Response(status=status.HTTP_200_OK)
+                return _authorize()
         except Exception as exc:
             logger.debug("check_domain: PlatformConfig check failed: %s", exc)
 
@@ -358,18 +369,18 @@ class DomainActionsMixin:
             query |= Q(private_ip=domain)
 
         if ManagedServer.objects.filter(query).exists():
-            return Response(status=status.HTTP_200_OK)
+            return _authorize()
 
         # 3. Check against Services (Public Domain)
         if Service.objects.filter(public_domain=domain).exists():
-            return Response(status=status.HTTP_200_OK)
+            return _authorize()
 
         # 3b. Check against service host aliases (accounts.google.com pattern)
         try:
             if Service.objects.filter(
                 host_aliases__contains=[{"host": domain}],
             ).exists():
-                return Response(status=status.HTTP_200_OK)
+                return _authorize()
         except Exception as exc:
             logger.debug("check_domain: alias lookup failed: %s", exc)
 
@@ -391,12 +402,12 @@ class DomainActionsMixin:
             .exists()
         )
         if routable_custom_domain:
-            return Response(status=status.HTTP_200_OK)
+            return _authorize()
 
         # 4. Check against Addons
         from ...models.addons import Addon
         if Addon.objects.filter(public_domain=domain).exists():
-            return Response(status=status.HTTP_200_OK)
+            return _authorize()
 
         # 5. Check against STAGED deployment staging URLs
         from ...models import Deployment
@@ -407,7 +418,7 @@ class DomainActionsMixin:
             ),
             staging_url__icontains=domain,
         ).exists():
-            return Response(status=status.HTTP_200_OK)
+            return _authorize()
 
         # 6. Check against auto-generated staging domains.
         # Previously this authorized ANY "staging-*.<base_domain>" by prefix
@@ -415,7 +426,7 @@ class DomainActionsMixin:
         # Now we verify the domain actually belongs to a real service record.
         try:
             if Service.objects.filter(staging_domain=domain, staging_domain_verified=True).exists():
-                return Response(status=status.HTTP_200_OK)
+                return _authorize()
         except Exception:
             pass
 

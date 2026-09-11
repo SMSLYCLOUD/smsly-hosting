@@ -5,7 +5,12 @@ Tests for the hardened Caddy ``on_demand_tls`` 'ask' endpoint.
 Verifies:
   * Missing or wrong ``X-Caddy-Secret`` returns 401.
   * Correct ``X-Caddy-Secret`` returns 200 for an authorized domain.
-  * Per-IP throttling caps requests at 60/minute (61st returns 429).
+  * Authorized asks are NEVER throttled: every ask arrives from the
+    single Caddy container IP, so an IP-bucketed rate limit is shared
+    across ALL domains and deadlocks issuance (2026-09-11 trulay.co
+    incident — handshakes for cert-less domains re-ask every attempt,
+    tripping 60/min in seconds, after which no domain can get a cert).
+    The shared secret plus the per-apex daily cap are the protections.
 """
 
 from django.test import TestCase, override_settings
@@ -107,19 +112,22 @@ class CaddyAskSecurityTests(TestCase):
             **headers,
         )
 
-    def test_missing_secret_returns_401(self):
+    def test_missing_secret_is_denied(self):
         from django.core.cache import cache
         cache.clear()
 
+        # Anonymous callers get 403 (DRF maps unauthenticated permission
+        # denials to 403 when no WWW-Authenticate scheme is configured on
+        # the endpoint). Caddy treats any non-200 as deny.
         resp = self._get("authorized.example.com")
-        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_wrong_secret_returns_401(self):
+    def test_wrong_secret_is_denied(self):
         from django.core.cache import cache
         cache.clear()
 
         resp = self._get("authorized.example.com", secret="not-the-right-secret")
-        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_correct_secret_returns_200_for_authorized_domain(self):
         from django.core.cache import cache
@@ -137,21 +145,18 @@ class CaddyAskSecurityTests(TestCase):
 
     @override_settings(REST_FRAMEWORK=REST_FRAMEWORK_FAST)
     @override_settings(CADDY_DAILY_CERT_CAP=1000)
-    def test_60_requests_succeed_61st_returns_429(self):
+    def test_authorized_asks_are_never_throttled(self):
         from django.core.cache import cache
         cache.clear()
 
-        for i in range(60):
+        for i in range(70):
             resp = self._get("authorized.example.com", secret=self.secret)
             self.assertEqual(
                 resp.status_code,
                 status.HTTP_200_OK,
                 f"Request {i+1} returned {resp.status_code} (expected 200)",
             )
-        # 61st request from the same IP should be throttled.
-        resp = self._get("authorized.example.com", secret=self.secret)
-        self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
-        self.assertIn("Retry-After", resp.headers)
+        self.assertNotIn("Retry-After", resp.headers)
 
 
 @override_settings(CACHES=TEST_CACHES)

@@ -12,8 +12,8 @@ from django.core import signing
 from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.utils.http import content_disposition_header
 from rest_framework import authentication, permissions, serializers, status
+from rest_framework.exceptions import NotAuthenticated
 from rest_framework.response import Response
-
 from apps.cloud.models import CloudProvider
 from apps.domains.utils import normalize_domain
 from apps.deployments.models import Deployment, Service
@@ -390,10 +390,10 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
             if header_provided and hmac.compare_digest(header_provided, expected):
                 return True
         user = getattr(request, "user", None)
-        if user is not None and getattr(user, "is_authenticated", False) and (
-            getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)
-        ):
-            return True
+        if user is not None and getattr(user, "is_authenticated", False):
+            if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+                return True
+            return False
         # No secret configured — reject unauthenticated requests.
         # The secret is auto-generated at startup (settings.CADDY_ASK_SECRET)
         # and stored in PlatformConfig.  Allowing through when it's missing
@@ -404,7 +404,9 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
             "and no admin user.  Ensure CADDY_ASK_SECRET is set in .env or "
             "PlatformConfig."
         )
-        return False
+        raise NotAuthenticated(
+            "Caddy ask endpoint requires a valid secret or admin authentication."
+        )
 
     @staticmethod
     def _get_expected_secret():

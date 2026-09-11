@@ -1488,6 +1488,13 @@ CORS_ALLOW_HEADERS = [
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'filters': {
+        # Masks ?secret= query params (Caddy ask callback) everywhere they
+        # flow — otherwise the shared secret lands in logs in plaintext.
+        'redact_query_secrets': {
+            '()': 'config.logging_filters.RedactQuerySecretsFilter',
+        },
+    },
     'formatters': {
         'json': {
             '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
@@ -1502,6 +1509,7 @@ LOGGING = {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'json' if not DEBUG else 'verbose',
+            'filters': ['redact_query_secrets'],
         },
     },
     'root': {

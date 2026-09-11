@@ -906,18 +906,21 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         on every page render. The dashboard renders 4-20 GETs per
         page; at 3/min the user is 429'd before the page can load.
         Now:
-          - ``check_domain`` (Caddy) uses the ``caddy_ask`` scope.
+          - ``check_domain`` (Caddy) is NOT throttled: every ask arrives
+            from the single Caddy container IP, so an IP-bucketed rate
+            limit is shared across ALL domains and deadlocks issuance —
+            handshakes for cert-less domains re-ask on every attempt,
+            tripping 60/min in seconds, after which every ask 429s and no
+            domain can ever get a certificate (2026-09-11 trulay.co
+            incident). The shared secret plus the per-apex daily cap in
+            the view are the real protections.
           - GET / HEAD / OPTIONS fall through to the default user-rate
             throttle (``'user': '5000/hour'``).
           - POST / PUT / PATCH / DELETE get the deployment-burst
             guard.
         """
         if self.action == 'check_domain':
-            from rest_framework.throttling import ScopedRateThrottle
-            throttle = ScopedRateThrottle()
-            throttle.scope = 'caddy_ask'
-            self.throttle_scope = 'caddy_ask'
-            return [throttle]
+            return []
         if self.request.method in permissions.SAFE_METHODS:
             return []
         return [BurstRateThrottle(), DeploymentRateThrottle()]
