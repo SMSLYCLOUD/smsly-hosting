@@ -1392,6 +1392,11 @@ services:
       start_period: 10s
     labels:
     - managed_by=smsly-hosting
+    # REQUIRED with exposedbydefault=false: without traefik.enable the
+    # provider skips this container entirely and the crowdsec-bouncer
+    # middleware below never exists -> every user router referencing it
+    # is dropped and all services 503 via route-fallback (2026-09-11).
+    - traefik.enable=true
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.enabled=true"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecMode=stream"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiScheme=http"
