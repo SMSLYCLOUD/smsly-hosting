@@ -436,6 +436,11 @@ EOF
 CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,$DOMAIN_ORIGINS,http://localhost:8090,http://$PUBLIC_IP
 CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,$DOMAIN_ORIGINS,http://$PUBLIC_IP
 
+# Canonical public origin of the dashboard, baked into the frontend image
+# as NEXT_PUBLIC_APP_URL (drives the middleware hostname check). Same
+# scheme decision as CORS above: never https://IP.
+FRONTEND_APP_URL=$DOMAIN_ORIGINS
+
 # Docker networking
 # Ensure addon containers and deployed app containers share the same network for connectivity.
 DOCKER_NETWORK=smsly-net

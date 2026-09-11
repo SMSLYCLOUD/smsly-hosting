@@ -1019,6 +1019,7 @@ services:
       network: host
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
+        NEXT_PUBLIC_APP_URL: ${FRONTEND_APP_URL:-}
         NODE_BUILD_MEMORY_MB: ${FRONTEND_BUILD_MEMORY_MB:-2048}
     restart: unless-stopped
     env_file: .env

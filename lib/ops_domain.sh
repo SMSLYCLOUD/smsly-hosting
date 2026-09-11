@@ -15,6 +15,21 @@ fix_domain_sync() {
     else
         echo "USE_SSL=true" >> "$env_file"
     fi
+    # Keep the frontend's baked canonical origin in sync: the middleware
+    # hostname check reads NEXT_PUBLIC_APP_URL from the image build, so a
+    # domain change without a rebuild would 404 the real dashboard.
+    # fix-domain forces USE_SSL=true above, hence https here.
+    _prev_frontend_url="$(grep -m1 '^FRONTEND_APP_URL=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+    if grep -q '^FRONTEND_APP_URL=' "$env_file" ; then
+        sed -i "s|^FRONTEND_APP_URL=.*|FRONTEND_APP_URL=https://$target_domain|" "$env_file"
+    else
+        echo "FRONTEND_APP_URL=https://$target_domain" >> "$env_file"
+    fi
+    if [ "${_prev_frontend_url:-}" != "https://$target_domain" ]; then
+        _FRONTEND_URL_CHANGED="true"
+    else
+        _FRONTEND_URL_CHANGED="false"
+    fi
 
     # Sync allowlists
     sync_env_domain_allowlists "$env_file" "$target_domain" "$(detect_public_ip)"
@@ -87,6 +102,16 @@ CADDYFIX
         timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile || \
             timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
+    fi
+
+    # 5. Rebuild frontend when the canonical origin changed so the baked
+    # NEXT_PUBLIC_APP_URL (middleware hostname check) cannot go stale.
+    # Skipped when unchanged — the rebuild takes minutes.
+    if [ "${_FRONTEND_URL_CHANGED:-false}" = "true" ]; then
+        echo -e "${BLUE}  → Domain changed: rebuilding frontend to re-bake canonical origin...${NC}"
+        timeout -k 5 900 docker compose -f "$COMPOSE_FILE" up -d --build --no-deps frontend && \
+            echo -e "${GREEN}  ✓ Frontend rebuilt with new canonical origin${NC}" || \
+            echo -e "${YELLOW}    ⚠ Frontend rebuild failed — dashboard hostname check may use the old domain until next update${NC}"
     fi
 
     echo -e "${GREEN}  ✓ Domain fix complete for: $target_domain${NC}"

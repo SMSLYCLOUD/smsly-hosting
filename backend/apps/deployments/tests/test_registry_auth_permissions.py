@@ -8,7 +8,10 @@ claim from the security audit doesn't regress. Specifically:
     not substring matching — project "a" must NOT match repo "team-a/frontend"
   * team membership grants pull but NOT push (push requires direct ownership)
   * project membership grants pull
-  * platform images (``smsly/*``) are superuser-only
+  * platform images (``smsly/*``): any authenticated user may PULL
+    (deployments must pull sidecars/base images), only superusers may PUSH
+  * project-scoped namespaces (``proj-<id8>/*``): pull follows project
+    access, push requires project ownership
   * token endpoint returns 503 when REGISTRY_HTTP_SECRET is not configured,
     rather than falling back to a SECRET_KEY-derived signing key
 """
@@ -160,10 +163,14 @@ class RegistryAuthPermissionTests(TestCase):
 
     # ── Platform images ─────────────────────────────────────────────────
 
-    def test_non_superuser_cannot_pull_platform_images(self):
-        """smsly/* repos are admin-only."""
-        self.assertFalse(_check_registry_permission(
+    def test_non_superuser_can_pull_but_not_push_platform_images(self):
+        """smsly/* repos: any authenticated user may pull (deployments
+        need sidecars/base images); push stays superuser-only."""
+        self.assertTrue(_check_registry_permission(
             self.owner, "repository:smsly/backend:pull", ["pull"],
+        ))
+        self.assertFalse(_check_registry_permission(
+            self.owner, "repository:smsly/backend:push", ["push"],
         ))
 
     def test_superuser_can_pull_platform_images(self):

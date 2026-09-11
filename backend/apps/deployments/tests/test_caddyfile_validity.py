@@ -1,100 +1,86 @@
 # pylint: disable=invalid-name
-"""Tests to verify the Caddyfile is valid and routes correctly after nginx removal."""
+"""Structural tests for the GENERATED Caddyfile.
 
-import os
+The old suite asserted on a checked-in ``caddy-config/Caddyfile`` fixture
+written for a long-dead static template (``{$DOMAIN}`` placeholders,
+``@api path`` matchers). The platform renders its Caddyfile from
+``generate_caddyfile`` on every routing sync, so these tests render with
+a seeded PlatformConfig and assert on that output instead — including
+the redirect invariants (http->https 308, /ui canonical, wildcard
+redirect handles authoritative).
+"""
 
 from django.test import TestCase
 
-CADDYFILE_PATH = os.path.join(
-    os.path.dirname(__file__), '..', '..', '..', '..', 'caddy-config', 'Caddyfile'
+from apps.deployments.models import PlatformConfig
+from apps.deployments.services.caddy_manager.config_generation import (
+    generate_caddyfile,
+)
+from apps.deployments.services.caddy_manager.validation import (
+    extract_site_labels,
+    validate_wildcard_redirects_authoritative,
 )
 
 
 class CaddyfileValidityTests(TestCase):
-    """Verify the static Caddyfile has correct structure after nginx removal."""
+    """Verify the generated Caddyfile has correct structure and redirects."""
 
-    def setUp(self):
-        with open(CADDYFILE_PATH) as f:
-            self.caddyfile = f.read()
+    @classmethod
+    def setUpTestData(cls):
+        config = PlatformConfig.load()
+        config.domain = "grid.example.test"
+        config.use_ssl = True
+        config.wildcard_subdomains = True
+        config.server_ip = None
+        config.save()
+        cls.caddyfile = generate_caddyfile(config)
+        cls.domain = "grid.example.test"
 
-    def test_caddyfile_exists(self):
-        self.assertTrue(os.path.exists(CADDYFILE_PATH))
+    def test_global_options_block_is_first(self):
+        """Exactly one keyless global block, preceding every site block."""
+        meaningful = [
+            line for line in self.caddyfile.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        self.assertTrue(meaningful[0] == "{")
+        self.assertIn("on_demand_tls", self.caddyfile)
 
     def test_no_nginx_references(self):
-        """The Caddyfile should not reference nginx:80 anymore."""
-        # Allow the comment mentioning 'no nginx' but not as a reverse_proxy target
-        lines = self.caddyfile.split('\n')
-        for line in lines:
+        for line in self.caddyfile.split("\n"):
             stripped = line.strip()
-            if 'reverse_proxy' in stripped and 'nginx' in stripped:
+            if "reverse_proxy" in stripped and "nginx" in stripped:
                 self.fail(f"Caddyfile still proxies to nginx: {stripped}")
 
     def test_proxies_to_backend(self):
-        self.assertIn('reverse_proxy backend:8000', self.caddyfile)
+        self.assertIn("reverse_proxy backend:8000", self.caddyfile)
 
     def test_proxies_to_frontend(self):
-        self.assertIn('reverse_proxy frontend:3000', self.caddyfile)
+        self.assertIn("reverse_proxy frontend:3000", self.caddyfile)
 
     def test_on_demand_tls_asks_backend(self):
-        self.assertIn('ask http://backend:8000/api/v1/services/check-domain/', self.caddyfile)
-
-    def test_api_route(self):
-        self.assertIn('@api path /api/*', self.caddyfile)
-
-    def test_websocket_route(self):
-        self.assertIn('@ws path /ws/*', self.caddyfile)
-
-    def test_admin_route(self):
-        self.assertIn('@admin path /admin/*', self.caddyfile)
-
-    def test_health_route(self):
-        self.assertIn('@health path /health', self.caddyfile)
-
-    def test_static_file_serving(self):
-        self.assertIn('@static path /static/*', self.caddyfile)
-        self.assertIn('root * /app/staticfiles', self.caddyfile)
-
-    def test_media_file_serving(self):
-        self.assertIn('@media path /media/*', self.caddyfile)
-        self.assertIn('root * /app/media', self.caddyfile)
-
-    def test_caddy_health_endpoint(self):
-        self.assertIn('respond /caddy-health 200', self.caddyfile)
-
-    def test_gzip_encoding(self):
-        self.assertIn('encode gzip', self.caddyfile)
-
-    def test_backup_download_no_buffering(self):
-        self.assertIn('flush_interval -1', self.caddyfile)
-
-    def test_websocket_timeout(self):
-        """WebSocket routes should have long timeouts."""
-        self.assertIn('read_timeout 3600s', self.caddyfile)
-
-    def test_oauth_routes_on_backend(self):
-        """OAuth routes must stay on backend, not frontend."""
-        self.assertIn('/accounts/github/*', self.caddyfile)
-        self.assertIn('/accounts/google/*', self.caddyfile)
-
-    def test_oauth_connect_routes_on_frontend(self):
-        """OAuth connect callback routes must go to frontend."""
-        self.assertIn('@oauth_github_connect', self.caddyfile)
-        self.assertIn('@oauth_google_connect', self.caddyfile)
-        self.assertIn('@oauth_gitlab_connect', self.caddyfile)
-        self.assertIn('@oauth_bitbucket_connect', self.caddyfile)
+        self.assertIn(
+            "ask http://backend:8000/api/v1/services/check-domain/", self.caddyfile
+        )
 
     def test_http_to_https_redirect(self):
-        """The :80 block should redirect to HTTPS for non-IP hosts."""
-        self.assertIn('redir @redirectable https://{host}{uri} 308', self.caddyfile)
+        """The :80 block redirects non-IP hosts to HTTPS (308)."""
+        self.assertIn("redir @redirectable https://{host}{uri} 308", self.caddyfile)
 
-    def test_acme_challenge_handling(self):
-        """ACME challenge path should be handled."""
-        self.assertIn('/.well-known/acme-challenge/*', self.caddyfile)
+    def test_platform_block_present(self):
+        self.assertIn(f"{self.domain} {{", self.caddyfile)
 
-    def test_domain_block_structure(self):
-        """The {$DOMAIN} block should exist."""
-        self.assertIn('{$DOMAIN} {', self.caddyfile)
+    def test_wildcard_site_present(self):
+        self.assertIn(f"*.{self.domain} {{", self.caddyfile)
+        self.assertIn(self.domain, extract_site_labels(self.caddyfile))
 
-    def test_port80_block_structure(self):
-        """:80 block should exist for HTTP fallback."""
-        self.assertIn(':80 {', self.caddyfile)
+    def test_ui_redirect_canonical(self):
+        """/ui collapses to / everywhere a platform :443 variant exists."""
+        self.assertIn("handle /ui {", self.caddyfile)
+        self.assertIn("redir / 301", self.caddyfile)
+
+    def test_wildcard_redirects_authoritative(self):
+        """No redirect source may also be an explicit site (dead 301)."""
+        self.assertEqual(validate_wildcard_redirects_authoritative(self.caddyfile), [])
+
+    def test_gzip_encoding(self):
+        self.assertIn("encode gzip", self.caddyfile)

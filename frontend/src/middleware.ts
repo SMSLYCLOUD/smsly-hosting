@@ -73,6 +73,26 @@ function getRustTwinToken(request: NextRequest): string | null {
   return null;
 }
 
+/**
+ * Canonical platform hostname, baked at image build time from
+ * FRONTEND_APP_URL (see lib/fresh_config.sh + docker-compose build
+ * args). Empty on images built before the bake existed — the hostname
+ * check below stays disabled then (fail-open legacy behavior).
+ */
+const APP_URL_HOST = (() => {
+    try {
+        const raw = (process.env.NEXT_PUBLIC_APP_URL || "").trim();
+        if (!raw) return "";
+        return new URL(raw).hostname.toLowerCase();
+    } catch {
+        return "";
+    }
+})();
+
+function isIpHost(host: string): boolean {
+    return /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/.test(host);
+}
+
 function isStaticAsset(pathname: string): boolean {
   if (pathname.startsWith("/_next/static/")) return true;
   if (pathname.startsWith("/_next/image/")) return true;
@@ -126,15 +146,27 @@ export async function middleware(request: NextRequest) {
     return injectRustTwinAuthHeader(request);
   }
 
-  // Hostname validation: reject requests for unknown service subdomains.
-  // Only the platform domain (APP_URL) and localhost serve the dashboard.
-  // Everything else is a service domain that should have been routed to
-  // a container by Caddy — if we're here, the service doesn't exist.
-  // NOTE: Caddy already handles unknown subdomains via its catch-all
-  // route (reverse_proxy to frontend:3000). The frontend page-level
-  // 404 detection (services/[id]/page.tsx) handles missing services.
-  // This middleware check is disabled until NEXT_PUBLIC_APP_URL is
-  // reliably set in the build environment.
+  // Hostname validation: a request for <something>.<platform-domain>
+  // that reaches the frontend is an orphaned service subdomain — Caddy
+  // routes known service hosts to their containers, so arrival here
+  // means the service is gone. Answer 404 instead of serving the
+  // dashboard/login shell under a dead hostname. Scoped to subdomains
+  // of the baked platform host only (exact host, custom admin domains,
+  // localhost and IPs always pass through); disabled entirely while
+  // NEXT_PUBLIC_APP_URL is unset (fail-open legacy behavior).
+  if (APP_URL_HOST && !isIpHost(APP_URL_HOST)) {
+    const reqHost = (request.headers.get("host") || "")
+      .split(":")[0]
+      .trim()
+      .toLowerCase();
+    if (
+      reqHost &&
+      reqHost !== APP_URL_HOST &&
+      reqHost.endsWith(`.${APP_URL_HOST}`)
+    ) {
+      return new NextResponse("Service not found", { status: 404 });
+    }
+  }
 
   // Allow the callback page through so it can complete auth.
   if (isCallbackPage(pathname)) {
