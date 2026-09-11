@@ -3,6 +3,43 @@ import logging
 logger = logging.getLogger(__name__)
 
 ECOSYSTEM_TRUST_DOMAIN = "ecosystem.local"
+PLATFORM_TRUST_DOMAIN = "platform.local"
+
+
+def _configure_platform_mtls(service, enabled: bool = True) -> None:
+    """Normalize a default (non-ecosystem) service to platform mTLS.
+
+    Platform services belong to the platform.local trust domain backed by
+    the platform SPIRE server — never the ecosystem domain. mTLS stays
+    automatic and enabled by default (sidecar included), mirroring the
+    ecosystem behavior on its own trust bundle.
+    """
+    try:
+        from apps.mtls.models import MtlsConfig
+
+        enabled = bool(enabled)
+        config, _created = MtlsConfig.objects.get_or_create(
+            service=service,
+            defaults={
+                "enabled": enabled,
+                "trust_domain": PLATFORM_TRUST_DOMAIN,
+                "sidecar_enabled": enabled,
+            },
+        )
+        changed = []
+        if config.enabled != enabled:
+            config.enabled = enabled
+            changed.append("enabled")
+        if config.trust_domain != PLATFORM_TRUST_DOMAIN:
+            config.trust_domain = PLATFORM_TRUST_DOMAIN
+            changed.extend(["trust_domain", "spiffe_id"])
+        if bool(config.sidecar_enabled) != enabled:
+            config.sidecar_enabled = enabled
+            changed.append("sidecar_enabled")
+        if changed:
+            config.save(update_fields=sorted(set(changed + ["updated_at"])))
+    except Exception:
+        logger.exception("Failed to configure platform mTLS for %s", service.name)
 
 
 def _configure_ecosystem_mtls(service, enabled: bool) -> None:

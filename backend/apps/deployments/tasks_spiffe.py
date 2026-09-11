@@ -27,6 +27,15 @@ ECOSYSTEM_SPIRE_SERVER_CONTAINER = os.getenv(
 )
 ECOSYSTEM_SPIRE_SERVER_SOCKET = "/tmp/spire-server/private/api.sock"
 
+# Platform trust domain (default services). Separate SPIRE server/agent
+# pair from the ecosystem stack — entries, SVIDs and agents must never
+# cross domains.
+PLATFORM_SPIFFE_TRUST_DOMAIN = os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local")
+PLATFORM_SPIRE_SERVER_CONTAINER = os.getenv(
+    "SPIRE_SERVER_CONTAINER", "smsly-spire-server"
+)
+PLATFORM_SPIRE_SERVER_SOCKET = "/tmp/spire-server/private/api.sock"
+
 
 @shared_task(
     name="apps.deployments.tasks_spiffe.sync_spiffe_entries_task",
@@ -205,14 +214,28 @@ def _list_spire_entries() -> list | None:
     Returns None when the list call itself fails — callers must abort
     rather than treat failure as "no entries" (blind-sync incident).
     """
+    return _list_spire_entries_from(
+        ECOSYSTEM_SPIRE_SERVER_CONTAINER, ECOSYSTEM_SPIRE_SERVER_SOCKET,
+    )
+
+
+def _list_platform_spire_entries() -> list | None:
+    """List all SPIRE registration entries from the platform server."""
+    return _list_spire_entries_from(
+        PLATFORM_SPIRE_SERVER_CONTAINER, PLATFORM_SPIRE_SERVER_SOCKET,
+    )
+
+
+def _list_spire_entries_from(server_container: str, server_socket: str) -> list | None:
+    """List registration entries from the given SPIRE server."""
     try:
         result = subprocess.run(
             [
-                "docker", "exec", ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+                "docker", "exec", server_container,
                 # NOTE: this image (spire 1.9.6) has `entry show`, not
                 # `entry list` — list prints fallback usage with rc!=0.
                 "/opt/spire/bin/spire-server", "entry", "show",
-                "-socketPath", ECOSYSTEM_SPIRE_SERVER_SOCKET,
+                "-socketPath", server_socket,
                 "-output", "json",
             ],
             capture_output=True, text=True, timeout=30,
@@ -240,14 +263,32 @@ def _live_ecosystem_agent_id() -> str | None:
     smsly-identity-service's SVID via a stale catch-all). Picks the
     non-banned join_token agent with the latest SVID expiry.
     """
+    return _live_agent_id(
+        ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+        ECOSYSTEM_SPIRE_SERVER_SOCKET,
+        ECOSYSTEM_SPIFFE_TRUST_DOMAIN,
+    )
+
+
+def _live_platform_agent_id() -> str | None:
+    """Discover the live platform agent's SPIFFE ID (platform.local)."""
+    return _live_agent_id(
+        PLATFORM_SPIRE_SERVER_CONTAINER,
+        PLATFORM_SPIRE_SERVER_SOCKET,
+        PLATFORM_SPIFFE_TRUST_DOMAIN,
+    )
+
+
+def _live_agent_id(server_container: str, server_socket: str, trust_domain: str) -> str | None:
+    """Discover the live join_token agent's SPIFFE ID on a SPIRE server."""
     import json
 
     try:
         result = subprocess.run(
             [
-                "docker", "exec", ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+                "docker", "exec", server_container,
                 "/opt/spire/bin/spire-server", "agent", "list",
-                "-socketPath", ECOSYSTEM_SPIRE_SERVER_SOCKET,
+                "-socketPath", server_socket,
                 "-output", "json",
             ],
             capture_output=True, text=True, timeout=30,
@@ -265,7 +306,7 @@ def _live_ecosystem_agent_id() -> str | None:
             path = ((ag.get("id") or {}).get("path")) or ""
             if not path:
                 continue
-            full = f"spiffe://{ECOSYSTEM_SPIFFE_TRUST_DOMAIN}{path}"
+            full = f"spiffe://{trust_domain}{path}"
             if fallback is None:
                 fallback = full
             exp = str(ag.get("x509svid_expires_at") or "")
@@ -277,44 +318,55 @@ def _live_ecosystem_agent_id() -> str | None:
         return None
 
 
-def _create_spire_entry(service_name: str, parent_id: str | None = None) -> bool:
-    """Create a SPIRE registration entry in the ecosystem server for a service.
+def _create_spire_entry(service_name: str, parent_id: str | None = None,
+                          trust_domain: str | None = None,
+                          server_container: str | None = None,
+                          server_socket: str | None = None) -> bool:
+    """Create a SPIRE registration entry for a service.
 
-    Parent defaults to the live agent (discovered); callers must not use
-    a static parent — agent IDs rotate on re-bootstrap.
+    Defaults target the ecosystem server; pass the platform constants
+    for platform.local services. Parent defaults to the live agent of
+    the targeted server (discovered); callers must not use a static
+    parent — agent IDs rotate on re-bootstrap.
     """
+    trust_domain = trust_domain or ECOSYSTEM_SPIFFE_TRUST_DOMAIN
+    server_container = server_container or ECOSYSTEM_SPIRE_SERVER_CONTAINER
+    server_socket = server_socket or ECOSYSTEM_SPIRE_SERVER_SOCKET
     try:
-        spiffe_id = f"spiffe://{ECOSYSTEM_SPIFFE_TRUST_DOMAIN}/service/{service_name}"
+        spiffe_id = f"spiffe://{trust_domain}/service/{service_name}"
         if not parent_id:
-            parent_id = _live_ecosystem_agent_id()
+            if trust_domain == PLATFORM_SPIFFE_TRUST_DOMAIN:
+                parent_id = _live_platform_agent_id()
+            else:
+                parent_id = _live_ecosystem_agent_id()
         if not parent_id:
-            parent_id = f"spiffe://{ECOSYSTEM_SPIFFE_TRUST_DOMAIN}/spire-server"
+            parent_id = f"spiffe://{trust_domain}/spire-server"
         selector = f"docker:label:com.paas.service:{service_name}"
 
         result = subprocess.run(
             [
-                "docker", "exec", ECOSYSTEM_SPIRE_SERVER_CONTAINER,
+                "docker", "exec", server_container,
                 "/opt/spire/bin/spire-server", "entry", "create",
-                "-socketPath", ECOSYSTEM_SPIRE_SERVER_SOCKET,
+                "-socketPath", server_socket,
                 "-spiffeID", spiffe_id,
                 "-parentID", parent_id,
                 "-selector", selector,
                 "-ttl", "3600",
                 "-dns", service_name,
-                "-dns", f"{service_name}.ecosystem.svc",
+                "-dns", f"{service_name}.{trust_domain.split('.')[0]}.svc",
             ],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0:
-            logger.info("Created SPIRE ecosystem entry for %s", service_name)
+            logger.info("Created SPIRE %s entry for %s", trust_domain, service_name)
             return True
         elif "already exists" in result.stderr:
             return False
         else:
-            logger.warning("Failed to create SPIRE ecosystem entry for %s: %s", service_name, result.stderr)
+            logger.warning("Failed to create SPIRE %s entry for %s: %s", trust_domain, service_name, result.stderr)
             return False
     except Exception as e:
-        logger.warning("Failed to create SPIRE ecosystem entry for %s: %s", service_name, e)
+        logger.warning("Failed to create SPIRE %s entry for %s: %s", trust_domain, service_name, e)
         return False
 
 

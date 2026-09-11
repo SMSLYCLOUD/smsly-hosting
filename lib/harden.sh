@@ -23,6 +23,36 @@ source "$(dirname "${BASH_SOURCE[0]}")/harden_container_runtime.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_trivy.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_infisical.sh"
 
+_harden_envoy_image_bootstrap() {
+    # Ensure the Envoy sidecar image exists in the platform registry.
+    # Fresh hosts never built it, so every sidecar injection died with
+    # 404 (2026-09-11). Idempotent: skips when the tag already resolves.
+    # Best-effort: if the registry isn't up yet the deploy-time pull
+    # covers it and the next update retries.
+    command -v docker >/dev/null 2>&1 || return 0
+    local envoy_dir="$INSTALL_DIR/infrastructure/envoy"
+    [ -f "$envoy_dir/Dockerfile" ] || { _harden_log warn "envoy Dockerfile missing"; return 1; }
+    local envoy_tag="registry:5000/smsly/envoy-spire-sidecar:latest"
+    if docker image inspect "$envoy_tag" >/dev/null 2>&1; then
+        return 0
+    fi
+    if docker pull "$envoy_tag" >/dev/null 2>&1; then
+        _harden_log ok "envoy sidecar image present"
+        return 0
+    fi
+    local loop_tag="127.0.0.1:5000/smsly/envoy-spire-sidecar:latest"
+    if ! docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
+        _harden_log warn "envoy sidecar image build failed"
+        return 1
+    fi
+    if ! docker push "$loop_tag" >/dev/null 2>&1; then
+        _harden_log warn "envoy sidecar image push failed (registry may not be up yet)"
+        return 1
+    fi
+    _harden_log ok "envoy sidecar image built and pushed"
+    return 0
+}
+
 _harden_spire_start_agent() {
     # Start one SPIRE agent with a freshly minted single-use join token
     # (mirrors apps/mtls/views.py::_start_agent_with_token).
@@ -81,6 +111,9 @@ _harden_spire_bootstrap() {
         "smsly-hosting_spire-agent-data" "smsly-hosting_spire-agent-socket" "smsly-hosting_spire-agent-svids" || return 1
     _harden_spire_start_agent "smsly-spire-agent-ecosystem" "smsly-spire-server-ecosystem" "$INSTALL_DIR/infrastructure/spire/agent-ecosystem.conf" \
         "smsly-spire_spire-ecosystem-agent-data" "smsly-spire_spire-ecosystem-agent-socket" "smsly-spire_spire-ecosystem-agent-svids" || return 1
+    # Sidecar image last: non-fatal (the registry may not be up yet on a
+    # fresh install; deploy-time pull and the next update retry it).
+    _harden_envoy_image_bootstrap || true
     return 0
 }
 

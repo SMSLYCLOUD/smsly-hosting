@@ -44,10 +44,11 @@ PLATFORM_SPIFFE_TRUST_DOMAIN = os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"
 SPIRE_SOCKET_CONTAINER_PATH = "/opt/spire/run"
 SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 
-# Only the ecosystem trust domain is allowed for user services.
-# platform.local belongs to platform-internal services (separate SPIRE
-# server/trust bundle) — letting a user service claim it binds the
-# wrong certificate chain (see get_service_trust_domain).
+# Both trust domains are valid. Ecosystem-managed services belong to
+# the ecosystem domain; every other service belongs to the platform
+# domain (separate SPIRE server/trust bundle).
+ALLOWED_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN, PLATFORM_SPIFFE_TRUST_DOMAIN}
+# Back-compat alias: historical callers only knew the ecosystem domain.
 ALLOWED_ECOSYSTEM_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN}
 
 
@@ -83,22 +84,30 @@ def resolve_spire_volume_name(short_name: str) -> str:
 
 def is_mtls_enabled(service) -> bool:
     """Check if mTLS is enabled for a service."""
-    # An explicitly enabled ecosystem service is authoritative. Do not let a
+    # An explicitly enabled service is authoritative. Do not let a
     # stale platform-wide toggle suppress the labels/mounts needed by SPIRE
     # Docker selectors during its redeploy.
     try:
         enabled = getattr(service.mtls_config, "enabled", False)
         if not isinstance(enabled, bool):
             return False
-        if enabled and get_service_trust_domain(service) == ECOSYSTEM_SPIFFE_TRUST_DOMAIN:
+        if enabled:
             return True
     except Exception:
         pass
-    # Check PlatformConfig DB toggle first
+    # Check PlatformConfig DB toggles (per trust-domain) first.
     try:
         from apps.deployments.models.platform import PlatformConfig
         pc = PlatformConfig.load()
-        if not pc.mtls_ecosystem_enabled:
+        trust_domain = ""
+        try:
+            trust_domain = str(getattr(service.mtls_config, "trust_domain", "") or "")
+        except Exception:
+            pass
+        if trust_domain == PLATFORM_SPIFFE_TRUST_DOMAIN:
+            if not pc.mtls_enabled:
+                return False
+        elif not pc.mtls_ecosystem_enabled:
             return False
     except Exception:
         pass
@@ -120,22 +129,29 @@ def is_mtls_enabled(service) -> bool:
 def get_service_trust_domain(service) -> str:
     """Get the trust domain for a specific service.
 
-    User-deployed services always get ecosystem.local.
-    Rejects any attempt to use platform.local or other trust domains.
+    Honors the service's configured domain when it is a known platform
+    domain. Ecosystem-managed services default to ecosystem.local;
+    every other service defaults to platform.local (each backed by its
+    own SPIRE server/trust bundle).
     """
     try:
-        td = service.mtls_config.trust_domain
-        if td not in ALLOWED_ECOSYSTEM_TRUST_DOMAINS:
+        td = str(service.mtls_config.trust_domain or "").strip()
+        if td in ALLOWED_TRUST_DOMAINS:
+            return td
+        if td:
             logger.error(
-                "Service %s has disallowed trust_domain=%r, forcing ecosystem.local",
+                "Service %s has unknown trust_domain=%r, falling back by ownership",
                 service.name, td,
             )
-            return ECOSYSTEM_SPIFFE_TRUST_DOMAIN
-        return td
     except Exception:
         pass
 
-    return ECOSYSTEM_SPIFFE_TRUST_DOMAIN
+    try:
+        if str(getattr(service, "managed_by", "") or "").upper() == "ECOSYSTEM":
+            return ECOSYSTEM_SPIFFE_TRUST_DOMAIN
+    except Exception:
+        pass
+    return PLATFORM_SPIFFE_TRUST_DOMAIN
 
 
 def get_mtls_labels(service) -> dict:
@@ -178,15 +194,28 @@ def get_mtls_env_vars(service) -> dict:
     }
 
 
+def _spire_volume_names(service) -> tuple[str, str]:
+    """Return (socket_volume, svids_volume) for the service's trust domain."""
+    if get_service_trust_domain(service) == PLATFORM_SPIFFE_TRUST_DOMAIN:
+        return PLATFORM_SPIRE_SOCKET_HOST_PATH, PLATFORM_SPIRE_SVIDS_HOST_PATH
+    return ECOSYSTEM_SPIRE_SOCKET_HOST_PATH, ECOSYSTEM_SPIRE_SVIDS_HOST_PATH
+
+
 def get_mtls_volumes(service=None) -> list:
     """Get volume mounts for SPIRE socket and SVIDs.
 
-    Returns list of (host_volume, container_path, mode) tuples.
-    Always uses ecosystem volumes (user services only).
+    Returns list of (host_volume, container_path, mode) tuples for the
+    service's own trust domain (platform or ecosystem agent volumes).
     """
+    if service is None:
+        return [
+            (ECOSYSTEM_SPIRE_SOCKET_HOST_PATH, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
+            (ECOSYSTEM_SPIRE_SVIDS_HOST_PATH, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
+        ]
+    socket_vol, svids_vol = _spire_volume_names(service)
     return [
-        (ECOSYSTEM_SPIRE_SOCKET_HOST_PATH, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
-        (ECOSYSTEM_SPIRE_SVIDS_HOST_PATH, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
+        (socket_vol, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
+        (svids_vol, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
     ]
 
 
@@ -195,9 +224,10 @@ def get_mtls_docker_run_args(service) -> str:
     if not is_mtls_enabled(service):
         return ""
 
+    socket_vol, svids_vol = _spire_volume_names(service)
     args = (
-        f"-v {ECOSYSTEM_SPIRE_SOCKET_HOST_PATH}:{SPIRE_SOCKET_CONTAINER_PATH}:ro "
-        f"-v {ECOSYSTEM_SPIRE_SVIDS_HOST_PATH}:{SPIRE_SVIDS_CONTAINER_PATH}:ro "
+        f"-v {socket_vol}:{SPIRE_SOCKET_CONTAINER_PATH}:ro "
+        f"-v {svids_vol}:{SPIRE_SVIDS_CONTAINER_PATH}:ro "
     )
     return args
 
@@ -207,9 +237,10 @@ def get_mtls_docker_run_volumes(service) -> dict:
     if not is_mtls_enabled(service):
         return {}
 
+    socket_vol, svids_vol = _spire_volume_names(service)
     return {
-        ECOSYSTEM_SPIRE_SOCKET_HOST_PATH: {"bind": SPIRE_SOCKET_CONTAINER_PATH, "mode": "ro"},
-        ECOSYSTEM_SPIRE_SVIDS_HOST_PATH: {"bind": SPIRE_SVIDS_CONTAINER_PATH, "mode": "ro"},
+        socket_vol: {"bind": SPIRE_SOCKET_CONTAINER_PATH, "mode": "ro"},
+        svids_vol: {"bind": SPIRE_SVIDS_CONTAINER_PATH, "mode": "ro"},
     }
 
 

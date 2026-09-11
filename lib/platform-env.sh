@@ -280,6 +280,17 @@ ensure_env_runtime_defaults() {
     [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
     env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
     env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "Compose profiles to activate (matches the DB HA mode)"
+    # Registry public bind: without an explicit override the compose
+    # fallback is a hardcoded IP from another host and the registry port
+    # bind kills the whole install (2026-09-10 fresh-install incident).
+    # This runs on every update path (unlike the overrides step, which
+    # resume can skip), so the key is always repaired.
+    local _rt_bind
+    _rt_bind="$(env_get_value "$env_file" "REGISTRY_PUBLIC_BIND_IP")"
+    if [ -z "$_rt_bind" ] || ! _registry_bind_ip_is_local "$_rt_bind"; then
+        _rt_bind="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9][0-9.]*$' | grep -v '^127\.' | head -1 || true)"
+        [ -n "$_rt_bind" ] && env_set_value "$env_file" "REGISTRY_PUBLIC_BIND_IP" "$_rt_bind"
+    fi
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"

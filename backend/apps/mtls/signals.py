@@ -11,14 +11,20 @@ logger = logging.getLogger(__name__)
 
 @receiver(post_save, sender=Service)
 def create_mtls_config(sender, instance, created, **kwargs):
-    """Auto-create MtlsConfig when a new Service is created."""
+    """Auto-create MtlsConfig when a new Service is created.
+
+    Default services get PLATFORM mTLS (platform.local trust domain),
+    automatic and enabled by default — including the Envoy sidecar.
+    Ecosystem services are normalized to the ecosystem trust domain
+    (ecosystem.local) by the ecosystem deploy task afterwards.
+    """
     if created:
         try:
             config, created = MtlsConfig.objects.get_or_create(
                 service=instance,
                 defaults={
                     "enabled": True,
-                    "trust_domain": "ecosystem.local",
+                    "trust_domain": "platform.local",
                     "sidecar_enabled": True,
                 },
             )

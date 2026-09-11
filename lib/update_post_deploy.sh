@@ -49,6 +49,14 @@ if not created and not cp.is_active:
     if ! groups smsly  | grep -q "docker"; then
         usermod -aG docker smsly || echo -e "${YELLOW}    ⚠ usermod docker group failed (non-fatal)${NC}"
     fi
+    # The operator runs installs via sudo from their own login — without
+    # docker group membership every post-install docker command needs sudo
+    # (2026-09-10: ubuntu could not run `docker ps` on a fresh host).
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        if ! groups "${SUDO_USER}" 2>/dev/null | grep -q "docker"; then
+            usermod -aG docker "${SUDO_USER}" || echo -e "${YELLOW}    ⚠ usermod docker group failed for ${SUDO_USER} (non-fatal)${NC}"
+        fi
+    fi
 
     # ─── Self-Healing: Cleanup Stale Resources ──────────────────────────────
     echo -e "${BLUE}  → Pruning stale deployment containers and BuildKit caches...${NC}"

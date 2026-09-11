@@ -452,20 +452,48 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     # gate below fails an otherwise healthy deployment
                     # (2026-09-09 backend incident). Best-effort — the gate
                     # still reports clearly if the entry cannot be created.
+                    # Entries live on the trust domain's OWN server:
+                    # platform.local -> platform server, anything else ->
+                    # ecosystem server.
                     try:
                         from apps.deployments.tasks_spiffe import (
                             _create_spire_entry,
                             _entry_path,
                             _list_spire_entries,
                             _live_ecosystem_agent_id,
+                            _live_platform_agent_id,
+                            PLATFORM_SPIFFE_TRUST_DOMAIN,
+                            PLATFORM_SPIRE_SERVER_CONTAINER,
+                            PLATFORM_SPIRE_SERVER_SOCKET,
                         )
-                        want_path = f"/service/{service.name}"
-                        listed = _list_spire_entries() or []
-                        if not any(_entry_path(e) == want_path for e in listed):
-                            _create_spire_entry(
-                                service.name,
-                                parent_id=_live_ecosystem_agent_id(),
+                        _trust_domain = str(
+                            getattr(mtls_config, "trust_domain", "") or ""
+                        ).strip()
+                        _is_platform = (
+                            _trust_domain == PLATFORM_SPIFFE_TRUST_DOMAIN
+                        )
+                        if _is_platform:
+                            from apps.deployments.tasks_spiffe import (
+                                _list_platform_spire_entries,
                             )
+                            listed = _list_platform_spire_entries() or []
+                        else:
+                            listed = _list_spire_entries() or []
+                        want_path = f"/service/{service.name}"
+                        if not any(_entry_path(e) == want_path for e in listed):
+                            if _is_platform:
+                                _create_spire_entry(
+                                    service.name,
+                                    parent_id=_live_platform_agent_id(),
+                                    trust_domain=PLATFORM_SPIFFE_TRUST_DOMAIN,
+                                    server_container=PLATFORM_SPIRE_SERVER_CONTAINER,
+                                    server_socket=PLATFORM_SPIRE_SERVER_SOCKET,
+                                )
+                            else:
+                                _create_spire_entry(
+                                    service.name,
+                                    parent_id=_live_ecosystem_agent_id(),
+                                )
                     except Exception as entry_exc:
                         logger.warning(
                             "SPIRE entry ensure failed for %s: %s",
@@ -477,6 +505,24 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                             f"Envoy sidecar for {service.name} did not become "
                             f"ready with an issued SVID before go-live"
                         )
+            except (docker.errors.ImageNotFound, docker.errors.NotFound) as exc:
+                # The sidecar IMAGE itself is unavailable (never built on
+                # this host). Failing a healthy app deploy over missing
+                # mesh plumbing is wrong — continue without the sidecar,
+                # record it loudly, and let the installer/repair button
+                # inject it later (2026-09-11 incident: every deploy died
+                # with 404 on registry:5000/smsly/envoy-spire-sidecar).
+                logger.error(
+                    "Envoy sidecar image unavailable for %s: %s — "
+                    "continuing WITHOUT mTLS sidecar",
+                    service.name, exc,
+                )
+                append_log(
+                    deployment,
+                    f"[MTLS-WARN] Envoy sidecar image unavailable ({exc}).\n"
+                    f"Deployment continues without the mesh sidecar — run "
+                    f"the mTLS repair action to attach it later.\n",
+                )
             except Exception as exc:
                 raise RuntimeError(
                     f"mTLS sidecar injection failed for {service.name}: {exc}"

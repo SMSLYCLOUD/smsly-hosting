@@ -909,6 +909,7 @@ def mtls_repair(request, service_id):
     )
     from apps.deployments.tasks.ecosystem.tasks import (
         _configure_ecosystem_mtls,
+        _configure_platform_mtls,
     )
 
     service = get_object_or_404(Service, id=service_id)
@@ -999,12 +1000,17 @@ def mtls_repair(request, service_id):
             )
 
     # ── 2. mTLS config normalization ────────────────────────────────────
+    # Ecosystem services -> ecosystem.local, everything else ->
+    # platform.local. Never move a service across trust domains the
+    # wrong way.
     mtls_normalized = []
     for svc in scope:
         try:
             if svc.managed_by == "ECOSYSTEM":
                 _configure_ecosystem_mtls(svc, enabled=True)
-                mtls_normalized.append(svc.name)
+            else:
+                _configure_platform_mtls(svc, enabled=True)
+            mtls_normalized.append(svc.name)
         except Exception as exc:
             logger.warning("mTLS repair normalize failed for %s: %s", svc.name, exc)
 

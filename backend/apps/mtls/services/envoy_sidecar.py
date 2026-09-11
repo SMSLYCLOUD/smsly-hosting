@@ -120,6 +120,19 @@ class EnvoySidecar:
         from apps.mtls.models import MtlsConfig
 
         client = get_docker_client()
+
+        # Ensure the sidecar image is available locally. Fresh hosts may
+        # never have built it — pull from the platform registry on demand
+        # instead of failing the whole deployment (2026-09-11: every new
+        # service deploy failed with 404 because the image was absent).
+        # A missing image raises ImageNotFound here so callers can decide
+        # (deploy continues with a warning; the installer builds it).
+        try:
+            client.images.get(ENVOY_IMAGE)
+        except Exception:
+            logger.info("Pulling Envoy sidecar image %s", ENVOY_IMAGE)
+            client.images.pull(ENVOY_IMAGE)
+
         mtls_config = service.mtls_config
 
         sidecar_name = EnvoySidecar.get_sidecar_name(service)

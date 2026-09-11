@@ -32,7 +32,7 @@ class MtlsConfig(models.Model):
     )
     trust_domain = models.CharField(
         max_length=255,
-        default="ecosystem.local",
+        default="platform.local",
         help_text="SPIFFE trust domain for this service.",
     )
     spiffe_id = models.CharField(
