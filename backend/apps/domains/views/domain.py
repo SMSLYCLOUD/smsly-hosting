@@ -316,8 +316,15 @@ class DomainConfigView(GenericAPIView):
             if 'smtp_use_tls' in data:
                 config.smtp_use_tls = _parse_bool(data.get('smtp_use_tls'))
 
-            # Validate: wildcard requires Cloudflare token
-            if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:
+            # Validate: wildcard requires Cloudflare token. Resolve the
+            # EFFECTIVE token (DB field, else env fallback) — the DB value
+            # can be wiped while a working token still lives in .env, and
+            # blocking the save then strands the operator with no way to
+            # re-enable wildcards (2026-09-11 incident).
+            _effective_cf_token = (config.cloudflare_api_token or "").strip()
+            if not _effective_cf_token:
+                _effective_cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+            if config.wildcard_subdomains and config.use_ssl and not _effective_cf_token:
                 return Response(
                     {'error': 'Wildcard subdomains require a Cloudflare API Token.'},
                     status=status.HTTP_400_BAD_REQUEST
