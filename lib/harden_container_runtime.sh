@@ -33,8 +33,16 @@ _harden_container_runtime_bootstrap() {
     fi
 
     if command -v kata-runtime ; then
-        env_set_value "$env_file" "CONTAINER_RUNTIME" "kata"
-        echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=kata in .env${NC}"
+        if [ -f "$env_file" ]; then
+            env_set_value "$env_file" "CONTAINER_RUNTIME" "kata"
+            echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=kata in .env${NC}"
+        else
+            # No .env yet (config phase has not run): export for this
+            # process only. Writing now would create a stub .env that
+            # poisons resume (2026-09-12) — config persists it later.
+            export CONTAINER_RUNTIME="kata"
+            echo -e "${BLUE}  → [harden] CONTAINER_RUNTIME=kata (persist deferred until .env exists)${NC}"
+        fi
         return 0
     fi
 
@@ -47,8 +55,16 @@ _harden_container_runtime_bootstrap() {
     fi
 
     if command -v runsc ; then
-        env_set_value "$env_file" "CONTAINER_RUNTIME" "runsc"
-        echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=runsc in .env${NC}"
+        if [ -f "$env_file" ]; then
+            env_set_value "$env_file" "CONTAINER_RUNTIME" "runsc"
+            echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=runsc in .env${NC}"
+        else
+            # No .env yet (config phase has not run): export for this
+            # process only. Writing now would create a stub .env that
+            # poisons resume (2026-09-12) — config persists it later.
+            export CONTAINER_RUNTIME="runsc"
+            echo -e "${BLUE}  → [harden] CONTAINER_RUNTIME=runsc (persist deferred until .env exists)${NC}"
+        fi
         return 0
     fi
 

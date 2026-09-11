@@ -14,6 +14,12 @@ validate_env_file() {
         "FRP_AUTH_TOKEN"
         "TUNNEL_DOMAIN"
         "PGCAT_ADMIN_PASSWORD"
+        "DOMAIN"
+        "USE_SSL"
+        "PUBLIC_IP"
+        "FRONTEND_APP_URL"
+        "CONTAINER_REGISTRY_URL"
+        "REGISTRY_USER"
     )
     local missing_vars=()
     local invalid_vars=()

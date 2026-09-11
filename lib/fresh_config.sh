@@ -106,8 +106,21 @@ if [ "$wrong_project" = "true" ]; then
     done
 fi
 
+# STUB REJECTION (2026-09-12): the harden phase can create a 1-2 key .env
+# (CONTAINER_RUNTIME) before config runs; preserving such a stub poisons
+# resume. A file counts as an existing config only with critical keys
+# non-empty — anything else falls through to full generation below.
+_existing_env_is_complete() {
+    local _f="$1"
+    [ -f "$_f" ] || return 1
+    [ -n "$(env_get_value "$_f" "DOMAIN")" ] || return 1
+    [ -n "$(env_get_value "$_f" "POSTGRES_PASSWORD")" ] || return 1
+    [ -n "$(env_get_value "$_f" "SECRET_KEY")" ] || return 1
+    return 0
+}
+
 # ─── IDEMPOTENCY: Skip secret generation if .env already exists ─────────────
-if [ -f "$INSTALL_DIR/.env" ]; then
+if _existing_env_is_complete "$INSTALL_DIR/.env"; then
     echo -e "${GREEN}  ✓ Existing .env found — preserving configuration${NC}"
     echo -e "${BLUE}  → Backing up existing .env to .env.backup${NC}"
     cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup"
@@ -132,6 +145,17 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 
 
 else
+    # STUB SALVAGE: a stub .env exists (harden wrote keys pre-config).
+    # Back it aside, reuse any passwords it holds, then regenerate fully.
+    # Sourcing reuses stub secrets so nothing consumed downstream changes.
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        echo -e "${YELLOW}  ⚠ Incomplete .env found (missing DOMAIN/secrets) — regenerating fully${NC}"
+        cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.stub-backup" || true
+        set -a
+        source "$INSTALL_DIR/.env" || true
+        set +a
+        rm -f "$INSTALL_DIR/.env"
+    fi
     # ─── Configuration Summary ──────────────────────────────────────────────
     PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
     DOMAIN="${DOMAIN:-$PUBLIC_IP}"
