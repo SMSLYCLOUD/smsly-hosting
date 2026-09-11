@@ -215,13 +215,16 @@ def safe_registry_host_for_internal_fallback() -> str:
     return (parsed.netloc or parsed.path).rstrip("/")
 
 
-def safe_image_for_service(service_name: str, tag: str = "latest") -> str:
+def safe_image_for_service(service_name: str, tag: str = "latest", namespace: str = "smsly") -> str:
     """Build an internal-registry image reference for a service.
 
     Combines ``safe_registry_host_for_internal_fallback`` with the
     caller-supplied service name and tag. The result is
-    ``<host>:<port>/smsly/<service_name>:<tag>`` and is guaranteed
+    ``<host>:<port>/<namespace>/<service_name>:<tag>`` and is guaranteed
     to point at a registry on the platform allowlist.
+
+    ``namespace`` defaults to the legacy global ``smsly/``; pass
+    ``project_image_namespace(service)`` for project-scoped storage.
 
     The ``service_name`` is a string the user controls; the caller
     is responsible for having already validated it (e.g. via
@@ -231,4 +234,5 @@ def safe_image_for_service(service_name: str, tag: str = "latest") -> str:
     host = safe_registry_host_for_internal_fallback()
     safe_tag = re.sub(r"[^A-Za-z0-9_.-]", "", tag or "latest")[:128] or "latest"
     safe_name = re.sub(r"[^a-z0-9_.-]", "", (service_name or "").lower())[:63] or "app"
-    return f"{host}/smsly/{safe_name}:{safe_tag}"
+    safe_ns = re.sub(r"[^a-z0-9_.-]", "", (namespace or "").lower())[:63] or "smsly"
+    return f"{host}/{safe_ns}/{safe_name}:{safe_tag}"

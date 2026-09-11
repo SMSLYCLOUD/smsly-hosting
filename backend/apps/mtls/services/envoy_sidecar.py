@@ -38,6 +38,15 @@ ENVOY_ADMIN_PORT = 9901
 ENVOY_INBOUND_PORT = 80
 ENVOY_OUTBOUND_PORT = 8080
 
+# Build context for (re)building the sidecar image when the platform
+# registry does not have it. The backend image does NOT contain the
+# repo, so this must be a host-mounted path: compose mounts
+# ./infrastructure/envoy -> /opt/envoy-build (ro) on backend/workers.
+ENVOY_BUILD_CONTEXT_CANDIDATES = (
+    "/opt/envoy-build",
+    "/opt/smsly-hosting/infrastructure/envoy",
+)
+
 # Volume mounts for SPIRE agent socket and SVIDs
 SPIRE_AGENT_SOCKET_VOLUME = "spire-ecosystem-agent-socket"
 SPIRE_SVIDS_VOLUME = "spire-ecosystem-agent-svids"
@@ -47,6 +56,172 @@ SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 
 class EnvoySidecar:
     """Manages Envoy sidecar lifecycle for a service."""
+
+    @staticmethod
+    def _split_image_ref(image: str) -> tuple[str, str, str]:
+        """Split an image ref into (registry_host, repository, tag).
+
+        ``registry:5000/smsly/x:latest`` -> (``registry:5000``,
+        ``registry:5000/smsly/x``, ``latest``). Unqualified names yield
+        an empty host and tag ``latest``.
+        """
+        tag = "latest"
+        repository = image
+        host = ""
+        if ":" in repository.rsplit("/", 1)[-1]:
+            repository, _, tag = repository.rpartition(":")
+            if "/" in tag:
+                repository, tag = image, "latest"
+        first, _, _rest = repository.partition("/")
+        if _rest and (":" in first or "." in first or first == "localhost"):
+            host = first
+        return host, repository, tag
+
+    @staticmethod
+    def _platform_registry_auth() -> tuple[str, str, str]:
+        """Return (registry_host, username, password) for the platform registry.
+
+        Source of truth is the ScopedRegistry chain with the PlatformConfig
+        fallback (``smsly-registry`` / ``REGISTRY_PASSWORD``) — the same
+        credential family the pipeline uses for pushes. Empty user/password
+        when nothing is configured (callers must handle that explicitly).
+        """
+        try:
+            from apps.deployments.models.registry_scope import ScopedRegistry
+
+            info = ScopedRegistry.resolve_registry_credentials(None) or {}
+            url = str(info.get("url") or "").split("://")[-1].rstrip("/")
+            return (
+                url or "registry:5000",
+                str(info.get("username") or ""),
+                str(info.get("password") or ""),
+            )
+        except Exception as exc:
+            logger.debug("Platform registry credential resolution failed: %s", exc)
+            return "registry:5000", "", ""
+
+    @staticmethod
+    def _pull_sidecar_image(client, image: str) -> None:
+        """Ensure *image* is present in the daemon, authenticating first.
+
+        The platform registry enforces htpasswd auth globally, so an
+        anonymous pull always 401s ("no basic auth credentials") — the
+        exact failure the mTLS repair reported for every service. Raises
+        ``docker.errors.ImageNotFound`` when the image cannot be
+        obtained (missing repo, bad credentials, registry down) so
+        callers keep their existing tolerate-and-warn contract.
+        """
+        import docker
+
+        try:
+            client.images.get(image)
+            return
+        except Exception:
+            pass
+
+        logger.info("Pulling Envoy sidecar image %s", image)
+        _host, _repository, _tag = EnvoySidecar._split_image_ref(image)
+        _url, _user, _pwd = EnvoySidecar._platform_registry_auth()
+        auth_config = (
+            {"username": _user, "password": _pwd} if _user and _pwd else None
+        )
+        try:
+            client.images.pull(_repository, tag=_tag, auth_config=auth_config)
+            return
+        except docker.errors.ImageNotFound:
+            raise
+        except docker.errors.APIError as exc:
+            status = getattr(exc, "status_code", None) or getattr(exc, "response", None) and getattr(exc.response, "status_code", None)
+            detail = str(exc)
+            if status == 401 or "no basic auth credentials" in detail.lower():
+                if not auth_config:
+                    raise docker.errors.ImageNotFound(
+                        f"Registry {(_host or _url)} requires authentication but no "
+                        "platform registry credential is configured "
+                        "(PlatformConfig registry_user/registry_password). "
+                        f"Original error: {exc}"
+                    ) from exc
+                raise docker.errors.ImageNotFound(
+                    f"Registry authentication failed for {image} — the platform "
+                    "credential was rejected. Verify it matches the registry "
+                    f"htpasswd entry. Original error: {exc}"
+                ) from exc
+            if status == 404 or "manifest unknown" in detail.lower() or "not found" in detail.lower():
+                raise docker.errors.ImageNotFound(
+                    f"Sidecar image {image} is not in the platform registry. "
+                    f"Original error: {exc}"
+                ) from exc
+            raise
+
+    @staticmethod
+    def _build_and_push_sidecar_image(client, image: str) -> None:
+        """Build the sidecar image from the mounted build context and push it.
+
+        Self-heals a registry that lost (or never received) the image —
+        e.g. fresh installs where the installer ran before the registry
+        was up. Raises ``docker.errors.ImageNotFound`` when no build
+        context is available or the build/push fails.
+        """
+        import docker
+
+        build_dir = ""
+        for candidate in ENVOY_BUILD_CONTEXT_CANDIDATES:
+            try:
+                if os.path.isfile(os.path.join(candidate, "Dockerfile")):
+                    build_dir = candidate
+                    break
+            except Exception:
+                continue
+        if not build_dir:
+            raise docker.errors.ImageNotFound(
+                "No Envoy build context available "
+                f"(looked in {', '.join(ENVOY_BUILD_CONTEXT_CANDIDATES)}). "
+                "Build it on the host: "
+                "docker build -t registry:5000/smsly/envoy-spire-sidecar:latest "
+                "infrastructure/envoy && docker push 127.0.0.1:5000/smsly/envoy-spire-sidecar:latest"
+            )
+        _host, _repository, _tag = EnvoySidecar._split_image_ref(image)
+        _url, _user, _pwd = EnvoySidecar._platform_registry_auth()
+        auth_config = (
+            {"username": _user, "password": _pwd} if _user and _pwd else None
+        )
+        logger.info("Building Envoy sidecar image %s from %s", image, build_dir)
+        try:
+            client.images.build(
+                path=build_dir, tag=image, rm=True, pull=True,
+                timeout=max(int(getattr(client, "timeout", 600) or 600), 600),
+            )
+        except Exception as exc:
+            raise docker.errors.ImageNotFound(
+                f"Envoy sidecar image build failed in {build_dir}: {exc}"
+            ) from exc
+        try:
+            client.images.push(_repository, tag=_tag, auth_config=auth_config)
+        except Exception as exc:
+            raise docker.errors.ImageNotFound(
+                f"Envoy sidecar image push of {image} failed: {exc}"
+            ) from exc
+
+    @staticmethod
+    def ensure_sidecar_image(client, image: str | None = None) -> str:
+        """Ensure the sidecar image exists locally, building it if needed.
+
+        Pull (authenticated) -> build+push fallback -> verify. Returns
+        the image ref. Raises ``docker.errors.ImageNotFound`` only when
+        all avenues fail, preserving the tolerate-and-warn contract of
+        ``inject_sidecar`` callers.
+        """
+        import docker
+
+        image = image or ENVOY_IMAGE
+        try:
+            EnvoySidecar._pull_sidecar_image(client, image)
+            return image
+        except docker.errors.ImageNotFound as pull_exc:
+            logger.warning("Sidecar pull failed for %s (%s) — attempting build", image, pull_exc)
+        EnvoySidecar._build_and_push_sidecar_image(client, image)
+        EnvoySidecar._pull_sidecar_image(client, image)
+        return image
 
     @staticmethod
     def generate_config(service, mtls_config):
@@ -122,16 +297,13 @@ class EnvoySidecar:
         client = get_docker_client()
 
         # Ensure the sidecar image is available locally. Fresh hosts may
-        # never have built it — pull from the platform registry on demand
-        # instead of failing the whole deployment (2026-09-11: every new
-        # service deploy failed with 404 because the image was absent).
-        # A missing image raises ImageNotFound here so callers can decide
-        # (deploy continues with a warning; the installer builds it).
-        try:
-            client.images.get(ENVOY_IMAGE)
-        except Exception:
-            logger.info("Pulling Envoy sidecar image %s", ENVOY_IMAGE)
-            client.images.pull(ENVOY_IMAGE)
+        # never have built it and the platform registry enforces auth, so
+        # pull authenticated (platform credential) with a build+push
+        # fallback. A missing image raises ImageNotFound here so callers
+        # can decide (deploy continues with a warning; the repair
+        # endpoint reports it). Previously this pulled anonymously, which
+        # always 401'd, and the 2026-09-11 404s killed whole deploys.
+        EnvoySidecar.ensure_sidecar_image(client, ENVOY_IMAGE)
 
         mtls_config = service.mtls_config
 

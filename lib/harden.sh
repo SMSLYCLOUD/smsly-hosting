@@ -23,15 +23,33 @@ source "$(dirname "${BASH_SOURCE[0]}")/harden_container_runtime.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_trivy.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_infisical.sh"
 
+_harden_envoy_registry_login() {
+    # Mirror the loopback registry login onto the Docker-DNS hostname.
+    # The daemon matches credentials per registry hostname: the host
+    # config typically only carries 127.0.0.1:5000 (written at provision
+    # time), so pulls of registry:5000/* 401 with "no basic auth
+    # credentials" even though valid credentials exist. Reuses them
+    # without ever printing the secret (all expansion stays local).
+    local auth user pass
+    auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || return 1
+    [ -n "$auth" ] || return 1
+    user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || return 1
+    pass=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f2-) || return 1
+    [ -n "$user" ] && [ -n "$pass" ] || return 1
+    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+}
+
 _harden_envoy_image_bootstrap() {
     # Ensure the Envoy sidecar image exists in the platform registry.
     # Fresh hosts never built it, so every sidecar injection died with
     # 404 (2026-09-11). Idempotent: skips when the tag already resolves.
-    # Best-effort: if the registry isn't up yet the deploy-time pull
-    # covers it and the next update retries.
     command -v docker >/dev/null 2>&1 || return 0
     local envoy_dir="$INSTALL_DIR/infrastructure/envoy"
-    [ -f "$envoy_dir/Dockerfile" ] || { _harden_log warn "envoy Dockerfile missing"; return 1; }
+    [ -f "$envoy_dir/Dockerfile" ] || { _harden_log err "envoy Dockerfile missing at $envoy_dir — sidecar injection will fail until it exists"; return 1; }
+    # The registry enforces htpasswd auth: log the daemon in first or
+    # BOTH the pull probe and the push below 401 (2026-09-12: repair
+    # reported "no basic auth credentials" for every service).
+    _harden_envoy_registry_login 2>/dev/null || _harden_log warn "no registry login available — pull/push may 401"
     local envoy_tag="registry:5000/smsly/envoy-spire-sidecar:latest"
     if docker image inspect "$envoy_tag" >/dev/null 2>&1; then
         return 0
@@ -42,11 +60,11 @@ _harden_envoy_image_bootstrap() {
     fi
     local loop_tag="127.0.0.1:5000/smsly/envoy-spire-sidecar:latest"
     if ! docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
-        _harden_log warn "envoy sidecar image build failed"
+        _harden_log err "envoy sidecar image build failed in $envoy_dir"
         return 1
     fi
     if ! docker push "$loop_tag" >/dev/null 2>&1; then
-        _harden_log warn "envoy sidecar image push failed (registry may not be up yet)"
+        _harden_log err "envoy sidecar image push failed — check registry auth (docker login) and that the registry is up"
         return 1
     fi
     _harden_log ok "envoy sidecar image built and pushed"

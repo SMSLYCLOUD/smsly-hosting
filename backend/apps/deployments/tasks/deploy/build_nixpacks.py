@@ -146,7 +146,10 @@ def _build_uploaded_source(deployment, service) -> str:
 
         safe_service_name = _docker_safe_segment(service.name, fallback="upload")
         deploy_tag = str(deployment.id).replace("-", "")[:8]
-        image_name = f"smsly/{safe_service_name}:{deploy_tag}"
+        from apps.deployments.services.registry_credentials import (
+            project_image_namespace,
+        )
+        image_name = f"{project_image_namespace(service)}/{safe_service_name}:{deploy_tag}"
 
         env_map = {env.key: env.value for env in service.env_vars.all()}
         dockerfile_path = os.path.join(source_dir, "Dockerfile")

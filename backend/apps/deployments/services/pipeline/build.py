@@ -80,7 +80,11 @@ class BuildMixin:
                 self._clone_repo()
 
             tag_hash = self.deployment.commit_hash[:7]
-            self.image_name = f"smsly/{self.service.name.lower()}:{tag_hash}"
+            from apps.deployments.services.registry_credentials import (
+                project_image_namespace,
+            )
+            _ns = project_image_namespace(self.service)
+            self.image_name = f"{_ns}/{self.service.name.lower()}:{tag_hash}"
 
             # ── Build cache: skip if image already exists locally ──
             if tag_hash != 'latest':

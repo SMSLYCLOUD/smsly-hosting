@@ -272,7 +272,14 @@ class RecoveryMixin:
             commit = getattr(deployment, "commit_hash", "") or ""
             tag = commit[:8] if commit else "latest"
             from ..registry_validation import safe_image_for_service
-            docker_image = safe_image_for_service(service_name, tag=tag)
+            try:
+                from apps.deployments.services.registry_credentials import (
+                    project_image_namespace,
+                )
+                _rec_ns = project_image_namespace(deployment.service)
+            except Exception:
+                _rec_ns = "smsly"
+            docker_image = safe_image_for_service(service_name, tag=tag, namespace=_rec_ns)
 
         self._log(f"Pulling image: {docker_image}")
         pull_out, pull_err, pull_code = self._exec(

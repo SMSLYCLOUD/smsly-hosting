@@ -1392,6 +1392,16 @@ def generate_caddyfile(config) -> str:
         except ValueError:
             logger.warning("Ignoring invalid platform domain in config: %r", effective_domain)
 
+    # Single source of truth for "the *.domain site exists". The
+    # wildcard site block, the per-host block skip, known-hosts, and the
+    # redirect map must ALL agree — Caddy prefers exact-host sites, so
+    # any host with both an explicit block and a wildcard redirect
+    # handle never redirects (silent dead 301, 2026-09-12). The
+    # Cloudflare token is deliberately NOT part of this condition: it
+    # only controls the dns-challenge TLS lines, while serving works
+    # via on-demand either way.
+    _wildcard_site_on = bool(use_ssl and domain and config.wildcard_subdomains)
+
     if use_ssl and domain:
         platform_block = [f"{domain} {{"]
         platform_block.extend(
@@ -1509,7 +1519,7 @@ def generate_caddyfile(config) -> str:
         )
         sections.append("\n".join(platform_block))
 
-        if config.wildcard_subdomains:
+        if _wildcard_site_on:
             wildcard_known_hosts = _get_wildcard_known_hosts(domain)
             wildcard_remote_hosts = _get_wildcard_remote_host_map(domain)
             wildcard_lines = [
@@ -1952,7 +1962,11 @@ def generate_caddyfile(config) -> str:
 }"""
         )
 
-    wildcard_base = domain if (config.use_ssl and config.wildcard_subdomains and cloudflare_token) else ""
+    # Which wildcard-covered hosts skip their explicit site block:
+    # exactly the hosts served by the wildcard site above
+    # (_wildcard_site_on). See the flag definition for why these must
+    # never disagree (silent dead 301s, 2026-09-12).
+    wildcard_base = domain if _wildcard_site_on else ""
     service_blocks = _get_service_domain_blocks(wildcard_domain=wildcard_base)
     sections.extend(service_blocks)
 

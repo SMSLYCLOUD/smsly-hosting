@@ -128,6 +128,18 @@ def _get_platform_user(request: HttpRequest):
     return None
 
 
+def _project_namespace_prefix(project_id) -> str:
+    """Image-namespace prefix for a project: ``proj-<first 8 of uuid>``.
+
+    Must stay identical to ``project_image_namespace`` in
+    ``apps.deployments.services.registry_credentials`` (single source of
+    truth lives there; this mirror avoids importing service code into the
+    auth view). Deliberately derived from the immutable id, NOT the
+    editable name, so renames cannot squat another project's namespace.
+    """
+    return f"proj-{str(project_id).replace('-', '')[:8]}"
+
+
 def _check_registry_permission(user, scope: str, actions: list[str]) -> bool:
     """
     Determine if user has permission for the requested registry action.
@@ -164,14 +176,17 @@ def _check_registry_permission(user, scope: str, actions: list[str]) -> bool:
     from ..models.project import ProjectMember as _ProjectMember
 
     # Build set of project prefixes that this user can access
-    # Repo names follow the pattern: smsly/<service_name>
-    # or: <project_uuid>/<service_name> for scoped repos
+    # Repo names follow the pattern: smsly/<service_name> (platform),
+    # <project_uuid>/<service_name>, <project_name>/<service_name>,
+    # or proj-<id8>/<service_name> (ecosystem/project-scoped builds)
+    # for scoped repos.
     accessible_prefixes = set()
 
     # Directly owned projects
     for p in _Project.objects.filter(owner=user).only("id", "name"):
         accessible_prefixes.add(p.name.lower())
         accessible_prefixes.add(str(p.id))
+        accessible_prefixes.add(_project_namespace_prefix(p.id))
 
     # Projects via team membership
     team_ids = _TeamMember.objects.filter(
@@ -182,6 +197,7 @@ def _check_registry_permission(user, scope: str, actions: list[str]) -> bool:
     ).only("id", "name"):
         accessible_prefixes.add(p.name.lower())
         accessible_prefixes.add(str(p.id))
+        accessible_prefixes.add(_project_namespace_prefix(p.id))
 
     # Direct project membership
     project_ids = _ProjectMember.objects.filter(
@@ -190,6 +206,7 @@ def _check_registry_permission(user, scope: str, actions: list[str]) -> bool:
     for p in _Project.objects.filter(id__in=list(project_ids)).only("id", "name"):
         accessible_prefixes.add(p.name.lower())
         accessible_prefixes.add(str(p.id))
+        accessible_prefixes.add(_project_namespace_prefix(p.id))
 
     # Platform images (smsly/*) are managed by superusers only.
     # Non-superusers may pull platform images for deployments but must
@@ -215,6 +232,7 @@ def _check_registry_permission(user, scope: str, actions: list[str]) -> bool:
         for p in _Project.objects.filter(owner=user).only("id", "name"):
             owned_prefixes.add(p.name.lower())
             owned_prefixes.add(str(p.id))
+            owned_prefixes.add(_project_namespace_prefix(p.id))
         return any(
             repo_lower == prefix or repo_lower.startswith(prefix + "/")
             for prefix in owned_prefixes

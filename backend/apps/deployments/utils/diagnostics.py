@@ -110,7 +110,14 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
     var_names = [ev.key for ev in env_vars[:15]]
 
     registry_url = getattr(deployment, 'registry_url', None) or "Local Docker Daemon"
-    image_name = getattr(deployment, 'image_name', getattr(svc, 'docker_image', f"smsly/{svc.name.lower()}:latest"))
+    try:
+        from apps.deployments.services.registry_credentials import (
+            project_image_namespace,
+        )
+        _diag_ns = project_image_namespace(svc)
+    except Exception:
+        _diag_ns = "smsly"
+    image_name = getattr(deployment, 'image_name', getattr(svc, 'docker_image', f"{_diag_ns}/{svc.name.lower()}:latest"))
 
     root_user_status = "No build dir — skipped"
     if build_dir:

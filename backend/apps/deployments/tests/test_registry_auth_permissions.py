@@ -174,6 +174,35 @@ class RegistryAuthPermissionTests(TestCase):
             admin, "repository:smsly/backend:pull", ["pull"],
         ))
 
+    # ── Project-scoped namespaces (proj-<id8>) ──────────────────────────
+
+    def _proj_ns(self, project):
+        return f"proj-{str(project.id).replace('-', '')[:8]}"
+
+    def test_owner_can_push_proj_namespace(self):
+        ns = self._proj_ns(self.project)
+        self.assertTrue(_check_registry_permission(
+            self.owner, f"repository:{ns}/web:push", ["push"],
+        ))
+        self.assertTrue(_check_registry_permission(
+            self.owner, f"repository:{ns}/web:pull", ["pull"],
+        ))
+
+    def test_member_can_pull_but_not_push_proj_namespace(self):
+        ns = self._proj_ns(self.project)
+        self.assertTrue(_check_registry_permission(
+            self.project_member, f"repository:{ns}/web:pull", ["pull"],
+        ))
+        self.assertFalse(_check_registry_permission(
+            self.project_member, f"repository:{ns}/web:push", ["push"],
+        ))
+
+    def test_outsider_denied_proj_namespace(self):
+        ns = self._proj_ns(self.project)
+        self.assertFalse(_check_registry_permission(
+            self.outsider, f"repository:{ns}/web:pull", ["pull"],
+        ))
+
 
 class RegistryTokenEndpointSelfHealTests(TestCase):
     """The token endpoint must self-heal when REGISTRY_HTTP_SECRET is unset.
