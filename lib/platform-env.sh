@@ -1,8 +1,8 @@
 apply_env_platform_overrides() {
     local env_file="$1"
     local changed=false
-    local current_domain current_use_ssl current_acme_email current_wildcard current_cf_token current_public_ip current_registry_bind
-    local desired_domain desired_use_ssl desired_acme_email desired_wildcard desired_cf_token desired_public_ip desired_registry_bind
+    local current_domain="" current_use_ssl="" current_acme_email="" current_wildcard="" current_cf_token="" current_public_ip="" current_registry_bind=""
+    local desired_domain="" desired_use_ssl="" desired_acme_email="" desired_wildcard="" desired_cf_token="" desired_public_ip="" desired_registry_bind=""
 
     [ -f "$env_file" ] || return 0
 

@@ -25,7 +25,7 @@ load_cloudflare_env() {
         return
     fi
 
-    local token_line token
+    local token_line="" token=""
     token_line="$(grep '^Environment="CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF"  || true)"
     token="${token_line#Environment=\"CLOUDFLARE_API_TOKEN=}"
     token="${token%\"}"

@@ -606,7 +606,7 @@ prepare_media_voice_database() {
     psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1 -c \
         "CREATE TABLE IF NOT EXISTS smsly_media_schema_migrations (filename text PRIMARY KEY, applied_at timestamptz DEFAULT NOW());" >/dev/null
 
-    local migration mig_name applied
+    local migration="" mig_name="" applied=""
     for migration in "${MEDIA_VOICE_SOURCE_DIR}/storage/migrations/"*.sql; do
         [ -f "$migration" ] || continue
         mig_name="$(basename "$migration")"

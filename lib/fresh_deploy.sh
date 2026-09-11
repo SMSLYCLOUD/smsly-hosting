@@ -82,7 +82,7 @@ _registry_tls_ok() {
     # openssl x509 -noout -modulus matches the cert's modulus;
     # openssl rsa  -noout -modulus matches the key's modulus. They must
     # be equal for the TLS handshake to succeed.
-    local _cmod _kmod
+    local _cmod="" _kmod=""
     _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus  | openssl sha256)" || return 1
     _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus  | openssl sha256)" || return 1
     [ "$_cmod" = "$_kmod" ]

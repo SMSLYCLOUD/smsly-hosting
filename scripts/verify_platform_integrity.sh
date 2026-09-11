@@ -24,7 +24,7 @@ ensure_registry_pair() {
     local crt="$CERTS/registry.crt" key="$CERTS/registry.key"
     [ -f "$crt" ] && [ -f "$key" ] || { log "registry cert files missing — skipping (install.sh will create)"; return 0; }
 
-    local cmod kmod
+    local cmod="" kmod=""
     cmod=$(openssl x509 -in "$crt" -noout -pubkey 2>/dev/null | sha256sum | awk '{print $1}')
     kmod=$(openssl pkey -in "$key" -pubout 2>/dev/null        | sha256sum | awk '{print $1}')
     if [ -n "$cmod" ] && [ "$cmod" = "$kmod" ]; then
@@ -56,7 +56,7 @@ ensure_registry_pair() {
 ensure_egress_nic_rules() {
     command -v iptables >/dev/null 2>&1 || return 0
     # Collect comment-tagged bridges we manage
-    local rules br ifaces missing
+    local rules="" br="" ifaces="" missing=""
     rules=$(iptables -S DOCKER-USER 2>/dev/null | grep -oP '(?<=-i )br-[0-9a-f]+' | sort -u)
     [ -z "$rules" ] && { log "no smsly egress rules to guard"; return 0; }
 

@@ -246,8 +246,8 @@ normalize_registry_host() {
 
 ensure_agent_env_defaults() {
     local env_file="$INSTALL_DIR/.env"
-    local master_ip master_mesh_ip registry_host
-    local rabbitmq_password redis_password
+    local master_ip="" master_mesh_ip="" registry_host=""
+    local rabbitmq_password="" redis_password=""
 
     master_ip="$(env_get_value "$env_file" "MASTER_IP")"
     master_mesh_ip="$(env_get_value "$env_file" "MASTER_MESH_IP")"
@@ -321,7 +321,7 @@ ensure_agent_env_defaults() {
     fi
 
     # Automatically set and update ALLOWED_HOSTS
-    local allowed_hosts current_ips public_ip new_hosts
+    local allowed_hosts="" current_ips="" public_ip="" new_hosts=""
     allowed_hosts="$(env_get_value "$env_file" "ALLOWED_HOSTS")"
     current_ips="$(hostname -I  | tr -s ' ' ',' | sed 's/,$//')"
     public_ip="$(detect_public_ip)"
@@ -354,7 +354,7 @@ ensure_agent_env_defaults() {
 configure_docker_registry_trust() {
     local env_file="$INSTALL_DIR/.env"
     local daemon_json="/etc/docker/daemon.json"
-    local master_ip master_mesh_ip registry_url registry_host
+    local master_ip="" master_mesh_ip="" registry_url="" registry_host=""
     local registries=()
     local mirrors=()
 
@@ -388,7 +388,7 @@ configure_docker_registry_trust() {
     mkdir -p /etc/docker
     [ -f "$daemon_json" ] || printf '{}\n' > "$daemon_json"
 
-    local trust_payload mirror_payload status
+    local trust_payload="" mirror_payload="" status=""
     trust_payload="$(printf '%s\n' "${registries[@]}")"
     mirror_payload="$(printf '%s\n' "${mirrors[@]}")"
 
@@ -497,7 +497,7 @@ wait_for_local_rabbitmq() {
 
 sync_local_rabbitmq_password() {
     local env_file="$INSTALL_DIR/.env"
-    local rabbitmq_user rabbitmq_password
+    local rabbitmq_user="" rabbitmq_password=""
 
     rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER")"
     rabbitmq_user="${rabbitmq_user:-smsly_user}"
@@ -549,7 +549,7 @@ pull_latest_code() {
     local script_checksum_after=""
     [ -f "$AGENT_SCRIPT_PATH" ] && script_checksum_before="$(sha256sum "$AGENT_SCRIPT_PATH"  | awk '{print $1}' || true)"
     # Stash any local changes to avoid pull conflicts
-    local stash_before stash_after stash_created
+    local stash_before="" stash_after="" stash_created=""
     stash_created="false"
     stash_before="$(git stash list  | wc -l | tr -d ' ')"
     git stash push -m "smsly-agent-lite-update"  || true
@@ -720,7 +720,7 @@ do_install() {
     check_docker() { command -v docker  && docker info ; }
     check_internet && echo -e "${GREEN}  ✓ Internet OK${NC}" || { echo -e "${RED}✗ No internet${NC}"; exit 1; }
     check_docker && echo -e "${GREEN}  ✓ Docker OK${NC}" || { echo -e "${RED}✗ Docker not running${NC}"; exit 1; }
-    local ram disk_free
+    local ram="" disk_free=""
     ram="$(free -m | awk '/^Mem:/{print $2}')"
     [ "${ram:-0}" -lt 512 ] && { echo -e "${RED}✗ Need >= 512MB RAM (have ${ram:-0}MB)${NC}"; exit 1; }
     echo -e "${GREEN}  ✓ RAM: ${ram}MB${NC}"

@@ -40,7 +40,7 @@ recover_runtime_stack() {
     _registry_tls_ok() {
         [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
         [ -f "$INSTALL_DIR/certs/registry.crt" ] || return 1
-        local _cmod _kmod
+        local _cmod="" _kmod=""
         _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus  | openssl sha256)" || return 1
         _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus  | openssl sha256)" || return 1
         [ "$_cmod" = "$_kmod" ]

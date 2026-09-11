@@ -4,7 +4,7 @@ DOMAIN_SYNC_SERVICE_IDS=""
 
 sync_platform_domain_state() {
     local env_file="${1:-$INSTALL_DIR/.env}"
-    local sync_domain sync_use_ssl sync_wildcard sync_cf_token sync_public_ip
+    local sync_domain="" sync_use_ssl="" sync_wildcard="" sync_cf_token="" sync_public_ip=""
     local sync_json=""
 
     [ -f "$env_file" ] || return 0

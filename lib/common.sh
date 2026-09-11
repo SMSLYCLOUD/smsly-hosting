@@ -143,7 +143,7 @@ run_backend_migrations() {
         user_args=(--user root)
     fi
 
-    local migrate_db timeout_seconds rc
+    local migrate_db="" timeout_seconds="" rc=""
     migrate_db="$(get_migration_database_alias)"
     timeout_seconds="${MIGRATION_TIMEOUT_SECONDS:-900}"
     echo -e "${BLUE}  -> Migration database: ${migrate_db}${NC}"
@@ -428,7 +428,7 @@ sync_agent_lite_rabbitmq_password() {
     [ "$MODE_AGENT_LITE" = "true" ] || return 0
 
     local env_file="$INSTALL_DIR/.env"
-    local rabbitmq_user rabbitmq_password
+    local rabbitmq_user="" rabbitmq_password=""
 
     rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER"  || true)"
     rabbitmq_user="${rabbitmq_user:-smsly_user}"

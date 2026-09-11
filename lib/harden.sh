@@ -30,7 +30,11 @@ _harden_envoy_registry_login() {
     # time), so pulls of registry:5000/* 401 with "no basic auth
     # credentials" even though valid credentials exist. Reuses them
     # without ever printing the secret (all expansion stays local).
-    local auth user pass
+    # NOTE: locals MUST be initialized (="") — bare `local x` leaves the
+    # variable UNSET, and any read under `set -u` is instantly fatal in a
+    # way no `||` guard can catch (2026-09-12: this exact pattern silently
+    # aborted a fresh install with zero output).
+    local auth="" user="" pass=""
     auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || auth=""
     if [ -n "$auth" ]; then
         user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || user=""
@@ -59,7 +63,10 @@ _harden_envoy_image_bootstrap() {
     # The registry enforces htpasswd auth: log the daemon in first or
     # BOTH the pull probe and the push below 401 (2026-09-12: repair
     # reported "no basic auth credentials" for every service).
-    _harden_envoy_registry_login 2>/dev/null || _harden_log warn "no registry login available — pull/push may 401"
+    # No stderr suppression on the call itself: with initialized locals
+    # the only failure mode is a plain `return 1`, and any future fatal
+    # must stay visible instead of dying silently (2026-09-12).
+    _harden_envoy_registry_login || _harden_log warn "no registry login available — pull/push may 401"
     local envoy_tag="registry:5000/smsly/envoy-spire-sidecar:latest"
     if docker image inspect "$envoy_tag" >/dev/null 2>&1; then
         return 0

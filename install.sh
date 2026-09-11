@@ -209,7 +209,7 @@ _registry_self_heal() {
         [ -n "$curl_err" ] && echo -e "  \033[0;33m  ↳ $url ${code:-timeout/error} — ${curl_err//$'\n'/ | }\033[0m"
 
         # Fallback: try docker pull
-        local pull_out pull_short
+        local pull_out="" pull_short=""
         pull_out=$(timeout -k 5 10 docker pull "${url}/alpine:latest" || true)
         if echo "$pull_out" | grep -qE "Pulled|up to date|Image is up to date"; then
             echo -e "  \033[0;32m→ $url OK (docker pull)\033[0m"

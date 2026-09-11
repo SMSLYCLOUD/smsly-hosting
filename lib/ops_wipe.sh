@@ -84,7 +84,7 @@ fix_env_permissions() {
     chown root:1000 "$env_file"  || true
     chmod 664 "$env_file"  || true
 
-    local owner mode
+    local owner="" mode=""
     owner="$(stat -c '%u:%g' "$env_file"  || echo "?")"
     mode="$(stat -c '%a' "$env_file"  || echo "?")"
     echo -e "${GREEN}  ✓ .env permissions: $mode owner=$owner${NC}"
