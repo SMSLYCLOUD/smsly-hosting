@@ -170,12 +170,15 @@ harden_security_bootstrap() {
     _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
     _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
     _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_kernel_bootstrap
-    _harden_docker_daemon_bootstrap
+    _harden_kernel_bootstrap       || { _harden_failures=$((_harden_failures + 1)); }
+    _harden_docker_daemon_bootstrap || { _harden_failures=$((_harden_failures + 1)); }
     _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
     _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
     _harden_spire_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
-    _harden_container_runtime_bootstrap
+    # Unguarded like kernel/docker-daemon above (best-effort hardening must
+    # never abort the install under `set -e`); the function itself always
+    # returns 0 — this guard is belt-and-braces against future edits.
+    _harden_container_runtime_bootstrap || { _harden_failures=$((_harden_failures + 1)); }
     _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
     _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
     if [ "$_harden_failures" -gt 0 ]; then

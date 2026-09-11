@@ -51,6 +51,14 @@ _harden_container_runtime_bootstrap() {
         echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=runsc in .env${NC}"
         return 0
     fi
+
+    # Sandboxing is best-effort hardening: reaching here means neither
+    # Kata nor gVisor is installed (no KVM, offline mirror, rare arch).
+    # Fall off the end and the caller dies silently under `set -e`
+    # (2026-09-12: fresh install aborted with no error right after the
+    # Falco/SPIRE bootstrap). Always succeed explicitly.
+    echo -e "${YELLOW}  ⚠ [harden] No sandboxed runtime (Kata/gVisor) available — continuing without container sandboxing${NC}"
+    return 0
 }
 
 _harden_container_runtime_verify() {
