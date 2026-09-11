@@ -116,7 +116,10 @@ fi
 # refs. Self-heals or ALERTs to the log; see the script header.
 INTEGRITY_SCRIPT="/opt/smsly-hosting/scripts/verify_platform_integrity.sh"
 INTEGRITY_CRON="0 * * * * root $INTEGRITY_SCRIPT >> /var/log/smsly-integrity.log 2>&1"
-if [ -x "$INTEGRITY_SCRIPT" ]; then
+# The script ships non-executable from git on some checkouts; make it
+# executable first so the -x gate cannot false-negative (2026-09-12).
+chmod +x "$INTEGRITY_SCRIPT" 2>/dev/null || true
+if [ -f "$INTEGRITY_SCRIPT" ]; then
     if ! grep -q "verify_platform_integrity.sh" /etc/crontab ; then
         echo "$INTEGRITY_CRON" >> /etc/crontab
         echo -e "${GREEN}  ✓ Platform integrity guard scheduled hourly via cron${NC}"
@@ -124,7 +127,7 @@ if [ -x "$INTEGRITY_SCRIPT" ]; then
         echo -e "${GREEN}  ✓ Platform integrity guard already scheduled${NC}"
     fi
 else
-    echo -e "${YELLOW}  ⚠ verify_platform_integrity.sh missing/not executable — integrity guard NOT scheduled${NC}"
+    echo -e "${YELLOW}  ⚠ verify_platform_integrity.sh missing — integrity guard NOT scheduled${NC}"
 fi
 
 # ─── Sysctl tuning (idempotent) ──────────────────────────────────────────────

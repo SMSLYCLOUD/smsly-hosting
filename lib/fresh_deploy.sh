@@ -290,6 +290,14 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 
     # Docker login now that the registry is actually running
     docker_login
+    # Retry the Envoy sidecar image build+push now that registry auth and
+    # the registry itself exist. The harden-phase attempt runs before
+    # fresh_config writes REGISTRY_PASSWORD, so it always 401s on a true
+    # fresh host (2026-09-12); without this retry the image stays local-only
+    # and the catalog stays empty. Non-fatal: deploy-time self-heal covers it.
+    if command -v _harden_envoy_image_bootstrap >/dev/null 2>&1; then
+        _harden_envoy_image_bootstrap || true
+    fi
 fi
 if [ "$STACK_DEPLOYED_FROM_CHECKPOINT" = "true" ]; then
     reconcile_compose_stack_after_resume

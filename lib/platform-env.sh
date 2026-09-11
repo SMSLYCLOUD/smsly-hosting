@@ -291,6 +291,34 @@ ensure_env_runtime_defaults() {
         _rt_bind="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9][0-9.]*$' | grep -v '^127\.' | head -1 || true)"
         [ -n "$_rt_bind" ] && env_set_value "$env_file" "REGISTRY_PUBLIC_BIND_IP" "$_rt_bind"
     fi
+    # Backfill core platform identity keys (2026-09-12: resume runs can
+    # preserve a stub .env that never went through fresh_config full
+    # template - DOMAIN/USE_SSL/PUBLIC_IP/FRONTEND_APP_URL missing breaks
+    # Caddy sync, frontend bake, CORS. Idempotent: never overwrites).
+    local _bf_public_ip="" _bf_domain="" _bf_use_ssl="" _bf_origins=""
+    _bf_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+    if [ -z "$_bf_public_ip" ]; then
+        _bf_public_ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9][0-9.]*$' | grep -v '^127\.' | head -1 || true)"
+        [ -n "$_bf_public_ip" ] && env_ensure_var "$env_file" "PUBLIC_IP" "$_bf_public_ip" "Server public IP (auto-detected)"
+    fi
+    _bf_domain="$(env_get_value "$env_file" "DOMAIN")"
+    if [ -z "$_bf_domain" ]; then
+        if [ -n "$_bf_public_ip" ]; then _bf_domain="$_bf_public_ip"; else _bf_domain="localhost"; fi
+        env_ensure_var "$env_file" "DOMAIN" "$_bf_domain" "Platform domain or IP"
+    fi
+    _bf_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
+    if [ -z "$_bf_use_ssl" ]; then
+        if echo "$_bf_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then _bf_use_ssl="false"; else _bf_use_ssl="true"; fi
+        env_ensure_var "$env_file" "USE_SSL" "$_bf_use_ssl" "Use SSL (false for raw IP)"
+    fi
+    if echo "$_bf_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || [ "$_bf_use_ssl" != "true" ]; then _bf_origins="http://$_bf_domain"; else _bf_origins="https://$_bf_domain"; fi
+    env_ensure_var "$env_file" "FRONTEND_APP_URL" "$_bf_origins" "Canonical public origin baked into frontend"
+    env_ensure_var "$env_file" "CONTAINER_REGISTRY_URL" "registry:5000" "Private Docker registry"
+    env_ensure_var "$env_file" "REGISTRY_USER" "smsly-registry" "Registry username"
+    env_ensure_var "$env_file" "DOCKER_NETWORK" "smsly-net" "Docker network for services"
+    env_ensure_var "$env_file" "WILDCARD_SUBDOMAINS" "false" "Wildcard subdomain SSL"
+    env_ensure_var "$env_file" "CADDY_CONFIG_DIR" "/caddy-config" "Caddy config directory"
+    env_ensure_var "$env_file" "ACME_EMAIL" "" "ACME email for Lets Encrypt"
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
