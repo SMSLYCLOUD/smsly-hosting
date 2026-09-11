@@ -2389,6 +2389,9 @@ export const ecosystemApi = {
   getTaskStatus: (taskId: string) =>
     api.get('/cloud/ecosystem/task_status/', { params: { task_id: taskId } }).then(r => r.data),
 
+  getPlanStatus: (planId: string) =>
+    api.get('/cloud/ecosystem/plan_status/', { params: { plan_id: planId } }).then(r => r.data),
+
   getDeepScanStatus: (taskId: string) =>
     api.get('/cloud/ecosystem/deep_scan/status/', { params: { task_id: taskId } }).then(r => r.data),
 

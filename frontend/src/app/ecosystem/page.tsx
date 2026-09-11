@@ -5,7 +5,7 @@
 // plans via useEffect+useState. React Query's useQuery/useMutation would handle
 // cache management, background refetching, and optimistic updates cleanly.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2, Plus,
@@ -294,6 +294,67 @@ export default function EcosystemPage() {
     useEffect(() => { saveState('selectedRepos', selectedRepos); }, [selectedRepos]);
     useEffect(() => { saveState('aiProvider', selectedProvider); }, [selectedProvider]);
 
+    // Track mount so long plan polls stop setting state after unmount.
+    const mountedRef = useRef(true);
+    useEffect(() => () => { mountedRef.current = false; }, []);
+
+    // Poll plan status for deployment progress. Defined before the
+    // mount-resume effect and deployAll so neither hits a TDZ/lint issue.
+    // Service names are globally unique (DB constraint), so the
+    // services_status name map keys each row unambiguously.
+    const pollPlanStatus = useCallback(async (targetPlanId: string) => {
+        if (!targetPlanId) return;
+        let retries = 0;
+        const MAX_RETRIES = 1800; // 1800 * 5s = 2.5 hours (waves can take long)
+        const poll = async () => {
+            if (!mountedRef.current) return;
+            try {
+                const data = await ecosystemApi.getPlanStatus(targetPlanId);
+                if (!mountedRef.current) return;
+                const status = data.status;
+                const servicesStatus = data.services_status || {};
+                const servicesCreated = data.services_created || [];
+
+                // Update deploy results with current statuses
+                if (servicesCreated.length > 0) {
+                    const updatedResults = servicesCreated.map((svc: any) => ({
+                        ...svc,
+                        status: servicesStatus[svc.name] || svc.status || 'unknown',
+                    }));
+                    setDeployResults(updatedResults);
+                }
+
+                if (status === 'completed') {
+                    setStep('done');
+                    return;
+                } else if (status === 'failed') {
+                    setError(data.error_message || 'Ecosystem deployment failed');
+                    setStep('review');
+                    return;
+                }
+                // Non-terminal (deploying/review/scanning/...): keep polling
+                // with a shared retry budget so a wedged plan can't poll forever.
+                retries++;
+                if (retries > MAX_RETRIES) {
+                    setError('Deployment is taking too long. Please check the services page.');
+                    setStep('review');
+                    return;
+                }
+                setTimeout(poll, 5000);
+            } catch (err: any) {
+                if (!mountedRef.current) return;
+                retries++;
+                if (retries > MAX_RETRIES) {
+                    setError('Failed to poll deployment status');
+                    setStep('review');
+                    return;
+                }
+                setTimeout(poll, 10000);
+            }
+        };
+        poll();
+    }, []);
+
     // Check for active plan on mount — always runs so that returning
     // after page navigation properly resumes scanning/deploying.
     useEffect(() => {
@@ -340,23 +401,16 @@ export default function EcosystemPage() {
                     setDeployTaskId(data.deploy_task_id);
                     setPlan(data.plan && Array.isArray(data.plan.services) ? data.plan : null);
                     setStep('deploying');
-                    pollTask(data.deploy_task_id, (result: any) => {
-                        if (result.error) {
-                            setError(result.error);
-                            setStep('review');
-                        } else {
-                            setDeployResults(result.services || []);
-                            setStep('done');
-                        }
-                    });
+                    pollPlanStatus(data.plan_id);
                 }
             } catch {
                 // Server unreachable — keep local state as-is
             }
         };
         checkActivePlan();
+    // pollPlanStatus is a stable useCallback; step is intentionally read once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [pollPlanStatus]);
 
     // Poll for scan task completion
     const pollTask = useCallback(async (taskId: string, onComplete: (result: any) => void) => {
@@ -574,18 +628,11 @@ export default function EcosystemPage() {
                 env_scan_depth: envScanDepth,
             });
             setDeployTaskId(data.task_id);
-            if (data.plan_id) setPlanId(data.plan_id);
+            const newPlanId = data.plan_id || planId;
+            if (newPlanId) setPlanId(newPlanId);
             if (data.project_id) setDeployProjectId(data.project_id);
 
-            pollTask(data.task_id, (result) => {
-                if (result.error) {
-                    setError(result.error);
-                    setStep('review');
-                } else {
-                    setDeployResults(result.services || []);
-                    setStep('done');
-                }
-            });
+            pollPlanStatus(newPlanId);
         } catch (err: any) {
             setError(err.message || 'Failed to start deployment');
             setStep('review');

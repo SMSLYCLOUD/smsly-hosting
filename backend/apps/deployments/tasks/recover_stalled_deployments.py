@@ -17,8 +17,14 @@ A row is stalled when ALL of these hold:
      worker bumps updated_at on every status transition and log append,
      so silence means no worker),
   4. its service's project has no EcosystemPlan currently 'deploying'
-     (the wave engine legitimately parks future-wave rows untouched for
-     hours — never steal those).
+     — with one exception: REVIEW rows are swept even under a live
+     plan. REVIEW means the wave engine already dispatched the row to a
+     worker (QUEUED→REVIEW flip + smart_deploy_task send); a REVIEW row
+     idle past the threshold is a dead dispatch, not a parked future
+     wave. All other states stay protected while their plan is
+     deploying, because long builds stream logs via append_log (which
+     does not bump updated_at) and would otherwise look idle
+     mid-build.
 
 Stalled rows are marked CANCELLED (never retried — the sweeper cannot
 know why the worker died, and blind re-queueing is how retry storms
@@ -99,7 +105,12 @@ def recover_stalled_deployments(self):
         for dep in rows:
             try:
                 project_id = getattr(getattr(dep, "service", None), "project_id", None)
-                if _project_has_live_plan(project_id):
+                # Under a live plan, only REVIEW rows are safe to sweep:
+                # REVIEW means dispatched-but-never-picked-up (dead
+                # dispatch). Every other state is either a legitimately
+                # parked future wave (QUEUED) or a potentially live long
+                # build whose log streaming does not bump updated_at.
+                if _project_has_live_plan(project_id) and dep.status != Deployment.Status.REVIEW:
                     skipped_live_plan += 1
                     continue
                 dep.status = Deployment.Status.CANCELLED

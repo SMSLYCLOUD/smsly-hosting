@@ -867,8 +867,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     use_shared_addons = plan.get("use_shared_addons", True)
     cancel_on_failure = plan.get("cancel_others_on_failure", False)
     shared_addon_config: dict[str, dict] = plan.get("shared_addon_config", {})
-    mtls_config: dict = plan.get("mtls_config", {})
-    communication_rules: dict = plan.get("communication_rules", {})
+    _mtls_raw = plan.get("mtls_config", {})
+    mtls_config: dict = _mtls_raw if isinstance(_mtls_raw, dict) else {}
+    _rules_raw = plan.get("communication_rules", {})
+    communication_rules: dict = _rules_raw if isinstance(_rules_raw, dict) else {}
     if not isinstance(services_plan, list) or not services_plan:
         _fail_plan_record(plan_id, "No services in deploy plan")
         return {"error": "No services in deploy plan"}
@@ -987,6 +989,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             )
             if _created:
                 logger.info("Auto-created ecosystem project '%s' (%s)", project.name, project.id)
+
+    # NOTE: no inline GC of old ephemeral projects here. Project.delete()
+    # enqueues delete_service_task per service and runs before the
+    # cross-project adoption pre-pass below, so deleting here would destroy
+    # services adoption was about to reuse. Orphan-project GC (with container
+    # cleanup + live-plan guard) belongs in a beat task, not the deploy worker.
 
     if plan_id:
         from apps.deployments.models.ecosystem import EcosystemPlan
@@ -1233,6 +1241,40 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                         .first()
                     )
                     if _adopt_svc is not None:
+                        # Ecosystem independence: never adopt out of a
+                        # project that backs a live or healthy plan
+                        # (scanning/review/deploying/completed). Those
+                        # projects are independent running ecosystems —
+                        # pulling their service into this project would
+                        # gut them. Only adopt from dead contexts (all
+                        # plans failed, or no plans at all), i.e. recovery
+                        # from a failed attempt, not a merge of two live
+                        # ecosystems.
+                        _adopt_source_proj = _adopt_svc.project
+                        _adopt_blocked = False
+                        if _adopt_source_proj is not None:
+                            try:
+                                from apps.deployments.models.ecosystem import (
+                                    EcosystemPlan as _AdoptEcoPlan,
+                                )
+                                _adopt_blocked = _AdoptEcoPlan.objects.filter(
+                                    project_id=_adopt_source_proj.id,
+                                ).exclude(
+                                    status=_AdoptEcoPlan.Status.FAILED,
+                                ).exists()
+                            except Exception:
+                                # Fail closed: on uncertainty, do not move
+                                # a service out of another project.
+                                _adopt_blocked = True
+                        if _adopt_blocked:
+                            logger.info(
+                                "Not adopting ecosystem service %s (%s): "
+                                "source project %s backs a live/healthy "
+                                "plan — ecosystems stay independent",
+                                _adopt_svc.name, _adopt_svc.id,
+                                getattr(_adopt_source_proj, 'name', '?'),
+                            )
+                            continue
                         logger.info(
                             "Adopting ecosystem service %s (%s) from ephemeral "
                             "project %s into %s (same repo key)",
@@ -1415,7 +1457,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         return use_shared_addons
 
     def _has_shared_addon(addon_type: str) -> bool:
-        """True if a shared ACTIVE addon of this type already exists for the project.
+        """True if a shared ACTIVE addon of this type already exists in this project.
 
         Defensive: if a prior run already provisioned the shared addon
         (e.g. via the anchor service), the per-service loop MUST skip to
@@ -1432,8 +1474,14 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         shared URL — 8 of 10 services in plan 2a7b78d3 died with 'Addon
         placeholder {{POSTGRES_URL}} ... could not be resolved' and were
         stranded with no deployment rows ('Ready to Deploy' forever).
+
+        Scope is STRICTLY the current project. Each ecosystem project is
+        independent: it must never reuse (reattach) another project's
+        shared addon, which would hand one ecosystem's database to another.
+        Same-plan retries reuse the same project (via the plan link), so
+        re-runs still find their addon here.
         """
-        if not project:
+        if project is None:
             return False
         return Addon.objects.filter(
             service__owner=user,
@@ -1459,12 +1507,17 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
             if not existing_addon:
                 # Search for an existing ACTIVE *shared* addon of this type
-                # WITHIN THIS ECOSYSTEM (same project) to avoid creating
-                # duplicate volumes on re-deploys (SEC-VOL-001).
+                # WITHIN THIS PROJECT ONLY to avoid creating duplicate
+                # volumes on re-runs of the same plan (SEC-VOL-001).
+                # Same-plan retries reuse the same project via the plan
+                # link, so the addon is found here.
                 #
-                # SECURITY (addon-theft): only addons NAMED '{type}-shared'
-                # are candidates. Ecosystem shared addons are created with
-                # name='{type}-shared' below. A manually-deployed service's
+                # SECURITY (addon-theft + ecosystem independence): only
+                # addons NAMED '{type}-shared' IN THIS PROJECT are
+                # candidates. Ecosystem shared addons are created with
+                # name='{type}-shared' below. Never reuse another
+                # project's addon — each ecosystem is independent and must
+                # get its own database. A manually-deployed service's
                 # personal addons (named '{service}-{type}' by the standard
                 # provisioner) are NEVER eligible for reuse — previously
                 # the lookup matched ANY ACTIVE addon in the project, so a

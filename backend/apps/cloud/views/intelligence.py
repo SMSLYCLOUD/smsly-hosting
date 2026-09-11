@@ -695,6 +695,10 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         use_shared_addons = request.data.get('use_shared_addons', True)
         cancel_others_on_failure = request.data.get('cancel_others_on_failure', False)
         shared_addon_config = request.data.get('shared_addon_config', {})
+        _mtls_raw = request.data.get('mtls_config')
+        _mtls_config = _mtls_raw if isinstance(_mtls_raw, dict) else None
+        _rules_raw = request.data.get('communication_rules')
+        _communication_rules = _rules_raw if isinstance(_rules_raw, dict) else None
         env_scan_depth = request.data.get('env_scan_depth')
         if not isinstance(plan, dict):
             return Response(
@@ -801,7 +805,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
 
         # Harden browser-submitted plan: strip untrusted passthrough keys
         # and validate service entries before persisting/dispatching.
-        _allowed_top = {"services", "addons", "wave_size", "env_scan_depth", "project_name", "name", "use_shared_addons", "cancel_others_on_failure", "shared_addon_config"}
+        _allowed_top = {"services", "addons", "wave_size", "env_scan_depth", "project_name", "name", "use_shared_addons", "cancel_others_on_failure", "shared_addon_config", "mtls_config", "communication_rules"}
         _allowed_svc = {"name", "repo", "branch", "port", "stack", "build", "depends_on", "env_vars", "addons", "server_id", "skip", "deploy_order", "internal"}
         if not isinstance(plan.get("services", []), list) or len(plan.get("services", [])) > 50:
             return Response({'error': 'Invalid plan services list.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -825,6 +829,19 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             _clean_services.append(_cleaned)
         plan = {k: v for k, v in plan.items() if k in _allowed_top}
         plan["services"] = _clean_services
+        # mTLS + communication rules travel as siblings of `plan` in the
+        # request body (not inside it), so inject them here for BOTH the
+        # existing-plan and new-plan branches below. An explicitly passed
+        # dict (even empty) wins; otherwise keep whatever the plan itself
+        # carried so re-dispatches of stored plans don't wipe stored values.
+        if _mtls_config is not None:
+            plan['mtls_config'] = _mtls_config
+        elif not isinstance(plan.get('mtls_config'), dict):
+            plan['mtls_config'] = {}
+        if _communication_rules is not None:
+            plan['communication_rules'] = _communication_rules
+        elif not isinstance(plan.get('communication_rules'), dict):
+            plan['communication_rules'] = {}
         if plan_record:
             if not plan_record.project:
                 plan_record.project = project
@@ -867,36 +884,166 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def ecosystem_add_service(self, request):
         """
-        Add a custom service to the ecosystem plan.
+        Add a service with a real repository to an existing ecosystem plan.
 
-        Generates docker-compose.yml, .env.production, and SPIFFE config
-        for the new service and returns it to be added to the plan.
+        Creates the Service + Deployment records in the plan's project and
+        optionally triggers deployment. A real, clonable ``repo_url`` is
+        required — placeholder repos (e.g. ``custom/...``) guarantee a
+        failed clone, so they are rejected with 400.
         """
-        service_name = request.data.get('name', '').strip()
+        import re as _re
+
+        from django.db import transaction
+
+        from apps.cloud.models import CloudProvider
+        from apps.deployments.models import Deployment, Service
+        from apps.deployments.models.ecosystem import EcosystemPlan
+        from apps.deployments.tasks.ecosystem.helpers.repo import _canonical_repo_ref
+        from apps.deployments.tasks.ecosystem.helpers.service import _next_available_service_name
+
+        plan_id = request.data.get('plan_id')
+        service_name = str(request.data.get('name', '') or '').strip()
+        repo_url = str(request.data.get('repo_url') or request.data.get('repo') or '').strip()
+        branch = str(request.data.get('branch') or 'main').strip() or 'main'
         port = request.data.get('port')
         stack = request.data.get('stack', 'python')
         directory = request.data.get('directory', '')
-        trust_domain = request.data.get('trust_domain', 'trulay.co')
+        trust_domain = request.data.get('trust_domain', 'ecosystem.local')
+        trigger_deploy = bool(request.data.get('trigger_deploy', False))
 
+        if not plan_id:
+            return Response({'error': 'plan_id is required'}, status=status.HTTP_400_BAD_REQUEST)
         if not service_name:
             return Response({'error': 'Service name is required'}, status=status.HTTP_400_BAD_REQUEST)
-        if not port:
+        if not repo_url:
+            return Response({'error': 'repo_url is required (must be a clonable GitHub/GitLab/Bitbucket URL)'}, status=status.HTTP_400_BAD_REQUEST)
+        if not _re.match(r'^https://(github\.com|gitlab\.com|bitbucket\.org)/', repo_url):
+            return Response({'error': 'Only GitHub, GitLab, and Bitbucket URLs are allowed.'}, status=status.HTTP_400_BAD_REQUEST)
+        if port is None or str(port).strip() == '':
             return Response({'error': 'Port is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             port = int(port)
+            if not 1 <= port <= 65535:
+                raise ValueError()
         except (TypeError, ValueError):
-            return Response({'error': 'Port must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Port must be an integer 1-65535'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Derive names
-        service_name = service_name.lower().replace(' ', '-').replace('_', '-')
+        # Get the plan
+        try:
+            plan_record = EcosystemPlan.objects.get(id=plan_id, user=request.user)
+        except EcosystemPlan.DoesNotExist:
+            return Response({'error': 'Ecosystem plan not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not plan_record.project:
+            return Response({'error': 'Plan has no associated project'}, status=status.HTTP_400_BAD_REQUEST)
+
+        project = plan_record.project
+
+        # Derive names (avoid IntegrityError on the globally-unique name).
+        requested_name = service_name.lower().replace(' ', '-').replace('_', '-')
+        service_name = _next_available_service_name(Service, requested_name)
         service_upper = service_name.upper().replace('-', '_')
         container_name = f"smsly-{service_name}"
-        spiffe_id = f"spiffe://{trust_domain}/service/{service_name}"
         if not directory:
             directory = f"{service_upper}/smsly-{service_name}"
+        repo_identity = _canonical_repo_ref(repo_url).lower() or repo_url.strip().lower()
 
-        # Generate docker-compose.yml
+        # Get or create ecosystem provider
+        provider = CloudProvider.objects.filter(is_active=True, scope="ecosystem").first()
+        if not provider:
+            provider = CloudProvider.objects.create(
+                name="Ecosystem Docker",
+                provider_type=CloudProvider.ProviderType.LOCAL,
+                scope="ecosystem",
+                region="us-east-1",
+                is_active=True,
+            )
+
+        with transaction.atomic():
+            # Create the service (valid model enums: DOCKER/COMPOSE, not
+            # lowercase "dockerfile"/"DOCKER" deploy_mode).
+            svc = Service.objects.create(
+                name=service_name,
+                owner=request.user,
+                project=project,
+                repository_url=repo_url,
+                branch=branch,
+                internal_port=port,
+                provider=provider,
+                buildpack="DOCKER",
+                deploy_mode="COMPOSE",
+                compose_file="docker-compose.yml",
+                compose_main_service=service_name,
+                root_directory=directory or "/",
+                managed_by="ECOSYSTEM",
+                ecosystem_repo_key=repo_identity,
+            )
+
+            # Configure mTLS for ecosystem
+            from apps.mtls.models import MtlsConfig
+            MtlsConfig.objects.get_or_create(
+                service=svc,
+                defaults={
+                    "enabled": True,
+                    "trust_domain": trust_domain,
+                    "sidecar_enabled": True,
+                },
+            )
+
+            # Create deployment
+            deployment = Deployment.objects.create(
+                service=svc,
+                commit_hash="ecosystem-deploy",
+                commit_message=f"Ecosystem add-service: {service_name}",
+                branch=branch,
+                status=Deployment.Status.QUEUED,
+                target_is_local=True,
+                build_logs=f"Ecosystem add-service: {service_name} ({stack})\nPort: {port}\n",
+            )
+
+            # Update plan's services_created AND plan services so resume
+            # views stay consistent.
+            services_created = list(plan_record.services_created or [])
+            services_created.append({
+                "repo": repo_url,
+                "name": service_name,
+                "requested_name": requested_name,
+                "service_id": str(svc.id),
+                "deployment_id": str(deployment.id),
+                "status": "queued",
+                "stack": stack,
+                "port": port,
+            })
+            plan_record.services_created = services_created
+            _plan_json = dict(plan_record.plan or {})
+            _plan_services = list(_plan_json.get("services") or [])
+            _plan_services.append({
+                "repo": repo_url,
+                "name": service_name,
+                "branch": branch,
+                "port": port,
+                "stack": stack,
+                "build": "dockerfile",
+                "depends_on": [],
+                "deploy_order": len(_plan_services),
+                "internal": True,
+            })
+            _plan_json["services"] = _plan_services
+            plan_record.plan = _plan_json
+            plan_record.save(update_fields=['services_created', 'plan', 'updated_at'])
+
+        # Optionally trigger deployment (outside the transaction so a broker
+        # outage doesn't roll back the created rows).
+        _deploy_warning = None
+        if trigger_deploy:
+            try:
+                from apps.deployments.tasks import smart_deploy_task
+                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id), skip_review=True)
+            except Exception as exc:
+                _deploy_warning = f"Service created but deployment dispatch failed: {exc}"
+
+        # Also return the generated templates for reference
         docker_compose = f"""# =============================================================================
 # SMSLY {service_upper} - Production Docker Compose
 # =============================================================================
@@ -949,7 +1096,6 @@ networks:
     name: smsly-network
 """
 
-        # Generate .env.production
         env_production = f"""# =============================================================================
 # SMSLY {service_upper} - Production Configuration
 # =============================================================================
@@ -983,7 +1129,6 @@ CALLER_SVID_VALIDATION=true
 MIGRATION_PHASE=phase4
 """
 
-        # Generate SPIFFE entry
         spiffe_entry = {
             "spiffe_id": {
                 "trust_domain": trust_domain,
@@ -1002,41 +1147,53 @@ MIGRATION_PHASE=phase4
             "x509_svid_ttl": "1h"
         }
 
-        # Build the service plan entry
-        service_plan = {
-            "repo": f"custom/{service_name}",
-            "name": service_name,
-            "stack": stack,
-            "port": port,
-            "build": "dockerfile",
-            "addons": ["POSTGRES"],
-            "env_vars": {
-                "PORT": str(port),
-                "ENVIRONMENT": "production",
-                "SPIFFE_TRUST_DOMAIN": trust_domain,
+        _resp = {
+            'service': {
+                'id': str(svc.id),
+                'name': svc.name,
+                'requested_name': requested_name,
+                'repo_url': repo_url,
+                'branch': branch,
+                'port': port,
+                'stack': stack,
+                'deployment_id': str(deployment.id),
+                'status': 'queued',
             },
-            "depends_on": [],
-            "deploy_order": 0,
-            "skip": False,
-            "_custom": True,
-            "_directory": directory,
-            "_docker_compose": docker_compose,
-            "_env_production": env_production,
-            "_spiffe_entry": spiffe_entry,
-        }
-
-        return Response({
-            'service': service_plan,
+            'service_plan': {
+                "repo": repo_url,
+                "name": service_name,
+                "branch": branch,
+                "stack": stack,
+                "port": port,
+                "build": "dockerfile",
+                "addons": ["POSTGRES"],
+                "env_vars": {
+                    "PORT": str(port),
+                    "ENVIRONMENT": "production",
+                    "SPIFFE_TRUST_DOMAIN": trust_domain,
+                },
+                "depends_on": [],
+                "deploy_order": 0,
+                "skip": False,
+                "_custom": True,
+                "_directory": directory,
+                "_docker_compose": docker_compose,
+                "_env_production": env_production,
+                "_spiffe_entry": spiffe_entry,
+            },
             'checklist': {
                 'docker_compose': f'{directory}/docker-compose.yml',
-                'env_production': f'{directory}//.env.production',
+                'env_production': f'{directory}/.env.production',
                 'spiffe_entry': spiffe_entry,
                 'services_to_update': [
                     'gateway', 'platform-api', 'backend', 'identity',
                     'audit', 'policy', 'rate-limit', 'email', 'transaction-chain'
                 ],
-            }
-        })
+            },
+        }
+        if _deploy_warning:
+            _resp['warning'] = _deploy_warning
+        return Response(_resp)
 
     @action(detail=False, methods=['get'])
     def task_status(self, request):
@@ -1197,6 +1354,28 @@ MIGRATION_PHASE=phase4
             'ai_provider': plan.ai_provider,
             'plan': plan.plan,
             'scan_progress': plan.scan_progress,
+        })
+
+    @action(detail=False, methods=['get'])
+    def plan_status(self, request):
+        """Return plan status with deployment progress for polling."""
+        from apps.deployments.models.ecosystem import EcosystemPlan
+
+        plan_id = request.query_params.get('plan_id')
+        if not plan_id:
+            return Response({'error': 'plan_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        plan = EcosystemPlan.objects.filter(id=plan_id, user=request.user).first()
+        if not plan:
+            return Response({'error': 'Plan not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({
+            'plan_id': str(plan.id),
+            'status': plan.status,
+            'services_status': plan.services_status or {},
+            'error_message': plan.error_message,
+            'completed_at': plan.completed_at,
+            'services_created': plan.services_created or [],
         })
 
     @action(detail=False, methods=['get'])

@@ -76,6 +76,11 @@ urlpatterns = [
         name='ecosystem-active-plan',
     ),
     path(
+        'ecosystem/plan_status/',
+        IntelligenceViewSet.as_view({'get': 'plan_status'}),
+        name='ecosystem-plan-status',
+    ),
+    path(
         'ecosystem/download-env/',
         IntelligenceViewSet.as_view({'get': 'download_env'}),
         name='ecosystem-download-env',
