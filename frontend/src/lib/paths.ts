@@ -17,14 +17,16 @@ export const PROTECTED_PREFIXES = [
   "/admin-dashboard",
   "/project",
   "/projects",
-  "/store",
+  // NOTE: /store and /templates are intentionally PUBLIC (browsing uses
+  // the AllowAny templates API; deploy/provision actions 401-gate to
+  // /login). /marketplace stays protected — it manages the operator's
+  // own addons/services, not the public catalog.
   "/marketplace",
   "/settings",
   "/ecosystem",
   "/intelligence",
   "/servers",
   "/tunnels",
-  "/templates",
   "/reseller",
   "/backups",
   "/transfers",

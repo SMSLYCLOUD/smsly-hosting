@@ -12,6 +12,13 @@ class SecurityMiddleware:
     """
     Zero Trust Security Middleware.
     Enforces HMAC V2 Signature Verification for all API requests.
+
+    ORDERING NOTE (verified live 2026-09-12): this middleware returns 403
+    for unsigned /api/* requests BEFORE CommonMiddleware's APPEND_SLASH
+    pass runs (which only 301s responses that would otherwise be 404).
+    API consumers therefore see ``403 Invalid or missing signature`` —
+    never the trailing-slash 301 — until they sign correctly. Sign
+    first, then fix trailing slashes.
     """
 
     def __init__(self, get_response):

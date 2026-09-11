@@ -135,9 +135,30 @@ ensure_migrations() {
     fi
 }
 
+# ── 6. Traefik middleware references must resolve (2026-09-11 root cause)
+# A router referencing an undefined middleware (e.g. crowdsec-bouncer
+# declared on a container Traefik skips via exposedbydefault=false) makes
+# Traefik drop EVERY affected router — all user traffic fell through to
+# route-fallback 503 with exit 143 across the stack. Traefik logs the
+# signature below; alert loudly so the operator fixes labels instead of
+# debugging 503s. Detection only — never restart Traefik from here.
+ensure_traefik_middlewares() {
+    command -v docker >/dev/null 2>&1 || return 0
+    docker inspect smsly-hosting-traefik-1 >/dev/null 2>&1 || { log "traefik not running — skipping middleware check"; return 0; }
+    local bad
+    bad=$(docker logs smsly-hosting-traefik-1 --since 60m 2>&1 | grep -i -e 'middleware.*does not exist' -e 'unknown middleware' | head -n 5) || true
+    if [ -n "$bad" ]; then
+        log "ALERT: Traefik reports undefined middleware(s) in the last 60m — user routers are being dropped (503 via route-fallback). Fix container labels:"
+        echo "$bad" | while IFS= read -r line; do log "ALERT detail: $line"; done
+    else
+        log "traefik middleware refs OK (no undefined-middleware errors in 60m)"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
 ensure_edge_lockdown
 ensure_migrations
+ensure_traefik_middlewares
 log "integrity check complete"

@@ -175,6 +175,10 @@ export const config = {
     "/metrics",
     "/openapi.json",
     // Page-level protection (unchanged from before).
+    // NOTE: /store and /templates are intentionally PUBLIC (browsing uses
+    // the AllowAny templates API; deploy actions 401-gate to /login).
+    // /marketplace stays protected — it manages the operator's own
+    // addons/services, not the public catalog.
     "/dashboard/:path*",
     "/new/:path*",
     "/services/:path*",
@@ -184,14 +188,12 @@ export const config = {
     "/admin-dashboard/:path*",
     "/project/:path*",
     "/projects/:path*",
-    "/store/:path*",
     "/marketplace/:path*",
     "/settings/:path*",
     "/ecosystem/:path*",
     "/intelligence/:path*",
     "/servers/:path*",
     "/tunnels/:path*",
-    "/templates/:path*",
     "/reseller/:path*",
     "/backups/:path*",
     "/transfers/:path*",

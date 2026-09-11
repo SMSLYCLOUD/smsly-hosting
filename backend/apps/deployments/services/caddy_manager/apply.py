@@ -225,6 +225,24 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                 _reg_exc,
             )
 
+        # SHADOW GUARD (2026-09-12 incident): a wildcard->custom 301 that
+        # shares its source host with an explicit site block never fires
+        # (exact-host sites win). Refuse such content instead of silently
+        # deploying a dead redirect.
+        try:
+            from .validation import validate_wildcard_redirects_authoritative
+            shadow_errors = validate_wildcard_redirects_authoritative(content)
+            if shadow_errors:
+                result["message"] = shadow_errors[0]
+                logger.error("apply_caddyfile refused: %s", result["message"])
+                return result
+        except Exception as _shadow_exc:
+            logger.warning(
+                "wildcard-redirect shadow check errored (%s) — proceeding; "
+                "verify the Caddyfile after apply.",
+                _shadow_exc,
+            )
+
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
         try:
             os.chmod(CADDY_CONFIG_DIR, 0o775)

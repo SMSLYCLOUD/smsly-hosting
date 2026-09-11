@@ -257,6 +257,44 @@ def validate_no_site_block_regression(
     ]
 
 
+def validate_wildcard_redirects_authoritative(content: str) -> list[str]:
+    """Refuse content where a wildcard->custom redirect can never fire.
+
+    SHADOW GUARD (2026-09-12 incident): the generated Caddyfile contained
+    both ``@wildcard_redirect_N host <wild>`` (301 to the custom domain)
+    AND an explicit top-level ``<wild> { ... }`` site block. Caddy routes
+    exact-host sites before wildcard sites, so the explicit block
+    shadowed the redirect handle — the wildcard URL proxied (200)
+    instead of redirecting (301) with no error anywhere.
+
+    The check is content-local: every ``@wildcard_redirect_*`` source
+    host must NOT also be an explicit site label in the same content.
+    """
+    sources: set[str] = set()
+    for line in str(content or "").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("@wildcard_redirect_"):
+            continue
+        if " host " not in stripped:
+            continue
+        host = stripped.split(" host ", 1)[1].strip().split()[0] if stripped.split(" host ", 1)[1].strip() else ""
+        host = host.strip().lower().rstrip(".")
+        if host:
+            sources.add(host)
+    if not sources:
+        return []
+    shadowed = sorted(s for s in sources if s in extract_site_labels(content))
+    if not shadowed:
+        return []
+    return [
+        "Wildcard->custom redirect(s) for "
+        f"{', '.join(shadowed)} would never fire: each host also has an "
+        "explicit site block, which Caddy prefers over the wildcard-site "
+        "redirect handle. Refusing to apply — regenerate without the "
+        "duplicate site block so the 301 is authoritative."
+    ]
+
+
 def validate_control_plane_block_present(content: str, platform_domain: str) -> list[str]:
     """Refuse to apply a Caddyfile that drops the control plane site block.
 

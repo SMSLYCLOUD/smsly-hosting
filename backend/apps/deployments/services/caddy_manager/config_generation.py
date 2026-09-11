@@ -350,6 +350,19 @@ def _build_service_domain_block(
     return "\n".join(lines)
 
 
+def _www_apex_redirect_target(value: str, verified_set: set[str]) -> str:
+    """Return the apex hostname when a www custom domain must 301 to it.
+
+    Canonicalization applies only when BOTH www.X and X are verified
+    customs of the same service. www-only setups (apex attached
+    elsewhere or nowhere) must keep proxying, so anything else yields
+    ``""`` (no redirect).
+    """
+    if value.startswith("www.") and value[4:] in verified_set:
+        return value[4:]
+    return ""
+
+
 def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     blocks = []
     seen = set()
@@ -415,6 +428,12 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
             ):
                 pass  # private/hidden: no public custom-domain routes
             else:
+                # Canonicalize www -> apex (301) when BOTH are verified
+                # customs of this same service: one canonical hostname per
+                # site avoids split sessions/cookies and duplicate SEO
+                # content. www-only setups (apex not attached here) keep
+                # proxying untouched.
+                _verified_ordered: list[str] = []
                 for domain_obj in service.domain_instances.filter(
                     status__in=[
                         DomainStatus.ACTIVE,
@@ -423,16 +442,30 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     ],
                     verified=True,
                 ):
-                    value = domain_obj.domain_name.strip()
-                    if not value:
+                    _raw = domain_obj.domain_name.strip()
+                    if not _raw:
                         continue
                     try:
-                        value = normalize_domain(value)
+                        _norm = normalize_domain(_raw)
                     except ValueError:
                         continue
+                    if _norm and _norm not in _verified_ordered:
+                        _verified_ordered.append(_norm)
+                _verified_set = set(_verified_ordered)
+                for value in _verified_ordered:
                     if value in seen:
                         continue
                     seen.add(value)
+                    _apex = _www_apex_redirect_target(value, _verified_set)
+                    if _apex:
+                        lines = [f"{value} {{"]
+                        lines.append("    tls {")
+                        lines.append("        on_demand")
+                        lines.append("    }")
+                        lines.append(f"        redir https://{_apex}{{uri}} 301")
+                        lines.append("}")
+                        blocks.append("\n".join(lines))
+                        continue
                     target_host = public_domain if (public_domain and not isHidden) else value
 
                     lines = [f"{value} {{"]
@@ -967,9 +1000,17 @@ def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
             target = ""
             for item in (service.custom_domains or []):
                 value = item.strip() if isinstance(item, str) else ""
-                if value:
-                    target = value
-                    break
+                if not value:
+                    continue
+                try:
+                    # Normalize (lowercase, no scheme/path/port): the map
+                    # value is interpolated into `redir https://{target}`,
+                    # so a raw "https://X/" or "X:8443" would emit a
+                    # broken redirect. First *valid* custom wins.
+                    target = normalize_domain(value)
+                except ValueError:
+                    continue
+                break
             if not target:
                 continue
             raw_public = str(service.public_domain or "").strip()
@@ -984,6 +1025,16 @@ def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
     except Exception as exc:
         logger.warning("Could not load wildcard redirect map: %s", exc)
         return {}
+
+    # Loop guard: if A redirects to B and B redirects back to A (mutual
+    # first-customs), browsers spin until their hop limit. Drop the cycle
+    # — both hosts keep proxying instead of redirect-looping.
+    for _source in [k for k, v in redirects.items() if v in redirects]:
+        logger.warning(
+            "Dropping wildcard redirect %s -> %s (mutual redirect cycle)",
+            _source, redirects[_source],
+        )
+        del redirects[_source]
 
     return dict(sorted(redirects.items()))
 
@@ -1802,6 +1853,12 @@ def generate_caddyfile(config) -> str:
     }}
     handle /grafana {{
         reverse_proxy frontend:3000
+    }}
+    handle /ui {{
+        redir / 301
+    }}
+    handle /ui/* {{
+        redir / 301
     }}
     handle {{
         reverse_proxy frontend:3000
