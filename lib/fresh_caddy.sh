@@ -55,6 +55,20 @@ EOF
             echo -e "${YELLOW}    ⚠ Could not chown caddy_data volume — cert issuance may fail later${NC}"
     fi
 
+    # Access logs live in the NAMED caddy_logs volume (compose mounts
+    # `caddy_logs:/var/log/caddy` — NOT the /opt/smsly-hosting/caddy-logs
+    # bind path created above). A root-owned volume makes every future
+    # `caddy reload` fail with "open /var/log/caddy/access.log: permission
+    # denied", leaving routing silently stale while the file on disk keeps
+    # changing (2026-09-12: wildcard site + new redirects never went live).
+    # Resolve dynamically: the project prefix is not always smsly-hosting.
+    _caddy_logs_vol="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E 'caddy_logs$' | head -n 1 || true)"
+    if [ -n "$_caddy_logs_vol" ]; then
+        echo -e "${BLUE}  → Ensuring ${_caddy_logs_vol} volume is writable by caddy (uid 1000)...${NC}"
+        docker run --rm -v "${_caddy_logs_vol}:/logs" alpine chown -R 1000:1000 /logs  || \
+            echo -e "${YELLOW}    ⚠ Could not chown ${_caddy_logs_vol} volume — future Caddy reloads may fail${NC}"
+    fi
+
     # ACME staging validation — verify Let's Encrypt can reach this server before going live
     if [ "${DOMAIN:-}" ] && [ "$USE_SSL" = "true" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         echo -e "${BLUE}  → Running ACME staging validation for $DOMAIN...${NC}"

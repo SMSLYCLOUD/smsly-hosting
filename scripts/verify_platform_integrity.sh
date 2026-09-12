@@ -19,6 +19,35 @@ LOG_PREFIX="[smsly-integrity]"
 
 log() { echo "$LOG_PREFIX $(date -Is) $*"; }
 
+# ── 7. Caddy log volume must stay writable by uid 1000 ──────────────
+# The Caddy container runs as uid 1000 and logs to the NAMED caddy_logs
+# volume. A root-owned volume makes EVERY `caddy reload` fail with
+# "open /var/log/caddy/access.log: permission denied" — routing then
+# silently goes stale while the on-disk Caddyfile keeps changing
+# (2026-09-12: wildcard site + redirects never went live). Fresh installs
+# chown it; this heals hosts that predate the fix.
+ensure_caddy_logs_writable() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local vol
+    vol=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E 'caddy_logs$' | head -n 1) || true
+    [ -n "$vol" ] || { log "no caddy_logs volume — skipping log-perm check"; return 0; }
+    local mnt="" owner=""
+    mnt=$(docker volume inspect "$vol" --format '{{.Mountpoint}}' 2>/dev/null) || {
+        log "ALERT: cannot inspect volume $vol"; return 0
+    }
+    owner=$(stat -c '%u:%g' "$mnt" 2>/dev/null) || owner="unknown"
+    if [ "$owner" = "1000:1000" ]; then
+        log "caddy_logs volume writable (1000:1000)"
+        return 0
+    fi
+    log "ALERT: caddy_logs volume owned by $owner — routing reloads are failing; repairing"
+    if docker run --rm -v "$vol:/logs" alpine chown -R 1000:1000 /logs >/dev/null 2>&1; then
+        log "caddy_logs ownership repaired to 1000:1000"
+    else
+        log "ALERT: caddy_logs ownership repair FAILED — future Caddy reloads will fail"
+    fi
+}
+
 # ── 1. Registry TLS pair ─────────────────────────────────────────────
 ensure_registry_pair() {
     local crt="$CERTS/registry.crt" key="$CERTS/registry.key"
@@ -161,4 +190,5 @@ ensure_spire_running
 ensure_edge_lockdown
 ensure_migrations
 ensure_traefik_middlewares
+ensure_caddy_logs_writable
 log "integrity check complete"

@@ -495,6 +495,71 @@ marker-scrape legacy rows. Never append runtime output to `build_logs`.
 
 ---
 
+### 23. Caddy Reloads Fail Silently on Volume Permissions
+
+**What happened:** The `caddy_logs` named volume was root-owned while the
+Caddy container runs as uid 1000. Every `caddy reload` failed with `open
+/var/log/caddy/access.log: permission denied` — but the on-disk Caddyfile
+kept updating, so everything *looked* current while the process served a
+days-old config (wildcard site + new redirects never went live, no certs
+issued, zero errors surfaced).
+
+**Why it's bad:** File-vs-process divergence is invisible: all code review
+passes, all file checks pass, production silently serves stale routing.
+
+**Lessons:**
+- Fresh installs must chown data/log volumes to the runtime UID *after*
+  `up` (`lib/fresh_caddy.sh` pattern: throwaway `alpine chown` on the
+  named volume). A bind path with a similar name (`caddy-logs/` vs the
+  `caddy_logs` volume) does NOT cover it — verify with the volume's
+  mountpoint, not a lookalike path.
+- `scripts/verify_platform_integrity.sh` re-checks this hourly and
+  self-heals. Any new non-root runtime volume belongs in that script.
+- When routing "doesn't take effect", compare the RUNNING config
+  (Caddy admin API `:2019/config/`) against the file — never trust the
+  file alone.
+
+---
+
+## Edge / Caddy Ownership (read before touching routing)
+
+This area has caused three production outages (Sep 02 control-plane
+wipe, Sep 06 stub wipe, Sep 11 middleware drop, Sep 12 stale reload).
+Agents must follow these boundaries:
+
+**Single writer.** The ONLY legal way to change edge routing is
+`generate_caddyfile()` → `apply_caddyfile()` (fail-closed validators
+inside apply refuse platform drops, total wipes, and shadowed
+redirects). Never hand-edit the live Caddyfile, never `caddy reload`
+around the apply path, never write site blocks from shell scripts
+(`lib/ops_domain.sh` regenerates through the same functions; its
+static stub is emergency-fallback only when the backend is down).
+
+**File ≠ live.** After any routing change, confirm the RUNNING config
+(`GET :2019/config/`) contains the new site/redirect — a successful
+file write with a failed reload is the standard silent failure (see
+#23). `apply_caddyfile` records reload failures for the dashboard;
+treat a recorded failure as P0.
+
+**Redirect authority.** A redirect handle fires only if NO explicit
+site block exists for its source host (exact-host sites win over
+wildcard sites — validated by
+`validate_wildcard_redirects_authoritative`). Adding a per-host block
+for a redirect source kills the redirect with no error.
+
+**Volumes have owners.** Caddy runs as uid 1000. `caddy_data` and
+`caddy_logs` named volumes must be `1000:1000` (see #23). Any new
+volume mounted into a non-root container needs the same treatment at
+install time AND in `verify_platform_integrity.sh`.
+
+**Traefik middleware refs must resolve.** Every middleware named on a
+router must be defined on a container Traefik actually discovers
+(`traefik.enable=true` with `exposedbydefault=false`). One dangling
+ref drops every router that names it (Sep 11 platform-wide 503s).
+`verify_platform_integrity.sh` greps Traefik logs for the signature.
+
+---
+
 ## Pre-Commit Checklist
 
 Before committing changes to this codebase:
@@ -551,6 +616,16 @@ Before committing changes to this codebase:
 20. **After any form component receives a polled prop:** Verify it uses the
     `dirtyRef`/`seededRef` pattern and depends on `prop?.id`, not the object
     reference (AGENTS.md #21).
+21. **After touching Caddy generation or routing:** Run the Caddy test
+    files (`test_caddyfile_validity`, `test_caddy_redirect_canonical`,
+    `test_caddy_path_redirects`) and confirm the shadow validator passes
+    on representative output. Never hand-edit a live Caddyfile to test.
+22. **After touching installer shell (`lib/`, `scripts/`, `install.sh`):**
+    Run `tests/test_shell_nounset_safety.py` (no bare multi-var `local`
+    under `set -u`) and `bash -n` every changed file.
+23. **After adding a volume to a non-root container in compose:** Verify
+    install-time ownership (throwaway `alpine chown` pattern) AND add a
+    check to `scripts/verify_platform_integrity.sh` (AGENTS.md #23).
 
 ---
 
