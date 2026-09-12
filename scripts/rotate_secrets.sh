@@ -35,9 +35,14 @@ gen_token() { python3 -c "import secrets; print(secrets.token_urlsafe(32))"; }
 # Read the existing .env (if any) to preserve non-secret values
 declare -A PRESERVE
 if [ -f "$ENV_FILE" ]; then
-    while IFS='=' read -r key value; do
+    # NOTE: `${line#*=}`, not `IFS='=' read` — bash drops a trailing
+    # delimiter, corrupting values ending in '=' (Fernet keys, 2026-09-12).
+    while IFS= read -r line; do
         # Skip comments and blank lines
-        [[ -z "$key" || "$key" =~ ^# ]] && continue
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        [[ "$line" == *"="* ]] || continue
+        key="${line%%=*}"
+        value="${line#*=}"
         PRESERVE["$key"]="$value"
     done < "$ENV_FILE"
 fi

@@ -197,14 +197,20 @@ else
     # implementation wrote to $INSTALL_DIR/.secrets.tmp which could leak on
     # early failure (rm -f only ran on the success path).
     SECRETS_GENERATED=false
-    while IFS='=' read -r _smsly_secrets_key _smsly_secrets_val; do
-        case "$_smsly_secrets_key" in
-            SECRET_KEY|FIELD_ENCRYPTION_KEY|POSTGRES_PASSWORD|REDIS_PASSWORD|RABBITMQ_PASSWORD|GATEWAY_SECRET|GITHUB_WEBHOOK_SECRET|AUTOSCALER_API_TOKEN|FRP_AUTH_TOKEN|PGCAT_ADMIN_PASSWORD|REPLICATION_PASSWORD|SENTINEL_PASSWORD|REGISTRY_HTTP_SECRET|CROWDSEC_BOUNCER_KEY)
+    # NOTE: never parse KEY=value with `IFS='=' read` — bash drops a
+    # trailing delimiter, so every Fernet key (always ending in '=') lost
+    # its padding, failed validation, and aborted the install (2026-09-12).
+    # `${line#*=}` strips only up to the FIRST '=', preserving the value.
+    while IFS= read -r _smsly_secrets_line; do
+        case "$_smsly_secrets_line" in
+            SECRET_KEY=*|FIELD_ENCRYPTION_KEY=*|POSTGRES_PASSWORD=*|REDIS_PASSWORD=*|RABBITMQ_PASSWORD=*|GATEWAY_SECRET=*|GITHUB_WEBHOOK_SECRET=*|AUTOSCALER_API_TOKEN=*|FRP_AUTH_TOKEN=*|PGCAT_ADMIN_PASSWORD=*|REPLICATION_PASSWORD=*|SENTINEL_PASSWORD=*|REGISTRY_HTTP_SECRET=*|CROWDSEC_BOUNCER_KEY=*)
+                _smsly_secrets_key="${_smsly_secrets_line%%=*}"
+                _smsly_secrets_val="${_smsly_secrets_line#*=}"
                 printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
                 ;;
         esac
     done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" --shell  | grep -E '^[A-Z_]+=' || true)
-    unset _smsly_secrets_key _smsly_secrets_val
+    unset _smsly_secrets_line _smsly_secrets_key _smsly_secrets_val
     if [ -n "${SECRET_KEY:-}" ] && [ -n "${FIELD_ENCRYPTION_KEY:-}" ]; then
         SECRETS_GENERATED=true
         echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
@@ -255,7 +261,7 @@ try:
     print('valid')
 except Exception:
     print('invalid')
-"  | grep -q valid; then
+"  | grep -qx valid; then
         echo -e "${RED}  ✗ CRITICAL: Failed to generate a valid Fernet encryption key.${NC}"
         echo -e "${RED}    Ensure the 'cryptography' package is installed and retry.${NC}"
         echo -e "${RED}    pip3 install cryptography${NC}"
@@ -269,7 +275,7 @@ try:
     print('valid')
 except Exception:
     print('invalid')
-"  | grep -q valid; then
+"  | grep -qx valid; then
         echo -e "${RED}  ✗ CRITICAL: Failed to generate a valid backup Fernet encryption key.${NC}"
         echo -e "${RED}    Ensure the 'cryptography' package is installed and retry.${NC}"
         echo -e "${RED}    pip3 install cryptography${NC}"
