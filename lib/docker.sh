@@ -276,14 +276,18 @@ cleanup_stale_containers() {
 
 compose_stack_build() {
     docker_login
+    # Full-stack builds take 10+ minutes on small boxes (frontend npm
+    # build alone is ~4-6 min on 2 vCPU). A 300s cap killed healthy
+    # builds mid-lint with exit 124 (2026-09-12). 1800s still bounds
+    # true hangs while fitting real builds.
     local services=""
     if is_node_mode; then
         stop_node_excluded_services
         services="$(compose_stack_build_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" build "$@" $services
+        timeout -k 5 1800 docker compose -f "$COMPOSE_FILE" build "$@" $services
     else
-        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" build "$@"
+        timeout -k 5 1800 docker compose -f "$COMPOSE_FILE" build "$@"
     fi
 }
 
@@ -294,9 +298,9 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 300 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 300 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
