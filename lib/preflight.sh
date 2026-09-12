@@ -176,6 +176,37 @@ ensure_system_swap() {
         local needed_mb=$target_swap_mb
         [ "$current_swap_mb" -gt 0 ] && [ "$active_swap_count" -gt 0 ] && needed_mb=$((target_swap_mb - current_swap_mb))
 
+        # DISK GUARD (2026-09-12): a 4x-RAM swapfile on a small disk fills
+        # the filesystem and kills Docker builds with "no space left on
+        # device" (26GB swap on a 47GB disk). Cap the new file so at least
+        # 15GB (or 30% on larger disks) stays free, max 8GB new — swap
+        # beyond that never helps builds anyway. Never fail the install
+        # over swap: skip loudly when the disk cannot spare it.
+        local avail_mb=""
+        avail_mb="$(df -m / 2>/dev/null | awk 'NR==2{print $4}' || true)"
+        local disk_total_mb=""
+        disk_total_mb="$(df -m / 2>/dev/null | awk 'NR==2{print $2}' || true)"
+        local reserve_mb=15360
+        if [ -n "$disk_total_mb" ] && [ "$disk_total_mb" -gt 0 ] 2>/dev/null; then
+            local pct_reserve=$((disk_total_mb * 30 / 100))
+            [ "$pct_reserve" -gt "$reserve_mb" ] && reserve_mb="$pct_reserve"
+        fi
+        local max_new_mb=8192
+        if [ -n "$avail_mb" ] && [ "$avail_mb" -gt 0 ] 2>/dev/null; then
+            max_new_mb=$((avail_mb - reserve_mb))
+            [ "$max_new_mb" -gt 8192 ] && max_new_mb=8192
+        else
+            max_new_mb=0
+        fi
+        if [ "$max_new_mb" -lt 512 ]; then
+            echo -e "${YELLOW}  ⚠ Skipping swap provisioning: disk cannot spare it (avail ${avail_mb:-unknown}MB, reserve ${reserve_mb}MB). Continuing without extra swap.${NC}"
+            return 0
+        fi
+        if [ "$needed_mb" -gt "$max_new_mb" ]; then
+            echo -e "${YELLOW}  ⚠ Capping new swap at ${max_new_mb}MB to protect disk space (4x-RAM target was ${needed_mb}MB)${NC}"
+            needed_mb="$max_new_mb"
+        fi
+
         echo -e "${BLUE}  → Provisioning ${needed_mb}MB local swap (RAM: ${current_ram_mb}MB, Target: 4x)...${NC}"
         local swapfile="/swapfile-smsly"
 
