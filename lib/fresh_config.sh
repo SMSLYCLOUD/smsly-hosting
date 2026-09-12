@@ -355,6 +355,18 @@ except Exception:
         done
         [ -n "$_detected_sentinels" ] && SENTINEL_HOSTS="$_detected_sentinels"
     fi
+    # Compute effective compose profiles BEFORE the template: the
+    # observability stack is 'medium'-gated, so always include it.
+    # NOTE: this MUST live here, not inside the template heredoc below.
+    # Unquoted heredocs still run backtick/${} expansions, and the bare
+    # ${COMPOSE_PROFILES} + `medium`/`full` backticks that used to live in
+    # the template aborted generation under set -u with zero output,
+    # killing the whole install (2026-09-12).
+    COMPOSE_PROFILES="${COMPOSE_PROFILES:-${DB_HA_ENABLED:-local-ha}}"
+    case ",${COMPOSE_PROFILES}," in
+        *,medium,*) ;;
+        *) COMPOSE_PROFILES="${COMPOSE_PROFILES},medium" ;;
+    esac
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
@@ -380,19 +392,15 @@ DATABASE_CONNECT_TIMEOUT=5
 # ── Database HA mode ─────────────────────────────────────────────────
 # local-ha | patroni | external (see .env.example for semantics).
 # Docker Compose natively honors COMPOSE_PROFILES from this file, so
-# every `docker compose` call picks the right DB stack with no flags.
+# every 'docker compose' call picks the right DB stack with no flags.
 DB_HA_ENABLED=${DB_HA_ENABLED:-local-ha}
 # Observability (Loki/Promtail/Grafana/cAdvisor/docker-labels/alertmanager)
-# is `medium`-gated in docker-compose.prod.yml. Fresh installs previously
+# is 'medium'-gated in docker-compose.prod.yml. Fresh installs previously
 # defaulted to profiles=local-ha only, so the entire monitoring stack
 # silently never started (Grafana embeds 502'd, Loki blackouts went
 # unnoticed, autoscaler Prometheus targets stayed incomplete). Always
-# include `medium`; `full` (Falco, SPIRE, Verdaccio) stays opt-in.
-COMPOSE_PROFILES=${DB_HA_ENABLED:-local-ha}
-case ",${COMPOSE_PROFILES}," in
-    *,medium,*) ;;
-    *) COMPOSE_PROFILES="${COMPOSE_PROFILES},medium" ;;
-esac
+# include 'medium'; 'full' (Falco, SPIRE, Verdaccio) stays opt-in.
+COMPOSE_PROFILES=$COMPOSE_PROFILES
 # PgCat upstream. patroni mode routes through HAProxy write/read ports.
 PGCAT_DB_HOST=${PGCAT_DB_HOST:-postgres-primary}
 PGCAT_DB_PORT=${PGCAT_DB_PORT:-5432}
@@ -545,6 +553,13 @@ EOF
         apply_agent_lite_env_overrides "$ENV_TMP"
     fi
 
+    # Fail LOUD if template generation produced a stub (e.g. a future
+    # heredoc-expansion regression). validate_env_file below would list
+    # every variable missing; this names the cause instead.
+    if [ ! -s "$ENV_TMP" ] || ! grep -q '^DOMAIN=' "$ENV_TMP"; then
+        echo -e "${RED}  x .env template generation produced incomplete output ($ENV_TMP) — aborting before validation${NC}"
+        exit 1
+    fi
     # Atomic move and validation
     if validate_env_file "$ENV_TMP"; then
         mv "$ENV_TMP" "$INSTALL_DIR/.env"
