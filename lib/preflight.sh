@@ -210,17 +210,33 @@ ensure_system_swap() {
         echo -e "${BLUE}  → Provisioning ${needed_mb}MB local swap (RAM: ${current_ram_mb}MB, Target: 4x)...${NC}"
         local swapfile="/swapfile-smsly"
 
-        # If the file already exists but is too small, we need to recreate it
+        # If the file already exists but is too small, we need to recreate it.
+        # Cap the recreate at the disk-guard maximum: forgetting this refilled
+        # a 47GB disk to 100% (2026-09-12: capped 1017MB silently reset
+        # to 31744MB after rm).
         if [ -f "$swapfile" ]; then
             swapoff "$swapfile"  || true
             rm -f "$swapfile"
-            # Since we removed the old file, we need to create the full target amount
+            # Since we removed the old file, we need the full target amount
+            # — but NEVER above the disk-guard cap (see above).
             needed_mb=$target_swap_mb
+            if [ "$needed_mb" -gt "$max_new_mb" ]; then
+                needed_mb="$max_new_mb"
+            fi
         fi
 
-        fallocate -l ${needed_mb}M "$swapfile"  || dd if=/dev/zero of="$swapfile" bs=1M count=$needed_mb status=none
+        # A failed allocation must NEVER kill the install (and must
+        # never leave a partial file for mkswap to bless). Swap is
+        # best-effort: warn and continue without it.
+        if ! fallocate -l ${needed_mb}M "$swapfile" >/dev/null 2>&1; then
+            if ! dd if=/dev/zero of="$swapfile" bs=1M count=$needed_mb status=none >/dev/null 2>&1; then
+                echo -e "${YELLOW}  \u26a0 Swap allocation failed (disk full?) \u2014 continuing without extra swap${NC}"
+                rm -f "$swapfile"
+                return 0
+            fi
+        fi
         chmod 600 "$swapfile"
-        mkswap "$swapfile" 
+        mkswap "$swapfile"
         swapon "$swapfile"  || true
         # Make permanent (idempotent)
         if ! grep -q "$swapfile" /etc/fstab ; then
