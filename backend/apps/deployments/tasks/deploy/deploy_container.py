@@ -501,9 +501,39 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                         )
                     EnvoySidecar.inject_sidecar(service)
                     if not EnvoySidecar.wait_sidecar_ready(service):
-                        raise RuntimeError(
-                            f"Envoy sidecar for {service.name} did not become "
-                            f"ready with an issued SVID before go-live"
+                        # Mesh is mandatory ONLY for ecosystem services.
+                        # For everything else a failed sidecar must degrade
+                        # to a warning — failing a healthy app deploy over
+                        # broken mesh plumbing stranded prod deploys
+                        # (operator had to disable mTLS to ship).
+                        if str(getattr(service, "managed_by", "") or "").upper() == "ECOSYSTEM":
+                            raise RuntimeError(
+                                f"Envoy sidecar for {service.name} did not become "
+                                f"ready with an issued SVID before go-live"
+                            )
+                        logger.error(
+                            "Envoy sidecar for %s not ready — continuing WITHOUT "
+                            "mesh sidecar (non-ecosystem service)",
+                            service.name,
+                        )
+                        append_log(
+                            deployment,
+                            f"[MTLS-WARN] Envoy sidecar for {service.name} did not "
+                            f"become ready. Deployment continues without the mesh "
+                            f"sidecar — re-enable mTLS or run the mTLS repair "
+                            f"action to attach it later.\n",
+                        )
+                else:
+                    # Mesh disabled for this service: sweep any non-running
+                    # sidecar corpse (Created/Exited from a failed inject)
+                    # so it never confuses status checks. Running sidecars
+                    # are never touched here.
+                    try:
+                        EnvoySidecar.remove_orphan_sidecar(service)
+                    except Exception as exc:
+                        logger.debug(
+                            "Orphan sidecar sweep skipped for %s: %s",
+                            service.name, exc,
                         )
             except (docker.errors.ImageNotFound, docker.errors.NotFound) as exc:
                 # The sidecar IMAGE itself is unavailable (never built on

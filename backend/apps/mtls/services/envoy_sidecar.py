@@ -439,6 +439,47 @@ class EnvoySidecar:
             return {"status": "not_found", "name": sidecar_name}
 
     @staticmethod
+    def remove_orphan_sidecar(service):
+        """
+        Remove a non-running Envoy sidecar corpse (Created/Exited/Dead).
+
+        A running sidecar is NEVER touched — it may be serving mesh
+        traffic even when the DB row disagrees. Missing container and
+        unreachable daemon degrade to a status dict, never raise.
+        """
+        from apps.cloud.docker_client import get_docker_client
+
+        sidecar_name = EnvoySidecar.get_sidecar_name(service)
+        try:
+            client = get_docker_client()
+            try:
+                container = client.containers.get(sidecar_name)
+            except Exception:
+                return {"status": "not_found", "name": sidecar_name}
+            try:
+                container.reload()
+            except Exception:
+                pass
+            if getattr(container, "status", "") == "running":
+                return {"status": "running_kept", "name": sidecar_name}
+            try:
+                try:
+                    container.stop(timeout=5)
+                except Exception:
+                    pass
+                container.remove(force=True)
+            except Exception:
+                # Already gone between reload and remove — desired state.
+                pass
+            logger.info("Removed orphan Envoy sidecar %s for service %s",
+                        sidecar_name, service.name)
+            return {"status": "removed", "name": sidecar_name}
+        except Exception as exc:
+            logger.debug("Orphan sidecar cleanup skipped for %s: %s",
+                         service.name, exc)
+            return {"status": "unknown", "name": sidecar_name}
+
+    @staticmethod
     def get_sidecar_status(service):
         """
         Check if the Envoy sidecar is running and healthy.
@@ -451,10 +492,14 @@ class EnvoySidecar:
         """
         from apps.cloud.docker_client import get_docker_client
 
-        client = get_docker_client()
-        sidecar_name = EnvoySidecar.get_sidecar_name(service)
-
         try:
+            # Client acquisition is inside the try: without a reachable
+            # daemon get_docker_client() itself raises, and the status
+            # endpoint must degrade to "not_found", never 500.
+            # sidecar_name stays outside: the except handler needs it and
+            # it never touches Docker.
+            sidecar_name = EnvoySidecar.get_sidecar_name(service)
+            client = get_docker_client()
             container = client.containers.get(sidecar_name)
 
             # Check health via Envoy admin API
