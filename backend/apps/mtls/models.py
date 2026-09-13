@@ -27,8 +27,10 @@ class MtlsConfig(models.Model):
         related_name="mtls_config",
     )
     enabled = models.BooleanField(
-        default=True,
-        help_text="Whether mTLS is enabled for this service.",
+        default=False,
+        help_text="Master switch for mTLS on this service. Off by default for "
+        "non-ecosystem services; ecosystem deploy and platform services "
+        "enable their own rows explicitly.",
     )
     trust_domain = models.CharField(
         max_length=255,
@@ -51,11 +53,12 @@ class MtlsConfig(models.Model):
         help_text="When the SVID was last rotated.",
     )
     sidecar_enabled = models.BooleanField(
-        default=True,
+        default=False,
         help_text=(
             "Enable Envoy sidecar for transparent mTLS. "
             "When enabled, an Envoy proxy is deployed alongside the service "
-            "to handle mTLS termination/origination transparently."
+            "to handle mTLS termination/origination transparently. "
+            "Off by default for non-ecosystem services."
         ),
     )
     created_at = models.DateTimeField(auto_now_add=True)

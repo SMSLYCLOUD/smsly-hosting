@@ -13,23 +13,34 @@ logger = logging.getLogger(__name__)
 def create_mtls_config(sender, instance, created, **kwargs):
     """Auto-create MtlsConfig when a new Service is created.
 
-    Default services get PLATFORM mTLS (platform.local trust domain),
-    automatic and enabled by default — including the Envoy sidecar.
-    Ecosystem services are normalized to the ecosystem trust domain
-    (ecosystem.local) by the ecosystem deploy task afterwards.
+    mTLS is OFF by default for user services — operators opt in per
+    service (dashboard toggle / enable endpoint) or via ecosystem
+    deploy, which normalizes its own rows explicitly right after
+    creation. The only exception is platform-operated services
+    (managed_by="PLATFORM"), which keep platform mesh enabled so the
+    control plane never loses its own mTLS silently. Existing rows are
+    never touched (get_or_create): flipping a default must not rewrite
+    anyone's live mesh membership.
     """
     if created:
         try:
+            platform_owned = (
+                str(getattr(instance, "managed_by", "") or "").upper()
+                == "PLATFORM"
+            )
             config, created = MtlsConfig.objects.get_or_create(
                 service=instance,
                 defaults={
-                    "enabled": True,
+                    "enabled": platform_owned,
                     "trust_domain": "platform.local",
-                    "sidecar_enabled": True,
+                    "sidecar_enabled": platform_owned,
                 },
             )
             if created:
-                logger.info("Auto-created MtlsConfig for service %s", instance.name)
+                logger.info(
+                    "Auto-created MtlsConfig for service %s (enabled=%s)",
+                    instance.name, platform_owned,
+                )
         except Exception as exc:
             logger.error(
                 "Failed to auto-create MtlsConfig for service %s: %s",
