@@ -213,17 +213,6 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 id=replica_id, status='RUNNING',
             )
         spawner = SpawningService()
-        # Refuse to destroy the last replica when min_replicas >= 1, so a
-        # service cannot be taken to zero by manual destroy. To take a
-        # service to zero, set min_replicas=0 first.
-        running = ServiceReplica.objects.filter(
-            service=replica.service, status='RUNNING'
-        ).count()
-        if running <= (replica.service.min_replicas or 0):
-            return Response({
-                'error': f'Cannot destroy replica — service is at min_replicas '
-                f'({replica.service.min_replicas or 0}). Set min_replicas=0 first.',
-            }, status=400)
         try:
             spawner.destroy(replica)
             return Response({'status': 'destroyed'})
