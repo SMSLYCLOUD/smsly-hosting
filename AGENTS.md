@@ -519,6 +519,41 @@ passes, all file checks pass, production silently serves stale routing.
   (Caddy admin API `:2019/config/`) against the file — never trust the
   file alone.
 
+### 24. Never Bind-Mount a Host File That Is Not Guaranteed to Exist
+
+**What happened:** `inject_sidecar` bind-mounted
+`/opt/smsly-hosting/builds/envoy.yaml.template` into every Envoy sidecar,
+but nothing ever created that file. On the first injection the daemon
+auto-created a **directory** at that path, and every sidecar start died
+with `not a directory: Are you trying to mount a directory onto a file`.
+The directory persists, so every retry and every later service failed
+identically (4 sidecars stuck `Created`, ecosystem deploy dead). A second
+instance of the same trap: the rendered `envoy-<service>.yaml` was
+unlinked right after injection while the sidecar restarts with
+`unless-stopped` — the next daemon/host restart would re-trigger the
+identical failure.
+
+**Why it's bad:** One missing file becomes host-wide poison: the daemon's
+auto-create turns a create-time error into permanent state, and retries
+can never succeed until a human removes the directory by hand.
+
+**Lessons:**
+- Never bind-mount a host path unless the code guarantees it exists **as
+  the right type** (preflight `os.path.isfile`, fail fast with a clear
+  error — never a daemon 400). Prefer content already baked into the
+  image (the sidecar image carries its own template).
+- Never delete a bind-mounted source while its container still exists
+  with a restart policy — the next restart re-resolves the source and
+  the daemon re-poisons it. Delete the file only when the container is
+  removed (`remove_sidecar` / `remove_orphan_sidecar` pattern).
+- Code that replaces a poisoned path must self-heal already-poisoned
+  hosts (directory-only `rmtree` of the legacy path in `inject_sidecar`)
+  — otherwise the fix requires manual host surgery on every box.
+
+**How to catch:** `grep -rn "volumes={" backend/apps/mtls/ backend/apps/deployments/services/`.
+Every host-path bind source must be traceable to code that creates it as
+a file, or it is this bug.
+
 ---
 
 ## Edge / Caddy Ownership (read before touching routing)
@@ -626,6 +661,11 @@ Before committing changes to this codebase:
 23. **After adding a volume to a non-root container in compose:** Verify
     install-time ownership (throwaway `alpine chown` pattern) AND add a
     check to `scripts/verify_platform_integrity.sh` (AGENTS.md #23).
+24. **After adding/changing a host-path bind mount in backend code:**
+    Every host source must be traceable to code that creates it as a file
+    (preflight `isfile`, fail fast), must never be deleted while its
+    container exists with a restart policy, and poisoned-host self-heal
+    belongs in the same change (AGENTS.md #24).
 
 ---
 

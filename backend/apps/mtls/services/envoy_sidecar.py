@@ -53,9 +53,54 @@ SPIRE_SVIDS_VOLUME = "spire-ecosystem-agent-svids"
 SPIRE_AGENT_SOCKET_CONTAINER_PATH = "/opt/spire/run"
 SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 
+# Legacy poison: pre-2026-09-14 code bind-mounted this host path into every
+# sidecar, but nothing ever created the file — the daemon auto-created a
+# DIRECTORY there and all sidecar starts failed with "not a directory".
+# inject_sidecar removes it (directory only, never a real file) so already-
+# poisoned hosts self-heal on the next deploy.
+LEGACY_TEMPLATE_MOUNT_SOURCE = "/opt/smsly-hosting/builds/envoy.yaml.template"
+
 
 class EnvoySidecar:
     """Manages Envoy sidecar lifecycle for a service."""
+
+    @staticmethod
+    def _config_path_for(service) -> str:
+        """Host path of the rendered Envoy config bind-mounted into the sidecar."""
+        config_dir = os.getenv("ENVOY_CONFIG_DIR", "/opt/smsly-hosting/builds")
+        safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "", service.name)[:80]
+        return os.path.join(config_dir, f"envoy-{safe_name}.yaml")
+
+    @staticmethod
+    def _remove_legacy_template_poison() -> None:
+        """Delete the auto-created directory from the old template bind-mount.
+
+        Only removes it when it is a directory (the daemon's auto-create
+        artifact). A real file there is left untouched. Best-effort: host
+        state must never fail an injection.
+        """
+        try:
+            if os.path.isdir(LEGACY_TEMPLATE_MOUNT_SOURCE) and not os.path.islink(
+                LEGACY_TEMPLATE_MOUNT_SOURCE
+            ):
+                shutil.rmtree(LEGACY_TEMPLATE_MOUNT_SOURCE)
+                logger.warning(
+                    "Removed legacy poison directory %s (daemon auto-create "
+                    "artifact of the old template bind-mount)",
+                    LEGACY_TEMPLATE_MOUNT_SOURCE,
+                )
+        except Exception as exc:
+            logger.debug("Legacy template poison cleanup skipped: %s", exc)
+
+    @staticmethod
+    def _remove_config_file(service) -> None:
+        """Best-effort delete of a service's rendered sidecar config."""
+        try:
+            path = EnvoySidecar._config_path_for(service)
+            if os.path.isfile(path) and not os.path.islink(path):
+                os.unlink(path)
+        except Exception as exc:
+            logger.debug("Sidecar config cleanup skipped for %s: %s", service.name, exc)
 
     @staticmethod
     def _split_image_ref(image: str) -> tuple[str, str, str]:
@@ -237,7 +282,7 @@ class EnvoySidecar:
         """
         template_path = os.getenv("ENVOY_TEMPLATE_PATH") or os.path.join(
             os.path.dirname(__file__),
-            "..", "..", "..", "..", "..",
+            "..", "..", "..", "..",
             "infrastructure", "envoy", "envoy.yaml.template",
         )
 
@@ -329,15 +374,32 @@ class EnvoySidecar:
         # Generate Envoy config
         config = EnvoySidecar.generate_config(service, mtls_config)
 
-        # Write config to a temp file and mount it
+        # Self-heal hosts poisoned by the old template bind-mount before
+        # creating anything (the daemon auto-created directory breaks
+        # every start until it is gone).
+        EnvoySidecar._remove_legacy_template_poison()
+
+        # Write the rendered config and bind-mount it. The file MUST stay
+        # on disk afterwards: the sidecar restarts with
+        # restart_policy=unless-stopped, and a missing bind source makes
+        # the daemon auto-create a directory on the next start — the same
+        # "not a directory" death. It is deleted only when the sidecar
+        # itself is removed (remove_sidecar / remove_orphan_sidecar).
         config_dir = os.getenv("ENVOY_CONFIG_DIR", "/opt/smsly-hosting/builds")
         os.makedirs(config_dir, exist_ok=True)
-        safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "", service.name)[:80]
-        config_path = os.path.join(config_dir, f"envoy-{safe_name}.yaml")
+        config_path = EnvoySidecar._config_path_for(service)
         if os.path.isdir(config_path):
             shutil.rmtree(config_path)
         with open(config_path, "w") as f:
             f.write(config)
+
+        # Preflight: fail fast with a clear error instead of a daemon 400.
+        if not os.path.isfile(config_path):
+            raise RuntimeError(
+                f"Envoy sidecar config for {service.name} is not a file at "
+                f"{config_path} — refusing to create a container the daemon "
+                "cannot start"
+            )
 
         try:
             from apps.deployments.services.mtls_integration import resolve_spire_volume_name
@@ -373,9 +435,19 @@ class EnvoySidecar:
                 },
                 volumes={
                      config_path: {"bind": "/etc/envoy/envoy.yaml", "mode": "ro"},
-                     "/opt/smsly-hosting/builds/envoy.yaml.template": {
-                         "bind": "/etc/envoy/envoy.yaml.template", "mode": "ro",
-                     },
+                     # NOTE: the envoy.yaml.template is NOT bind-mounted.
+                     # The sidecar image bakes it in (infrastructure/envoy/
+                     # Dockerfile: COPY envoy.yaml.template
+                     # /etc/envoy/envoy.yaml.template) and the entrypoint
+                     # renders from it as a fallback. A host bind-mount here
+                     # used to point at
+                     # /opt/smsly-hosting/builds/envoy.yaml.template, a file
+                     # nothing ever creates — the daemon then auto-created a
+                     # DIRECTORY at that path and every sidecar start died
+                     # with "not a directory: Are you trying to mount a
+                     # directory onto a file", poisoning all later retries
+                     # (the directory persists). Never bind-mount a host
+                     # path that is not guaranteed to exist as a file.
                      socket_volume: {
                         "bind": SPIRE_AGENT_SOCKET_CONTAINER_PATH,
                         "mode": "ro",
@@ -402,14 +474,12 @@ class EnvoySidecar:
                 "name": sidecar_name,
                 "container_id": container.id[:12],
             }
-
-        finally:
-            # Keep the host-visible config while the sidecar is running.
-            try:
-                if not os.getenv("ENVOY_CONFIG_DIR"):
-                    os.unlink(config_path)
-            except Exception:
-                pass
+        except Exception:
+            # Injection failed: drop the config we just wrote so a stale
+            # file can never confuse the next attempt (inject always
+            # re-renders it from scratch).
+            EnvoySidecar._remove_config_file(service)
+            raise
 
     @staticmethod
     def remove_sidecar(service):
@@ -433,6 +503,7 @@ class EnvoySidecar:
             container.stop(timeout=5)
             container.remove(force=True)
             logger.info("Removed Envoy sidecar %s for service %s", sidecar_name, service.name)
+            EnvoySidecar._remove_config_file(service)
             return {"status": "removed", "name": sidecar_name}
         except Exception as exc:
             logger.warning("Could not remove sidecar %s: %s", sidecar_name, exc)
@@ -473,6 +544,7 @@ class EnvoySidecar:
                 pass
             logger.info("Removed orphan Envoy sidecar %s for service %s",
                         sidecar_name, service.name)
+            EnvoySidecar._remove_config_file(service)
             return {"status": "removed", "name": sidecar_name}
         except Exception as exc:
             logger.debug("Orphan sidecar cleanup skipped for %s: %s",

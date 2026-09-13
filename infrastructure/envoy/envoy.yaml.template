@@ -9,7 +9,6 @@
 #
 # Placeholders (replaced at runtime):
 #   {{APP_PORT}}          - Application's internal port (e.g., 8000)
-#   {{SPIFFE_ID}}         - This service's SPIFFE identity
 #   {{TRUST_DOMAIN}}      - SPIFFE trust domain (ecosystem.local)
 #   {{SERVICE_NAME}}      - Service name for DNS resolution
 #   {{SPIRE_AGENT_SOCKET}} - Path to SPIRE agent UDS socket
