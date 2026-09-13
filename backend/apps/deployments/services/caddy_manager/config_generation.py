@@ -167,7 +167,12 @@ def _service_path_redirect_rules(service) -> list[tuple[str, str, str, str]]:
                 source_host = normalize_domain(source_host)
             except ValueError:
                 continue
-        if not _PATH_REDIRECT_SEGMENT_RE.match(path):
+        if path != "/" and not _PATH_REDIRECT_SEGMENT_RE.match(path):
+            continue
+        if path == "/" and not source_host:
+            # Unscoped root rule (no source host): fail safe, skip. The
+            # serializer never produces these; emitting one would redirect
+            # a whole site root on every site block it lands in.
             continue
         # Strip a URL scheme if the operator pasted a full URL.
         if "://" in target:
@@ -209,6 +214,24 @@ def _path_redirect_site_lines(
     lines: list[str] = []
     for index, (source_host, segment, target, target_path) in enumerate(rules):
         if source_host and source_host != site_domain:
+            continue
+        if segment == "/":
+            # Whole-host root redirect (e.g. accounts.trulay.co =>
+            # accounts.trulay.co/login): exact `/` ONLY. Sub-paths must
+            # keep proxying - matching them too would swallow the site
+            # (and loop when target shares the host).
+            if not source_host:
+                # Unscoped root rule: fail safe, skip. The serializer
+                # never produces these; emitting one would redirect a
+                # whole site root on every site block it lands in.
+                continue
+            dest = f"https://{target}{target_path if target_path and target_path != '/' else '/'}"
+            lines.extend([
+                f"{indent}@path_redir_{index}_root path /",
+                f"{indent}handle @path_redir_{index}_root {{",
+                f"{indent}    redir {dest} 301",
+                f"{indent}}}",
+            ])
             continue
         if target_path and target_path != "/":
             # Host/path target: /seg -> https://host/path, /seg/x -> https://host/path/x
@@ -276,7 +299,19 @@ def _service_host_alias_rules(service) -> list[tuple[str, str]]:
     return rules
 
 
-def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: str, host_header: str) -> str:
+def _alias_scoped_redirects(rules: list[tuple[str, str, str, str]],
+                            alias_host: str) -> list[tuple[str, str, str, str]]:
+    """Redirect rules eligible for an alias host's site block.
+
+    Only domain-scoped rules naming THIS alias host. Plain-path rules
+    stay out (alias blocks never had them; adding them could hijack an
+    alias rewrite_root), and foreign-host rules stay dropped.
+    """
+    return [r for r in (rules or []) if r and r[0] == alias_host]
+
+
+def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: str, host_header: str,
+                           path_redirect_rules: list[tuple[str, str, str, str]] | None = None) -> str:
     """Caddyfile site block for a host alias (accounts.google.com pattern).
 
     Semantics (from Service.host_aliases help_text):
@@ -303,6 +338,13 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         "        output file /var/log/caddy/access.log",
         "    }",
     ])
+    # Domain-scoped path redirects for THIS alias host (e.g. source
+    # ``accounts.example.com/login``). Redirect handles come first: Caddy
+    # `handle` blocks are exclusive, first match wins, and a redirect must
+    # beat the rewrite/proxy below. Plain-path rules are deliberately NOT
+    # included — alias blocks never had them.
+    if path_redirect_rules:
+        lines.extend(_path_redirect_site_lines(path_redirect_rules, site_domain=alias_host))
     if rewrite_root and rewrite_root != "/":
         lines.extend([
             "    @alias_root path /",
@@ -491,15 +533,22 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
             # blocks that serve this app under extra hostnames. Exact host
             # matches take precedence over the platform wildcard block.
             upstream_url = _remote_upstream_url_for_service(service)
+            redirect_rules = _service_path_redirect_rules(service)
             for alias_host, rewrite_root in _service_host_alias_rules(service):
                 if alias_host in seen:
                     continue
                 seen.add(alias_host)
+                # Only domain-scoped rules naming THIS alias host are
+                # emitted here — they had no site block before and were
+                # silently dropped. Plain-path rules stay out (existing
+                # behavior preserved); foreign-host rules stay dropped.
+                alias_redirects = _alias_scoped_redirects(redirect_rules, alias_host)
                 blocks.append(_build_host_alias_block(
                     alias_host,
                     rewrite_root,
                     upstream_url,
                     public_domain or alias_host,
+                    path_redirect_rules=alias_redirects,
                 ))
 
             # Custom staging domain: only route if this service has an active
@@ -1128,6 +1177,21 @@ def _get_wildcard_path_redirect_lines(wildcard_domain: str) -> list[str]:
                     continue
                 matcher = f"@wpr_{svc_alias}_{r_index}"
                 rest_re = f"wpr_{svc_alias}_{r_index}"
+                if target_path and target_path != "/":
+                    tp = target_path.rstrip('/')
+                else:
+                    tp = ""
+                if segment == "/":
+                    # Whole-host root redirect scoped to this service's
+                    # hostname: exact `/` only, sub-paths keep proxying.
+                    lines.append(f"    {matcher} {{")
+                    lines.append(f"        host {public_domain}")
+                    lines.append("        path /")
+                    lines.append("    }")
+                    lines.append(f"    handle {matcher} {{")
+                    lines.append(f"        redir https://{target}{tp or '/'} 301")
+                    lines.append("    }")
+                    continue
                 seg_q = segment.replace('/', r'\/')
                 # Named matcher combining host + path_regexp. The regexp
                 # captures the remainder (empty for the exact /seg match,

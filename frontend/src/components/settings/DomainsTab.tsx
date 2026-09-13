@@ -179,6 +179,21 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
         toast({ title: "Copied!", description: text });
     };
 
+    // Pull the first human-readable message out of a DRF field-error
+    // envelope (e.g. {path_redirects: ["..."]}) so backend validation
+    // (loop guards, duplicates) surfaces verbatim instead of a generic
+    // "Failed to save". Read-only display helper — always returns a string.
+    const firstFieldError = (err: any, field: string): string | undefined => {
+        const bag = err?.response?.data?.[field];
+        if (Array.isArray(bag)) {
+            const first = bag.find((m) => typeof m === 'string');
+            if (first) return first;
+        } else if (typeof bag === 'string') {
+            return bag;
+        }
+        return undefined;
+    };
+
     const updateHostAliases = async (next: { host: string; rewrite_root: string }[]) => {
         try {
             const updated = await servicesApi.update(service.id, { host_aliases: next });
@@ -197,7 +212,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
             }
             toast({ title: 'Host alias saved', description: 'Routing sync dispatched. SSL is issued automatically once DNS resolves.' });
         } catch (err: any) {
-            toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to save host alias.', variant: 'destructive' });
+            toast({ title: 'Error', description: firstFieldError(err, 'host_aliases') || err?.response?.data?.error || 'Failed to save host alias.', variant: 'destructive' });
         }
     };
 
@@ -219,20 +234,45 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const updatePathRedirects = async (next: { path: string; target: string }[]) => {
         try {
             const updated = await servicesApi.update(service.id, { path_redirects: next });
-            setService(prev => ({ ...prev, ...updated }));
+            // Same guard as host aliases above: only merge payloads that
+            // actually look like a Service, never a DRF error envelope
+            // (React error #31 otherwise).
+            const looksLikeService = updated && (
+                typeof updated === 'object' &&
+                !('path_redirects' in updated && Object.keys(updated).length <= 3) &&
+                ('id' in updated || 'name' in updated)
+            );
+            if (looksLikeService) {
+                setService(prev => ({ ...prev, ...updated }));
+            }
             toast({ title: 'Path redirects saved', description: 'Routing sync dispatched.' });
         } catch (err: any) {
-            toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to save path redirect.', variant: 'destructive' });
+            toast({ title: 'Error', description: firstFieldError(err, 'path_redirects') || err?.response?.data?.error || 'Failed to save path redirect.', variant: 'destructive' });
         }
     };
 
     const handleAddPathRedirect = () => {
-        const path = newPath.trim().toLowerCase().replace(/^https?:\/\//, '');
-        const target = newTarget.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
-        if (!/^(?:[a-z0-9.-]+)?\/[a-z0-9_-]{1,63}$/.test(path)) {
-            toast({ title: 'Invalid source', description: 'Use /account or app.example.com/account', variant: 'destructive' });
+        // Accept /account, app.example.com/account, or a whole domain
+        // like app.example.com (redirects the domain root). Mirrors the
+        // backend rules: single-segment paths, loop-safe targets.
+        const raw = newPath.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        let ok = false;
+        if (raw.startsWith('/')) {
+            ok = /^\/[a-z0-9_-]{1,63}$/.test(raw);
+        } else if (raw && !/[\s/]/.test(raw)) {
+            ok = raw.includes('.'); // bare domain = whole-domain source
+        } else if (raw) {
+            const slash = raw.indexOf('/');
+            const host = raw.slice(0, slash);
+            const seg = raw.slice(slash);
+            ok = host.includes('.') && !/[\s/]/.test(host) && /^\/[a-z0-9_-]{1,63}$/.test(seg);
+        }
+        if (!ok) {
+            toast({ title: 'Invalid source', description: 'Use /account, app.example.com/account, or a whole domain like app.example.com', variant: 'destructive' });
             return;
         }
+        const path = raw;
+        const target = newTarget.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
         if (!target || !target.includes('.') || target.includes(' ')) {
             toast({ title: 'Invalid target', description: 'Enter a host like account.example.com or account.example.com/login', variant: 'destructive' });
             return;
@@ -555,7 +595,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 <div className="mb-8">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Path Redirects</h4>
                     <p className="text-xs text-muted-foreground mb-3">
-                        Permanently redirect /path or a specific domain/path to another domain/path.
+                        Permanently redirect /path, a specific domain/path, or a whole domain to another domain/path.
                     </p>
 
                     {(service.path_redirects ?? []).map(({ path, target }) => (
@@ -576,7 +616,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
 
                     <div className="flex gap-2 mt-3">
                         <Input
-                            placeholder="/account or app.example.com/account"
+                            placeholder="/account, app.example.com/account, or app.example.com"
                             value={newPath}
                             onChange={(e) => setNewPath(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleAddPathRedirect()}
