@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
-import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -10,6 +10,17 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_dt(value: Any) -> Optional[datetime]:
+    """Parse an ISO datetime string robustly; return None if unparseable."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        # cscli emits RFC3339 with 'Z'; datetime.fromisoformat needs '+00:00'.
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -27,6 +38,7 @@ class CrowdSecDecision:
     start_time: str
     end_time: str
     service: Optional[str] = None
+    host: Optional[str] = None
     raw: Optional[dict] = None
 
 
@@ -53,26 +65,55 @@ class CrowdSecService:
     def __init__(self):
         self._decisions_cache: Optional[list[CrowdSecDecision]] = None
         self._alerts_cache: Optional[list[CrowdSecAlert]] = None
-        self._cache_ts: float = 0
+        self._decisions_ts: float = 0
+        self._alerts_ts: float = 0
         self._cache_ttl = 10  # seconds
 
-    def _run_cscli(self, args: list[str]) -> dict:
-        """Run cscli and return parsed JSON."""
-        cmd = ["docker", "exec", "smsly-crowdsec", "cscli"] + args + ["-o", "json"]
+    def _run_cscli(self, args: list[str]) -> Any:
+        """Run cscli and return parsed JSON (list or dict).
+
+        Callers must include their own ``-o json`` flags; this helper
+        never appends output flags so duplicate ``-o json -o json``
+        can never reach cscli.
+        """
+        cmd = ["docker", "exec", "smsly-crowdsec", "cscli"] + args
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if result.returncode != 0:
                 logger.warning("cscli %s failed: %s", " ".join(args), result.stderr)
-                return {}
-            return json.loads(result.stdout) if result.stdout.strip() else {}
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as exc:
+                return []
+            if not result.stdout.strip():
+                return []
+            return json.loads(result.stdout)
+        except FileNotFoundError:
+            logger.warning("cscli %s failed: docker CLI not available", " ".join(args))
+            return []
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as exc:
             logger.warning("cscli %s error: %s", " ".join(args), exc)
-            return {}
+            return []
 
-    def _fetch_decisions_raw(self) -> list[dict]:
+    @staticmethod
+    def _as_list(raw: Any) -> list[dict]:
+        """Normalize cscli JSON output to a list of dicts.
+
+        cscli normally returns a JSON list, but tolerate wrapper dicts
+        (``{"decisions": [...]}``) and return [] for anything else so
+        callers never iterate dict keys as if they were records.
+        """
+        if isinstance(raw, list):
+            return [d for d in raw if isinstance(d, dict)]
+        if isinstance(raw, dict):
+            for key in ("decisions", "alerts", "data", "items"):
+                nested = raw.get(key)
+                if isinstance(nested, list):
+                    return [d for d in nested if isinstance(d, dict)]
+            return []
+        return []
+
+    def _fetch_decisions_raw(self) -> Any:
         return self._run_cscli(["decisions", "list", "-o", "json"])
 
-    def _fetch_alerts_raw(self) -> list[dict]:
+    def _fetch_alerts_raw(self) -> Any:
         return self._run_cscli(["alerts", "list", "-o", "json"])
 
     def _fetch_metrics_raw(self) -> dict:
@@ -87,13 +128,26 @@ class CrowdSecService:
             return {}
 
     def _get_service_hosts(self) -> dict[str, set[str]]:
-        """Map service_id -> set of hostnames it routes (public_domain, customs, aliases)."""
-        from apps.deployments.models import Service
-        mapping = {}
-        for svc in Service.objects.only("id", "public_domain", "custom_domains", "host_aliases").iterator():
+        """Map service_id -> set of hostnames it routes (public, staging, customs, aliases)."""
+        try:
+            from apps.deployments.models import Service
+        except Exception as exc:
+            logger.debug("CrowdSec host map unavailable: %s", exc)
+            return {}
+        mapping: dict[str, set[str]] = {}
+        try:
+            qs = Service.objects.only(
+                "id", "public_domain", "staging_domain", "custom_domains", "host_aliases"
+            ).iterator()
+        except Exception as exc:
+            logger.debug("CrowdSec host map query failed: %s", exc)
+            return {}
+        for svc in qs:
             hosts = set()
-            if svc.public_domain:
-                hosts.add(svc.public_domain.strip().lower().rstrip("."))
+            for attr in ("public_domain", "staging_domain"):
+                raw_host = getattr(svc, attr, None)
+                if isinstance(raw_host, str) and raw_host.strip():
+                    hosts.add(raw_host.strip().lower().rstrip("."))
             for d in svc.custom_domains or []:
                 if isinstance(d, str) and d.strip():
                     hosts.add(d.strip().lower().rstrip("."))
@@ -126,24 +180,17 @@ class CrowdSecService:
         
         alert = raw.get("alert", {}) if isinstance(raw.get("alert"), dict) else {}
         scenario = raw.get("scenario") or alert.get("scenario") or ""
-        
-        # Get host from alert events if available
-        service = None
+
+        # Get host from alert events if available (kept for batch enrichment).
         host = None
         events = alert.get("events", []) if isinstance(alert, dict) else raw.get("events", [])
         if isinstance(events, list) and events:
             first_event = events[0] if isinstance(events[0], dict) else {}
             meta = first_event.get("meta", {}) if isinstance(first_event.get("meta"), dict) else {}
-            host = (first_event.get("meta", {}).get("http_host") 
-                    or meta.get("http_host") 
-                    or meta.get("request_host")
-                    or meta.get("host"))
-            if host:
-                # Try to get service from host
-                # Will resolve in batch below
-                pass
-        
-        decision = CrowdSecDecision(
+            if isinstance(meta, dict):
+                host = meta.get("http_host") or meta.get("request_host") or meta.get("host")
+
+        return CrowdSecDecision(
             id=str(raw.get("id") or raw.get("uuid") or ""),
             scope=raw.get("scope", ""),
             value=raw.get("value", ""),
@@ -155,34 +202,35 @@ class CrowdSecService:
             simulated=bool(raw.get("simulated", False)),
             start_time=raw.get("start_time", ""),
             end_time=raw.get("end_time", ""),
+            service=None,  # filled in batch by _enrich_with_service
+            host=host,
             raw=raw,
         )
-        # Set service and host for later enrichment
-        decision.service = None  # Will be filled in batch
-        decision.raw = {"host": host} if host else None
-        return decision
 
     def _normalize_alert(self, raw: dict, host_map: dict[str, set[str]]) -> CrowdSecAlert:
         """Map cscli alert JSON to CrowdSecAlert with service enrichment."""
         alert = raw if isinstance(raw, dict) else {}
         events = alert.get("events", []) if isinstance(alert.get("events"), list) else []
         
-        # Extract host from events
+        # Extract host from events; summarize every event (the event
+        # carrying the host must not be dropped from the summary).
         host = None
         events_summary = []
         for ev in events:
-            if isinstance(ev, dict):
-                meta = ev.get("meta", {}) if isinstance(ev.get("meta"), dict) else {}
-                host = ev.get("meta", {}).get("http_host") or meta.get("http_host") or meta.get("request_host")
-                if host:
-                    break
-                events_summary.append({
-                    "source": ev.get("source", ""),
-                    "method": meta.get("http_method", ""),
-                    "path": meta.get("http_path", "") or meta.get("uri", ""),
-                    "status": meta.get("http_status", ""),
-                    "user_agent": meta.get("http_user_agent", ""),
-                })
+            if not isinstance(ev, dict):
+                continue
+            meta = ev.get("meta", {}) if isinstance(ev.get("meta"), dict) else {}
+            if not isinstance(meta, dict):
+                meta = {}
+            if host is None:
+                host = meta.get("http_host") or meta.get("request_host") or meta.get("host")
+            events_summary.append({
+                "source": ev.get("source", ""),
+                "method": meta.get("http_method", ""),
+                "path": meta.get("http_path", "") or meta.get("uri", ""),
+                "status": meta.get("http_status", ""),
+                "user_agent": meta.get("http_user_agent", ""),
+            })
         
         service = None
         if host:
@@ -207,14 +255,8 @@ class CrowdSecService:
         """Batch-enrich decisions with service_id via host matching."""
         host_map = self._get_service_hosts()
         for d in decisions:
-            host = None
-            if d.raw and "host" in d.raw:
-                host = d.raw.get("host")
-            if not host and d.scenario:
-                # Try to extract from raw if available
-                pass
-            if host:
-                svc_id = self._resolve_service_for_host(host, host_map)
+            if d.host:
+                svc_id = self._resolve_service_for_host(d.host, host_map)
                 if svc_id:
                     d.service = svc_id
         return decisions
@@ -228,19 +270,27 @@ class CrowdSecService:
         limit: int = 100,
     ) -> list[CrowdSecDecision]:
         """Get decisions with optional filters, enriched with service_id."""
-        # Cache
+        # Cache (decisions have their own timestamp; alerts must not evict them).
         now = time.time()
-        if self._decisions_cache is None or (now - self._cache_ts) > self._cache_ttl:
-            raw = self._fetch_decisions_raw()
+        if self._decisions_cache is None or (now - self._decisions_ts) > self._cache_ttl:
+            raw = self._as_list(self._fetch_decisions_raw())
+            host_map = self._get_service_hosts()
             self._decisions_cache = self._enrich_with_service(
-                [self._normalize_decision(d, self._get_service_hosts()) for d in raw]
+                [self._normalize_decision(d, host_map) for d in raw]
             )
-            self._cache_ts = now
-        
-        results = self._decisions_cache
+            self._decisions_ts = now
+
+        results = list(self._decisions_cache)
         if active:
-            now_iso = datetime.now(timezone.utc).isoformat()
-            results = [d for d in results if d.end_time and d.end_time >= now_iso]
+            now_dt = datetime.now(timezone.utc)
+            active_results = []
+            for d in results:
+                end_dt = _parse_dt(d.end_time)
+                # Keep decisions with no/unparseable end_time (fail-open:
+                # never hide a ban because of a timestamp format change).
+                if end_dt is None or end_dt >= now_dt:
+                    active_results.append(d)
+            results = active_results
         if ip:
             results = [d for d in results if d.value == ip]
         if scenario:
@@ -251,31 +301,40 @@ class CrowdSecService:
 
     def get_alerts(self, limit: int = 50) -> list[CrowdSecAlert]:
         now = time.time()
-        if self._alerts_cache is None or (now - self._cache_ts) > self._cache_ttl:
-            raw = self._fetch_alerts_raw()
+        if self._alerts_cache is None or (now - self._alerts_ts) > self._cache_ttl:
+            raw = self._as_list(self._fetch_alerts_raw())
             host_map = self._get_service_hosts()
-            self._alerts_cache = [self._normalize_alert(a, self._get_service_hosts()) for a in raw]
-            self._cache_ts = time.time()
-        return self._alerts_cache[:limit]
+            self._alerts_cache = [self._normalize_alert(a, host_map) for a in raw]
+            self._alerts_ts = now
+        return list(self._alerts_cache)[:limit]
 
     def get_metrics(self) -> dict:
         return self._fetch_metrics_raw()
 
     def unban(self, ip: str, range_type: str = "Ip") -> dict:
-        """Unban an IP or range."""
+        """Unban an IP or range. Returns {"status": ...} or {"error": ...}."""
         try:
             if range_type == "Range":
+                ipaddress.ip_network(ip, strict=False)
                 cmd = ["docker", "exec", "smsly-crowdsec", "cscli", "decisions", "delete", "--range", ip]
             else:
+                ipaddress.ip_address(ip)
                 cmd = ["docker", "exec", "smsly-crowdsec", "cscli", "decisions", "delete", "--ip", ip]
+        except ValueError:
+            return {"error": f"invalid {'CIDR range' if range_type == 'Range' else 'IP address'}: {ip}"}
+        try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if result.returncode == 0:
-                # Invalidate cache
+                # Invalidate caches
                 self._decisions_cache = None
                 self._alerts_cache = None
-                self._cache_ts = 0
+                self._decisions_ts = 0
+                self._alerts_ts = 0
                 return {"status": "removed", "ip": ip}
             return {"error": result.stderr or "unban failed"}
+        except FileNotFoundError:
+            logger.warning("unban failed: docker CLI not available")
+            return {"error": "docker CLI not available on this host"}
         except Exception as exc:
             logger.exception("unban failed")
             return {"error": str(exc)}

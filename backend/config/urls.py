@@ -238,6 +238,7 @@ urlpatterns = [
     path('api/v1/', include('apps.mcp.urls')),
     path('api/v1/', include('apps.deployments.urls')),
     path('api/v1/cloud/', include('apps.cloud.urls')),
+    path('api/v1/crowdsec/', include('apps.crowdsec.urls')),
     path('api/v1/teams/', include('apps.teams.urls')),
     path('api/v1/autoscaler/', include('apps.autoscaler.urls')),
     path('api/v1/notifications/', include('apps.notifications.urls')),

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
-from django.utils import timezone
-from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.request import Request
@@ -14,6 +11,14 @@ from rest_framework.response import Response
 from .services import get_crowdsec_service
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_limit(raw: object, default: int, maximum: int = 500) -> int:
+    try:
+        limit = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(limit, maximum))
 
 
 @api_view(["GET"])
@@ -34,11 +39,9 @@ def crowdsec_decisions(request: Request) -> Response:
         ip = request.query_params.get("ip") or None
         scenario = request.query_params.get("scenario") or None
         service_id = request.query_params.get("service_id") or None
-        limit = int(request.query_params.get("limit", 100))
-        if limit > 500:
-            limit = 500
+        limit = _parse_limit(request.query_params.get("limit", 100), 100)
 
-        decisions = get_crowdsec_service().get_decisions(
+        decisions = service.get_decisions(
             active=active, ip=ip, scenario=scenario, service_id=service_id, limit=limit
         )
 
@@ -103,7 +106,7 @@ def crowdsec_service_decisions(request: Request, service_id: str) -> Response:
 def crowdsec_alerts(request: Request) -> Response:
     """List CrowdSec alerts."""
     try:
-        limit = int(request.query_params.get("limit", 50))
+        limit = _parse_limit(request.query_params.get("limit", 50), 50)
         alerts = get_crowdsec_service().get_alerts(limit=limit)
         return Response({
             "count": len(alerts),
@@ -179,16 +182,20 @@ def crowdsec_unban(request: Request) -> Response:
         result = get_crowdsec_service().unban(ip, range_type)
         if "error" in result:
             return Response(result, status=500)
-        
-        # Audit log
-        from apps.core.models import AuditLog
-        AuditLog(
-            actor=request.user.get_username(),
-            action="CROWDSEC_UNBAN",
-            target=f"IP {ip}",
-            metadata={"ip": ip, "range_type": range_type},
-        ).save()
-        
+
+        # Audit log (best-effort: never fail the unban response on audit errors)
+        try:
+            from apps.core.models import AuditLog
+            AuditLog(
+                user=request.user if getattr(request, "user", None) and request.user.is_authenticated else None,
+                actor=request.user.get_username() if getattr(request, "user", None) and request.user.is_authenticated else "system",
+                action="CROWDSEC_UNBAN",
+                target=f"IP {ip}",
+                metadata={"ip": ip, "range_type": range_type},
+            ).save()
+        except Exception:
+            logger.exception("crowdsec_unban audit log failed")
+
         return Response(result)
     except Exception as exc:
         logger.exception("crowdsec_unban failed")

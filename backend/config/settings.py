@@ -728,6 +728,7 @@ INSTALLED_APPS = [
     'apps.permissions',
     'apps.mcp',
     'apps.media',
+    'apps.crowdsec',
 ]
 
 if IS_AGENT_MODE:
