@@ -645,6 +645,32 @@ class EnvoySidecar:
                 if isinstance(output, (bytes, bytearray)):
                     output = output.decode(errors="replace")
                 if certs.exit_code == 0 and want in (output or ""):
+                    # Persist immediately so the Services page stops showing
+                    # "SVID Missing" without waiting for the hourly
+                    # sync_svid_metadata_task beat. Best-effort only — a DB
+                    # failure must never fail an otherwise ready deploy.
+                    try:
+                        import json as _json
+
+                        from apps.mtls.tasks import _parse_sidecar_identity
+
+                        try:
+                            _certs_data = _json.loads(output or "{}")
+                        except Exception:
+                            _certs_data = {}
+                        _uri, _expiry = _parse_sidecar_identity(_certs_data)
+                        if _expiry is not None:
+                            from django.utils import timezone as _tz
+
+                            from apps.mtls.models import MtlsConfig
+
+                            MtlsConfig.objects.filter(service=service).update(
+                                svid_expiry=_expiry, last_rotation=_tz.now()
+                            )
+                    except Exception as exc:
+                        logger.debug(
+                            "SVID persist skipped for %s: %s", service.name, exc
+                        )
                     logger.info("Envoy sidecar ready with SVID for %s", service.name)
                     return True
                 last_state = "SVID not issued yet"

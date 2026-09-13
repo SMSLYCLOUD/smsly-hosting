@@ -16,6 +16,35 @@ from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, RETRY_DELAY_STANDA
 logger = logging.getLogger(__name__)
 
 
+def _parse_expiry(raw):
+    """Parse an Envoy /certs expiration_time into an aware UTC datetime.
+
+    Envoy emits ``%Y-%m-%dT%H:%M:%SZ`` but fractional seconds
+    (``...T15:26:43.123Z`` / nanos) have been observed from SDS dumps.
+    Returns None when unparseable — callers treat that as "no SVID yet"
+    rather than crashing.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
+        try:
+            return datetime.datetime.strptime(text, fmt).replace(
+                tzinfo=datetime.timezone.utc
+            )
+        except (ValueError, TypeError):
+            continue
+    try:
+        # Handles offsets: "...+00:00" and "Z" with fractions.
+        iso = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        parsed = datetime.datetime.fromisoformat(iso)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_sidecar_identity(certs_data):
     """Extract the served identity SVID (URI + expiry) from Envoy /certs.
 
@@ -38,11 +67,8 @@ def _parse_sidecar_identity(certs_data):
             identity_uris = [u for u in uris if "/service/" in u]
             if not identity_uris:
                 continue
-            try:
-                expiry = datetime.datetime.strptime(
-                    cert.get("expiration_time") or "", "%Y-%m-%dT%H:%M:%SZ"
-                ).replace(tzinfo=datetime.timezone.utc)
-            except (ValueError, TypeError):
+            expiry = _parse_expiry(cert.get("expiration_time"))
+            if expiry is None:
                 continue
             if best is None or expiry < best[1]:
                 best = (identity_uris[0], expiry)
@@ -75,6 +101,45 @@ def _read_sidecar_certs(client, sidecar_name):
     except Exception as exc:
         logger.debug("Sidecar /certs unavailable for %s: %s", sidecar_name, exc)
         return None
+def sync_svid_for_service(service, client=None):
+    """Best-effort immediate SVID metadata sync for one service.
+
+    Called right after a sidecar becomes ready so the UI stops showing
+    "Missing" without waiting for the hourly beat. Never raises —
+    returns True when svid_expiry was persisted.
+    """
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        from apps.mtls.models import MtlsConfig
+        from apps.mtls.services.envoy_sidecar import EnvoySidecar
+
+        client = client or get_docker_client()
+        uri, expiry = None, None
+        try:
+            certs = _read_sidecar_certs(
+                client, EnvoySidecar.get_sidecar_name(service)
+            )
+            if certs:
+                uri, expiry = _parse_sidecar_identity(certs)
+        except Exception as exc:
+            logger.debug("Sidecar SVID read failed for %s: %s", service.name, exc)
+        if expiry is None:
+            uri, expiry = _read_workload_cert_expiry(client, service)
+        if expiry is None:
+            return False
+        MtlsConfig.objects.filter(service=service).update(
+            svid_expiry=expiry, last_rotation=timezone.now()
+        )
+        logger.info(
+            "SVID metadata synced for %s (uri=%s expiry=%s)",
+            service.name, uri or "n/a", expiry.isoformat(),
+        )
+        return True
+    except Exception as exc:
+        logger.debug("SVID sync skipped for %s: %s", getattr(service, "name", "?"), exc)
+        return False
+
+
 @shared_task(
     name="apps.mtls.tasks.sync_svid_metadata_task",
     soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
@@ -91,35 +156,14 @@ def sync_svid_metadata_task():
     """
     from apps.cloud.docker_client import get_docker_client
     from apps.mtls.models import MtlsConfig
-    from apps.mtls.services.envoy_sidecar import EnvoySidecar
 
     client = get_docker_client()
     synced = 0
     checked = 0
     for config in MtlsConfig.objects.filter(enabled=True).select_related("service"):
-        service = config.service
         checked += 1
-        uri, expiry = None, None
-        try:
-            certs = _read_sidecar_certs(
-                client, EnvoySidecar.get_sidecar_name(service)
-            )
-            if certs:
-                uri, expiry = _parse_sidecar_identity(certs)
-        except Exception as exc:
-            logger.debug("Sidecar SVID read failed for %s: %s", service.name, exc)
-        if expiry is None:
-            uri, expiry = _read_workload_cert_expiry(client, service)
-        if expiry is None:
-            continue
-        config.svid_expiry = expiry
-        config.last_rotation = timezone.now()
-        config.save(update_fields=["svid_expiry", "last_rotation", "updated_at"])
-        synced += 1
-        logger.info(
-            "SVID metadata synced for %s (uri=%s expiry=%s)",
-            service.name, uri or "n/a", expiry.isoformat(),
-        )
+        if sync_svid_for_service(config.service, client=client):
+            synced += 1
     return {"synced": synced, "checked": checked}
 
 
