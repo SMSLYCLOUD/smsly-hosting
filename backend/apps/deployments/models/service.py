@@ -328,6 +328,13 @@ class Service(TimeStampedModel):
         default=False,
         help_text="When true, production deploys go through the SafeDeploy pipeline (preview → migration validation → risk classification → manual approval).",
     )
+    fast_deploy_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        null=True, blank=True, default=None,
+        help_text="Per-service fast deploy override: True forces fast deploys "
+                  "(no AI analysis, no review gates, straight to live), False "
+                  "forces the full review path, empty inherits the platform-wide "
+                  "fast_deploy_default.",
+    )
     preview_environments_enabled = models.BooleanField(default=True)  # type: ignore[var-annotated]
     auto_create_preview_on_branch_push = models.BooleanField(default=False)  # type: ignore[var-annotated]
     MIGRATION_AUTO_APPROVAL_CHOICES = [('NEVER', 'Never'), ('LOW_RISK_ONLY', 'Low Risk Only'), ('LOW_AND_MEDIUM', 'Low and Medium'), ('ALWAYS_REQUIRE_MANUAL', 'Always Require Manual')]

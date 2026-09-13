@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 class DeploymentMixin:
-    def trigger_deploy(self, deployment, remote_service_id, skip_review=False, image_name=None):
+    def trigger_deploy(self, deployment, remote_service_id, skip_review=False, image_name=None,
+                         fast_deploy=False):
         path = f"/api/v1/services/{remote_service_id}/deploy/"
         config = PlatformConfig.load()
         ref = deployment.commit_hash or "HEAD"
@@ -18,6 +19,7 @@ class DeploymentMixin:
             "ref": ref,
             "source_node": config.server_ip or "controller",
             "skip_review": skip_review,
+            "fast_deploy": fast_deploy,
         }
         if image_name:
             # Rewrite master-INTERNAL registry refs (registry:5000 /

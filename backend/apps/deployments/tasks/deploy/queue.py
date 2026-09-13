@@ -49,6 +49,7 @@ def enqueue_smart_deploy_task(
     deployment_id: str,
     provider_id: str,
     skip_review: bool = False,
+    fast_deploy: bool = False,
 ) -> Any:
     from ..deployment.tasks_deploy import smart_deploy_task
     """
@@ -62,6 +63,7 @@ def enqueue_smart_deploy_task(
         "deployment_id": str(deployment_id),
         "provider_id": str(provider_id),
         "skip_review": skip_review,
+        "fast_deploy": fast_deploy,
     }
     queue = _current_agent_node_queue()
     if queue:
@@ -119,15 +121,17 @@ def recover_stalled_queued_deployments(limit: int = 100) -> dict:
         skip_review = deployment.is_rollback or should_skip_review_for_commit_message(
             deployment.commit_message
         )
+        fast_deploy = bool(getattr(deployment, 'is_fast_deploy', False))
         try:
             enqueue_smart_deploy_task(
                 deployment_id=str(deployment.id),
                 provider_id=str(provider.id),
                 skip_review=skip_review,
+                fast_deploy=fast_deploy,
             )
             append_log(
                 deployment,
-                f"\n[queue-restore] Requeued deployment task (skip_review={skip_review}).\n",
+                f"\n[queue-restore] Requeued deployment task (skip_review={skip_review}, fast_deploy={fast_deploy}).\n",
             )
             results["queued"] += 1
         except Exception as exc:  # pragma: no cover - broker/runtime failure

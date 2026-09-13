@@ -52,15 +52,17 @@ class DeployActionsMixin:
         is_remote_sync = self._is_remote_sync_request()
         requested_skip_review = _parse_bool(request.data.get('skip_review', False))
         skip_review = requested_skip_review if is_remote_sync else False
+        requested_fast_deploy = _parse_bool(request.data.get('fast_deploy', False))
+        fast_deploy = requested_fast_deploy if is_remote_sync else False
         source_node = str(request.data.get('source_node') or '').strip()
         image_name = str(request.data.get('image_name') or '').strip()
         scan_depth = str(request.data.get('scan_depth') or '').strip()
 
-        if (source_node or image_name or requested_skip_review) and not is_remote_sync:
+        if (source_node or image_name or requested_skip_review or requested_fast_deploy) and not is_remote_sync:
             return Response(
                 {
                     'error': (
-                        'source_node, image_name, and skip_review are reserved '
+                        'source_node, image_name, skip_review, and fast_deploy are reserved '
                         'for authenticated node-to-node deployment requests.'
                     )
                 },
@@ -125,13 +127,15 @@ class DeployActionsMixin:
             target_is_local=target_is_local,
             queued_min_replicas=service.min_replicas,
             scan_depth=scan_depth if scan_depth in ('shallow', 'standard', 'deep') else '',
+            is_fast_deploy=fast_deploy,
         )
 
         try:
             enqueue_smart_deploy_task(
                 deployment_id=str(deployment.id),
                 provider_id=str(provider.id),
-                skip_review=skip_review
+                skip_review=skip_review,
+                fast_deploy=fast_deploy,
             )
         except Exception as exc:  # pragma: no cover - broker/runtime failure
             logger.exception(

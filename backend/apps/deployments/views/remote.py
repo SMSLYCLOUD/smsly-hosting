@@ -28,6 +28,7 @@ class RemoteTriggerView(GenericAPIView):
         service_id = serializer.validated_data['service_id']
         provider_id = serializer.validated_data['provider_id']
         skip_review = serializer.validated_data.get('skip_review', False)
+        fast_deploy = serializer.validated_data.get('fast_deploy', False)
         ref = serializer.validated_data.get('commit_hash', 'HEAD')
         source_node = request.data.get('source_node', 'remote-controller')
 
@@ -50,14 +51,16 @@ class RemoteTriggerView(GenericAPIView):
                 status=Deployment.Status.QUEUED,
                 commit_hash=ref if ref != 'HEAD' else 'latest',
                 commit_message=f"Remote Trigger: {ref} (via {source_node})",
-                source_node=source_node
+                source_node=source_node,
+                is_fast_deploy=fast_deploy,
             )
 
             # Enqueue task
             enqueue_smart_deploy_task(
                 deployment_id=str(deployment.id),
                 provider_id=str(provider.id),
-                skip_review=skip_review
+                skip_review=skip_review,
+                fast_deploy=fast_deploy,
             )
 
             return Response(DeploymentSerializer(deployment).data, status=status.HTTP_201_CREATED)

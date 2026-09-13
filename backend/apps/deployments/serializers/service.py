@@ -360,7 +360,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         return normalized_aliases
 
     def validate_path_redirects(self, value):
-        """Validate redirects from ``/path`` or ``domain/path`` sources."""
+        """Validate redirects from ``/path``, ``domain/path`` or whole-domain sources."""
         if not isinstance(value, list):
             raise serializers.ValidationError("path_redirects must be a list.")
         from apps.domains.utils import normalize_domain, split_host_and_path
@@ -380,23 +380,83 @@ class ServiceSerializer(serializers.ModelSerializer):
                     source_domain = normalize_domain(source_domain)
                 except ValueError as exc:
                     raise serializers.ValidationError(f"Invalid source domain/path: {exc}")
-            if not re.fullmatch(r'/[a-z0-9_-]{1,63}', raw_path):
+            if not raw_path or raw_path == '/':
+                # Whole-domain source (e.g. `accounts.trulay.co` or with a
+                # trailing slash): every request to the host root redirects.
+                # A bare `/` alone is rejected — redirecting every path of
+                # every site would be an accident waiting for a typo.
+                if not source_domain:
+                    raise serializers.ValidationError(
+                        "Redirect sources must be a path like /account, a "
+                        "domain/path like app.example.com/account, or a whole "
+                        "domain like app.example.com.")
+                raw_path = '/'
+            elif not re.fullmatch(r'/[a-z0-9_-]{1,63}', raw_path):
                 raise serializers.ValidationError("Redirect paths must be a single segment like /account.")
             if '://' in target:
                 target = target.split('://', 1)[1]
             try:
                 target_host, target_path = split_host_and_path(target)
-                target = normalize_domain(target_host)
+                target_host = normalize_domain(target_host)
+                target = target_host
                 if target_path and target_path != '/':
                     target = f'{target}{target_path}'
             except ValueError as exc:
                 raise serializers.ValidationError(f"Invalid redirect target: {exc}")
+            norm_target_path = target_path or '/'
+            if target_host == source_domain and norm_target_path == raw_path:
+                # Certain infinite loop: the redirect points at the exact
+                # URL it matches (e.g. accounts.trulay.co => accounts.trulay.co/).
+                raise serializers.ValidationError(
+                    f"Redirect {source_domain}{raw_path} points at itself "
+                    f"and would loop forever.")
+            if not source_domain and norm_target_path == raw_path and \
+                    target_host in self._redirect_routed_hosts():
+                # Plain-path rules fire on every site of the service: an
+                # exact self-match on a routed host loops for certain.
+                raise serializers.ValidationError(
+                    f"Redirect {raw_path} points at itself on {target_host} "
+                    f"and would loop forever.")
             key = (source_domain, raw_path)
             if key in seen:
                 raise serializers.ValidationError("Duplicate path redirect.")
             seen.add(key)
             normalized.append({'path': f'{source_domain}{raw_path}' if source_domain else raw_path, 'target': target})
         return normalized
+
+    def _redirect_routed_hosts(self) -> set:
+        """Hosts this service routes (for exact self-loop detection)."""
+        hosts = set()
+        instance = getattr(self, 'instance', None)
+        if instance is None:
+            return hosts
+        for attr in ('public_domain', 'staging_domain'):
+            try:
+                from apps.domains.utils import normalize_domain
+                raw = str(getattr(instance, attr, '') or '').strip().lower()
+                if raw:
+                    hosts.add(normalize_domain(raw))
+            except ValueError:
+                continue
+        for domain in (getattr(instance, 'custom_domains', None) or []):
+            if not isinstance(domain, str):
+                continue
+            try:
+                from apps.domains.utils import normalize_domain
+                hosts.add(normalize_domain(domain.strip().lower()))
+            except ValueError:
+                continue
+        for entry in (getattr(instance, 'host_aliases', None) or []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                from apps.domains.utils import normalize_domain
+                raw = str(entry.get('host') or '').strip().lower()
+                if raw:
+                    hosts.add(normalize_domain(raw))
+            except ValueError:
+                continue
+        return hosts
 
     class Meta:
         model = Service
@@ -417,6 +477,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'disable_crowdsec_waf',
             'regions', 'primary_region',
             'safedeploy_enabled', 'preview_environments_enabled',
+            'fast_deploy_enabled',
             'auto_create_preview_on_branch_push',
             'migration_auto_approval_policy', 'production_requires_backup',
             'auto_rollback_enabled', 'auto_rollback_threshold',

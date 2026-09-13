@@ -42,16 +42,16 @@ class LifecycleActionsMixin:
         service is moved to the new project and the registry override
         is stored on the Deployment for audit trail.
         """
-        from ...models.project import Project
+        from ...models.core import Project
         from ...models.registry_scope import ScopedRegistry
 
         serializer = DeploymentTriggerSerializer(data=request.data)
         if serializer.is_valid():
             service_id = serializer.validated_data['service_id']
             provider_id = serializer.validated_data['provider_id']
-            if serializer.validated_data.get('skip_review', False):
+            if serializer.validated_data.get('skip_review', False) or serializer.validated_data.get('fast_deploy', False):
                 return Response(
-                    {'error': 'skip_review is reserved for trusted internal deployment paths.'},
+                    {'error': 'skip_review and fast_deploy are reserved for trusted internal deployment paths.'},
                     status=status.HTTP_403_FORBIDDEN,
                 )
             skip_review = False

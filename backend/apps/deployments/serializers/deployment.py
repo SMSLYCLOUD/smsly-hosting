@@ -21,6 +21,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
             'staging_url', 'staged_at',
             'started_at', 'finished_at', 'duration_seconds',
             'is_rollback', 'source_node', 'rollback_from',
+            'is_fast_deploy',
             'target_server', 'target_server_name', 'target_is_local',
             'ecosystem_retry_count', 'queued_min_replicas',
             'metadata', 'registry_override',
@@ -66,6 +67,7 @@ class DeploymentTriggerSerializer(serializers.Serializer):
     provider_id = serializers.UUIDField()
     commit_hash = serializers.CharField(required=False, allow_blank=True)
     skip_review = serializers.BooleanField(default=False)
+    fast_deploy = serializers.BooleanField(default=False)
 
     cpu_cores = serializers.DecimalField(
         max_digits=6, decimal_places=2, required=False)

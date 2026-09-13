@@ -34,6 +34,7 @@ from ..deploy.helpers import (  # noqa: F401
 from ..deploy.build_nixpacks import _build_function, _build_uploaded_source
 from .tasks_deploy_remote import _handle_remote_deployment, _resume_remote_deployment
 from ..tasks_utils import (
+    resolve_fast_deploy,
     should_skip_review_for_commit_message,
 )
 
@@ -46,7 +47,7 @@ from ..tasks_utils import (
     name="apps.deployments.tasks.smart_deploy_task",
 )
 def smart_deploy_task(self, deployment_id: str, provider_id: str,
-                     skip_review: bool = False):
+                     skip_review: bool = False, fast_deploy: bool = False):
     deployment = None
     try:
         deployment = Deployment.objects.get(id=deployment_id)
@@ -93,11 +94,31 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         except Exception as exc:
             logger.debug("Failed to create GitHub deployment for %s: %s", deployment_id, exc)
 
-        skip_review = skip_review or deployment.is_rollback or should_skip_review_for_commit_message(
+        service = deployment.service
+
+        from apps.deployments.models import PlatformConfig
+        config = PlatformConfig.load()
+
+        # Fast deploy: no AI analysis, no review gates, straight to live
+        # (ACTIVE) instead of pausing at REVIEW or holding at STAGED.
+        # Precedence: explicit param / row flag > per-service override >
+        # platform-wide default. The row flag keeps queue-recovery
+        # re-enqueues on the same path.
+        fast_deploy = bool(
+            fast_deploy
+            or getattr(deployment, 'is_fast_deploy', False)
+            or resolve_fast_deploy(service, config)
+        )
+        skip_review = skip_review or fast_deploy or deployment.is_rollback or should_skip_review_for_commit_message(
             deployment.commit_message
         )
+        staged_only = skip_review and not deployment.is_rollback and not fast_deploy
+        if fast_deploy:
+            logger.info(
+                "Fast deploy %s (service %s): skipping AI analysis and review gates",
+                deployment_id, deployment.service_id,
+            )
 
-        service = deployment.service
         if not provider_id or provider_id == "None":
             provider = _resolve_provider_for_service(service, prefer_local=True)
             if not provider:
@@ -105,7 +126,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         else:
             provider = CloudProvider.objects.get(id=provider_id)
 
-        if not getattr(deployment, 'is_rollback', False) and getattr(settings, "SENATE_ENABLED", True):
+        if not getattr(deployment, 'is_rollback', False) and not fast_deploy and getattr(settings, "SENATE_ENABLED", True):
             try:
                 from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
                 _sugg, _inj = EnvironmentIntelligenceService.apply_intelligence_to_service(service, scan_results={})
@@ -128,9 +149,6 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
             if deployment.status == Deployment.Status.AWAITING_APPROVAL:
                 return
 
-        from apps.deployments.models import PlatformConfig
-        config = PlatformConfig.load()
-
         # Kubernetes deploy path — route through Orchestrator
         # when a service targets a K8s cluster, the full flow is:
         # BuildManager (build + push to registry) → ClusterManager (K8s
@@ -149,7 +167,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
             else:
                 target = ManagedServer.objects.filter(host=deployment.source_node).first()
                 if target:
-                    _handle_remote_deployment(deployment, target, skip_review=skip_review)
+                    _handle_remote_deployment(deployment, target, skip_review=skip_review,
+                                              fast_deploy=fast_deploy)
                     return
 
         effective_server = _deployment_effective_server(deployment)
@@ -164,7 +183,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 with fleet_build_lock(deployment):
                     pipeline = PipelineManager(
                         deployment,
-                        staged_only=skip_review and not deployment.is_rollback,
+                        staged_only=staged_only,
+                        skip_analysis=fast_deploy,
                     )
                     if skip_review:
                         built_image = pipeline.run()
@@ -175,6 +195,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 _handle_remote_deployment(
                     deployment, effective_server,
                     skip_review=skip_review, image_name=built_image,
+                    fast_deploy=fast_deploy,
                 )
                 return
 
@@ -185,16 +206,19 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 with fleet_build_lock(deployment):
                     pipeline = PipelineManager(
                         deployment,
-                        staged_only=skip_review and not deployment.is_rollback,
+                        staged_only=staged_only,
+                        skip_analysis=fast_deploy,
                     )
                     built_image = pipeline.run()
                 _handle_remote_deployment(
                     deployment, effective_server,
                     skip_review=skip_review, image_name=built_image,
+                    fast_deploy=fast_deploy,
                 )
                 return
 
-            _handle_remote_deployment(deployment, effective_server, skip_review=skip_review)
+            _handle_remote_deployment(deployment, effective_server, skip_review=skip_review,
+                                      fast_deploy=fast_deploy)
             return
 
         if service.deploy_type == 'GIT':
@@ -205,7 +229,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 with fleet_build_lock(deployment):
                     manager = PipelineManager(
                         deployment,
-                        staged_only=skip_review and not deployment.is_rollback,
+                        staged_only=staged_only,
+                        skip_analysis=fast_deploy,
                     )
                     image_name = manager.run()
             else:
@@ -229,7 +254,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
             raise ValueError(f"Unsupported deploy type: {service.deploy_type}")
 
         _deploy_container(deployment, provider, image_name,
-                          staged_only=skip_review and not deployment.is_rollback)
+                          staged_only=staged_only)
 
     except PipelineError as e:
         _handle_failure(self, deployment, str(e), "Pipeline Failure")

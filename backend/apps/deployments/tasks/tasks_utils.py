@@ -29,6 +29,27 @@ def _env_int(name: str, default: int, minimum: int = 0, maximum: int | None = No
 
 
 
+def resolve_fast_deploy(service, platform_config=None) -> bool:
+    """Resolve whether deploys for this service run the fast path.
+
+    Precedence: per-service ``fast_deploy_enabled`` override first
+    (True forces on, False forces off), otherwise the platform-wide
+    ``fast_deploy_default``. ``None`` (empty) on the service means
+    "inherit the platform default". Never raises — unknown state
+    means the safe (full review) path.
+    """
+    try:
+        override = getattr(service, "fast_deploy_enabled", None)
+        if override is not None:
+            return bool(override)
+        if platform_config is None:
+            from apps.deployments.models import PlatformConfig
+            platform_config = PlatformConfig.load()
+        return bool(getattr(platform_config, "fast_deploy_default", False))
+    except Exception:
+        return False
+
+
 def should_skip_review_for_commit_message(message: str) -> bool:
     """Return True for system-created deployments that must not pause at REVIEW."""
     # SECURITY: commit messages are attacker-controlled (webhook pushes).

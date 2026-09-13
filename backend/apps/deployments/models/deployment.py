@@ -100,6 +100,12 @@ class Deployment(TimeStampedModel):
     # Rollback tracking
     is_rollback = models.BooleanField(  # type: ignore[var-annotated]
         default=False, help_text="Whether this deployment is a rollback")
+    # Fast deploy: skip AI analysis + review gates, go straight to live.
+    # Persisted on the row so queue recovery re-enqueues with the same
+    # semantics instead of silently falling back to the review path.
+    is_fast_deploy = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Fast deploy: no AI analysis, no review gates, straight to ACTIVE")
     source_node = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, null=True,
         help_text="Node that triggered this deployment (for multi-deploy)")
@@ -224,6 +230,8 @@ class Deployment(TimeStampedModel):
     )
     def __str__(self):
         label = f"{self.service.name} - {self.commit_hash[:7]} ({self.status})"
+        if self.is_fast_deploy:
+            label = f"[FAST] {label}"
         if self.is_rollback:
             label = f"[ROLLBACK] {label}"
         return label

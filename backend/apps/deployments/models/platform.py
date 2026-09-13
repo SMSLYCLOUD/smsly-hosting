@@ -599,6 +599,11 @@ class PlatformConfig(models.Model):
     auto_promote_hours = models.PositiveIntegerField(
         default=12,
         help_text="Auto-promote deployments in STAGED status after this many hours (0 = disabled)")
+    fast_deploy_default = models.BooleanField(
+        default=False,
+        help_text="Platform-wide fast deploy default: skip AI analysis and review "
+                  "gates, deploy straight to live. Per-service fast_deploy_enabled "
+                  "overrides this (True forces on, False forces off, empty inherits).")
 
     # ── Blue-Green Rollback ─────────────────────────────────────────────
     rollback_grace_minutes = models.PositiveIntegerField(

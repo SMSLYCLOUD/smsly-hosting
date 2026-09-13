@@ -43,10 +43,12 @@ class PipelineManager(
     _buildx_driver_lock = threading.Lock()
 
 
-    def __init__(self, deployment: Deployment, staged_only: bool = False):
+    def __init__(self, deployment: Deployment, staged_only: bool = False,
+                 skip_analysis: bool = False):
         self.deployment = deployment
         self.service = deployment.service
         self.staged_only = staged_only
+        self.skip_analysis = skip_analysis
         self.build_dir = None
         self.source_dir = None
         self.image_name = None
@@ -65,7 +67,22 @@ class PipelineManager(
             is_docker_type = self.service.deploy_type == 'DOCKER' and self.service.docker_image
             if not is_docker_type:
                 self._clone_repo()
-                self._run_ai_analysis()
+                if self.skip_analysis:
+                    # Fast deploy: no repo scan, no Senate LLM call, no AI
+                    # resource recommendations. Service-configured env vars
+                    # are still injected below; AI-detected manifest env and
+                    # AI resource upsizing are skipped.
+                    logger.info(
+                        "Fast deploy %s: skipping AI analysis, straight to build",
+                        self.deployment.id,
+                    )
+                    append_log(
+                        self.deployment,
+                        "\n⚡ Fast deploy: skipping AI analysis "
+                        "(no review, straight to build).\n",
+                    )
+                else:
+                    self._run_ai_analysis()
                 self._inject_env_vars()
                 self._auto_provision_addons()
             self._build_image()
