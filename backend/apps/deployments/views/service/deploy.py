@@ -584,3 +584,32 @@ class DeployActionsMixin:
             return self.get_paginated_response(serializer.data)
         serializer = DeploymentSerializer(deployments, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='scan-report')
+    def scan_report(self, request, pk=None):
+        """Newest deployment carrying a non-empty vulnerability report.
+
+        The service-detail `latest_deployment` always reflects the newest
+        deploy, which during/after a redeploy usually has no scan yet —
+        the Security tab would go blank. This endpoint returns the newest
+        report ever recorded so the tab stays populated across redeploys.
+        Reports are small JSON (summary/error); build logs are never
+        included here.
+        """
+        service = self.get_object()
+        dep = (
+            service.deployments
+            .exclude(vulnerability_report={})
+            .exclude(vulnerability_report__isnull=True)
+            .order_by('-created_at')
+            .only('id', 'status', 'created_at', 'vulnerability_report')
+            .first()
+        )
+        if not dep or not dep.vulnerability_report:
+            return Response({"report": None, "deployment_id": None})
+        return Response({
+            "report": dep.vulnerability_report,
+            "deployment_id": str(dep.id),
+            "status": dep.status,
+            "created_at": dep.created_at.isoformat() if dep.created_at else None,
+        })
