@@ -1,11 +1,14 @@
 "use client";
 
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Shield, AlertTriangle } from "lucide-react";
+import { Shield, AlertTriangle, Ban, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { crowdsecApi, CrowdSecDecision } from "@/lib/api";
 
 interface SecurityCardProps {
   config: any;
@@ -169,6 +172,118 @@ export function DeviceTrustCard({ config, onChange }: SecurityCardProps) {
             onCheckedChange={(v) => onChange("enforce_device_trust", v)}
           />
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function CrowdSecBlocksCard() {
+  const [decisions, setDecisions] = useState<CrowdSecDecision[]>([]);
+  const [alertCount, setAlertCount] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [unbanningIp, setUnbanningIp] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchBlocks = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [decRes, alertRes] = await Promise.all([
+        crowdsecApi.decisions({ limit: 100 }),
+        crowdsecApi.alerts({ limit: 1 }).catch(() => null),
+      ]);
+      setDecisions(decRes.results || []);
+      setAlertCount(alertRes ? alertRes.count : null);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || "Failed to load threat blocks");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchBlocks();
+  }, [fetchBlocks]);
+
+  const handleUnban = async (ip: string) => {
+    setUnbanningIp(ip);
+    setError(null);
+    try {
+      await crowdsecApi.unban(ip);
+      await fetchBlocks();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || `Failed to unblock ${ip}`);
+    } finally {
+      setUnbanningIp(null);
+    }
+  };
+
+  return (
+    <Card className="md:col-span-2">
+      <CardHeader>
+        <CardTitle className="flex items-center space-x-2">
+          <Ban className="h-5 w-5" />
+          <span>CrowdSec Threat Blocks</span>
+          {!loading && !error && (
+            <Badge variant={decisions.length > 0 ? "destructive" : "outline"} className="text-[10px] ml-1">
+              {decisions.length} active
+            </Badge>
+          )}
+        </CardTitle>
+        <CardDescription>
+          IPs currently blocked platform-wide, why they were blocked, and one-click unblock.
+          {alertCount !== null && alertCount > 0 && ` ${alertCount} threat alerts on record.`}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex justify-end mb-2">
+          <Button onClick={fetchBlocks} variant="ghost" size="sm" disabled={loading}>
+            <RefreshCw className={`h-3 w-3 mr-1 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : error ? (
+          <p className="text-sm text-red-400">{error}</p>
+        ) : decisions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No active blocks. CrowdSec re-blocks reoffending IPs automatically.</p>
+        ) : (
+          <div className="space-y-1 max-h-72 overflow-y-auto">
+            {decisions.map((d) => (
+              <div key={d.id || d.value} className="flex items-center gap-2 p-2 rounded-lg bg-black/20 text-xs">
+                <code className="text-foreground font-semibold">{d.value}</code>
+                <Badge variant="destructive" className="text-[9px]">{d.type || d.scope}</Badge>
+                <span className="text-muted-foreground truncate flex-1" title={d.scenario}>
+                  {d.scenario || "unknown scenario"} · {d.events_count} events
+                </span>
+                {d.service_name && (
+                  <Badge variant="outline" className="text-[9px] hidden md:inline-flex">{d.service_name}</Badge>
+                )}
+                {d.end_time && (
+                  <span className="text-muted-foreground hidden sm:inline">
+                    until {new Date(d.end_time).toLocaleString()}
+                  </span>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[10px]"
+                  disabled={unbanningIp === d.value}
+                  onClick={() => handleUnban(d.value)}
+                >
+                  {unbanningIp === d.value ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <><ShieldCheck className="h-3 w-3 mr-1" /> Unblock</>
+                  )}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

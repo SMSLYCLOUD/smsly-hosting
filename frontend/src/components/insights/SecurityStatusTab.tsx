@@ -4,12 +4,12 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Shield, ShieldCheck, ShieldX, Cpu, Lock, Eye,
   AlertTriangle, CheckCircle2, XCircle, Loader2,
-  RefreshCw, Bug, FileWarning, ShieldAlert
+  RefreshCw, Bug, FileWarning, ShieldAlert, Ban
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import api from "@/lib/api";
+import api, { servicesApi, crowdsecApi, CrowdSecDecision, CrowdSecAlert } from "@/lib/api";
 
 interface VulnSummary {
   critical: number;
@@ -42,6 +42,52 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [latestDeployId, setLatestDeployId] = useState<string | null>(null);
+  const [reportSource, setReportSource] = useState<{ deployment_id: string; created_at?: string | null } | null>(null);
+  const [decisions, setDecisions] = useState<CrowdSecDecision[]>([]);
+  const [alerts, setAlerts] = useState<CrowdSecAlert[]>([]);
+  const [wafForbidden, setWafForbidden] = useState(false);
+  const [wafLoading, setWafLoading] = useState(false);
+  const [unbanningIp, setUnbanningIp] = useState<string | null>(null);
+  const [wafError, setWafError] = useState<string | null>(null);
+
+  const hasUsableReport = (r: any) =>
+    r !== null && typeof r === "object" && Object.keys(r).length > 0;
+
+  const fetchWaf = useCallback(async () => {
+    setWafLoading(true);
+    setWafError(null);
+    try {
+      const [decRes, alertRes] = await Promise.all([
+        crowdsecApi.serviceDecisions(serviceId),
+        crowdsecApi.serviceAlerts(serviceId),
+      ]);
+      setDecisions(decRes.results || []);
+      setAlerts(alertRes.results || []);
+      setWafForbidden(false);
+    } catch (err: any) {
+      if (err?.response?.status === 403) {
+        // Non-admin viewers: hide the blocks section entirely.
+        setWafForbidden(true);
+      } else {
+        setWafError(err?.response?.data?.error || err?.message || "Failed to load WAF decisions");
+      }
+    } finally {
+      setWafLoading(false);
+    }
+  }, [serviceId]);
+
+  const handleUnban = useCallback(async (ip: string) => {
+    setUnbanningIp(ip);
+    setWafError(null);
+    try {
+      await crowdsecApi.unban(ip);
+      await fetchWaf();
+    } catch (err: any) {
+      setWafError(err?.response?.data?.error || err?.message || `Failed to unblock ${ip}`);
+    } finally {
+      setUnbanningIp(null);
+    }
+  }, [fetchWaf]);
 
   const fetchScan = useCallback(async () => {
     setLoading(true);
@@ -61,19 +107,36 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
         setCrowdsec(null);
       }
 
-      if (latest?.vulnerability_report) {
+      if (hasUsableReport(latest?.vulnerability_report)) {
         setReport(latest.vulnerability_report);
         setLatestDeployId(latest.id);
+        setReportSource(null);
       } else {
-        setReport(null);
+        // Latest deploy has no scan yet (redeploy in progress/failed) —
+        // fall back to the newest deployment that recorded one so the
+        // tab never clears mid-redeploy.
         setLatestDeployId(latest?.id || null);
+        try {
+          const scan = await servicesApi.getScanReport(serviceId);
+          if (hasUsableReport(scan?.report)) {
+            setReport(scan.report);
+            setReportSource(scan.deployment_id ? { deployment_id: scan.deployment_id, created_at: scan.created_at } : null);
+          } else {
+            setReport(null);
+            setReportSource(null);
+          }
+        } catch {
+          setReport(null);
+          setReportSource(null);
+        }
       }
+      await fetchWaf();
     } catch (err: any) {
       setError(err?.message || "Failed to load scan report");
     } finally {
       setLoading(false);
     }
-  }, [serviceId]);
+  }, [serviceId, fetchWaf]);
 
   useEffect(() => { fetchScan(); }, [fetchScan]);
 
@@ -145,14 +208,90 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
         </div>
       </div>
 
+      {/* Blocked IPs & Threat Decisions (admins only) */}
+      {!wafForbidden && (
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold flex items-center gap-2">
+              <Ban className="w-4 h-4 text-red-500" />
+              Blocked IPs & Threat Decisions
+              <Badge variant="outline" className="text-[10px] ml-1">{decisions.length} active</Badge>
+            </h3>
+            <Button onClick={fetchWaf} variant="ghost" size="sm" disabled={wafLoading}>
+              <RefreshCw className={`w-3 h-3 mr-1 ${wafLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
+
+          {wafError && (
+            <p className="text-xs text-red-400 mb-2">{wafError}</p>
+          )}
+
+          {decisions.length === 0 ? (
+            <p className="text-xs text-muted-foreground mb-4">No active blocks for this service.</p>
+          ) : (
+            <div className="space-y-1 mb-4">
+              {decisions.map((d) => (
+                <div key={d.id || d.value} className="flex items-center gap-2 p-2 rounded-lg bg-black/20 text-xs">
+                  <code className="text-foreground font-semibold">{d.value}</code>
+                  <Badge variant="destructive" className="text-[9px]">{d.type || d.scope}</Badge>
+                  <span className="text-muted-foreground truncate flex-1" title={d.scenario}>
+                    {d.scenario || "unknown scenario"} · {d.events_count} events
+                  </span>
+                  {d.end_time && (
+                    <span className="text-muted-foreground hidden sm:inline">
+                      until {new Date(d.end_time).toLocaleString()}
+                    </span>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-[10px]"
+                    disabled={unbanningIp === d.value}
+                    onClick={() => handleUnban(d.value)}
+                  >
+                    {unbanningIp === d.value ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <><ShieldCheck className="w-3 h-3 mr-1" /> Unblock</>
+                    )}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {alerts.length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs font-semibold text-muted-foreground mb-2">Recent threat alerts ({alerts.length})</p>
+              <div className="max-h-48 overflow-y-auto space-y-1">
+                {alerts.slice(0, 20).map((a) => (
+                  <div key={a.id} className="flex items-center gap-2 p-2 rounded-lg bg-black/20 text-xs">
+                    <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />
+                    <code className="text-muted-foreground">{a.value}</code>
+                    <span className="text-foreground truncate flex-1" title={a.message}>
+                      {a.scenario} · {a.events_count} events
+                    </span>
+                    {a.created_at && (
+                      <span className="text-muted-foreground hidden sm:inline">
+                        {new Date(a.created_at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Scan Report */}
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-bold flex items-center gap-2">
             <Bug className="w-4 h-4 text-amber-500" />
             Vulnerability Scan Report
-          </h3>
-          <Button onClick={fetchScan} variant="ghost" size="sm" disabled={loading}>
+          </h3>          <Button onClick={fetchScan} variant="ghost" size="sm" disabled={loading}>
             <RefreshCw className={`w-3 h-3 mr-1 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
@@ -192,6 +331,12 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
               {report.scan_time && <p>Scanned: {new Date(report.scan_time).toLocaleString()}</p>}
               {report.fail_on_severity && <p>Fail on severity: <Badge variant="outline" className="text-[10px] ml-1">{report.fail_on_severity}</Badge></p>}
               {latestDeployId && <p>Deployment: <code className="text-foreground">{latestDeployId.slice(0, 8)}</code></p>}
+              {reportSource && (
+                <p className="text-amber-400">
+                  Showing last recorded scan from deployment <code className="text-foreground">{reportSource.deployment_id.slice(0, 8)}</code>
+                  {reportSource.created_at && <> · {new Date(reportSource.created_at).toLocaleString()}</>} — the latest deploy has no scan yet.
+                </p>
+              )}
             </div>
 
             {/* Individual Findings */}

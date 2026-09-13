@@ -9,7 +9,7 @@ import { EcosystemPipelineCard, DeployPipelineCard } from "./PipelineCards";
 import { ContainerRegistryCard } from "./ContainerRegistryCard";
 import { ObservabilityCard, BillingSmsCard } from "./ObservabilityCards";
 import { FeatureFlagsCard } from "./FeatureFlagsCard";
-import { SecurityScanningCard, DeviceTrustCard } from "./SecurityCards";
+import { SecurityScanningCard, DeviceTrustCard, CrowdSecBlocksCard } from "./SecurityCards";
 import { InfisicalCard } from "./InfisicalCard";
 
 export function PlatformSettingsTab() {
@@ -88,6 +88,7 @@ export function PlatformSettingsTab() {
         <BillingSmsCard config={config} onChange={handleChange} />
         <FeatureFlagsCard config={config} onChange={handleChange} />
         <SecurityScanningCard config={config} onChange={handleChange} />
+        <CrowdSecBlocksCard />
         <DeviceTrustCard config={config} onChange={handleChange} />
         <InfisicalCard />
       </div>

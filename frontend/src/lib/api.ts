@@ -376,6 +376,7 @@ export interface Service {
     status: string;
     commit_hash?: string;
     created_at: string;
+    vulnerability_report?: any;
     target_server?: string | null;
     target_server_name?: string | null;
     target_is_local?: boolean;
@@ -470,6 +471,7 @@ export interface Deployment {
   commit_message?: string;
   status: string;
   build_logs?: string;
+  vulnerability_report?: any;
   pipeline_stages?: { name: string; status: string; duration?: number }[];
   ai_diagnosis?: string;
   duration_seconds?: number;
@@ -610,6 +612,15 @@ export const servicesApi = {
   },
   getDeployment: async (id: string): Promise<Deployment> => {
     const response = await api.get(`/deployments/${id}/`);
+    return response.data;
+  },
+  getScanReport: async (serviceId: string): Promise<{
+    report: any | null;
+    deployment_id: string | null;
+    status?: string;
+    created_at?: string | null;
+  }> => {
+    const response = await api.get(`/services/${serviceId}/scan-report/`);
     return response.data;
   },
   getIncidentReport: async (serviceId: string) => {
@@ -849,6 +860,59 @@ export const platformApi = {
   resources: async (): Promise<{ cpu_cores: number; ram_mb: number; disk_gb: number }> => {
     const response = await api.get('/platform/resources/');
     return response.data;
+  },
+};
+
+export interface CrowdSecDecision {
+  id: string;
+  scope: string;
+  value: string;
+  type: string;
+  origin: string;
+  scenario: string;
+  events_count: number;
+  simulated: boolean;
+  start_time: string;
+  end_time: string;
+  service?: string | null;
+  service_name?: string | null;
+}
+
+export interface CrowdSecAlert {
+  id: string;
+  source: string;
+  scenario: string;
+  scope: string;
+  value: string;
+  events_count: number;
+  start_time: string;
+  created_at: string;
+  message: string;
+  events: { source: string; method: string; path: string; status: string; user_agent: string }[];
+  service?: string | null;
+  service_name?: string | null;
+}
+
+export const crowdsecApi = {
+  decisions: async (params?: { ip?: string; scenario?: string; service_id?: string; limit?: number; active?: boolean }) => {
+    const response = await api.get('/crowdsec/decisions/', { params });
+    return response.data as { count: number; results: CrowdSecDecision[] };
+  },
+  serviceDecisions: async (serviceId: string) => {
+    const response = await api.get(`/crowdsec/decisions/service/${serviceId}/`);
+    return response.data as { count: number; results: CrowdSecDecision[] };
+  },
+  alerts: async (params?: { limit?: number }) => {
+    const response = await api.get('/crowdsec/alerts/', { params });
+    return response.data as { count: number; results: CrowdSecAlert[] };
+  },
+  serviceAlerts: async (serviceId: string) => {
+    const response = await api.get(`/crowdsec/alerts/service/${serviceId}/`);
+    return response.data as { count: number; results: CrowdSecAlert[] };
+  },
+  unban: async (ip: string, range_type: 'Ip' | 'Range' = 'Ip') => {
+    const response = await api.post('/crowdsec/unban/', { ip, range_type });
+    return response.data as { status: string; ip: string };
   },
 };
 
@@ -1178,6 +1242,7 @@ export interface PreviewEnvironment {
     id: string;
     status: string;
     created_at: string;
+    vulnerability_report?: any;
   } | null;
 }
 
