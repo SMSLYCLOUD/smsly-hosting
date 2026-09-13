@@ -76,11 +76,22 @@ def integrations_overview(request):
     """
     from allauth.socialaccount.models import SocialAccount, SocialToken
 
-    # GitHub App (server-to-server)
-    github_app_configured = bool(
-        getattr(settings, "GITHUB_APP_ID", "")
-        and getattr(settings, "GITHUB_APP_PRIVATE_KEY", "")
-    )
+    # GitHub App (server-to-server) — check live settings first, then
+    # PlatformConfig (DB) so an import/manifest that wrote the DB
+    # without a process restart is still reflected immediately.
+    def _is_github_app_configured() -> bool:
+        if getattr(settings, "GITHUB_APP_ID", "") and getattr(settings, "GITHUB_APP_PRIVATE_KEY", ""):
+            return True
+        try:
+            from apps.deployments.models.core import PlatformConfig
+            cfg = PlatformConfig.objects.first()
+            if cfg and getattr(cfg, "github_app_id", "") and getattr(cfg, "github_app_private_key", ""):
+                return True
+        except Exception:
+            pass
+        return False
+
+    github_app_configured = _is_github_app_configured()
 
     # GitHub OAuth (user login)
     github_oauth_app = _get_github_app()
@@ -225,6 +236,19 @@ def github_connection(request):
     login_name = extra.get("login") or extra.get("username") or None
     avatar_url = extra.get("avatar_url") or None
 
+    # Same PlatformConfig fallback as overview — see comment there
+    github_app_configured = bool(
+        getattr(settings, "GITHUB_APP_ID", "") and getattr(settings, "GITHUB_APP_PRIVATE_KEY", "")
+    )
+    if not github_app_configured:
+        try:
+            from apps.deployments.models.core import PlatformConfig
+            cfg = PlatformConfig.objects.first()
+            if cfg and getattr(cfg, "github_app_id", "") and getattr(cfg, "github_app_private_key", ""):
+                github_app_configured = True
+        except Exception:
+            pass
+
     return Response(
         {
             "connected": bool(account),
@@ -239,10 +263,7 @@ def github_connection(request):
                 if account
                 else None
             ),
-            "github_app_configured": bool(
-                getattr(settings, "GITHUB_APP_ID", "")
-                and getattr(settings, "GITHUB_APP_PRIVATE_KEY", "")
-            ),
+            "github_app_configured": github_app_configured,
         },
         status=status.HTTP_200_OK,
     )

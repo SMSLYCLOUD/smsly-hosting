@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import React, { Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Settings as SettingsIcon, Users, Cloud, Globe,
@@ -102,6 +102,26 @@ const SETTINGS_SECTIONS = [
 function SettingsContent() {
   const searchParams = useSearchParams();
   const defaultTab = searchParams.get("tab") || "account";
+  const githubAppStatus = searchParams.get("github_app");
+
+  // Show a one-time success toast when returning from GitHub App install/creation
+  // (backend redirects to /settings/integrations?github_app=connected → here as ?tab=git&github_app=connected).
+  // This was missing — the user landed back with no feedback and the card still showed "Not configured" until refresh.
+  useEffect(() => {
+    if (!githubAppStatus) return;
+    // Lazy import to avoid adding useToast to deps
+    import("@/components/ui/use-toast").then(({ toast }) => {
+      if (githubAppStatus === "connected") {
+        toast({ title: "GitHub App connected", description: "Installation linked. Deploy will now use the App for webhooks and commit statuses." });
+      } else if (githubAppStatus === "created") {
+        toast({ title: "GitHub App created", description: "App credentials stored. Now install it on your repositories." });
+      }
+    });
+    // Clean the URL so refresh doesn't re-toast
+    const url = new URL(window.location.href);
+    url.searchParams.delete("github_app");
+    window.history.replaceState({}, "", url.toString());
+  }, [githubAppStatus]);
 
   return (
     <DashboardShell>
