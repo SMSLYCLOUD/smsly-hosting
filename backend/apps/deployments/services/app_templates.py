@@ -391,7 +391,7 @@ APP_TEMPLATES: dict[str, AppTemplate] = {
         name='MinIO',
         description='High-performance S3-compatible object storage.',
         category='dev-tools',
-        docker_image='minio/minio:latest',
+        docker_image='quay.io/minio/minio:latest',
         default_port=9000,
         env_vars={'MINIO_ROOT_USER': 'admin',
                   'MINIO_ROOT_PASSWORD': '${RANDOM_PASSWORD}'},

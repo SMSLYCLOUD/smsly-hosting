@@ -45,7 +45,7 @@ class AddonProvisioner:
         'QDRANT': 'qdrant/qdrant:v1.12.1',
         'ELASTICSEARCH': 'docker.elastic.co/elasticsearch/elasticsearch:8.12.0',
         'RABBITMQ': 'rabbitmq:3.13-management',
-        'MINIO': 'minio/minio:latest',
+        'MINIO': 'quay.io/minio/minio:latest',
     }
 
     # Default ports for each addon
