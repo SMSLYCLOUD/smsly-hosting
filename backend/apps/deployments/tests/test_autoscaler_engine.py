@@ -13,7 +13,7 @@ from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from apps.autoscaler.engine.decision import (
@@ -228,7 +228,7 @@ class MetricsCollectorTests(TestCase):
 
 # ── Reconciler race condition test ─────────────────────────────────────────
 
-class ReconcilerRaceConditionTests(TestCase):
+class ReconcilerRaceConditionTests(TransactionTestCase):
     """The two Celery beat tasks must not double-spawn replicas when
     their intervals overlap. The Reconciler holds a per-service lock
     that serializes the work."""
@@ -280,9 +280,11 @@ class ReconcilerRaceConditionTests(TestCase):
                 in_section -= 1
             return ScaleResult(recommendation, applied=True, spawned=1)
 
-        # We patch the engine's _scale_up to record concurrency rather
-        # than actually spawn, so the per-service lock semantics are
-        # the only thing under test.
+        # We patch the engine's _plan_locked (DB reads) and _scale_up
+        # (spawns) to no-ops that record concurrency, so the per-service
+        # lock semantics are the only thing under test. Without this,
+        # 5 threads hit shared in-memory SQLite concurrently and flake
+        # with "database is locked" even though the lock serializes them.
         results: list = []
         errors: list = []
 
@@ -292,8 +294,12 @@ class ReconcilerRaceConditionTests(TestCase):
                 results.append(r)
             except Exception as exc:
                 errors.append(exc)
+            finally:
+                from django.db import connection
+                connection.close()
 
-        with patch.object(Reconciler, '_scale_up', side_effect=slow_reconcile):
+        with patch.object(Reconciler, '_plan_locked', side_effect=lambda r: r), \
+                patch.object(Reconciler, '_scale_up', side_effect=slow_reconcile):
             threads = [threading.Thread(target=worker) for _ in range(5)]
             for t in threads:
                 t.start()
