@@ -205,6 +205,40 @@ ensure_traefik_service_conflicts() {
     fi
 }
 
+# ── 8. fail2ban must stay active with resolvable jail logpaths ──────
+# 2026-09-13: the caddy-auth/caddy-dos jails pointed at the host path
+# /var/log/caddy/access.log, which never exists (compose mounts the NAMED
+# caddy_logs volume instead). fail2ban fails closed on a missing logpath
+# and takes ALL jails down with it — sshd included. The installer now
+# resolves the real volume path; this heals hosts that predate the fix
+# (restart only — a broken jail.local is repaired by the next update).
+ensure_fail2ban_running() {
+    command -v fail2ban-client >/dev/null 2>&1 || { log "fail2ban not installed — skipping"; return 0; }
+    if ! systemctl is-active --quiet fail2ban 2>/dev/null; then
+        log "ALERT: fail2ban not active — attempting restart"
+        systemctl restart fail2ban >/dev/null 2>&1 || true
+        sleep 3
+        if ! systemctl is-active --quiet fail2ban 2>/dev/null; then
+            log "ALERT: fail2ban restart FAILED — likely an unresolvable jail logpath; run install.sh --update to regenerate jail.local"
+            return 0
+        fi
+        log "fail2ban restart recovered the service"
+    fi
+    local enabled_logpath=""
+    enabled_logpath=$(awk '/^\[caddy-auth\]/{injail=1; next} /^\[/{injail=0} injail && /^enabled[[:space:]]*=[[:space:]]*true/{e=1} injail && /^logpath[[:space:]]*=/{lp=$0} END{if(e) print lp}' /etc/fail2ban/jail.local 2>/dev/null) || true
+    if [ -n "$enabled_logpath" ]; then
+        local logfile=""
+        logfile=$(echo "$enabled_logpath" | sed 's/^logpath[[:space:]]*=[[:space:]]*//' | awk '{print $1}')
+        if [ -n "$logfile" ] && [ ! -e "$logfile" ]; then
+            log "ALERT: caddy-auth jail enabled but logpath $logfile is missing — fail2ban will fail on next restart; run install.sh --update to regenerate jail.local"
+        else
+            log "fail2ban active (caddy-auth logpath OK)"
+        fi
+    else
+        log "fail2ban active (caddy jails disabled or absent)"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -213,4 +247,5 @@ ensure_migrations
 ensure_traefik_middlewares
 ensure_traefik_service_conflicts
 ensure_caddy_logs_writable
+ensure_fail2ban_running
 log "integrity check complete"

@@ -32,18 +32,40 @@ bantime = 24h
 findtime = 1d
 maxretry = 3
 JAIL_EOF
-    # Enable Caddy jails when Caddy logs are available
-    if [ -d /var/log/caddy ] || docker volume ls --format '{{.Name}}'  | grep -q caddy_logs; then
-        # Never duplicate the sections: fail2ban aborts on a repeated
-        # [caddy-auth], and every install/update run would otherwise append.
-        if ! grep -q '^\[caddy-auth\]' /etc/fail2ban/jail.local 2>/dev/null; then
-            cat <<'CADDY_JAIL_EOF' >> /etc/fail2ban/jail.local
+    # Caddy jails must point at the REAL access log. Compose mounts the
+    # NAMED caddy_logs volume (project-prefixed, e.g.
+    # smsly-hosting_caddy_logs) at /var/log/caddy INSIDE the container —
+    # the host path /var/log/caddy/access.log does not exist, and a jail
+    # with an unresolvable logpath aborts ALL of fail2ban (incl. sshd).
+    local _caddy_log=""
+    local _caddy_vol=""
+    _caddy_vol="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E 'caddy_logs$' | head -n 1)"
+    local _caddy_mp=""
+    if [ -n "$_caddy_vol" ]; then
+        _caddy_mp="$(docker volume inspect -f '{{.Mountpoint}}' "$_caddy_vol" 2>/dev/null)"
+        if [ -n "$_caddy_mp" ] && [ -f "$_caddy_mp/access.log" ]; then
+            _caddy_log="$_caddy_mp/access.log"
+        fi
+    fi
+    if [ -z "$_caddy_log" ] && [ -f /var/log/caddy/access.log ]; then
+        _caddy_log="/var/log/caddy/access.log"
+    fi
+    # Strip any installer-managed caddy sections first: re-runs stay
+    # idempotent (fail2ban aborts on repeated sections) and already-broken
+    # hosts with a stale logpath self-heal on the next update.
+    if [ -f /etc/fail2ban/jail.local ]; then
+        awk '/^\[caddy-(auth|dos)\]/{skip=1; next} /^\[/{skip=0} !skip' \
+            /etc/fail2ban/jail.local > /etc/fail2ban/jail.local.tmp && \
+            mv /etc/fail2ban/jail.local.tmp /etc/fail2ban/jail.local
+    fi
+    if [ -n "$_caddy_log" ]; then
+        cat <<CADDY_JAIL_EOF >> /etc/fail2ban/jail.local
 
 [caddy-auth]
 enabled = true
 filter = caddy-auth
 port = http,https
-logpath = /var/log/caddy/access.log
+logpath = $_caddy_log
 maxretry = 5
 bantime = 1h
 
@@ -51,12 +73,35 @@ bantime = 1h
 enabled = true
 filter = caddy-dos
 port = http,https
+logpath = $_caddy_log
+findtime = 300
+maxretry = 300
+bantime = 600
+CADDY_JAIL_EOF
+    else
+        # No readable Caddy access log on this host — leave the jails
+        # present but disabled so fail2ban (sshd/recidive) still starts.
+        # The next update re-resolves and re-enables automatically.
+        cat <<CADDY_JAIL_EOF >> /etc/fail2ban/jail.local
+
+[caddy-auth]
+enabled = false
+filter = caddy-auth
+port = http,https
+logpath = /var/log/caddy/access.log
+maxretry = 5
+bantime = 1h
+
+[caddy-dos]
+enabled = false
+filter = caddy-dos
+port = http,https
 logpath = /var/log/caddy/access.log
 findtime = 300
 maxretry = 300
 bantime = 600
 CADDY_JAIL_EOF
-        fi
+        _harden_log warn "no readable Caddy access log — caddy jails disabled (fail2ban still protects sshd)"
     fi
     # Caddy auth filter (JSON access log — 401/403 responses)
     [ -f /etc/fail2ban/filter.d/caddy-auth.conf ] || cat <<'FILTER_EOF' > /etc/fail2ban/filter.d/caddy-auth.conf
