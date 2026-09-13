@@ -178,7 +178,10 @@ def _docker_stats_cli() -> dict | None:
             if not name:
                 continue
             containers[name] = {
-                "cpu_percent": _safe_float(row.get("CPUPercentage", "0")),
+                # Real `docker stats --format json` keys are CPUPerc/MemPerc
+                # (with a trailing %). Accept the legacy CPUPercentage alias
+                # too so neither spelling silently reports 0.
+                "cpu_percent": _safe_float(row.get("CPUPerc", row.get("CPUPercentage", "0"))),
                 "memory_mb": parse_mem(row.get("MemUsage", "0") .split("/")[0].strip()),
                 "memory_limit_mb": parse_mem((row.get("MemUsage") or "0/0").split("/")[-1].strip()),
                 "memory_percent": _safe_float(row.get("MemPerc", "0")),
@@ -300,6 +303,8 @@ def parse_mem(s: str) -> float:
 
 def _safe_float(v: str) -> float:
     try:
+        if isinstance(v, str):
+            v = v.strip().rstrip('%').strip()
         return float(v)
     except (ValueError, TypeError):
         return 0.0

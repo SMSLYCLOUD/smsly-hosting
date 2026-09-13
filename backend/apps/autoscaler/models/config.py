@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import IntegrityError, models
 
 
 class AutoscalerConfig(models.Model):
@@ -14,15 +14,28 @@ class AutoscalerConfig(models.Model):
         verbose_name_plural = "Autoscaler Config"
 
     @classmethod
+    def _get_or_create_row(cls) -> "AutoscalerConfig":
+        """Fetch the singleton row, tolerating concurrent inserts.
+
+        Two beat workers starting on an empty table can both pass the
+        get_or_create lookup and race the INSERT — the loser gets
+        IntegrityError instead of a row. Re-read in that case.
+        """
+        try:
+            obj, _ = cls.objects.get_or_create(pk=1, defaults={"data": {}})
+            return obj
+        except IntegrityError:
+            return cls.objects.get(pk=1)
+
+    @classmethod
     def get_config(cls) -> dict:
         """Return the current config dict (creates a default row if missing)."""
-        obj, _ = cls.objects.get_or_create(pk=1, defaults={"data": {}})
-        return obj.data
+        return cls._get_or_create_row().data
 
     @classmethod
     def save_config(cls, new_data: dict) -> dict:
-        """Update the stored config with new data."""
-        obj, _ = cls.objects.get_or_create(pk=1)
+        """Update the stored config with new data (replaces the dict)."""
+        obj = cls._get_or_create_row()
         obj.data = new_data
         obj.save()
         return obj.data

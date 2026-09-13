@@ -132,6 +132,13 @@ class DecisionEngine:
             spawning_in_progress=self.spawning_in_progress,
         )
 
+        # Spawn in flight — defer, including for OOM/crash. A second
+        # emergency spawn while SDS/a previous spawn is still delivering
+        # only double-provisions; the next tick re-fires if OOM persists.
+        if self.spawning_in_progress:
+            r.reason = 'Replica spawn in progress — waiting.'
+            return r
+
         # Emergency: OOM or crash → always urgent scale up.
         # Checked BEFORE the metrics-unavailable guard because Loki
         # can report OOM/crash even when Prometheus/DB/Docker metrics
@@ -143,15 +150,13 @@ class DecisionEngine:
             r.action = 'scale_up'
             r.urgency = 'critical'
             r.reason = 'OOM/crash detected — immediate scaling.'
+            # Single replica per event: a persistent OOM re-fires on the
+            # next tick for escalation, while a transient spike heals
+            # without stranding a burst of unneeded replicas.
             r.scale_up_by = min(
-                max(2, self.running_replicas + 2),
+                1,
                 max(1, self.max_replicas - self.running_replicas),
             )
-            return r
-
-        # Spawn in flight — defer
-        if self.spawning_in_progress:
-            r.reason = 'Replica spawn in progress — waiting.'
             return r
 
         if at_capacity:
@@ -206,8 +211,12 @@ class DecisionEngine:
                 return r
 
         # ── Scale down ──────────────────────────────────────────────────────
+        # Unknown metrics (cpu_percent=None, i.e. every source failed) must
+        # never drive scale-down: None is "no data", not "idle". Without
+        # this guard a metrics outage scales healthy services down to min.
         if (
-            self.running_replicas > self.min_replicas
+            self.metrics.cpu_percent is not None
+            and self.running_replicas > self.min_replicas
             and cpu <= self.cpu_low
             and not scale_down_cooldown
         ):
@@ -220,8 +229,17 @@ class DecisionEngine:
             )
             return r
 
-        if scale_down_cooldown and self.running_replicas > 0 and cpu <= self.cpu_low:
+        if (
+            scale_down_cooldown
+            and self.metrics.cpu_percent is not None
+            and self.running_replicas > 0
+            and cpu <= self.cpu_low
+        ):
             r.reason = 'Scale-down cooldown active.'
+            return r
+
+        if self.metrics.cpu_percent is None:
+            r.reason = 'Metrics unavailable — holding steady.'
             return r
 
         r.reason = 'Metrics within normal range.'

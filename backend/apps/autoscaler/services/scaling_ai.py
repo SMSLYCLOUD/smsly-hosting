@@ -41,7 +41,7 @@ from apps.autoscaler.engine.decision import (  # noqa: F401
     DEFAULT_CPU_CRITICAL as CPU_CRITICAL,
     DEFAULT_CPU_LOW as CPU_LOW,
     DEFAULT_MAX_REPLICAS as MAX_REPLICAS,
-    DEFAULT_COOLDOWN_MIN as COOLDOWN_MINUTES,
+    DEFAULT_COOLDOWN_UP_MIN as COOLDOWN_MINUTES,
     DEFAULT_COOLDOWN_DOWN_MIN as COOLDOWN_DOWN_MINUTES,
     DEFAULT_MEM_GROWTH_MB_MIN as MEM_GROWTH_MB_MIN,
 )
@@ -162,15 +162,14 @@ class ScalingAnalyzer:
             max_replicas=self.service.max_replicas or MAX_REPLICAS,
             min_replicas=self.service.min_replicas or 0,
             cpu_target=self.service.autoscale_cpu_target or 0,
+            last_scale_at=getattr(self.service, 'last_scale_at', None),
             spawning_in_progress=guardrails.get('spawning_in_progress', False),
         )
         rec = engine.decide()
-        return {
-            'action': rec.action,
-            'reason': rec.reason,
-            'scale_up_by': rec.scale_up_by,
-            'urgency': rec.urgency,
-        }
+        # Full shape (superset of the legacy keys): callers relying on
+        # to_dict() fields like scale_down_by/cooldown_active/at_capacity
+        # must not KeyError.
+        return rec.to_dict()
 
     # ── AI enhancement (best-effort, non-blocking) ────────────────────────
 

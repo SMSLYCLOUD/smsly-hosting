@@ -13,6 +13,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import socket
 from dataclasses import asdict, dataclass
 
@@ -103,8 +104,12 @@ class MetricsCollector:
         out: dict = {}
         for key, query in queries.items():
             out[key] = self._promql(query)
-        if not any(out.values()):
-            errors = self._loki_errors()
+        # Loki enrichment runs on both branches: OOM/crash signals must
+        # stay visible even when CPU/memory series are present. A bare
+        # `any(out.values())` check is wrong here — 0.0 is a valid idle
+        # reading, not missing data — so test for None explicitly.
+        errors = self._loki_errors()
+        if all(v is None for v in out.values()):
             return MetricsSnapshot(
                 cpu_percent=out.get('cpu_percent'),
                 memory_mb=out.get('memory_mb'),
@@ -119,6 +124,10 @@ class MetricsCollector:
             cpu_percent=out.get('cpu_percent'),
             memory_mb=out.get('memory_mb'),
             memory_trend_mb_per_min=out.get('memory_trend'),
+            error_count_1h=errors.get('error_count_1h', 0),
+            oom_detected=errors.get('oom_detected', False),
+            crash_loop=errors.get('crash_loop', False),
+            has_errors=errors.get('has_errors', False),
             source='prometheus',
         )
 
@@ -128,18 +137,33 @@ class MetricsCollector:
 
         from apps.autoscaler.models.metrics import ServiceMetric
         now = timezone.now()
-        recent = ServiceMetric.objects.filter(
-            service=self.service,
-            timestamp__gte=now - timedelta(minutes=2),
+        # Single capped query (was: exists() + count() + full iteration =
+        # 3 queries plus an unbounded Python sum over the whole window).
+        rows = list(
+            ServiceMetric.objects.filter(
+                service=self.service,
+                timestamp__gte=now - timedelta(minutes=2),
+            ).order_by('timestamp')[:120]
         )
-        if not recent.exists():
+        if not rows:
             return MetricsSnapshot(source='db')
-        avg_cpu = sum(m.cpu_percent for m in recent) / recent.count()
-        avg_mem = sum(m.memory_usage for m in recent) / recent.count()
+        avg_cpu = sum(m.cpu_percent for m in rows) / len(rows)
+        avg_mem = sum(m.memory_usage for m in rows) / len(rows)
+        # Memory trend from oldest→newest row in the window so mem-growth
+        # scale-up also works on the default DB path (previously None here,
+        # which silently disabled that rule on the 30s beat).
+        trend = None
+        if len(rows) >= 2:
+            try:
+                span_min = (rows[-1].timestamp - rows[0].timestamp).total_seconds() / 60
+                if span_min >= 1:
+                    trend = (rows[-1].memory_usage - rows[0].memory_usage) / span_min
+            except Exception:
+                trend = None
         return MetricsSnapshot(
             cpu_percent=avg_cpu,
             memory_mb=avg_mem,
-            memory_trend_mb_per_min=None,
+            memory_trend_mb_per_min=trend,
             source='db',
         )
 
@@ -199,7 +223,10 @@ class MetricsCollector:
     # ── Loki errors (only used in combination with prometheus path) ─────────
     def _loki_errors(self) -> dict:
         from datetime import timedelta
-        query = f'{{compose_service=~"{self.service_name}.*"}} |= "error"'
+        # re.escape: service names feed a Loki regex — without escaping a
+        # name containing regex metacharacters over-matches other services.
+        # The trailing .* (blue-green variants) is intentional.
+        query = f'{{compose_service=~"{re.escape(self.service_name)}.*"}} |= "error"'
         ts_ns = int((timezone.now() - timedelta(seconds=3600)).timestamp() * 1_000_000_000)
         end_ns = int(timezone.now().timestamp() * 1_000_000_000)
         try:

@@ -421,6 +421,39 @@ class SpawningService:
         replica.destroyed_at = timezone.now()
         replica.save(update_fields=['status', 'destroyed_at'])
 
+    def replica_container_missing(self, replica) -> bool | None:
+        """True if the replica's container is certainly gone from its host.
+
+        Returns None when liveness cannot be determined (empty name,
+        Docker/SSH errors) — callers must fail closed and keep the row.
+        Only a confirmed absence heals; present-but-stopped containers
+        belong to Docker's restart policy, not to us.
+        """
+        name = (getattr(replica, "container_name", "") or "").strip()
+        if not name:
+            return None
+        if not getattr(replica, "node_id", None):
+            try:
+                import docker as docker_lib
+                client = docker_lib.from_env()
+                try:
+                    client.containers.get(name)
+                    return False
+                except docker_lib.errors.NotFound:
+                    return True
+            except Exception:
+                return None
+        try:
+            ssh = self._get_ssh(replica.node)
+            _, _, exit_code = ssh.exec_command(
+                f"docker inspect {shlex.quote(name)} >/dev/null 2>&1",
+                raise_on_error=False,
+                timeout=30,
+            )
+            return exit_code != 0
+        except Exception:
+            return None
+
     def cleanup(self):
         """Close all SSH connections."""
         for client in self._ssh_clients.values():

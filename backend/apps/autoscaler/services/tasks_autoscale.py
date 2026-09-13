@@ -99,14 +99,35 @@ def cleanup_stuck_spawning(self) -> dict[str, int]:
     from django.utils import timezone
 
     threshold = timezone.now() - timedelta(seconds=_STUCK_SPAWN_THRESHOLD_SECONDS)
-    stuck = ServiceReplica.objects.filter(
+    stuck = list(ServiceReplica.objects.filter(
         status='SPAWNING',
         created_at__lt=threshold,
-    )
-    count = stuck.count()
+    ))
+    count = len(stuck)
     if count > 0:
         logger.warning("Cleaning up %d stuck SPAWNING replicas (older than %ds)", count, _STUCK_SPAWN_THRESHOLD_SECONDS)
-        stuck.update(status='DESTROYED', destroyed_at=timezone.now())
+        # Destroy the actual containers, not just the DB rows: a
+        # partially-spawned container keeps `--restart unless-stopped` and
+        # the canonical Traefik labels, so a DB-only flip would leave it
+        # running and silently serving traffic. Best-effort per replica —
+        # one bad host must not stall the rest of the sweep, and a row
+        # left SPAWNING is retried on the next beat.
+        from apps.deployments.services.spawning_service import SpawningService
+        from celery.exceptions import SoftTimeLimitExceeded
+        spawner = SpawningService()
+        try:
+            for replica in stuck:
+                try:
+                    spawner.destroy(replica)
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "Stuck-spawn destroy failed for %s: %s",
+                        getattr(replica, 'container_name', '?'), exc,
+                    )
+        finally:
+            spawner.cleanup()
 
     # Also delete old DESTROYED replicas (> 24h) to prevent table bloat
     old_threshold = timezone.now() - timedelta(hours=24)
@@ -120,6 +141,82 @@ def cleanup_stuck_spawning(self) -> dict[str, int]:
         old_destroyed.delete()
 
     return {'cleaned': count, 'old_deleted': old_count}
+
+
+_DEAD_RUNNING_GRACE_SECONDS = 900
+
+
+@shared_task(
+    name='apps.autoscaler.services.tasks_autoscale.cleanup_dead_running',
+    bind=True,
+    ignore_result=True,
+    soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
+    time_limit=TASK_TIME_LIMIT_MEDIUM[1],
+)
+def cleanup_dead_running(self) -> dict[str, int]:
+    """Flip RUNNING replicas whose container is gone to DESTROYED.
+
+    Replica counts trust the DB row, so a container removed out-of-band
+    (manual `docker rm`, wiped remote host, failed HA failover deploy)
+    leaves a phantom RUNNING row that inflates the count and can wedge
+    the service at a false `at max_replicas`, blocking scale-up. Only a
+    *confirmed absence* heals — uncertainty keeps the row (fail closed).
+    Rows younger than the grace period are skipped: HA failover marks
+    RUNNING before its deploy materializes the container, and normal
+    deploys need minutes for large images.
+    """
+    from datetime import timedelta
+    from django.utils import timezone
+
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    healed = 0
+    checked = 0
+    try:
+        candidates = list(ServiceReplica.objects.filter(
+            status='RUNNING',
+            created_at__lt=timezone.now() - timedelta(seconds=_DEAD_RUNNING_GRACE_SECONDS),
+        ))
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        logger.warning("Dead-running sweep: replica query failed: %s", exc)
+        return {'healed': 0, 'checked': 0}
+    if not candidates:
+        return {'healed': 0, 'checked': 0}
+
+    from apps.deployments.services.spawning_service import SpawningService
+    spawner = SpawningService()
+    try:
+        for replica in candidates:
+            checked += 1
+            try:
+                missing = spawner.replica_container_missing(replica)
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as exc:
+                logger.debug(
+                    "Liveness probe skipped for %s: %s",
+                    getattr(replica, 'container_name', '?'), exc,
+                )
+                continue
+            if missing is True:
+                logger.warning(
+                    "Healing phantom RUNNING replica %s (container gone)",
+                    getattr(replica, 'container_name', '?'),
+                )
+                try:
+                    replica.status = 'DESTROYED'
+                    replica.destroyed_at = timezone.now()
+                    replica.save(update_fields=['status', 'destroyed_at'])
+                    healed += 1
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as exc:
+                    logger.debug("Phantom heal save failed: %s", exc)
+    finally:
+        spawner.cleanup()
+    return {'healed': healed, 'checked': checked}
 
 
 @shared_task(

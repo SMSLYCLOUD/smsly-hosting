@@ -12,6 +12,7 @@ semantics) and additionally updates ``last_scale_at`` for cooldown.
 """
 import logging
 import threading
+from collections import OrderedDict
 
 from django.db import transaction
 from django.utils import timezone
@@ -26,29 +27,30 @@ logger = logging.getLogger(__name__)
 # Bounded at MAX_LOCKS entries — least-recently-used entries are evicted
 # to prevent unbounded memory growth on large platforms.
 _MAX_LOCKS = 1000
-_SPAWN_LOCKS: dict[str, threading.Lock] = {}
-_SPAWN_LOCKS_ORDER: list[str] = []
+_SPAWN_LOCKS: OrderedDict[str, threading.Lock] = OrderedDict()
 _SPAWN_LOCKS_GUARD = threading.Lock()
 
 
 def _lock_for(service_id: str) -> threading.Lock:
     with _SPAWN_LOCKS_GUARD:
         lock = _SPAWN_LOCKS.get(service_id)
-        if lock is None:
-            # Evict oldest entry if at capacity
-            if len(_SPAWN_LOCKS) >= _MAX_LOCKS:
-                oldest = _SPAWN_LOCKS_ORDER.pop(0)
-                _SPAWN_LOCKS.pop(oldest, None)
-            lock = threading.Lock()
-            _SPAWN_LOCKS[service_id] = lock
-            _SPAWN_LOCKS_ORDER.append(service_id)
-        else:
-            # Move to end (most recently used)
-            try:
-                _SPAWN_LOCKS_ORDER.remove(service_id)
-            except ValueError:
-                pass
-            _SPAWN_LOCKS_ORDER.append(service_id)
+        if lock is not None:
+            _SPAWN_LOCKS.move_to_end(service_id)
+            return lock
+        # Evict oldest entries if at capacity — but NEVER a lock that is
+        # currently held. Evicting a held lock hands out two Lock objects
+        # for one service, letting two workers spawn concurrently
+        # (split-brain double-spawn). If every lock is held (extreme
+        # contention), overshoot the bound instead of splitting a brain.
+        while len(_SPAWN_LOCKS) >= _MAX_LOCKS:
+            for key, candidate in _SPAWN_LOCKS.items():
+                if not candidate.locked():
+                    del _SPAWN_LOCKS[key]
+                    break
+            else:
+                break
+        lock = threading.Lock()
+        _SPAWN_LOCKS[service_id] = lock
         return lock
 
 
@@ -96,22 +98,41 @@ class Reconciler:
             return ScaleResult(recommendation, applied=False, error='k8s-hpa')
 
         # The threading.Lock serializes concurrent invocations within a
-        # single worker process. The SELECT … FOR UPDATE row lock in
-        # ``_apply_locked`` serializes them across worker processes —
-        # Celery prefork children each have their own ``_SPAWN_LOCKS``
-        # dict, so the in-process lock alone cannot prevent a double
-        # spawn across processes. The row lock is the cross-process
-        # guarantee; the in-process lock reduces DB lock contention.
+        # single worker process (the race test pins this: _scale_up calls
+        # must never overlap for one service). It is held for the whole
+        # apply, INCLUDING the Docker/SSH I/O below — that only blocks
+        # same-service scalers, never the database.
+        #
+        # The DB transaction, on the other hand, is confined to
+        # ``_plan_locked`` (row lock + recount + clamp, all fast). The
+        # spawn/destroy I/O runs outside any transaction: holding a row
+        # lock across multi-minute SSH calls starved every other scaler
+        # for the service, and a rollback after successful spawns deleted
+        # the DB rows while the containers kept running (leak).
+        # Cross-process races from the shorter lock window are bounded by
+        # the per-iteration headroom re-check in _scale_up plus the
+        # pipeline dedup cache and spawning guards.
         with self._lock:
-            return self._apply_locked(recommendation)
+            plan = self._plan_locked(recommendation)
+            if isinstance(plan, ScaleResult):
+                return plan
+            if plan.action == 'scale_up':
+                return self._scale_up(plan)
+            if plan.action == 'scale_down':
+                return self._scale_down(plan)
+            return ScaleResult(recommendation, applied=False)
 
     @transaction.atomic
-    def _apply_locked(self, rec: Recommendation) -> ScaleResult:
+    def _plan_locked(self, rec: Recommendation) -> Recommendation | ScaleResult:
+        """Short locked planning phase: recount under the row lock and
+        clamp the recommendation. Returns a clamped Recommendation to
+        execute, or a ScaleResult when there is nothing to do."""
         from apps.autoscaler.models.replica import ServiceReplica
         from apps.deployments.models.core import Service
 
         # Acquire the row lock for the read-decide-write cycle. Other
-        # scale events for this service block here until we commit.
+        # scale events for this service block here until we commit —
+        # which is fast now that no I/O happens inside.
         try:
             locked = Service.objects.select_for_update().get(id=self.service.id)
         except Service.DoesNotExist:
@@ -140,12 +161,11 @@ class Reconciler:
             up_by = min(rec.scale_up_by, headroom)
             if up_by <= 0:
                 return ScaleResult(rec, applied=False, error='no headroom after lock')
-            clamped = Recommendation(
+            return Recommendation(
                 action='scale_up', reason=rec.reason, scale_up_by=up_by,
                 urgency=rec.urgency, cooldown_active=rec.cooldown_active,
                 at_capacity=rec.at_capacity, spawning_in_progress=rec.spawning_in_progress,
             )
-            return self._scale_up(clamped)
 
         if rec.action == 'scale_down':
             min_r = locked.min_replicas or 0
@@ -155,14 +175,25 @@ class Reconciler:
             down_by = min(max(rec.scale_down_by, 1), removable)
             if down_by <= 0:
                 return ScaleResult(rec, applied=False, error='no removable replicas after lock')
-            clamped = Recommendation(
+            return Recommendation(
                 action='scale_down', reason=rec.reason, scale_down_by=down_by,
                 urgency=rec.urgency, cooldown_active=rec.cooldown_active,
                 at_capacity=rec.at_capacity, spawning_in_progress=rec.spawning_in_progress,
             )
-            return self._scale_down(clamped)
 
         return ScaleResult(rec, applied=False)
+
+    def _live_replica_count(self) -> int:
+        """Current RUNNING + SPAWNING rows — the occupancy check used
+        before every spawn so concurrent workers cannot overshoot max."""
+        from apps.autoscaler.models.replica import ServiceReplica
+        return ServiceReplica.objects.filter(
+            service=self.service, status__in=('RUNNING', 'SPAWNING')
+        ).count()
+
+    def _has_headroom(self) -> bool:
+        max_r = getattr(self.service, 'max_replicas', None) or 1
+        return self._live_replica_count() < max_r
 
     # ── Scale up ─────────────────────────────────────────────────────────────
     def _scale_up(self, rec: Recommendation) -> ScaleResult:
@@ -178,8 +209,14 @@ class Reconciler:
 
             # Priority 1: local spawn — horizontal scaling replicates on the
             # same server for low-latency inter-replica communication.
+            # Headroom is re-checked every iteration (not just at plan
+            # time) so concurrent workers and slow sequential spawns
+            # cannot overshoot max_replicas.
             local_ok = True
             while spawned < remaining and local_ok:
+                if not self._has_headroom():
+                    logger.info("Headroom exhausted for %s — stopping scale-up", self.service.name)
+                    break
                 replica = ServiceReplica.objects.create(
                     service=self.service, node=None,
                     spawn_reason=rec.reason, status='SPAWNING',
@@ -256,6 +293,9 @@ class Reconciler:
 
             for node, score, resources in nodes_to_try:
                 if spawned >= remaining:
+                    break
+                if not self._has_headroom():
+                    logger.info("Headroom exhausted for %s — stopping scale-up", self.service.name)
                     break
                 replica = ServiceReplica.objects.create(
                     service=self.service, node=node,

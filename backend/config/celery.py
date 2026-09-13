@@ -174,6 +174,8 @@ app.conf.task_routes = {
     'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'deploy'},
     'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task': {'queue': 'deploy'},
     'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning': {'queue': 'deploy'},
+    'apps.autoscaler.services.tasks_autoscale.apply_vpa_limits_task': {'queue': 'deploy'},
+    'apps.autoscaler.services.tasks_autoscale.cleanup_dead_running': {'queue': 'deploy'},
     # Stats collection does Docker/K8s I/O and mutates platform containers —
     # keep it off the default 'celery' queue with the other I/O-heavy tasks.
     'apps.autoscaler.tasks.autoscaler_collect_stats': {'queue': 'deploy'},
@@ -371,6 +373,12 @@ app.conf.beat_schedule = {
     # Clean up replicas stuck in SPAWNING for > 5 minutes (failed spawn)
     'cleanup-stuck-spawning-every-5m': {
         'task': 'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Heal phantom RUNNING rows whose container is gone (removed out-of-band)
+    'cleanup-dead-running-every-5m': {
+        'task': 'apps.autoscaler.services.tasks_autoscale.cleanup_dead_running',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
