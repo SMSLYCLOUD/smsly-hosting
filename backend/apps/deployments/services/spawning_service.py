@@ -495,6 +495,11 @@ class SpawningService:
             "smsly.blue_green.canonical_name": service.name,
             "smsly.replica": "true",
         }
+        # No live reference (first replica, primary not yet running): fall
+        # back to explicit port so Traefik has a routable service.
+        if not ref_block:
+            labels[f"traefik.http.services.{service.name}.loadbalancer.server.port"] = \
+                str(env_vars.get("PORT") or service.internal_port or 8000)
         assert_block_compatible(
             live_service_blocks(client, service.name),
             {k: v for k, v in labels.items()
