@@ -345,6 +345,7 @@ export interface Service {
   autoscale_cpu_target?: number;
   autoscale_enabled?: boolean;
   vpa_enabled?: boolean;
+  fast_deploy_enabled?: boolean | null; // null = inherit platform default
   buildpack?: 'NIXPACKS' | 'DOCKER' | 'STATIC';
   root_directory?: string;
   build_command?: string;
@@ -477,6 +478,7 @@ export interface Deployment {
   created_at: string;
   finished_at?: string;
   is_rollback?: boolean;
+  is_fast_deploy?: boolean;
   rollback_from?: string | null;
   target_server?: string | null;
   target_server_name?: string | null;

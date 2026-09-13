@@ -28,6 +28,7 @@ export function AdvancedTab({ service }: { service: Service }) {
         restart_policy: service.restart_policy || 'unless-stopped',
     });
     const [scanDepth, setScanDepth] = useState<'shallow' | 'standard' | 'deep'>(service.env_scan_depth || 'shallow');
+    const [fastDeploy, setFastDeploy] = useState<boolean | null>(service.fast_deploy_enabled ?? null);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [error, setError] = useState('');
@@ -272,6 +273,69 @@ export function AdvancedTab({ service }: { service: Service }) {
                     {saved && (
                         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-4 py-3 text-emerald-500 text-sm flex items-center gap-2">
                             <Check size={16} /> Scan depth saved successfully
+                        </div>
+                    )}
+                </div>
+            </Card>
+
+            {/* Fast Deploy */}
+            <Card className="p-6 border-border shadow-md">
+                <div className="flex justify-between items-center mb-4">
+                    <div>
+                        <h3 className="font-bold text-lg flex items-center gap-2">
+                            <span className="h-5 w-5 rounded bg-amber-500/20 flex items-center justify-center text-amber-600 text-xs font-bold">⚡</span> Fast Deploy
+                        </h3>
+                        <p className="text-sm text-muted-foreground">Skip AI analysis and REVIEW gates for this service. Inherits platform default when not set.</p>
+                    </div>
+                </div>
+                <div className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Deploy Mode</label>
+                        <Select value={fastDeploy === null ? 'inherit' : fastDeploy ? 'fast' : 'standard'} onValueChange={(value) => setFastDeploy(value === 'inherit' ? null : value === 'fast')}>
+                            <SelectTrigger className="w-[320px]">
+                                <SelectValue placeholder="Select deploy mode" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="inherit">Inherit — follow platform default</SelectItem>
+                                <SelectItem value="fast">Fast — skip AI & review, go straight to live</SelectItem>
+                                <SelectItem value="standard">Standard — full AI analysis + review gates</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                            {fastDeploy === null && 'Uses Platform → Deploy Pipeline → Fast Deploy default.'}
+                            {fastDeploy === true && 'This service always fast-deploys, even if platform default is off.'}
+                            {fastDeploy === false && 'This service always goes through full review, even if platform default is on.'}
+                        </p>
+                    </div>
+                    <Button
+                        onClick={async () => {
+                            setSaving(true);
+                            setError('');
+                            setSaved(false);
+                            try {
+                                await servicesApi.update(service.id, { fast_deploy_enabled: fastDeploy } as any);
+                                setSaved(true);
+                                setTimeout(() => setSaved(false), 3000);
+                            } catch (err: any) {
+                                setError(err?.response?.data?.detail || err?.response?.data?.fast_deploy_enabled?.[0] || 'Failed to save fast deploy');
+                            } finally {
+                                setSaving(false);
+                            }
+                        }}
+                        disabled={saving}
+                        className="gap-2"
+                    >
+                        {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                        {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Fast Deploy'}
+                    </Button>
+                    {error && (
+                        <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-500 text-sm">
+                            {error}
+                        </div>
+                    )}
+                    {saved && (
+                        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-4 py-3 text-emerald-500 text-sm flex items-center gap-2">
+                            <Check size={16} /> Fast deploy saved successfully
                         </div>
                     )}
                 </div>

@@ -5,7 +5,7 @@ import { servicesApi, serversApi, Deployment, ManagedServer } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2, ArrowUpCircle, Server, UploadCloud } from 'lucide-react';
+import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2, ArrowUpCircle, Server, UploadCloud, Zap } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
@@ -421,6 +421,11 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                                     <span className="text-xs text-muted-foreground">
                                                         {d.created_at ? formatDistanceToNow(new Date(d.created_at), { addSuffix: true }) : 'Unknown time'}
                                                     </span>
+                                                    {(d as any).is_fast_deploy && (
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-amber-500/15 text-amber-600 border-amber-500/30">
+                                                            <Zap className="w-3 h-3" /> FAST
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     {d.commit_message?.includes('Upload') || d.commit_hash?.startsWith('upload-') ? <UploadCloud className="w-4 h-4 text-primary" /> : <GitCommit className="w-4 h-4 text-muted-foreground" />}

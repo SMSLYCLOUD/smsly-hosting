@@ -65,6 +65,7 @@ class DomainConfigView(GenericAPIView):
             # Deploy Pipeline
             'auto_review_hours': config.auto_review_hours,
             'auto_promote_hours': config.auto_promote_hours,
+            'fast_deploy_default': config.fast_deploy_default,
             # Feature Flags
             'smsly_disable_tier_gates': config.smsly_disable_tier_gates,
             'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
@@ -280,6 +281,8 @@ class DomainConfigView(GenericAPIView):
                     config.auto_promote_hours = max(0, min(168, int(data['auto_promote_hours'])))
                 except (TypeError, ValueError):
                     pass
+            if 'fast_deploy_default' in data:
+                config.fast_deploy_default = _parse_bool(data.get('fast_deploy_default'))
             # Feature Flags
             for _field in ('smsly_disable_tier_gates', 'enable_legacy_tunnel_api', 'smsly_strict_ssh_host_key_check'):
                 if _field in data:

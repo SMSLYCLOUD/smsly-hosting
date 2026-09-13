@@ -4,7 +4,8 @@ import React from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Server, Clock } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Server, Clock, Zap } from "lucide-react";
 
 interface PipelineCardProps {
   config: any;
@@ -116,6 +117,13 @@ export function DeployPipelineCard({ config, onChange }: PipelineCardProps) {
           <p className="text-xs text-muted-foreground">
             Auto-promote deployments in STAGED status after this many hours. Set to 0 to disable.
           </p>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label className="flex items-center gap-2"><Zap className="h-4 w-4 text-amber-500" /> Fast Deploy (platform default)</Label>
+            <p className="text-xs text-muted-foreground">Skip AI analysis and REVIEW/STAGED gates — deploy straight to live. Per-service setting overrides this.</p>
+          </div>
+          <Switch checked={!!config.fast_deploy_default} onCheckedChange={(v) => onChange("fast_deploy_default", v)} />
         </div>
       </CardContent>
     </Card>
