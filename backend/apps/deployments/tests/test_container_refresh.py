@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from apps.deployments.services.container_refresh import (
     ContainerRefreshError,
+    _is_remote_service,
     build_refresh_plan,
     recreate_with_fresh_env,
 )
@@ -16,6 +17,9 @@ def _service():
     svc.cpu_cores = "2.0"
     svc.memory_mb = 2048
     svc.server_id = None
+    svc.server = None
+    svc.active_target_type = ""
+    svc.active_host_ip = ""
     ev = MagicMock()
     ev.key = "FOO"
     ev.value = "bar"
@@ -115,8 +119,76 @@ class TestContainerRefresh(TestCase):
     def test_remote_service_refused(self):
         svc = _service()
         svc.server_id = "node-1"
-        with self.assertRaises(ContainerRefreshError):
-            recreate_with_fresh_env(svc)
+        svc.server = MagicMock(is_primary=False, host="10.0.0.9")
+        config = MagicMock(server_ip="10.0.0.1")
+        with patch("apps.deployments.models.PlatformConfig.load", return_value=config):
+            with self.assertRaises(ContainerRefreshError):
+                recreate_with_fresh_env(svc)
+
+    def test_local_service_with_server_assignment_allowed(self):
+        """Regression: Service.server is "where hosted" — also set for
+        LOCAL services (primary node record). apply-env must not refuse
+        them as remote."""
+        svc = _service()
+        svc.server_id = "primary-1"
+        svc.server = MagicMock(is_primary=True, host="10.0.0.1")
+        config = MagicMock(server_ip="10.0.0.1")
+        old = _container()
+        client, _ = _client(old)
+        with patch("apps.deployments.models.PlatformConfig.load", return_value=config), \
+                patch("apps.deployments.services.mtls_integration.get_mtls_env_vars",
+                      return_value={}), \
+                patch("docker.from_env", return_value=client):
+            res = recreate_with_fresh_env(svc)
+        self.assertTrue(res["ok"])
+        old.stop.assert_called_once()
+
+    def test_fresh_env_merges_live_and_db(self):
+        """Parity (2026-09-12 outage): live PORT/derived vars persist;
+        DB rows win (apply-env purpose); HOSTNAME never copied."""
+        from unittest.mock import MagicMock as _MM
+
+        from apps.deployments.services.container_refresh import (
+            _fresh_env,
+            _live_container_env,
+        )
+        old = _container()
+        old.attrs["Config"]["Env"] = [
+            "PORT=80", "SECRET=live-secret", "HOSTNAME=old", "STALE=x",
+        ]
+        svc = _service()
+        port_row = _MM()
+        port_row.key = "PORT"
+        port_row.value = "8000"
+        svc.env_vars.all.return_value = [
+            svc.env_vars.all.return_value[0], port_row,
+        ]
+        env = _fresh_env(svc, _live_container_env(old))
+        self.assertEqual(env["PORT"], "8000")  # DB edit wins
+        self.assertEqual(env["SECRET"], "live-secret")  # live persists
+        self.assertEqual(env["STALE"], "x")
+        self.assertEqual(env["FOO"], "bar")
+        self.assertNotIn("HOSTNAME", env)
+
+    def test_is_remote_service_locality(self):
+        self.assertFalse(_is_remote_service(_service()))
+        # primary server record -> local
+        svc = _service()
+        svc.server_id = "primary-1"
+        svc.server = MagicMock(is_primary=True, host="10.0.0.1")
+        with patch("apps.deployments.models.PlatformConfig.load",
+                   return_value=MagicMock(server_ip="10.0.0.1")):
+            self.assertFalse(_is_remote_service(svc))
+        # foreign server record -> remote
+        svc.server = MagicMock(is_primary=False, host="10.0.0.9")
+        with patch("apps.deployments.models.PlatformConfig.load",
+                   return_value=MagicMock(server_ip="10.0.0.1")):
+            self.assertTrue(_is_remote_service(svc))
+        # verified remote execution -> remote even without a server row
+        svc = _service()
+        svc.active_target_type = "remote"
+        svc.active_host_ip = "10.0.0.9"
+        self.assertTrue(_is_remote_service(svc))
 
     @patch("apps.deployments.services.mtls_integration.get_mtls_env_vars", return_value={})
     @patch("docker.from_env")

@@ -184,11 +184,33 @@ ensure_traefik_middlewares() {
     fi
 }
 
+# ── 6b. Traefik service conflicts must not exist (2026-09-12 root cause)
+# Two containers declaring the same traefik.http.services.<name> with
+# different definitions (e.g. a replica stamped with server.port only
+# while the primary carries healthcheck labels too) makes Traefik drop
+# the ENTIRE service ("defined multiple times with different
+# configurations") — every request for that host silently falls through
+# to route-fallback with a 200, so health monitors stay green while users
+# get the wrong content. Detection only — never restart Traefik from here.
+ensure_traefik_service_conflicts() {
+    command -v docker >/dev/null 2>&1 || return 0
+    docker inspect smsly-hosting-traefik-1 >/dev/null 2>&1 || { log "traefik not running — skipping service-conflict check"; return 0; }
+    local bad
+    bad=$(docker logs smsly-hosting-traefik-1 --since 60m 2>&1 | grep -e 'defined multiple times with different configurations' -e 'the service .* does not exist' | head -n 5) || true
+    if [ -n "$bad" ]; then
+        log "ALERT: Traefik reports dropped/conflicting service definition(s) in the last 60m — affected app routers are down, traffic is served by route-fallback. Destroy or relabel the conflicting replica container:"
+        echo "$bad" | while IFS= read -r line; do log "ALERT detail: $line"; done
+    else
+        log "traefik service definitions OK (no dropped-service errors in 60m)"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
 ensure_edge_lockdown
 ensure_migrations
 ensure_traefik_middlewares
+ensure_traefik_service_conflicts
 ensure_caddy_logs_writable
 log "integrity check complete"

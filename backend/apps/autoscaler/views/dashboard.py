@@ -4,8 +4,10 @@ import logging
 import subprocess
 import time
 import threading
+from datetime import datetime
 
 from django.core.cache import cache
+from django.db.models import Count
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
@@ -144,6 +146,121 @@ def _record_history(services, total_mem, infra_reserve):
     return history
 
 
+# ── Decision history: legacy engine + actual replica lifecycle ──────────
+def _parse_ts(value) -> datetime:
+    """Parse an ISO timestamp defensively; unparseable sorts last."""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _snapshot_mem(snapshot) -> float:
+    try:
+        return float((snapshot or {}).get("memory_mb", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _replica_scale_events(limit: int = 50) -> list[dict]:
+    """Actual scaling history derived from ServiceReplica lifecycle rows.
+
+    The legacy engine below only records its own container-level advice
+    (and can never fire scale-down with default min_workers=1), so manual
+    spawns/destroys and reconciler actions would otherwise leave the
+    dashboard timeline permanently empty. Worker counts are replayed per
+    service from the current RUNNING count backwards through the window,
+    so recent entries are exact.
+    """
+    try:
+        from apps.autoscaler.models.replica import ServiceReplica
+        rows = list(
+            ServiceReplica.objects.select_related("service")
+            .order_by("-created_at")[:limit]
+        )
+        running_now = dict(
+            ServiceReplica.objects.filter(status="RUNNING")
+            .values("service_id")
+            .annotate(n=Count("id"))
+            .values_list("service_id", "n")
+        )
+    except Exception as exc:
+        logger.debug("Autoscaler: replica history unavailable: %s", exc)
+        return []
+    by_service: dict = {}
+    for r in rows:
+        by_service.setdefault(r.service_id, []).append(r)
+    events: list[dict] = []
+    for service_rows in by_service.values():
+        # Replay the window chronologically (creates AND destroys in true
+        # time order), starting from the current RUNNING count rewound by
+        # the window's net change — so recent entries are exact.
+        stream: list[tuple] = []
+        for r in service_rows:
+            if r.created_at:
+                stream.append((r.created_at, 0, r))
+            if r.destroyed_at:
+                stream.append((r.destroyed_at, 1, r))
+        net = sum(1 for _, kind, _ in stream if kind == 0) - sum(
+            1 for _, kind, _ in stream if kind == 1
+        )
+        counter = running_now.get(service_rows[0].service_id, 0) - net
+        if counter < 0:
+            counter = 0
+        for ts, kind, r in sorted(stream, key=lambda e: str(e[0])):
+            name = r.container_name or r.service.name
+            mem = _snapshot_mem(r.metrics_snapshot)
+            reason = (r.spawn_reason or "").strip()
+            if kind == 0:
+                events.append({
+                    "timestamp": ts.isoformat(),
+                    "container": name,
+                    "action": "scale_up",
+                    "current_workers": counter,
+                    "target_workers": counter + 1,
+                    "current_memory_mb": mem,
+                    "target_memory_mb": mem,
+                    "reason": reason or "Replica spawned",
+                })
+                counter += 1
+            else:
+                events.append({
+                    "timestamp": ts.isoformat(),
+                    "container": name,
+                    "action": "scale_down",
+                    "current_workers": counter,
+                    "target_workers": max(counter - 1, 0),
+                    "current_memory_mb": mem,
+                    "target_memory_mb": mem,
+                    "reason": f"Replica removed{(' — ' + reason) if reason else ''}",
+                })
+                counter = max(counter - 1, 0)
+    return events
+
+
+def _get_recent_decisions(limit: int = 50) -> list[dict]:
+    """Merge legacy engine advice with actual replica lifecycle events."""
+    merged: list[dict] = []
+    seen = set()
+    try:
+        legacy = cache.get(CACHE_KEY_DECISIONS, []) or []
+    except Exception:
+        legacy = []
+    for d in list(legacy) + _replica_scale_events(limit):
+        if not isinstance(d, dict):
+            continue
+        key = (str(d.get("timestamp")), str(d.get("container")), str(d.get("action")))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(d)
+    merged.sort(key=lambda d: _parse_ts(d.get("timestamp")), reverse=True)
+    return merged[:limit]
+
+
 # ── Decision engine – when to scale up / down ───────────────────────────────
 def _decide_scaling(services: dict) -> list[dict]:
     actions = []
@@ -262,7 +379,7 @@ def _run_autoscaler_check():
             "free_mb": round(max(app_budget - total_used, 0), 1),
         },
         "services": services,
-        "recent_decisions": cache.get(CACHE_KEY_DECISIONS, []),
+        "recent_decisions": _get_recent_decisions(),
     }
     cache.set(CACHE_KEY_STATUS, status_data, timeout=300)
     return status_data

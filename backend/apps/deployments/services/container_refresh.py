@@ -26,6 +26,36 @@ class ContainerRefreshError(RuntimeError):
     """Fatal, user-facing recreation failure (rollback already attempted)."""
 
 
+def _is_remote_service(service) -> bool:
+    """True only when the service provably runs on a different node.
+
+    ``Service.server`` is "where hosted" — it is also set for LOCAL
+    services (primary node record), so a bare ``server_id`` check
+    wrongly refuses apply-env on local services. Mirror the deploy
+    path locality semantics instead (primary / controller-IP servers
+    are local). Fail closed (remote) when locality cannot be proven.
+    """
+    try:
+        server = getattr(service, "server", None)
+        # Both must be set: server_id None means "no host assignment"
+        # (also keeps MagicMock-based unit tests, which auto-create a
+        # truthy .server, on the local path when server_id is None).
+        if server is not None and getattr(service, "server_id", None) is not None:
+            from apps.deployments.models import PlatformConfig
+            from apps.deployments.tasks.deploy.provider import (
+                _is_local_deployment_server,
+            )
+            if not _is_local_deployment_server(server, PlatformConfig.load()):
+                return True
+        if str(getattr(service, "active_target_type", "") or "").lower() in (
+            "remote", "lite_agent",
+        ):
+            return bool(getattr(service, "active_host_ip", None))
+        return False
+    except Exception:
+        return True
+
+
 def _docker_client():
     import docker
     return docker.from_env()
@@ -64,8 +94,28 @@ def _resolve_target_container(service, client, container_id=None):
     return running[0]
 
 
-def _fresh_env(service) -> dict:
-    env_vars = {ev.key: ev.value for ev in service.env_vars.all()}
+def _live_container_env(container) -> dict:
+    """Parse the running container's env (runtime truth, minus HOSTNAME)."""
+    try:
+        from .replica_parity import parse_env_list
+        return parse_env_list(((container.attrs or {}).get("Config", {}) or {}).get("Env", []))
+    except Exception:
+        return {}
+
+
+def _fresh_env(service, live_env=None) -> dict:
+    """DB rows overlaid on live container env.
+
+    Parity rule (2026-09-12 outage): the live env carries
+    pipeline-derived keys (notably PORT) that DB rows alone lack.
+    Operator edits in the DB still win — that is the point of apply-env.
+    """
+    try:
+        from .replica_parity import merge_replica_env
+        env_vars = merge_replica_env(live_env or {}, {ev.key: ev.value for ev in service.env_vars.all()})
+    except Exception:
+        env_vars = dict(live_env or {})
+        env_vars.update({ev.key: ev.value for ev in service.env_vars.all()})
     try:
         from apps.deployments.services.mtls_integration import get_mtls_env_vars
         env_vars.update(get_mtls_env_vars(service) or {})
@@ -150,7 +200,7 @@ def build_refresh_plan(service, container) -> dict:
     except Exception:
         image = ""
     primary, nets = _container_networks(container)
-    env_vars = _fresh_env(service)
+    env_vars = _fresh_env(service, _live_container_env(container))
     return {
         "container_id": container.id[:12] if getattr(container, "id", "") else "",
         "container_name": getattr(container, "name", ""),
@@ -181,7 +231,7 @@ def recreate_with_fresh_env(service, container_id=None, dry_run=False) -> dict:
     Returns {"ok": True, "container": name, "previous": backup_name, ...}.
     Raises ContainerRefreshError on any failure AFTER attempting rollback.
     """
-    if getattr(service, "server_id", None):
+    if _is_remote_service(service):
         raise ContainerRefreshError("Remote services are not supported yet — redeploy from the dashboard")
     client = _docker_client()
     container = _resolve_target_container(service, client, container_id)
@@ -205,7 +255,7 @@ def recreate_with_fresh_env(service, container_id=None, dry_run=False) -> dict:
         if not primary:
             raise ContainerRefreshError("Container is not attached to any network — refusing to recreate")
         volumes = _container_volumes(container)
-        env_vars = _fresh_env(service)
+        env_vars = _fresh_env(service, _live_container_env(container))
         try:
             from apps.deployments.services.mtls_integration import (
                 get_mtls_docker_run_volumes,

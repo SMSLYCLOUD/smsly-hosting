@@ -126,6 +126,24 @@ class SpawningService:
             self._ssh_clients[node.id] = client
         return self._ssh_clients[node.id]
 
+    def _inspect_remote_container(self, ssh, name: str) -> dict:
+        """Return the remote container's ``Config`` (Env + Labels) as a dict.
+
+        Best effort: ``{}`` when the container is missing or inspect fails.
+        """
+        try:
+            out, _, exit_code = ssh.exec_command(
+                f"docker inspect --format='{{{{json .Config}}}}' {shlex.quote(name)}",
+                raise_on_error=False,
+                timeout=60,
+            )
+            if exit_code != 0 or not (out or "").strip():
+                return {}
+            parsed = json.loads(out.strip().splitlines()[0])
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
     def spawn(self, service, node, replica):
         """SSH into node, pull image, run container with Traefik labels.
 
@@ -170,6 +188,35 @@ class SpawningService:
 
         port = str(service.internal_port or 8000)
         domain = service.public_domain or f"{name}.localhost"
+
+        # Replica parity (outage-hardening): copy the live follower
+        # primary's env and Traefik service block. A partial block drops
+        # the WHOLE service in Traefik, so anything less than identical
+        # is a platform outage, not a bad replica.
+        from .replica_parity import (
+            merge_replica_env,
+            parse_env_list,
+            traefik_service_block,
+        )
+        follower_env: dict = {}
+        follower_block: dict = {}
+        try:
+            ref = self._inspect_remote_container(ssh, service.name)
+            follower_env = parse_env_list(ref.get("Env", []))
+            follower_block = traefik_service_block(
+                ref.get("Labels", {}), service.name)
+        except Exception as exc:
+            logger.debug("Follower primary inspect failed for %s: %s",
+                         service.name, exc)
+        if not follower_block:
+            logger.warning(
+                "No live follower reference for %s on %s - replica Traefik "
+                "labels are best-effort; verify no service-block conflict "
+                "after spawn", service.name, node.name,
+            )
+        db_env_remote = {ev.key: ev.value for ev in service.env_vars.all()}
+        remote_env = merge_replica_env(follower_env, db_env_remote)
+        port = str(remote_env.get("PORT") or service.internal_port or 8000)
         scoped_net = _scoped_network_for(service)
         net = scoped_net  # primary network — isolate from other services
         _attach_service_addons_to_scoped_net(service)
@@ -184,14 +231,22 @@ class SpawningService:
         # Host rule but lower priority — it never received traffic.
         # No router labels here: the primary's router already matches the
         # host and references the shared service name.
+        # The service block is COPIED from the live follower primary:
+        # any disagreement drops the entire service in Traefik.
         labels = [
             "traefik.enable=true",
             f"traefik.docker.network={net}",
-            f"traefik.http.services.{service.name}.loadbalancer.server.port={port}",
+        ]
+        labels.extend(f"{k}={v}" for k, v in follower_block.items())
+        if not follower_block:
+            labels.append(
+                f"traefik.http.services.{service.name}.loadbalancer.server.port={port}"
+            )
+        labels.extend([
             "managed_by=smsly-hosting",
             f"smsly.blue_green.canonical_name={shlex.quote(service.name)}",
             "smsly.replica=true",
-        ]
+        ])
 
         # --- mTLS: Add SPIRE workload attestation labels ---
         try:
@@ -213,9 +268,9 @@ class SpawningService:
         except Exception as e:
             logger.warning("Addon mesh rewrite failed for %s: %s", service.name, e)
         env_args = ""
-        for ev in service.env_vars.all():
-            value = mesh_overrides.get(ev.key, ev.value)
-            env_args += f" -e {shlex.quote(ev.key)}={shlex.quote(value)}"
+        for key, val in remote_env.items():
+            value = mesh_overrides.get(key, val)
+            env_args += f" -e {shlex.quote(key)}={shlex.quote(value)}"
 
         # --- mTLS: Add SPIFFE env vars ---
         try:
@@ -310,12 +365,9 @@ class SpawningService:
         return replica
 
     def destroy(self, replica):
-        """SSH into node, stop and remove the replica container."""
+        """Stop/remove the replica container, then mark DESTROYED."""
         if not replica.node:
-            replica.status = 'DESTROYED'
-            replica.destroyed_at = timezone.now()
-            replica.save(update_fields=['status', 'destroyed_at'])
-            return
+            return self.destroy_local(replica)
 
         replica.status = 'DESTROYING'
         replica.save(update_fields=['status'])
@@ -335,6 +387,39 @@ class SpawningService:
         replica.destroyed_at = timezone.now()
         replica.save(update_fields=['status', 'destroyed_at'])
         logger.info("Destroyed replica %s on %s", replica.container_name, replica.node.name)
+
+    def destroy_local(self, replica):
+        """Stop and remove a locally-spawned replica container.
+
+        Local replicas (node=None) previously only flipped the DB row,
+        leaving the container running — and still pooled behind Traefik
+        via the canonical LB labels. A missing container is not an
+        error: the row is still marked DESTROYED.
+        """
+        name = (getattr(replica, "container_name", "") or "").strip()
+        if name:
+            try:
+                import docker as docker_lib
+                client = docker_lib.from_env()
+                try:
+                    container = client.containers.get(name)
+                except docker_lib.errors.NotFound:
+                    container = None
+                if container is not None:
+                    with contextlib.suppress(Exception):
+                        container.stop(timeout=15)
+                    try:
+                        container.remove(force=True)
+                    except docker_lib.errors.NotFound:
+                        pass
+                    logger.info("Destroyed local replica container %s", name)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to remove local replica container %s: %s", name, exc
+                )
+        replica.status = 'DESTROYED'
+        replica.destroyed_at = timezone.now()
+        replica.save(update_fields=['status', 'destroyed_at'])
 
     def cleanup(self):
         """Close all SSH connections."""
@@ -367,7 +452,28 @@ class SpawningService:
         # Check local capacity
         self._check_local_capacity(service)
 
-        port = str(service.internal_port or 8000)
+        # --- Replica parity (outage-hardening, 2026-09-12): env comes from
+        # the live reference container (runtime truth: PORT, secrets,
+        # derived vars) overlaid with current DB rows (freshness); the
+        # Traefik service block is COPIED verbatim so Traefik can never see
+        # two definitions again. Labels always mirror live config even if
+        # that means the replica follows a stale PORT until redeploy — a
+        # single unhealthy replica is containable, a dropped service is not.
+        from .replica_parity import (
+            assert_block_compatible,
+            live_service_blocks,
+            merge_replica_env,
+            reference_config,
+        )
+        db_env = {ev.key: ev.value for ev in service.env_vars.all()}
+        live_env, ref_block = reference_config(client, service.name)
+        if not live_env and not ref_block:
+            logger.warning(
+                "No live reference container for %s — spawning best-effort "
+                "(no parity source)", service.name,
+            )
+        env_vars = merge_replica_env(live_env, db_env)
+
         domain = service.public_domain or f"{name}.localhost"
         scoped_net = _scoped_network_for(service)
         net = scoped_net
@@ -379,14 +485,22 @@ class SpawningService:
         # service and round-robins with per-server health checks. Router
         # labels intentionally omitted — the primary's router already
         # matches the host; a competing replica router never won traffic.
+        # The service block MUST equal the live reference exactly:
+        # Traefik drops the whole service on any disagreement.
         labels = {
             "traefik.enable": "true",
             "traefik.docker.network": net,
-            f"traefik.http.services.{service.name}.loadbalancer.server.port": port,
+            **dict(ref_block),
             "managed_by": "smsly-hosting",
             "smsly.blue_green.canonical_name": service.name,
             "smsly.replica": "true",
         }
+        assert_block_compatible(
+            live_service_blocks(client, service.name),
+            {k: v for k, v in labels.items()
+             if k.startswith(f"traefik.http.services.{service.name}.")},
+            service.name,
+        )
 
         # --- mTLS: Add SPIRE workload attestation labels ---
         try:
@@ -404,7 +518,7 @@ class SpawningService:
             except Exception as e:
                 logger.warning("Local docker login failed: %s", e)
 
-        env_vars = {ev.key: ev.value for ev in service.env_vars.all()}
+        # env_vars already merged above (live reference + DB rows); mTLS overlay next.
 
         # --- mTLS: Add SPIFFE env vars ---
         try:
@@ -536,5 +650,13 @@ class SpawningService:
             config = MtlsConfig.objects.filter(service=service, enabled=True, sidecar_enabled=True).first()
             if config:
                 EnvoySidecar.inject_sidecar(service)
+            else:
+                # Mesh disabled: sweep non-running sidecar corpses left by
+                # failed injects. Running sidecars are never touched.
+                try:
+                    EnvoySidecar.remove_orphan_sidecar(service)
+                except Exception as sweep_exc:
+                    logger.debug("Orphan sidecar sweep skipped for %s: %s",
+                                 service.name, sweep_exc)
         except Exception as exc:
             logger.warning("Envoy sidecar injection failed for %s: %s", service.name, exc)
