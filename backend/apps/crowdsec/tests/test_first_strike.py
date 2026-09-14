@@ -58,6 +58,25 @@ class TestFirstStrikeHelpers(TestCase):
         # Filters/data untouched.
         self.assertIn("groupby:", pinned)
 
+    def test_override_renames_scenario(self):
+        """The override MUST carry the smsly/* name — shipping the hub
+        name twice loads ambiguously (2026-09-14 live incident)."""
+        from apps.crowdsec.tasks import _build_override_content
+
+        out = _build_override_content(
+            "crowdsecurity/http-sensitive-files", HUB_YAML, 1
+        )
+        self.assertIn("name: smsly/http-sensitive-files-first-strike", out)
+        self.assertNotIn("name: crowdsecurity/http-sensitive-files", out)
+        self.assertIn("\ncapacity: 1\n", out)
+
+    def test_override_without_name_line_refused(self):
+        from apps.crowdsec.tasks import _build_override_content
+
+        self.assertIsNone(
+            _build_override_content("x/y", "type: leaky\ncapacity: 4\n", 1)
+        )
+
     def test_pin_capacity_absent_returns_none(self):
         self.assertIsNone(_pin_capacity("type: trigger\nname: x\n", 1))
 

@@ -305,13 +305,25 @@ def _build_override_content(hub_name: str, hub_yaml: str, capacity: int) -> str 
             hub_name,
         )
         return None
+    fs_name = _first_strike_scenario_name(hub_name)
+    renamed, count = re.subn(
+        r"(?m)^name:\s*\S+\s*$", f"name: {fs_name}", pinned, count=1
+    )
+    if count != 1:
+        logger.warning(
+            "CrowdSec first-strike: hub file for %s has no name line — "
+            "leaving hub behavior intact",
+            hub_name,
+        )
+        return None
     header = (
         "# SMSLY first-strike override — managed by "
         "crowdsec_first_strike_sync. DO NOT EDIT.\n"
-        f"# Source: {hub_name} (bucket capacity pinned to {capacity}; "
-        "filters/data track the hub file and are re-derived on every sync).\n"
+        f"# Source: {hub_name} (scenario renamed to {fs_name}, bucket "
+        f"capacity pinned to {capacity}; filters/data track the hub file "
+        "and are re-derived on every sync).\n"
     )
-    return header + pinned
+    return header + renamed
 
 
 @shared_task(
