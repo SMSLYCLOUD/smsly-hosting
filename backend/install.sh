@@ -3367,8 +3367,22 @@ _harden_crowdsec_register_bouncer() {
         fi
     fi
     if [ -n "$bouncer_key" ]; then
-        timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" \
-            || echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (already exists, non-fatal)${NC}"
+        # Idempotent: cscli errors when re-adding an existing bouncer.
+        # Pre-check keeps update logs clean; the "already exists" fallback
+        # covers the race where two paths register concurrently.
+        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+            echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+        else
+            local _add_out=""
+            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+                echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
+            elif echo "$_add_out" | grep -q "already exists"; then
+                echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+            else
+                echo "$_add_out"
+                echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (non-fatal)${NC}"
+            fi
+        fi
     fi
 }
 
@@ -8170,8 +8184,22 @@ _harden_crowdsec_register_bouncer() {
         fi
     fi
     if [ -n "$bouncer_key" ]; then
-        timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" \
-            || echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (already exists, non-fatal)${NC}"
+        # Idempotent: cscli errors when re-adding an existing bouncer.
+        # Pre-check keeps update logs clean; the "already exists" fallback
+        # covers the race where two paths register concurrently.
+        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+            echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+        else
+            local _add_out=""
+            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+                echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
+            elif echo "$_add_out" | grep -q "already exists"; then
+                echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+            else
+                echo "$_add_out"
+                echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (non-fatal)${NC}"
+            fi
+        fi
     fi
 }
 
@@ -9256,8 +9284,22 @@ _harden_crowdsec_register_bouncer() {
         fi
     fi
     if [ -n "$bouncer_key" ]; then
-        timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" \
-            || echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (already exists, non-fatal)${NC}"
+        # Idempotent: cscli errors when re-adding an existing bouncer.
+        # Pre-check keeps update logs clean; the "already exists" fallback
+        # covers the race where two paths register concurrently.
+        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+            echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+        else
+            local _add_out=""
+            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+                echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
+            elif echo "$_add_out" | grep -q "already exists"; then
+                echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+            else
+                echo "$_add_out"
+                echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (non-fatal)${NC}"
+            fi
+        fi
     fi
 }
 
@@ -10675,7 +10717,19 @@ fi
     fi
     if [ -n "${CROWDSEC_BOUNCER_KEY:-}" ]; then
         echo -e "${BLUE}  → Registering CrowdSec Bouncer...${NC}"
-        timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" || echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (already exists, non-fatal)${NC}"
+        # Idempotent: pre-check keeps logs clean; the "already exists"
+        # fallback covers concurrent registration by the harden path.
+        _crowdsec_out=""
+        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+            echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+        elif _crowdsec_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" 2>&1)"; then
+            echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
+        elif echo "$_crowdsec_out" | grep -q "already exists"; then
+            echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+        else
+            echo "$_crowdsec_out"
+            echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (non-fatal)${NC}"
+        fi
     fi
 
     set_checkpoint "update_containers_rebuilt"
@@ -12358,8 +12412,22 @@ _harden_crowdsec_register_bouncer() {
         fi
     fi
     if [ -n "$bouncer_key" ]; then
-        timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" \
-            || echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (already exists, non-fatal)${NC}"
+        # Idempotent: cscli errors when re-adding an existing bouncer.
+        # Pre-check keeps update logs clean; the "already exists" fallback
+        # covers the race where two paths register concurrently.
+        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+            echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+        else
+            local _add_out=""
+            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+                echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
+            elif echo "$_add_out" | grep -q "already exists"; then
+                echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
+            else
+                echo "$_add_out"
+                echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (non-fatal)${NC}"
+            fi
+        fi
     fi
 }
 
