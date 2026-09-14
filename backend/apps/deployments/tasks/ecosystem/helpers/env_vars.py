@@ -525,18 +525,28 @@ def _resolve_from_manifest_or_fallback(
             if _needs_senate:
                 # Send ALL env vars as context so AI can make informed decisions,
                 # but redact values of secret-named vars — they must never leave
-                # the platform boundary.
+                # the platform boundary. Fail CLOSED: if redaction itself
+                # fails, skip Senate enrichment entirely (placeholders then
+                # fail fast at the deploy gate) rather than shipping
+                # cleartext secrets to an external model.
                 try:
                     from apps.cloud.services.build_constants import is_secret_env_var
                     _senate_context = {
                         k: ("[REDACTED]" if is_secret_env_var(k) and str(v or "").strip() else v)
                         for k, v in resolved_env.items()
                     }
-                except Exception:
-                    _senate_context = dict(resolved_env)
-                senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
-                    _senate_context, stack, service_name, fill_keys=_needs_senate,
-                )
+                except Exception as redact_exc:
+                    logger.warning(
+                        "AI Senate redaction unavailable for %s (%s) — "
+                        "skipping enrichment rather than leaking secrets",
+                        service_name, redact_exc,
+                    )
+                    _needs_senate = set()
+                senate_suggestions = {}
+                if _needs_senate:
+                    senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
+                        _senate_context, stack, service_name, fill_keys=_needs_senate,
+                    )
                 for k, v in senate_suggestions.items():
                     current = str(resolved_env.get(k, '') or '').strip().lower()
                     is_placeholder = (
@@ -546,6 +556,20 @@ def _resolve_from_manifest_or_fallback(
                         or any(token in current for token in ("localhost", "127.0.0.1", "mock", "fake_"))
                     )
                     if is_placeholder:
+                        # Sanitize AI output before accepting it (strip
+                        # wrapper quotes/backticks/comments the model leaks),
+                        # but preserve intentional {{...}} tokens for the
+                        # downstream placeholder resolver ({{GENERATE}},
+                        # {{SERVICE:...}}, {{SHARED_SECRET:...}).
+                        if isinstance(v, str) and "{{" not in v:
+                            cleaned = sanitize_env_value(v, key=k, allow_empty=True)
+                            if cleaned is None:
+                                logger.warning(
+                                    "AI Senate value for '%s' rejected by sanitizer — omitting",
+                                    k,
+                                )
+                                continue
+                            v = cleaned
                         resolved_env[k] = v
         except Exception as exc:
             logger.warning("AI Senate enrichment failed for %s: %s", service_name, exc)
