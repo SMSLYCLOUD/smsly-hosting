@@ -60,6 +60,32 @@ _SECRET_EXCLUSIONS = re.compile(
     re.IGNORECASE,
 )
 
+# Values that are never valid production secrets. When one of these
+# reaches a final resolved env for a secret-like key, the deploy is
+# failed fast with an actionable message instead of shipping a
+# crash-looping container (2026-09-14: security-gateway shipped
+# SDK_HEADER_VALUE=CHANGE_ME and Restarted forever on a pydantic
+# "must be set to a secure random value" validation error).
+PLACEHOLDER_SECRET_VALUES = frozenset({
+    "CHANGE_ME",
+    "CHANGEME",
+    "CHANGE-ME",
+    "REPLACE_ME",
+    "REPLACEME",
+    "REPLACE-ME",
+    "YOUR_SECRET_HERE",
+    "PUT_SECRET_HERE",
+    "CHANGEME123",
+})
+
+# Minimum lengths for platform-known critical secrets, enforced only
+# when the key is present in the resolved env. Length is checked for
+# production deploys; explicit non-production ENVIRONMENT values skip
+# the length floor (placeholders above are still always rejected).
+CRITICAL_SECRET_MIN_LENGTH: dict[str, int] = {
+    "SDK_HEADER_VALUE": 32,
+}
+
 STACK_DEFAULTS: dict[str, dict[str, str]] = {
     "python": {
         "ENVIRONMENT": "production",

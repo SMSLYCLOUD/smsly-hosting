@@ -284,6 +284,34 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
 
         env_vars = _build_runtime_env(service, image_name=image_name)
 
+        # Fail fast on placeholder secrets: a placeholder (CHANGE_ME,
+        # REPLACE_ME, ...) or an under-length critical secret can never
+        # boot a production app — the container crash-loops on startup
+        # validation while the endpoint 503s/000s and the deployment row
+        # may even say ACTIVE. Reject HERE with an actionable message
+        # (2026-09-14: security-gateway shipped SDK_HEADER_VALUE=CHANGE_ME
+        # and Restarted forever on a pydantic "secure random value" error).
+        from apps.deployments.services.manifest_env_resolver.secrets import (
+            validate_resolved_secrets,
+        )
+        _secret_problems = validate_resolved_secrets(env_vars)
+        if _secret_problems:
+            _secret_detail = "; ".join(_secret_problems)
+            append_log(
+                deployment,
+                "\n[ENV-VALIDATION] Refusing to deploy with invalid secrets:\n"
+                + "\n".join(f"  - {p}" for p in _secret_problems)
+                + "\n\nSet real values in the service environment and redeploy.\n",
+            )
+            deployment.status = 'FAILED'
+            deployment.finished_at = timezone.now()
+            deployment.build_logs += f"\n[ENV-VALIDATION] {_secret_detail}\n"
+            deployment.save()
+            broadcast_status(deployment)
+            raise RuntimeError(
+                f"Invalid secrets in resolved env: {_secret_detail}"
+            )
+
         _ensure_addons_ready(service, deployment)
 
         from apps.addons.services.addon_provisioner import AddonProvisioner

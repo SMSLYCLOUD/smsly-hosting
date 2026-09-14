@@ -2,9 +2,91 @@ import logging
 import re
 import secrets
 
-from .constants import generate_strong_secret
+from .constants import (
+    CRITICAL_SECRET_MIN_LENGTH,
+    PLACEHOLDER_SECRET_VALUES,
+    _SECRET_EXCLUSIONS,
+    SECRET_PATTERNS,
+    generate_strong_secret,
+)
 
 logger = logging.getLogger(__name__)
+
+# Non-production ENVIRONMENT values skip the min-length floor
+# (placeholders are still always rejected — they are never valid).
+_NON_PROD_ENVIRONMENTS = frozenset({
+    "development", "dev", "staging", "stage", "test", "testing", "local",
+})
+
+
+_NORMALIZED_PLACEHOLDERS = frozenset(
+    re.sub(r"[-_\s]+", "", str(p)).upper()
+    for p in PLACEHOLDER_SECRET_VALUES
+)
+
+
+def _is_placeholder(value: str) -> bool:
+    norm = re.sub(r"[-_\s]+", "", (value or "").strip()).upper()
+    return bool(norm) and norm in _NORMALIZED_PLACEHOLDERS
+
+
+def validate_resolved_secrets(env: dict) -> list[str]:
+    """Fail-fast gate for placeholder secrets in a final resolved env.
+
+    Returns a list of human-readable problems (empty = clean). Enforces:
+
+    * every key in ``CRITICAL_SECRET_MIN_LENGTH`` that is present must be
+      non-empty, non-placeholder, and meet its length floor on
+      production-like deploys;
+    * any secret-like key (``SECRET_PATTERNS`` minus exclusions) holding
+      an exact placeholder token is rejected on every deploy.
+
+    A placeholder secret can never boot a production app (the app either
+    crash-loops on validation or silently runs insecure), so the deploy
+    must fail HERE with an actionable message instead of shipping a
+    Restarting container and a bare 503/000 endpoint.
+    """
+    problems: list[str] = []
+    if not env:
+        return problems
+    environment = str(env.get("ENVIRONMENT", "") or "").strip().lower()
+    enforce_length = environment not in _NON_PROD_ENVIRONMENTS
+    for key, floor in CRITICAL_SECRET_MIN_LENGTH.items():
+        if key not in env:
+            continue
+        text = env.get(key)
+        text = "" if text is None else str(text)
+        if not text.strip():
+            problems.append(
+                f"{key} is empty — set it to a secure random value "
+                f"(minimum {floor} characters)"
+            )
+        elif _is_placeholder(text):
+            problems.append(
+                f"{key} holds a placeholder value ({text.strip()[:24]!r}) — "
+                f"set it to a secure random value (minimum {floor} characters)"
+            )
+        elif enforce_length and len(text.strip()) < floor:
+            problems.append(
+                f"{key} is too short ({len(text.strip())} chars) — "
+                f"minimum {floor} characters in production"
+            )
+    for key, value in env.items():
+        if key in CRITICAL_SECRET_MIN_LENGTH:
+            continue
+        text = "" if value is None else str(value)
+        if not text.strip():
+            continue
+        if (
+            SECRET_PATTERNS.search(key)
+            and not _SECRET_EXCLUSIONS.search(key)
+            and _is_placeholder(text)
+        ):
+            problems.append(
+                f"{key} holds a placeholder value ({text.strip()[:24]!r}) — "
+                f"set a real secret before deploying"
+            )
+    return problems
 
 
 class SecretsMixin:
