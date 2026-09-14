@@ -85,6 +85,8 @@ class DomainConfigView(GenericAPIView):
             # CrowdSec
             'crowdsec_bouncer_key_set': bool(config.crowdsec_bouncer_key),
             'crowdsec_enroll_key_set': bool(config.crowdsec_enroll_key),
+            'crowdsec_auto_unblock_enabled': config.crowdsec_auto_unblock_enabled,
+            'crowdsec_auto_unblock_after_hours': config.crowdsec_auto_unblock_after_hours,
             # SMTP
             'smtp_host': config.smtp_host,
             'smtp_port': config.smtp_port,
@@ -171,6 +173,23 @@ class DomainConfigView(GenericAPIView):
                 config.wildcard_subdomains = _parse_bool(data.get('wildcard_subdomains'))
             if 'enable_crowdsec_waf' in data:
                 config.enable_crowdsec_waf = _parse_bool(data.get('enable_crowdsec_waf'))
+            if 'crowdsec_auto_unblock_enabled' in data:
+                config.crowdsec_auto_unblock_enabled = _parse_bool(
+                    data.get('crowdsec_auto_unblock_enabled'))
+            if 'crowdsec_auto_unblock_after_hours' in data:
+                try:
+                    hours = int(data.get('crowdsec_auto_unblock_after_hours'))
+                except (TypeError, ValueError):
+                    return Response(
+                        {'error': 'crowdsec_auto_unblock_after_hours must be an integer number of hours'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if hours < 1 or hours > 8760:
+                    return Response(
+                        {'error': 'crowdsec_auto_unblock_after_hours must be between 1 and 8760'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                config.crowdsec_auto_unblock_after_hours = hours
             if 'cloudflare_api_token' in data:
                 # Allow explicit clear by sending an empty string.
                 config.cloudflare_api_token = str(

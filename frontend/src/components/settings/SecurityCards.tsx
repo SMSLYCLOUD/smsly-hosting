@@ -117,6 +117,34 @@ export function SecurityScanningCard({ config, onChange }: SecurityCardProps) {
                   Optional. Enroll in CrowdSec console for community threat intelligence.
                 </p>
               </div>
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div className="space-y-0.5">
+                  <Label className="text-base">Automatic unblocking</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Automatically remove bans older than the retention window below.
+                    Turn off to require a manual Unblock click for every ban.
+                  </p>
+                </div>
+                <Switch
+                  checked={config.crowdsec_auto_unblock_enabled ?? true}
+                  onCheckedChange={(v) => onChange("crowdsec_auto_unblock_enabled", v)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Auto-unblock after (hours)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={8760}
+                  placeholder="24"
+                  value={config.crowdsec_auto_unblock_after_hours ?? 24}
+                  onChange={(e) => onChange("crowdsec_auto_unblock_after_hours", Number(e.target.value))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Bans older than this are removed by the periodic sweeper.
+                  Simulated (non-enforcing) decisions are never auto-removed.
+                </p>
+              </div>
             </div>
           )}
         </div>

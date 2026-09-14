@@ -642,6 +642,15 @@ class PlatformConfig(models.Model):
         max_length=256, blank=True, default='',
         help_text="CrowdSec console enrollment key (optional). "
                   "Falls back to CROWDSEC_ENROLL_KEY env var if empty.")
+    crowdsec_auto_unblock_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text="Automatically remove CrowdSec bans older than "
+                  "crowdsec_auto_unblock_after_hours. Turn off to require "
+                  "manual unblock for every ban.")
+    crowdsec_auto_unblock_after_hours = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=24,
+        help_text="Bans older than this many hours are auto-removed by the "
+                  "periodic sweeper (only when auto-unblock is enabled).")
 
     # ── SPIFFE mTLS ─────────────────────────────────────────────────────
     mtls_enabled = models.BooleanField(
