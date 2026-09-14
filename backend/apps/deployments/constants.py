@@ -73,3 +73,13 @@ DEPLOYMENT_LOG_ARCHIVE_BATCH = 50  # max deployments processed per cycle
 # ── Blue-green rollback grace period ────────────────────────────────────────
 # Rollback containers younger than this are ignored by the stale scanner.
 DEFAULT_ROLLBACK_GRACE_MINUTES = 10
+
+# ── Stuck green-candidate reaper ──────────────────────────────────────────
+# A STAGED deployment whose green container is verifiably dead (missing,
+# exited, unhealthy, or warming far past any sane start period) can never
+# promote — fail it so the service stops 503ing on a dead backend and the
+# row stops masquerading as "awaiting review". Healthy held greens are
+# NEVER touched regardless of age. Must stay well under auto_promote_hours
+# (default 12) so the reaper, not a doomed auto-promote, owns dead greens.
+STALE_STAGED_GREEN_REAP_HOURS = 3
+STALE_STAGED_GREEN_BATCH_SIZE = 20  # max stuck greens reaped per cycle

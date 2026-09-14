@@ -192,6 +192,120 @@ def auto_promote_staged_deployments():
 
 
 @shared_task(
+    name="apps.deployments.tasks.reap_unhealthy_staged_deployments",
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1],
+)
+def reap_unhealthy_staged_deployments():
+    """Fail STAGED deployments whose green container is verifiably dead.
+
+    A green that is missing, exited, unhealthy, or still warming far past
+    any sane start period can never promote — leaving the row STAGED
+    forever 503s the service on a dead backend while the UI suggests it
+    is "awaiting review" (2026-09-14: policy-service green stuck
+    health=starting for 9h with no blue container left at all).
+
+    Safety: only rows older than STALE_STAGED_GREEN_REAP_HOURS are
+    examined, and healthy (or healthcheck-less but running) greens are
+    NEVER touched regardless of age. The container is force-removed so a
+    crash-looping green stops consuming resources; the failure is logged
+    to the deployment for redeploy guidance.
+    """
+    from apps.deployments.constants import (
+        STALE_STAGED_GREEN_BATCH_SIZE,
+        STALE_STAGED_GREEN_REAP_HOURS,
+    )
+    threshold = timezone.now() - timedelta(hours=STALE_STAGED_GREEN_REAP_HOURS)
+    staged = Deployment.objects.filter(
+        status=Deployment.Status.STAGED,
+        staged_at__lte=threshold,
+    ).select_related('service')[:STALE_STAGED_GREEN_BATCH_SIZE]
+
+    reaped = 0
+    for deployment in staged:
+        green_id = (deployment.green_container_id or "").strip()
+        if not green_id:
+            _fail_staged_green(
+                deployment,
+                "No green container ID on a STAGED row — it can never "
+                "promote. Marked FAILED; redeploy to ship a fresh build.",
+                remove_container=False,
+            )
+            reaped += 1
+            continue
+        try:
+            green = docker.from_env().containers.get(green_id)
+            green.reload()
+        except docker.errors.NotFound:
+            _fail_staged_green(
+                deployment,
+                "Green container is gone (GC'd or crashed away) — it can "
+                "never promote. Marked FAILED; redeploy to ship a fresh build.",
+                remove_container=False,
+            )
+            reaped += 1
+            continue
+        except Exception as exc:
+            logger.warning(
+                "Green reaper: cannot inspect green %s for deployment %s: %s",
+                green_id[:12], deployment.id, exc,
+            )
+            continue
+        try:
+            state = green.attrs.get('State', {}) or {}
+            status = (state.get('Status') or '').lower()
+            health = (state.get('Health', {}).get('Status') or '').lower()
+        except Exception:
+            status, health = '', ''
+        if status == 'running' and health in ('healthy', ''):
+            # Legitimately held for review (or no healthcheck configured).
+            continue
+        reason = (
+            f"Green container is {status or 'unknown'}"
+            f"{f' (health={health})' if health else ''} after "
+            f"{STALE_STAGED_GREEN_REAP_HOURS}h+ staged — it can never "
+            f"promote. Marked FAILED and removed; redeploy to ship a "
+            f"fresh build."
+        )
+        _fail_staged_green(deployment, reason, remove_container=True)
+        reaped += 1
+
+    return {'reaped': reaped}
+
+
+def _fail_staged_green(
+    deployment: Deployment, reason: str, remove_container: bool,
+) -> None:
+    """Mark a stuck STAGED row FAILED, drop its dead green, and log it."""
+    green_id = (deployment.green_container_id or "").strip()
+    if remove_container and green_id:
+        try:
+            dead = docker.from_env().containers.get(green_id)
+            dead.remove(force=True)
+            logger.info(
+                "Green reaper: removed dead green %s for deployment %s",
+                green_id[:12], deployment.id,
+            )
+        except docker.errors.NotFound:
+            pass
+        except Exception as exc:
+            logger.warning(
+                "Green reaper: could not remove green %s: %s",
+                green_id[:12], exc,
+            )
+    try:
+        deployment.status = Deployment.Status.FAILED
+        deployment.finished_at = timezone.now()
+        deployment.save(update_fields=["status", "finished_at", "updated_at"])
+        append_log(deployment, f"[GREEN-REAPER] {reason}\n")
+        broadcast_status(deployment)
+    except Exception as exc:
+        logger.exception(
+            "Green reaper: failed to fail deployment %s: %s", deployment.id, exc
+        )
+
+
+@shared_task(
     name="apps.deployments.tasks.auto_review_deployments",
     soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
     time_limit=TASK_TIME_LIMIT_STANDARD[1],

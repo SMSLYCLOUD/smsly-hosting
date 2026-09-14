@@ -123,6 +123,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.edge_shield_watchdog': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_ecosystem_plans': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stalled_deployments': {'queue': 'fast'},
+    'apps.deployments.tasks.reap_unhealthy_staged_deployments': {'queue': 'deploy'},
     'apps.deployments.tasks.apply_service_resource_limits': {'queue': 'fast'},
     'apps.mcp.tasks.ensure_mcp_server_running': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_transfers': {'queue': 'fast'},
@@ -368,6 +369,17 @@ app.conf.beat_schedule = {
     # a deploying ecosystem plan, human-gated AWAITING_APPROVAL, or STAGED.
     'recover-stalled-deployments-every-15m': {
         'task': 'apps.deployments.tasks.recover_stalled_deployments',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
+    # Reap STAGED rows whose green container is verifiably dead (missing,
+    # exited, unhealthy, warming for hours). Healthy held greens are never
+    # touched. Without this, a dead green 503s the service while the row
+    # poses as "awaiting review" until a doomed auto-promote explodes.
+    # (The sibling recover-stalled-deployments sweeper explicitly excludes
+    # STAGED — this is its STAGED counterpart.)
+    'reap-unhealthy-staged-every-15m': {
+        'task': 'apps.deployments.tasks.reap_unhealthy_staged_deployments',
         'schedule': 900.0,
         'options': {'expires': 900.0},
     },

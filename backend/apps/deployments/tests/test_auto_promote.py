@@ -2,6 +2,8 @@
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
+import docker
+
 from apps.deployments.tasks.deploy.promote import auto_promote_staged_deployments
 
 
@@ -67,3 +69,78 @@ class TestAutoPromoteStagedDeployments(TestCase):
         self.assertEqual(res, {"promoted": 0})
         self.assertEqual(row.status, RealDeployment.Status.STAGED)
         row.save.assert_not_called()
+
+
+def _staged_row(green_id="green123"):
+    from apps.deployments.models import Deployment as RealDeployment
+    row = MagicMock()
+    row.id = "dep-1"
+    row.status = RealDeployment.Status.STAGED
+    row.green_container_id = green_id
+    return row
+
+
+class TestReapUnhealthyStagedDeployments(TestCase):
+    def _run(self, rows, container=None, get_side_effect=None):
+        from apps.deployments.tasks.deploy.promote import (
+            reap_unhealthy_staged_deployments as task,
+        )
+        mgr = MagicMock()
+        mgr.filter.return_value.select_related.return_value.__getitem__.return_value = rows
+        client = MagicMock()
+        if get_side_effect is not None:
+            client.containers.get.side_effect = get_side_effect
+        else:
+            client.containers.get.return_value = container
+        with patch("apps.deployments.models.Deployment.objects", mgr), \
+             patch("apps.deployments.tasks.deploy.promote.docker.from_env", return_value=client), \
+             patch("apps.deployments.tasks.deploy.promote.append_log"), \
+             patch("apps.deployments.tasks.deploy.promote.broadcast_status"):
+            return task.run(), client
+
+    def _container(self, status="running", health="starting"):
+        c = MagicMock()
+        c.attrs = {"State": {"Status": status, "Health": {"Status": health}}}
+        return c
+
+    def test_missing_green_fails_row(self):
+        res, _ = self._run(
+            [_staged_row()], get_side_effect=docker.errors.NotFound("gone")
+        )
+        self.assertEqual(res, {"reaped": 1})
+
+    def test_empty_green_id_fails_row(self):
+        res, _ = self._run([_staged_row(green_id="")])
+        self.assertEqual(res, {"reaped": 1})
+
+    def test_exited_green_reaped_and_removed(self):
+        container = self._container(status="exited", health="")
+        res, client = self._run([_staged_row()], container=container)
+        self.assertEqual(res, {"reaped": 1})
+        container.remove.assert_called_once_with(force=True)
+
+    def test_unhealthy_green_reaped(self):
+        container = self._container(status="running", health="unhealthy")
+        res, _ = self._run([_staged_row()], container=container)
+        self.assertEqual(res, {"reaped": 1})
+
+    def test_stuck_starting_green_reaped(self):
+        """2026-09-14 policy-service: health=starting for 9h."""
+        container = self._container(status="running", health="starting")
+        res, _ = self._run([_staged_row()], container=container)
+        self.assertEqual(res, {"reaped": 1})
+
+    def test_healthy_green_left_alone(self):
+        container = self._container(status="running", health="healthy")
+        res, _ = self._run([_staged_row()], container=container)
+        self.assertEqual(res, {"reaped": 0})
+        container.remove.assert_not_called()
+
+    def test_running_without_healthcheck_left_alone(self):
+        container = self._container(status="running", health="")
+        res, _ = self._run([_staged_row()], container=container)
+        self.assertEqual(res, {"reaped": 0})
+
+    def test_empty_sweep(self):
+        res, _ = self._run([])
+        self.assertEqual(res, {"reaped": 0})
