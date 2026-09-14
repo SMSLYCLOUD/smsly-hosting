@@ -246,6 +246,12 @@ def _write_override_file(filename: str, content: str) -> bool:
         ) as handle:
             handle.write(content)
             tmp = handle.name
+        # Backend runs as uid 1000: without this the copied file is
+        # 0600/uid-1000, which the CrowdSec container cannot read
+        # (user-namespace mapping) — config test then fails with
+        # "permission denied" (2026-09-14 live incident). World-readable
+        # content is fine: scenario files carry no secrets.
+        os.chmod(tmp, 0o644)
         result = _docker(
             "cp", tmp,
             f"smsly-crowdsec:{_FIRST_STRIKE_SCENARIOS_DIR}/{filename}",

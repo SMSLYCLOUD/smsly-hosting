@@ -197,3 +197,27 @@ class TestFirstStrikeSync(TestCase):
 
     def test_build_override_content_guards_missing_capacity(self):
         self.assertIsNone(_build_override_content("x/y", "type: trigger\n", 1))
+
+    def test_write_override_makes_file_world_readable(self):
+        """Regression (2026-09-14): backend runs as uid 1000, so a default
+        0600 temp file arrives unreadable in the CrowdSec container."""
+        import os
+
+        from apps.crowdsec import tasks as tasks_module
+
+        seen = {}
+
+        def fake_chmod(path, mode):
+            seen["mode"] = oct(mode)
+
+        def fake(*cmd, **kwargs):
+            cmd = list(cmd)
+            return _result(stdout="")
+
+        with patch.object(
+            tasks_module, "_docker", side_effect=fake
+        ), patch("os.chmod", side_effect=fake_chmod):
+            self.assertTrue(
+                tasks_module._write_override_file("x-first-strike.yaml", "capacity: 1\n")
+            )
+        self.assertEqual(seen.get("mode"), "0o644")
