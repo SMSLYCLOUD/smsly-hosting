@@ -40,6 +40,11 @@ BUILD_SECRET_EXACT_NAMES: frozenset[str] = frozenset({
     "PASSWORD",
     "TOKEN",
     "CREDENTIAL",
+    # Platform-known critical secrets whose names match no suffix rule.
+    # SDK_HEADER_VALUE authenticates SDK callers; without this entry its
+    # value was sent to the external AI Senate in cleartext, withheld
+    # from nothing, and shown unmasked (2026-09-14 audit).
+    "SDK_HEADER_VALUE",
 })
 
 # Prefixes that mark a var as explicitly safe for build-time injection.

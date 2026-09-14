@@ -123,6 +123,30 @@ def _get_node_metadata(obj) -> dict:
     }
 
 
+def _must_mask_env_value(key: str, value: object, flagged_secret: bool) -> bool:
+    """True when an env var value must be masked in API responses.
+
+    Flag-based masking alone leaves stale rows exposed (flags are set at
+    creation time only, and older rows predate current secret detection —
+    2026-09-14: live DB passwords served in clear for PG_URL, REDIS_URI,
+    POSTGRESQL_URL, CELERY_BROKER_URL and SDK_HEADER_VALUE). Belt and
+    braces: mask when the row is flagged, when the key is a known secret
+    name today, or when the value itself embeds credentials
+    (``scheme://user:pass@host`` or ``scheme://token@host``).
+    """
+    if flagged_secret:
+        return True
+    try:
+        from apps.cloud.services.build_constants import is_secret_env_var
+        if key and is_secret_env_var(key):
+            return True
+    except Exception:
+        pass
+    if isinstance(value, str) and re.search(r"://[^/\s?#]*@", value):
+        return True
+    return False
+
+
 class EnvVarSerializer(serializers.ModelSerializer):
     class Meta:
         model = EnvironmentVariable
@@ -158,7 +182,11 @@ class EnvVarSerializer(serializers.ModelSerializer):
                 'source': getattr(instance, 'source', 'USER'),
             }
         reveal_secrets = bool(self.context.get('reveal_secrets', False))
-        if instance.is_secret and not reveal_secrets:
+        if not reveal_secrets and _must_mask_env_value(
+            getattr(instance, 'key', ''),
+            ret.get('value', ''),
+            bool(getattr(instance, 'is_secret', False)),
+        ):
             ret['value'] = '********'
         return ret
 
