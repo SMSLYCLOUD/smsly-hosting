@@ -81,14 +81,13 @@ sync_cloudflare_token() {
 Environment="CLOUDFLARE_API_TOKEN=$NEW_TOKEN"
 ENVEOF
                 chmod 600 "$OVERRIDE_CONF"
-        systemctl daemon-reload  || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed${NC}"
+        systemctl daemon-reload  || echo "$LOG_PREFIX WARNING: systemctl daemon-reload failed"
                 # Export for caddy validate to use
                 export CLOUDFLARE_API_TOKEN="$NEW_TOKEN"
                 echo "$LOG_PREFIX Cloudflare token synced"
             else
                 export CLOUDFLARE_API_TOKEN="$NEW_TOKEN"
             fi
-            rm -f "$CANDIDATE_CADDY"
         elif [ -z "$NEW_TOKEN" ]; then
             clear_cloudflare_override
         else
@@ -254,6 +253,9 @@ while true; do
                 # Success clears any previous failure marker.
                 rm -f "$WATCH_DIR/.reload-failed" 2>/dev/null || true
             fi
+            # Always clean up the mktemp candidate (it holds a full
+            # Caddyfile copy per reload cycle).
+            rm -f "${CANDIDATE_CADDY:-}" 2>/dev/null || true
         else
             echo "$LOG_PREFIX WARNING: No Caddyfile found in $WATCH_DIR"
         fi
