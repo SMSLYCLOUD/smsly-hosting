@@ -1020,10 +1020,20 @@ ensure_container_on_network() {
     local container_name
     container_name="$(resolve_container_target "$raw_target")"
 
-    docker container inspect "$container_name"  || return 0
-    docker network inspect "$network_name"  || return 0
+    local container_id=""
+    container_id="$(docker container inspect --format '{{.Id}}' "$container_name" 2>/dev/null || true)"
+    if [ -z "$container_id" ]; then
+        return 0
+    fi
+    if ! docker network inspect "$network_name" > /dev/null 2>&1; then
+        return 0
+    fi
 
-    if docker network inspect "$network_name" --format '{{range $k, $v := .Containers}}{{$k}}{{end}}'  | grep -q "$container_name"; then
+    # .Containers is keyed by container ID: compare the resolved ID, not the
+    # (possibly fuzzy-resolved) name — the name never matched an ID, so every
+    # update ran a redundant connect and logged a daemon "already exists"
+    # error (plus the unredirected inspects dumped full JSON into the log).
+    if docker network inspect "$network_name" --format '{{range $k, $v := .Containers}}{{$k}} {{end}}' 2>/dev/null | grep -q "$container_id"; then
         return 0
     fi
 
@@ -2328,10 +2338,20 @@ ensure_container_on_network() {
     local container_name
     container_name="$(resolve_container_target "$raw_target")"
 
-    docker container inspect "$container_name"  || return 0
-    docker network inspect "$network_name"  || return 0
+    local container_id=""
+    container_id="$(docker container inspect --format '{{.Id}}' "$container_name" 2>/dev/null || true)"
+    if [ -z "$container_id" ]; then
+        return 0
+    fi
+    if ! docker network inspect "$network_name" > /dev/null 2>&1; then
+        return 0
+    fi
 
-    if docker network inspect "$network_name" --format '{{range $k, $v := .Containers}}{{$k}}{{end}}'  | grep -q "$container_name"; then
+    # .Containers is keyed by container ID: compare the resolved ID, not the
+    # (possibly fuzzy-resolved) name — the name never matched an ID, so every
+    # update ran a redundant connect and logged a daemon "already exists"
+    # error (plus the unredirected inspects dumped full JSON into the log).
+    if docker network inspect "$network_name" --format '{{range $k, $v := .Containers}}{{$k}} {{end}}' 2>/dev/null | grep -q "$container_id"; then
         return 0
     fi
 
