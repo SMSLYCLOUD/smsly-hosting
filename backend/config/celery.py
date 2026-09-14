@@ -124,6 +124,8 @@ app.conf.task_routes = {
     'apps.deployments.tasks.recover_stale_ecosystem_plans': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stalled_deployments': {'queue': 'fast'},
     'apps.deployments.tasks.reap_unhealthy_staged_deployments': {'queue': 'deploy'},
+    'apps.deployments.tasks.ensure_addon_network_aliases': {'queue': 'deploy'},
+    'apps.crowdsec.tasks.crowdsec_auto_unblock': {'queue': 'fast'},
     'apps.deployments.tasks.apply_service_resource_limits': {'queue': 'fast'},
     'apps.mcp.tasks.ensure_mcp_server_running': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_transfers': {'queue': 'fast'},
@@ -416,6 +418,22 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.auto_promote_staged_deployments',
         'schedule': 900.0,
         'options': {'expires': 600.0},
+    },
+    # CrowdSec automatic unblocking: remove bans older than the
+    # configured retention window (toggle + hours on the Settings page).
+    # Disabled mode leaves every ban for manual Unblock clicks.
+    'crowdsec-auto-unblock-every-15m': {
+        'task': 'apps.crowdsec.tasks.crowdsec_auto_unblock',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
+    # Re-affirm addon DNS aliases (redis-shared etc.) on scoped bridges.
+    # Deploy-time repair only runs during deploys; a mid-life alias strip
+    # never healed and broke every Redis call with NXDOMAIN (2026-09-14).
+    'ensure-addon-aliases-every-15m': {
+        'task': 'apps.deployments.tasks.ensure_addon_network_aliases',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
     },
     # Re-attach live service containers missing their scoped project
     # bridge (app on smsly-net while addons live on smsly-net-<scope8>
