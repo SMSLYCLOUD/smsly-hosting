@@ -595,6 +595,68 @@ def attach_container_to_platform_bridge(container_id: str, service_name: str) ->
         return False
 
 
+def attach_container_to_service_network(service, container_id: str) -> bool:
+    """Attach a live container to its service's scoped project network.
+
+    Repairs the gap where an app container lands on plain ``smsly-net``
+    (fresh adapter without service identity, missing ScopedNetwork row at
+    create time, cloned wrong nets, ...) while its addons live on the
+    project bridge (``smsly-net-<scope8>``) — Docker DNS then cannot
+    resolve addon aliases such as ``redis-shared`` and the service 503s
+    while reporting healthy.
+
+    No-op when the service has no project or resolves to the global
+    ``smsly-net``. Returns True on success or no-op, False on failure.
+    Never raises — callers treat this as best-effort self-heal.
+    """
+    try:
+        project = getattr(service, "project", None)
+        if project is None:
+            return True
+        from apps.deployments.models.network_scope import ScopedNetwork
+        network_name = ScopedNetwork.resolve_network_name(project)
+        if not network_name or network_name == "smsly-net":
+            return True
+        try:
+            cfg = ScopedNetwork.resolve_network_config(project)
+        except Exception:
+            cfg = {"name": network_name}
+        ensure_scoped_network(cfg)
+        client = docker.from_env()
+        try:
+            container = client.containers.get(container_id)
+        except docker.errors.NotFound:
+            logger.debug(
+                "Scoped-network attach skipped: container %s gone", container_id
+            )
+            return True
+        container.reload()
+        nets = (container.attrs.get("NetworkSettings") or {}).get("Networks") or {}
+        if network_name in nets:
+            return True
+        try:
+            net = client.networks.get(network_name)
+            net.connect(container)
+            logger.info(
+                "Attached %s (%s) to scoped network %s",
+                getattr(service, "name", "?"), str(container_id)[:12],
+                network_name,
+            )
+            return True
+        except Exception as exc:
+            # Tolerate the connect race (attached concurrently).
+            if "already exists" in str(exc).lower():
+                return True
+            logger.warning(
+                "Failed to attach %s to scoped network %s: %s",
+                getattr(service, "name", "?"), network_name, exc,
+            )
+            return False
+    except Exception as exc:
+        logger.debug("attach_container_to_service_network failed: %s", exc)
+        return False
+
+
 # ── Trusted internal ranges ─────────────────────────────────────────
 # Supernet ranges the platform treats as internal for X-Forwarded-For
 # trust decisions (Traefik forwardedHeaders, CrowdSec plugin,

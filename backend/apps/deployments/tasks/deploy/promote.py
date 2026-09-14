@@ -73,6 +73,22 @@ def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
 
     promoted_id = adapter.promote_container(service.name, green_id)
 
+    # Belt-and-braces: the promoted canonical container must sit on the
+    # service's scoped bridge even if the adapter resolved the fallback
+    # network (fresh adapter, missing row at create time, drift, ...).
+    # Non-fatal by design — a failed attach must never fail a promotion
+    # whose container is otherwise healthy (the repair beat retries).
+    try:
+        from apps.deployments.services.network_scope import (
+            attach_container_to_service_network,
+        )
+        attach_container_to_service_network(service, promoted_id)
+    except Exception:
+        logger.debug(
+            "Post-promote scoped-network attach skipped for %s",
+            service.name, exc_info=True,
+        )
+
     _mark_deployment_active(deployment, "local", "127.0.0.1", promoted_id)
 
     deployment.container_id = promoted_id

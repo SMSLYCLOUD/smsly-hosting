@@ -187,6 +187,93 @@ def reconcile_network_isolation_task():
         return {"status": "error", "reason": str(e)}
 
 
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.ensure_service_network_attachments")
+def ensure_service_network_attachments():
+    """Attach live service containers missing their scoped project network.
+
+    Heals the gap where an app container serves on plain ``smsly-net``
+    while its addons live on the project bridge (``smsly-net-<scope8>``):
+    Docker DNS cannot resolve addon aliases such as ``redis-shared`` and
+    the service 503s while the deployment row says ACTIVE (2026-09-14
+    live incident: identity-service). Compose-mode services are skipped
+    (their networks come from compose files). Idempotent: already-attached
+    containers are a no-op. Registered in celery.py beat_schedule every
+    15 minutes.
+    """
+    try:
+        import docker
+
+        from apps.deployments.models import Service
+        from apps.deployments.models.network_scope import ScopedNetwork
+        from apps.deployments.services.network_scope import (
+            attach_container_to_service_network,
+        )
+    except Exception as e:
+        logger.error("service-network repair: imports failed: %s", e)
+        return {"status": "error", "reason": str(e)}
+
+    checked = 0
+    ensured = 0
+    failed = 0
+    skipped_compose = 0
+    try:
+        client = docker.from_env()
+    except Exception as e:
+        logger.error("service-network repair: docker unavailable: %s", e)
+        return {"status": "error", "reason": str(e)}
+
+    try:
+        services = Service.objects.filter(
+            project__isnull=False,
+        ).select_related("project")
+        for service in services.iterator():
+            try:
+                if getattr(service, "deploy_mode", "") == "COMPOSE":
+                    skipped_compose += 1
+                    continue
+                network_name = ScopedNetwork.resolve_network_name(service.project)
+                if not network_name or network_name == "smsly-net":
+                    continue
+                container = None
+                container_id = getattr(service, "active_runtime_id", "") or ""
+                if container_id:
+                    try:
+                        container = client.containers.get(container_id)
+                    except docker.errors.NotFound:
+                        container = None
+                if container is None:
+                    try:
+                        container = client.containers.get(service.name)
+                    except docker.errors.NotFound:
+                        continue
+                checked += 1
+                if attach_container_to_service_network(service, container.id):
+                    ensured += 1
+                else:
+                    failed += 1
+            except Exception:
+                logger.exception(
+                    "service-network repair failed for service %s",
+                    getattr(service, "name", "?"),
+                )
+                failed += 1
+    except Exception as e:
+        logger.error("service-network repair sweep failed: %s", e)
+        return {"status": "error", "reason": str(e)}
+
+    logger.info(
+        "service-network repair: checked=%d ensured=%d failed=%d skipped_compose=%d",
+        checked, ensured, failed, skipped_compose,
+    )
+    return {
+        "status": "ok",
+        "checked": checked,
+        "ensured": ensured,
+        "failed": failed,
+        "skipped_compose": skipped_compose,
+    }
+
+
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.cleanup_orphaned_containers_task")
 def cleanup_orphaned_containers_task():
     """Periodic orphan sweep: stale green candidates (stopped OR running),

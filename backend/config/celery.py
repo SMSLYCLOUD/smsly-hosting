@@ -148,6 +148,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.recover_stalled_deletions': {'queue': 'deploy'},
     'apps.deployments.tasks.recover_redis_failover': {'queue': 'deploy'},
     'apps.deployments.tasks.auto_promote_staged_deployments': {'queue': 'deploy'},
+    'apps.deployments.tasks.ensure_service_network_attachments': {'queue': 'deploy'},
     'apps.deployments.tasks.auto_review_deployments': {'queue': 'deploy'},
     # -- Tasks re-exported from specialized modules (name= resolves to tasks.*) --
     'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
@@ -403,6 +404,15 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.auto_promote_staged_deployments',
         'schedule': 900.0,
         'options': {'expires': 600.0},
+    },
+    # Re-attach live service containers missing their scoped project
+    # bridge (app on smsly-net while addons live on smsly-net-<scope8>
+    # breaks addon DNS, e.g. redis-shared). Idempotent no-op when
+    # already attached.
+    'ensure-service-networks-every-15m': {
+        'task': 'apps.deployments.tasks.ensure_service_network_attachments',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
     },
     # Auto-approve deployments stuck in REVIEW for > configured hours
     'auto-review-pending-every-15m': {
