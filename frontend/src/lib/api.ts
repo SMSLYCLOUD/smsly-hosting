@@ -876,6 +876,16 @@ export interface CrowdSecDecision {
   end_time: string;
   service?: string | null;
   service_name?: string | null;
+  duration?: string | null;
+  source_ip?: string | null;
+  country?: string | null;
+  asn_org?: string | null;
+  ip_range?: string | null;
+  target_host?: string | null;
+  paths?: string[];
+  first_seen?: string | null;
+  last_seen?: string | null;
+  message?: string | null;
 }
 
 export interface CrowdSecAlert {

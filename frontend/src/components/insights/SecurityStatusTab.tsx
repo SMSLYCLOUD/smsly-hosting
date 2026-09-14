@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import {
-  Shield, ShieldCheck, ShieldX, Cpu, Lock, Eye,
+  Shield, ShieldX, Cpu, Lock, Eye,
   AlertTriangle, CheckCircle2, XCircle, Loader2,
   RefreshCw, Bug, FileWarning, ShieldAlert, Ban
 } from "lucide-react";
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import api, { servicesApi, crowdsecApi, CrowdSecDecision, CrowdSecAlert } from "@/lib/api";
+import { ThreatDecisionCard } from "@/components/crowdsec/ThreatDecisionCard";
 
 interface VulnSummary {
   critical: number;
@@ -228,35 +229,23 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
           )}
 
           {decisions.length === 0 ? (
-            <p className="text-xs text-muted-foreground mb-4">No active blocks for this service.</p>
+            <>
+              <p className="text-xs text-muted-foreground mb-4">No active blocks for this service.</p>
+              {(crowdsec?.active_bans ?? 0) > 0 && (
+                <p className="text-xs text-muted-foreground mb-4">
+                  {crowdsec.active_bans} platform-wide active ban(s) target other hosts — see Settings → Threat Blocks.
+                </p>
+              )}
+            </>
           ) : (
             <div className="space-y-1 mb-4">
               {decisions.map((d) => (
-                <div key={d.id || d.value} className="flex items-center gap-2 p-2 rounded-lg bg-black/20 text-xs">
-                  <code className="text-foreground font-semibold">{d.value}</code>
-                  <Badge variant="destructive" className="text-[9px]">{d.type || d.scope}</Badge>
-                  <span className="text-muted-foreground truncate flex-1" title={d.scenario}>
-                    {d.scenario || "unknown scenario"} · {d.events_count} events
-                  </span>
-                  {d.end_time && (
-                    <span className="text-muted-foreground hidden sm:inline">
-                      until {new Date(d.end_time).toLocaleString()}
-                    </span>
-                  )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-6 text-[10px]"
-                    disabled={unbanningIp === d.value}
-                    onClick={() => handleUnban(d.value)}
-                  >
-                    {unbanningIp === d.value ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <><ShieldCheck className="w-3 h-3 mr-1" /> Unblock</>
-                    )}
-                  </Button>
-                </div>
+                <ThreatDecisionCard
+                  key={d.id || d.value}
+                  decision={d}
+                  unbanningIp={unbanningIp}
+                  onUnban={handleUnban}
+                />
               ))}
             </div>
           )}

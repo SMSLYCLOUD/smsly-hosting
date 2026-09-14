@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Shield, AlertTriangle, Ban, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { Shield, AlertTriangle, Ban, Loader2, RefreshCw } from "lucide-react";
 import { crowdsecApi, CrowdSecDecision } from "@/lib/api";
+import { ThreatDecisionCard } from "@/components/crowdsec/ThreatDecisionCard";
 
 interface SecurityCardProps {
   config: any;
@@ -253,34 +254,13 @@ export function CrowdSecBlocksCard() {
         ) : (
           <div className="space-y-1 max-h-72 overflow-y-auto">
             {decisions.map((d) => (
-              <div key={d.id || d.value} className="flex items-center gap-2 p-2 rounded-lg bg-black/20 text-xs">
-                <code className="text-foreground font-semibold">{d.value}</code>
-                <Badge variant="destructive" className="text-[9px]">{d.type || d.scope}</Badge>
-                <span className="text-muted-foreground truncate flex-1" title={d.scenario}>
-                  {d.scenario || "unknown scenario"} · {d.events_count} events
-                </span>
-                {d.service_name && (
-                  <Badge variant="outline" className="text-[9px] hidden md:inline-flex">{d.service_name}</Badge>
-                )}
-                {d.end_time && (
-                  <span className="text-muted-foreground hidden sm:inline">
-                    until {new Date(d.end_time).toLocaleString()}
-                  </span>
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-[10px]"
-                  disabled={unbanningIp === d.value}
-                  onClick={() => handleUnban(d.value)}
-                >
-                  {unbanningIp === d.value ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <><ShieldCheck className="h-3 w-3 mr-1" /> Unblock</>
-                  )}
-                </Button>
-              </div>
+              <ThreatDecisionCard
+                key={d.id || d.value}
+                decision={d}
+                unbanningIp={unbanningIp}
+                onUnban={handleUnban}
+                showService
+              />
             ))}
           </div>
         )}

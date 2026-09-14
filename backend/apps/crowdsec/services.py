@@ -23,6 +23,51 @@ def _parse_dt(value: Any) -> Optional[datetime]:
         return None
 
 
+def _parse_go_duration(value: Any) -> Optional[float]:
+    """Parse a Go duration string (e.g. '2h34m39s', '45m', '20s') to seconds."""
+    if not value or not isinstance(value, str):
+        return None
+    import re
+
+    total = 0.0
+    matched = False
+    for amount, unit in re.findall(r"(\d+(?:\.\d+)?)(ns|us|ms|s|m|h|d|w)", value):
+        matched = True
+        factor = {
+            "ns": 1e-9, "us": 1e-6, "ms": 1e-3, "s": 1,
+            "m": 60, "h": 3600, "d": 86400, "w": 604800,
+        }[unit]
+        total += float(amount) * factor
+    return total if matched else None
+
+
+def _meta_to_dict(meta: Any) -> dict:
+    """Normalize cscli event meta to a plain dict.
+
+    Modern cscli emits ``meta`` as a LIST of ``{"key": ..., "value": ...}``
+    pairs; older shapes used a flat dict. Accept both so host/path
+    extraction keeps working across CrowdSec versions.
+    """
+    if isinstance(meta, dict):
+        return meta
+    if isinstance(meta, list):
+        out: dict = {}
+        for entry in meta:
+            if isinstance(entry, dict) and "key" in entry:
+                out[entry.get("key")] = entry.get("value")
+        return out
+    return {}
+
+
+def _meta_host(meta: dict) -> Optional[str]:
+    """Best-effort attacked-host extraction from a normalized meta dict."""
+    for key in ("target_fqdn", "http_host", "request_host", "host"):
+        val = meta.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 @dataclass
 class CrowdSecDecision:
     """Normalized CrowdSec decision from cscli JSON."""
@@ -40,6 +85,17 @@ class CrowdSecDecision:
     service: Optional[str] = None
     host: Optional[str] = None
     raw: Optional[dict] = None
+    # Enriched detail fields (populated when the cscli shape carries them).
+    duration: str = ""
+    source_ip: str = ""
+    country: str = ""
+    asn_org: str = ""
+    ip_range: str = ""
+    target_host: str = ""
+    paths: Optional[list] = None
+    first_seen: str = ""
+    last_seen: str = ""
+    message: str = ""
 
 
 @dataclass
@@ -171,47 +227,147 @@ class CrowdSecService:
         return None
 
     def _normalize_decision(self, raw: dict, host_map: dict[str, set[str]]) -> CrowdSecDecision:
-        """Map cscli decision JSON to CrowdSecDecision with service enrichment."""
-        # cscli decisions list -o json returns list of objects with these fields:
-        # {"id": "...", "type": "ban", "scope": "Ip", "value": "1.2.3.4", 
-        #  "origin": "crowdsec", "scenario": "http-probing", "scenario_version": "1.0",
-        #  "events_count": 5, "simulated": false, 
-        #  "start_time": "2026-09-13T00:00:00Z", "end_time": "2026-09-13T04:00:00Z"}
-        
-        alert = raw.get("alert", {}) if isinstance(raw.get("alert"), dict) else {}
-        scenario = raw.get("scenario") or alert.get("scenario") or ""
+        """Map cscli decision JSON to CrowdSecDecision with service enrichment.
 
-        # Get host from alert events if available (kept for batch enrichment).
+        Modern ``cscli decisions list -o json`` returns alert-shaped items:
+        the ban itself lives in the nested ``decisions[0]`` entry
+        (``{id, type, scope, value, origin, scenario, duration, ...}``),
+        the attacker sits in the ``source`` dict (``{ip, cn, as_name,
+        as_number, range, ...}``), and per-event detail (attacked host as
+        ``target_fqdn``, probed ``http_path``) lives in ``events[].meta``
+        as a LIST of ``{key, value}`` pairs. Older flat shapes (top-level
+        ``value``/``type``/dict ``meta``) are still accepted as fallback.
+        """
+        inner: dict = {}
+        nested = raw.get("decisions")
+        if isinstance(nested, list):
+            for entry in nested:
+                if isinstance(entry, dict):
+                    inner = entry
+                    break
+
+        value = inner.get("value") or raw.get("value") or ""
+        type_ = inner.get("type") or raw.get("type") or ""
+        scope = inner.get("scope") or raw.get("scope") or ""
+        origin = inner.get("origin") or raw.get("origin") or ""
+        scenario = inner.get("scenario") or raw.get("scenario") or ""
+        alert = raw.get("alert", {}) if isinstance(raw.get("alert"), dict) else {}
+        if not scenario and isinstance(alert, dict):
+            scenario = alert.get("scenario") or ""
+        simulated = inner.get("simulated", raw.get("simulated", False))
+        duration = inner.get("duration") or ""
+        if not isinstance(duration, str):
+            duration = ""
+
+        events = raw.get("events", [])
+        if not isinstance(events, list):
+            events = []
+        metas = [_meta_to_dict(ev.get("meta")) for ev in events if isinstance(ev, dict)]
+
         host = None
-        events = alert.get("events", []) if isinstance(alert, dict) else raw.get("events", [])
-        if isinstance(events, list) and events:
-            first_event = events[0] if isinstance(events[0], dict) else {}
-            meta = first_event.get("meta", {}) if isinstance(first_event.get("meta"), dict) else {}
-            if isinstance(meta, dict):
-                host = meta.get("http_host") or meta.get("request_host") or meta.get("host")
+        for meta in metas:
+            host = _meta_host(meta)
+            if host:
+                break
+        if not host:
+            # Legacy flat shape: host carried beside the decision itself.
+            host = _meta_host(raw if isinstance(raw, dict) else {})
+
+        paths: list[str] = []
+        for meta in metas:
+            path = meta.get("http_path") or meta.get("uri") or ""
+            if isinstance(path, str) and path and path not in paths:
+                paths.append(path)
+            if len(paths) >= 8:
+                break
+
+        stamps = [
+            ev.get("timestamp") for ev in events
+            if isinstance(ev, dict) and isinstance(ev.get("timestamp"), str)
+        ]
+        first_seen = min(stamps) if stamps else ""
+        last_seen = max(stamps) if stamps else ""
+        start_time = raw.get("start_at") or raw.get("created_at") or raw.get("start_time") or ""
+        if not isinstance(start_time, str):
+            start_time = ""
+        if not first_seen:
+            first_seen = start_time
+
+        end_time = raw.get("end_time") or raw.get("stop_at") or ""
+        if not isinstance(end_time, str):
+            end_time = ""
+        if not end_time and start_time:
+            seconds = _parse_go_duration(duration)
+            start_dt = _parse_dt(start_time)
+            if seconds and start_dt:
+                from datetime import timedelta
+
+                end_time = (start_dt + timedelta(seconds=seconds)).isoformat()
+
+        source = raw.get("source")
+        source = source if isinstance(source, dict) else {}
+        source_ip = source.get("ip") or ""
+        if not isinstance(source_ip, str):
+            source_ip = ""
+        if not source_ip:
+            for meta in metas:
+                candidate = meta.get("source_ip") or ""
+                if isinstance(candidate, str) and candidate.strip():
+                    source_ip = candidate.strip()
+                    break
+        def _s(val: Any) -> str:
+            return val if isinstance(val, str) else ""
+
+        country = _s(source.get("cn") or source.get("IsoCode"))
+        asn_org = _s(source.get("as_name") or source.get("ASNOrg"))
+        ip_range = _s(source.get("range") or source.get("SourceRange"))
+
+        events_count = raw.get("events_count") or 0
+        try:
+            events_count = int(events_count)
+        except (TypeError, ValueError):
+            events_count = len(events)
+
+        message = raw.get("message") or ""
+        if not isinstance(message, str):
+            message = ""
 
         return CrowdSecDecision(
-            id=str(raw.get("id") or raw.get("uuid") or ""),
-            scope=raw.get("scope", ""),
-            value=raw.get("value", ""),
-            type=raw.get("type", ""),
-            origin=raw.get("origin", ""),
-            scenario=scenario,
-            scenario_version=raw.get("scenario_version", ""),
-            events_count=int(raw.get("events_count") or 0),
-            simulated=bool(raw.get("simulated", False)),
-            start_time=raw.get("start_time", ""),
-            end_time=raw.get("end_time", ""),
+            id=str(inner.get("id") or raw.get("id") or raw.get("uuid") or ""),
+            scope=scope if isinstance(scope, str) else "",
+            value=value if isinstance(value, str) else "",
+            type=type_ if isinstance(type_, str) else "",
+            origin=origin if isinstance(origin, str) else "",
+            scenario=scenario if isinstance(scenario, str) else "",
+            scenario_version=raw.get("scenario_version", "") if isinstance(raw.get("scenario_version", ""), str) else "",
+            events_count=events_count,
+            simulated=bool(simulated),
+            start_time=start_time,
+            end_time=end_time,
             service=None,  # filled in batch by _enrich_with_service
             host=host,
             raw=raw,
+            duration=duration,
+            source_ip=source_ip,
+            country=country if isinstance(country, str) else "",
+            asn_org=asn_org if isinstance(asn_org, str) else "",
+            ip_range=ip_range if isinstance(ip_range, str) else "",
+            target_host=host or "",
+            paths=paths,
+            first_seen=first_seen if isinstance(first_seen, str) else "",
+            last_seen=last_seen if isinstance(last_seen, str) else "",
+            message=message,
         )
-
     def _normalize_alert(self, raw: dict, host_map: dict[str, set[str]]) -> CrowdSecAlert:
-        """Map cscli alert JSON to CrowdSecAlert with service enrichment."""
+        """Map cscli alert JSON to CrowdSecAlert with service enrichment.
+
+        Accepts the same modern shape as decisions (event ``meta`` as a
+        LIST of ``{key, value}`` pairs, attacked host as ``target_fqdn``,
+        attacker in the ``source`` dict) as well as older flat shapes.
+        """
         alert = raw if isinstance(raw, dict) else {}
         events = alert.get("events", []) if isinstance(alert.get("events"), list) else []
-        
+
         # Extract host from events; summarize every event (the event
         # carrying the host must not be dropped from the summary).
         host = None
@@ -219,33 +375,37 @@ class CrowdSecService:
         for ev in events:
             if not isinstance(ev, dict):
                 continue
-            meta = ev.get("meta", {}) if isinstance(ev.get("meta"), dict) else {}
-            if not isinstance(meta, dict):
-                meta = {}
+            meta = _meta_to_dict(ev.get("meta"))
             if host is None:
-                host = meta.get("http_host") or meta.get("request_host") or meta.get("host")
+                host = _meta_host(meta)
             events_summary.append({
-                "source": ev.get("source", ""),
-                "method": meta.get("http_method", ""),
+                "source": meta.get("source_ip", "") or ev.get("source", ""),
+                "method": meta.get("http_verb", "") or meta.get("http_method", ""),
                 "path": meta.get("http_path", "") or meta.get("uri", ""),
                 "status": meta.get("http_status", ""),
                 "user_agent": meta.get("http_user_agent", ""),
             })
-        
+
         service = None
         if host:
             service = self._resolve_service_for_host(host, host_map)
-        
+
+        source = alert.get("source", "")
+        if isinstance(source, dict):
+            source = source.get("ip") or ""
+        if not isinstance(source, str):
+            source = ""
+
         return CrowdSecAlert(
             id=str(alert.get("id") or alert.get("uuid") or ""),
-            source=alert.get("source", ""),
-            scenario=alert.get("scenario", ""),
-            scenario_version=alert.get("scenario_version", ""),
-            scope=alert.get("scope", ""),
-            value=alert.get("value", ""),
+            source=source,
+            scenario=alert.get("scenario", "") if isinstance(alert.get("scenario", ""), str) else "",
+            scenario_version=alert.get("scenario_version", "") if isinstance(alert.get("scenario_version", ""), str) else "",
+            scope=alert.get("scope", "") if isinstance(alert.get("scope", ""), str) else "",
+            value=alert.get("value", "") if isinstance(alert.get("value", ""), str) else "",
             events_count=int(alert.get("events_count") or 0),
-            start_time=alert.get("start_time", ""),
-            created_at=alert.get("created_at", ""),
+            start_time=alert.get("start_at") or alert.get("start_time") or "",
+            created_at=alert.get("created_at", "") if isinstance(alert.get("created_at", ""), str) else "",
             message=alert.get("message", "") or alert.get("description", ""),
             events=events_summary,
             service=service,
