@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 from apps.deployments.services.container_refresh import (
     ContainerRefreshError,
     _is_remote_service,
+    _live_extra_hosts,
+    _resolve_gvisor_extra_hosts,
     build_refresh_plan,
     recreate_with_fresh_env,
 )
@@ -200,3 +202,124 @@ class TestContainerRefresh(TestCase):
         with self.assertRaises(ContainerRefreshError):
             recreate_with_fresh_env(_service())
         old.stop.assert_not_called()
+
+
+def _runsc_container():
+    """platform-api shape (2026-09-14): runsc runtime, no hosts lifeline."""
+    c = _container()
+    c.attrs["HostConfig"]["Runtime"] = "runsc"
+    c.attrs["HostConfig"].pop("ExtraHosts", None)
+    c.attrs["NetworkSettings"] = {"Networks": {
+        "smsly-net-96e85eee": {"Aliases": []},
+        "smsly-platform-net": {"Aliases": ["api", "api.default.internal"]},
+    }}
+    return c
+
+
+def _addon_row(addon_id="addon-1", url="redis://:pw@redis-shared:6379/0"):
+    addon = MagicMock()
+    addon.id = addon_id
+    addon.name = "redis-shared"
+    addon.addon_type = "REDIS"
+    addon.connection_url = url
+    return addon
+
+
+def _client_with_addon(old, addon_ip="172.30.224.2"):
+    client, new_container = _client(old)
+    addon_container = MagicMock()
+    addon_container.attrs = {"NetworkSettings": {"Networks": {
+        "smsly-net-96e85eee": {"IPAddress": addon_ip},
+    }}}
+    orig_return = client.containers.get.return_value
+
+    def _get(name):
+        if str(name).startswith("smsly-addon-"):
+            return addon_container
+        return orig_return
+
+    client.containers.get.side_effect = _get
+    return client, new_container, addon_container
+
+
+class TestGvisorExtraHosts(TestCase):
+    def test_live_entries_parsed(self):
+        old = _container()
+        old.attrs["HostConfig"]["ExtraHosts"] = ["redis-shared:172.30.224.2"]
+        self.assertEqual(
+            _live_extra_hosts(old), ["redis-shared:172.30.224.2"]
+        )
+        self.assertEqual(_live_extra_hosts(_container()), [])
+
+    def test_fresh_resolution_wins_over_stale_live(self):
+        svc = _service()
+        svc.project_id = "proj-1"
+        with patch("apps.deployments.models.addons.Addon") as mock_addon_cls:
+            mock_addon_cls.objects.filter.return_value.filter.return_value = [
+                _addon_row()
+            ]
+            old = _runsc_container()
+            client, _, _ = _client_with_addon(old, addon_ip="172.30.224.9")
+            hosts = _resolve_gvisor_extra_hosts(
+                svc, {"smsly-net-96e85eee", "smsly-platform-net"},
+                client, live=["redis-shared:172.30.224.2"],
+            )
+        self.assertEqual(hosts, ["redis-shared:172.30.224.9"])
+
+    def test_db_failure_falls_back_to_live(self):
+        svc = _service()
+        with patch(
+            "apps.deployments.models.addons.Addon",
+            side_effect=Exception("no db"),
+        ):
+            hosts = _resolve_gvisor_extra_hosts(
+                svc, {"smsly-net-96e85eee"}, MagicMock(),
+                live=["redis-shared:172.30.224.2"],
+            )
+        self.assertEqual(hosts, ["redis-shared:172.30.224.2"])
+
+    @patch("apps.deployments.services.mtls_integration.get_mtls_env_vars", return_value={})
+    @patch("docker.from_env")
+    def test_runsc_recreate_injects_extra_hosts(self, mock_from_env, _mock_mtls):
+        svc = _service()
+        svc.project_id = "proj-1"
+        old = _runsc_container()
+        client, _, _ = _client_with_addon(old)
+        mock_from_env.return_value = client
+        with patch("apps.deployments.models.addons.Addon") as mock_addon_cls:
+            mock_addon_cls.objects.filter.return_value.filter.return_value = [
+                _addon_row()
+            ]
+            res = recreate_with_fresh_env(svc)
+        self.assertTrue(res["ok"])
+        create_kwargs = client.containers.create.call_args[1]
+        self.assertEqual(create_kwargs["runtime"], "runsc")
+        self.assertEqual(
+            create_kwargs["extra_hosts"], ["redis-shared:172.30.224.2"]
+        )
+
+    @patch("apps.deployments.services.mtls_integration.get_mtls_env_vars", return_value={})
+    @patch("docker.from_env")
+    def test_runc_recreate_carries_no_extra_hosts(self, mock_from_env, _mock_mtls):
+        old = _container()  # runc fixture
+        old.attrs["HostConfig"]["ExtraHosts"] = ["stale:10.0.0.9"]
+        client, _ = _client(old)
+        mock_from_env.return_value = client
+        res = recreate_with_fresh_env(_service())
+        self.assertTrue(res["ok"])
+        create_kwargs = client.containers.create.call_args[1]
+        self.assertEqual(create_kwargs["runtime"], "runc")
+        self.assertNotIn("extra_hosts", create_kwargs)
+
+    @patch("apps.deployments.services.mtls_integration.get_mtls_env_vars", return_value={})
+    @patch("docker.from_env")
+    def test_force_default_runtime_drops_runsc_and_hosts(self, mock_from_env, _mock_mtls):
+        old = _runsc_container()
+        old.attrs["HostConfig"]["ExtraHosts"] = ["redis-shared:172.30.224.2"]
+        client, _ = _client(old)
+        mock_from_env.return_value = client
+        res = recreate_with_fresh_env(_service(), force_default_runtime=True)
+        self.assertTrue(res["ok"])
+        create_kwargs = client.containers.create.call_args[1]
+        self.assertNotIn("runtime", create_kwargs)
+        self.assertNotIn("extra_hosts", create_kwargs)

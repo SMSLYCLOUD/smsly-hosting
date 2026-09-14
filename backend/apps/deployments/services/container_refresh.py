@@ -9,9 +9,17 @@ downtime for a process boot, no build, no registry pull.
 Safety:
   * the old container is renamed (not removed) until the replacement
     reports running; any failure rolls back (rename back + start).
-  * networks/aliases, labels, mounts, restart policy, runtime, and
-    resource limits are all cloned from the live container, so routing
-    (Traefik labels, DNS aliases) and isolation survive intact.
+  * networks/aliases, labels, mounts, restart policy, and resource
+    limits are cloned from the live container, so routing (Traefik
+    labels, DNS aliases) and isolation survive intact.
+  * runtime is preserved by default; pass force_default_runtime=True
+    to drop back to the daemon default (runc).
+  * gVisor (runsc) sandboxes cannot reach Docker's embedded DNS proxy,
+    so replacements running under runsc get fresh addon hostname->IP
+    mappings injected via extra_hosts (live entries kept, fresh
+    resolutions win). Non-runsc replacements deliberately carry NO
+    extra_hosts — stale overrides would shadow healthy DNS because
+    nsswitch consults files before dns.
   * resource limits come from the Service row (converging drift), env
     from EnvironmentVariable rows + mTLS injection (mirroring spawn).
   * remote-node services are refused — run where the code is current.
@@ -173,6 +181,70 @@ def _container_volumes(container) -> dict:
     return volumes
 
 
+def _live_extra_hosts(container) -> list[str]:
+    """Return the live container's extra_hosts entries (may be empty)."""
+    try:
+        hosts = ((container.attrs or {}).get("HostConfig", {}) or {}).get("ExtraHosts") or []
+        return [str(h) for h in hosts if h]
+    except Exception:
+        return []
+
+
+def _resolve_gvisor_extra_hosts(service, shared_nets, client, live=None) -> list[str]:
+    """Fresh hostname->IP mappings for addons on the service's networks.
+
+    gVisor (runsc) sandboxes cannot reach Docker's embedded DNS proxy, so
+    hostname-based addon connections only work via /etc/hosts entries.
+    Live entries are kept; fresh resolutions win per hostname (addon IPs
+    change across addon recreates, so a preserved stale entry would
+    misroute). Returns [] when nothing resolves — callers then omit
+    extra_hosts entirely. Never raises (best-effort self-heal).
+    """
+    merged: dict[str, str] = {}
+    for entry in live or []:
+        host, sep, ip = str(entry).partition(":")
+        if sep and host.strip() and ip.strip():
+            merged[host.strip()] = ip.strip()
+    try:
+        from urllib.parse import urlparse as _urlparse
+
+        from django.db.models import Q
+
+        from apps.deployments.models.addons import Addon as _Addon
+
+        svc_id = getattr(service, "id", None)
+        project_id = getattr(service, "project_id", None)
+        addon_qs = _Addon.objects.filter(status="ACTIVE")
+        if svc_id or project_id:
+            clauses = Q()
+            if svc_id:
+                clauses |= Q(service__id=svc_id)
+            if project_id:
+                clauses |= Q(service__project__id=project_id, name__endswith="-shared")
+            addon_qs = addon_qs.filter(clauses)
+        for addon in addon_qs:
+            url = (getattr(addon, "connection_url", "") or "").strip()
+            host = (_urlparse(url).hostname or "").strip() if url else ""
+            if not host:
+                continue
+            atype = str(getattr(addon, "addon_type", "") or "").lower()
+            cname = f"smsly-addon-{atype}-{getattr(addon, 'id', '')}"
+            try:
+                candidate = client.containers.get(cname)
+                candidate.reload()
+                anets = (candidate.attrs.get("NetworkSettings") or {}).get("Networks") or {}
+                for net_name in shared_nets:
+                    ip = (anets.get(net_name) or {}).get("IPAddress", "")
+                    if ip and host != ip:
+                        merged[host] = ip
+                        break
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.debug("gVisor extra_hosts resolution skipped: %s", exc)
+    return [f"{host}:{ip}" for host, ip in merged.items()]
+
+
 def _resource_kwargs(service) -> dict:
     try:
         cpus = float(getattr(service, "cpu_cores", 0) or 0)
@@ -201,6 +273,10 @@ def build_refresh_plan(service, container) -> dict:
         image = ""
     primary, nets = _container_networks(container)
     env_vars = _fresh_env(service, _live_container_env(container))
+    try:
+        live_runtime = ((container.attrs or {}).get("HostConfig", {}) or {}).get("Runtime") or None
+    except Exception:
+        live_runtime = None
     return {
         "container_id": container.id[:12] if getattr(container, "id", "") else "",
         "container_name": getattr(container, "name", ""),
@@ -209,6 +285,8 @@ def build_refresh_plan(service, container) -> dict:
         "primary_network": primary,
         "networks": sorted(nets),
         "resources": _resource_kwargs(service),
+        "runtime": live_runtime,
+        "extra_hosts": _live_extra_hosts(container),
     }
 
 
@@ -225,11 +303,17 @@ def _wait_running(container, timeout_seconds: int = 60) -> bool:
     return False
 
 
-def recreate_with_fresh_env(service, container_id=None, dry_run=False) -> dict:
-    """Recreate the service's running container with fresh DB env/config.
+def recreate_with_fresh_env(service, container_id=None, dry_run=False,
+                            force_default_runtime=False) -> dict:
+    """Recreate the service's running container with fresh config, without rebuilding.
 
     Returns {"ok": True, "container": name, "previous": backup_name, ...}.
     Raises ContainerRefreshError on any failure AFTER attempting rollback.
+
+    :param force_default_runtime: drop back to the daemon default runtime
+        (runc) instead of cloning the live one — the escape hatch out of
+        a broken sandboxed runtime (e.g. gVisor DNS failure). Implies no
+        extra_hosts (stale overrides would shadow healthy DNS).
     """
     if _is_remote_service(service):
         raise ContainerRefreshError("Remote services are not supported yet — redeploy from the dashboard")
@@ -286,6 +370,22 @@ def recreate_with_fresh_env(service, container_id=None, dry_run=False) -> dict:
         }
         if runtime:
             create_kwargs["runtime"] = runtime
+        if force_default_runtime:
+            # Escape hatch out of a broken sandboxed runtime: omit the key
+            # so the daemon default (runc) applies, and drop extra_hosts —
+            # stale hostname overrides would shadow the now-healthy DNS.
+            create_kwargs.pop("runtime", None)
+        elif (create_kwargs.get("runtime") or "") == "runsc":
+            # gVisor cannot reach Docker embedded DNS: refresh the /etc/hosts
+            # compensation (live entries kept, fresh resolutions win).
+            # Recreate previously dropped this, stranding runsc containers
+            # with zero name resolution (2026-09-14 platform-api incident).
+            hosts = _resolve_gvisor_extra_hosts(
+                service, set(nets), client,
+                live=_live_extra_hosts(container),
+            )
+            if hosts:
+                create_kwargs["extra_hosts"] = hosts
         create_kwargs.update(_resource_kwargs(service))
 
         container.stop(timeout=15)
