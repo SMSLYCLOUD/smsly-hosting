@@ -90,6 +90,32 @@ export function ThreatDecisionCard({ decision: d, unbanningIp, onUnban, showServ
         </div>
       )}
 
+      {d.events && d.events.length > 0 && (
+        <details className="rounded-md bg-black/30 px-2 py-1">
+          <summary className="cursor-pointer text-muted-foreground select-none">
+            Request timeline ({d.events.length} event{d.events.length === 1 ? "" : "s"})
+          </summary>
+          <div className="mt-1 max-h-40 space-y-1 overflow-y-auto">
+            {d.events.slice(0, 20).map((ev, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-muted-foreground">
+                {ev.timestamp && <span>{fmtDT(ev.timestamp)}</span>}
+                {ev.method && (
+                  <Badge variant="outline" className="text-[9px]">{ev.method}</Badge>
+                )}
+                {ev.path && <code className="text-foreground break-all">{ev.path}</code>}
+                {ev.status && <span>→ {ev.status}</span>}
+                {ev.target && <span className="truncate">on {ev.target}</span>}
+                {ev.user_agent && (
+                  <span className="truncate opacity-70" title={ev.user_agent}>
+                    {ev.user_agent.slice(0, 60)}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
       <div className="flex items-center gap-3 flex-wrap text-muted-foreground">
         {(d.first_seen || d.start_time) && (
           <span>First seen {fmtDT(d.first_seen || d.start_time)}</span>

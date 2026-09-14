@@ -119,6 +119,20 @@ class TestNormalizeDecision(TestCase):
         self.assertEqual(d.asn_org, "GOOGLE-CLOUD-PLATFORM")
         self.assertEqual(d.ip_range, "34.32.0.0/11")
 
+    def test_live_shape_preserves_full_event_timeline(self):
+        """Every request (method/path/status/time) survives normalization."""
+        d = self.svc._normalize_decision(_live_shape(), {})
+        self.assertEqual(len(d.events), 2)
+        first, second = d.events
+        self.assertEqual(first["method"], "GET")
+        self.assertEqual(first["path"], "/.git/config")
+        self.assertEqual(first["status"], "503")
+        self.assertEqual(
+            first["target"], "postgres-a6e2bf4a-46a67f.grid.smsly.cloud"
+        )
+        self.assertEqual(second["path"], "/.env")
+        self.assertTrue(first["timestamp"])
+
     def test_live_shape_computes_expiry(self):
         from datetime import datetime, timezone
 

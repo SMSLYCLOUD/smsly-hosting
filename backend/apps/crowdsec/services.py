@@ -95,6 +95,10 @@ class CrowdSecDecision:
     first_seen: str = ""
     last_seen: str = ""
     message: str = ""
+    # Full per-request timeline (method/path/status/timestamp per event,
+    # capped). Powers the "request path" view in Threat Blocks — the
+    # summary fields above collapse this, this preserves it.
+    events: Optional[list] = None
 
 
 @dataclass
@@ -261,7 +265,10 @@ class CrowdSecService:
         events = raw.get("events", [])
         if not isinstance(events, list):
             events = []
-        metas = [_meta_to_dict(ev.get("meta")) for ev in events if isinstance(ev, dict)]
+        metas = [
+            _meta_to_dict(ev.get("meta")) if isinstance(ev, dict) else {}
+            for ev in events
+        ]
 
         host = None
         for meta in metas:
@@ -273,11 +280,27 @@ class CrowdSecService:
             host = _meta_host(raw if isinstance(raw, dict) else {})
 
         paths: list[str] = []
+        event_detail: list[dict] = []
         for meta in metas:
             path = meta.get("http_path") or meta.get("uri") or ""
             if isinstance(path, str) and path and path not in paths:
                 paths.append(path)
             if len(paths) >= 8:
+                break
+        for ev, meta in zip(events, metas):
+            if not isinstance(ev, dict):
+                continue
+            ts = ev.get("timestamp")
+            event_detail.append({
+                "timestamp": ts if isinstance(ts, str) else "",
+                "method": meta.get("http_verb") or meta.get("http_method") or "",
+                "path": meta.get("http_path") or meta.get("uri") or "",
+                "status": str(meta.get("http_status") or ""),
+                "source_ip": meta.get("source_ip") or "",
+                "user_agent": meta.get("http_user_agent") or "",
+                "target": meta.get("target_fqdn") or meta.get("http_host") or "",
+            })
+            if len(event_detail) >= 20:
                 break
 
         stamps = [
@@ -344,6 +367,10 @@ class CrowdSecService:
             match = re.match(r"^Ip (\S+)\s+performed\s", message)
             if match:
                 value = match.group(1)
+                if not scope:
+                    # The summary names an Ip-scope ban; record it so the
+                    # row is actionable (display, unban, auto-unblock).
+                    scope = "Ip"
                 if not source_ip:
                     source_ip = value
                 logger.debug(
@@ -375,6 +402,7 @@ class CrowdSecService:
             first_seen=first_seen if isinstance(first_seen, str) else "",
             last_seen=last_seen if isinstance(last_seen, str) else "",
             message=message,
+            events=event_detail,
         )
     def _normalize_alert(self, raw: dict, host_map: dict[str, set[str]]) -> CrowdSecAlert:
         """Map cscli alert JSON to CrowdSecAlert with service enrichment.

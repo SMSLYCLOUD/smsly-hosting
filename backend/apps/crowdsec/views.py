@@ -72,6 +72,7 @@ def crowdsec_decisions(request: Request) -> Response:
                     "first_seen": d.first_seen,
                     "last_seen": d.last_seen,
                     "message": d.message,
+                    "events": d.events or [],
                 }
                 for d in decisions
             ],
@@ -114,6 +115,7 @@ def crowdsec_service_decisions(request: Request, service_id: str) -> Response:
                     "first_seen": d.first_seen,
                     "last_seen": d.last_seen,
                     "message": d.message,
+                    "events": d.events or [],
                 }
                 for d in decisions
             ],

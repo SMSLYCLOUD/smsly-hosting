@@ -863,6 +863,16 @@ export const platformApi = {
   },
 };
 
+export interface CrowdSecDecisionEvent {
+  timestamp?: string | null;
+  method?: string | null;
+  path?: string | null;
+  status?: string | null;
+  source_ip?: string | null;
+  user_agent?: string | null;
+  target?: string | null;
+}
+
 export interface CrowdSecDecision {
   id: string;
   scope: string;
@@ -886,6 +896,7 @@ export interface CrowdSecDecision {
   first_seen?: string | null;
   last_seen?: string | null;
   message?: string | null;
+  events?: CrowdSecDecisionEvent[];
 }
 
 export interface CrowdSecAlert {
