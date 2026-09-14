@@ -274,6 +274,146 @@ def ensure_service_network_attachments():
     }
 
 
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.ensure_addon_network_aliases")
+def ensure_addon_network_aliases():
+    """Re-affirm addon DNS aliases (e.g. ``redis-shared``) on scoped bridges.
+
+    Live incident 2026-09-14: the ``redis-shared`` alias flapped on
+    ``smsly-net-96e85eee`` (present → absent → present, endpoint IDs
+    churning, no docker-events trace). Apps with pooled connections masked
+    it until pools recycled, then every Redis call failed with
+    ``Name or service not known``. Deploy-time repair
+    (``_ensure_addons_ready``) only runs during deploys, so a mid-life
+    alias strip never healed.
+
+    This beat task sweeps every ACTIVE addon with a connection URL,
+    resolves the URL hostname apps actually dial, and re-attaches it with
+    ``docker network connect --alias`` when missing. Idempotent no-op when
+    the alias is present; never touches stopped/missing containers beyond
+    counting them. Registered in celery.py beat_schedule every 15 minutes.
+    """
+    import subprocess
+    from urllib.parse import unquote
+    from urllib.parse import urlparse as _urlparse
+
+    try:
+        from apps.deployments.models.addons import Addon
+        from apps.deployments.models.network_scope import ScopedNetwork
+    except Exception as e:
+        logger.error("addon-alias guard: imports failed: %s", e)
+        return {"status": "error", "reason": str(e)}
+
+    checked = 0
+    repaired = 0
+    failed = 0
+    skipped = 0
+    try:
+        addons = Addon.objects.filter(status="ACTIVE").select_related(
+            "service", "service__project",
+        )
+        addon_list = list(addons.iterator())
+    except Exception as e:
+        logger.error("addon-alias guard: DB query failed: %s", e)
+        return {"status": "error", "reason": str(e)}
+
+    for addon in addon_list:
+        try:
+            url = (getattr(addon, "connection_url", "") or "").strip()
+            if not url:
+                skipped += 1
+                continue
+            hostname = unquote(_urlparse(url).hostname or "").strip().lower()
+            if not hostname:
+                skipped += 1
+                continue
+            container_name = (
+                f"smsly-addon-{str(getattr(addon, 'addon_type', '')).lower()}"
+                f"-{addon.id}"
+            )
+            try:
+                inspect = subprocess.run(
+                    ["docker", "inspect", "-f",
+                     "{{range .NetworkSettings.Networks}}{{range .Aliases}}{{.}} {{end}}{{end}}",
+                     container_name],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except (subprocess.SubprocessError, OSError) as exc:
+                logger.debug("addon-alias guard: inspect failed for %s: %s", container_name, exc)
+                failed += 1
+                continue
+            if inspect.returncode != 0:
+                # Container gone (addon scaled down / mid-reprovision) —
+                # nothing to repair; the next provision re-attaches.
+                skipped += 1
+                continue
+            aliases = {a.lower() for a in (inspect.stdout or "").split()}
+            checked += 1
+            if hostname in aliases:
+                continue
+            # Alias missing — re-attach on the scoped bridge when the
+            # addon has a project, else the shared net.
+            project = getattr(addon, "project", None) or getattr(
+                getattr(addon, "service", None), "project", None,
+            )
+            target_net = ""
+            if project is not None:
+                try:
+                    target_net = ScopedNetwork.resolve_network_name(project)
+                except Exception:
+                    target_net = ""
+            if not target_net:
+                try:
+                    from apps.addons.services.addon_provisioner import (
+                        addon_provisioner,
+                    )
+                    target_net = addon_provisioner.network_name
+                except Exception:
+                    target_net = "smsly-net"
+            try:
+                repair = subprocess.run(
+                    ["docker", "network", "connect", "--alias", hostname,
+                     target_net, container_name],
+                    capture_output=True, text=True, timeout=30,
+                )
+            except (subprocess.SubprocessError, OSError) as exc:
+                logger.warning(
+                    "addon-alias guard: repair failed for %s (alias %s): %s",
+                    container_name, hostname, exc,
+                )
+                failed += 1
+                continue
+            if repair.returncode == 0 or "already exists" in (repair.stderr or "").lower():
+                repaired += 1
+                logger.info(
+                    "addon-alias guard: restored alias %s for %s on %s",
+                    hostname, container_name, target_net,
+                )
+            else:
+                failed += 1
+                logger.warning(
+                    "addon-alias guard: could not restore alias %s for %s: %s",
+                    hostname, container_name, (repair.stderr or "").strip()[:200],
+                )
+        except Exception:
+            logger.exception(
+                "addon-alias guard failed for addon %s",
+                getattr(addon, "name", "?"),
+            )
+            failed += 1
+
+    logger.info(
+        "addon-alias guard: checked=%d repaired=%d failed=%d skipped=%d",
+        checked, repaired, failed, skipped,
+    )
+    return {
+        "status": "ok",
+        "checked": checked,
+        "repaired": repaired,
+        "failed": failed,
+        "skipped": skipped,
+    }
+
+
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.cleanup_orphaned_containers_task")
 def cleanup_orphaned_containers_task():
     """Periodic orphan sweep: stale green candidates (stopped OR running),
