@@ -50,6 +50,7 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
   const [wafLoading, setWafLoading] = useState(false);
   const [unbanningIp, setUnbanningIp] = useState<string | null>(null);
   const [wafError, setWafError] = useState<string | null>(null);
+  const [statusFailed, setStatusFailed] = useState(false);
 
   const hasUsableReport = (r: any) =>
     r !== null && typeof r === "object" && Object.keys(r).length > 0;
@@ -104,8 +105,13 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
       setServiceWafDisabled(Boolean(service?.disable_crowdsec_waf));
       if (sysRes?.data?.crowdsec) {
         setCrowdsec(sysRes.data.crowdsec);
+        setStatusFailed(false);
       } else {
+        // A failed status fetch must NEVER render as "Disabled/Offline":
+        // null means unknown, not off (under load the endpoint can time
+        // out while the engine keeps enforcing).
         setCrowdsec(null);
+        setStatusFailed(true);
       }
 
       if (hasUsableReport(latest?.vulnerability_report)) {
@@ -177,29 +183,42 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
             variant={!serviceWafDisabled && crowdsec?.enabled ? "default" : "secondary"}
             className="text-[10px]"
           >
-            {!serviceWafDisabled && crowdsec?.enabled ? "Protected" : "Disabled"}
+            {statusFailed ? "Unknown" : (!serviceWafDisabled && crowdsec?.enabled ? "Protected" : "Disabled")}
           </Badge>
         </div>
+        {statusFailed && (
+          <p className="text-xs text-yellow-400 mb-3">
+            Platform status unavailable (request failed) — showing unknown, not off. Refresh to retry.
+          </p>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
           <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
             <div className="text-[10px] text-muted-foreground uppercase mb-1">WAF Status</div>
             <div className="font-semibold text-foreground">
-              {serviceWafDisabled ? "Bypassed (Service)" : crowdsec?.enabled ? "Active" : "Platform Disabled"}
+              {statusFailed ? "Unknown" : (serviceWafDisabled ? "Bypassed (Service)" : crowdsec?.enabled ? "Active" : "Platform Disabled")}
             </div>
           </div>
           <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
             <div className="text-[10px] text-muted-foreground uppercase mb-1">Engine Container</div>
             <div className="font-semibold text-foreground flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${crowdsec?.running ? "bg-emerald-500" : "bg-red-500"}`} />
-              {crowdsec?.running ? "Running" : "Offline"}
+              {statusFailed ? (
+                "Unknown"
+              ) : (
+                <>
+                  <span className={`w-2 h-2 rounded-full ${crowdsec?.running ? "bg-emerald-500" : "bg-red-500"}`} />
+                  {crowdsec?.running ? "Running" : "Offline"}
+                </>
+              )}
             </div>
           </div>
           <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
             <div className="text-[10px] text-muted-foreground uppercase mb-1">Active Bans</div>
             <div className="font-semibold text-foreground">
-              {crowdsec?.active_bans !== undefined && crowdsec?.active_bans >= 0
-                ? `${crowdsec.active_bans} decisions`
-                : "0 decisions"}
+              {statusFailed
+                ? "—"
+                : (crowdsec?.active_bans !== undefined && crowdsec?.active_bans >= 0
+                  ? `${crowdsec.active_bans} decisions`
+                  : "0 decisions")}
             </div>
           </div>
           <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
