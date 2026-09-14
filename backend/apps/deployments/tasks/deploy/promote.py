@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+import docker
 from celery import shared_task
 from django.utils import timezone
 
@@ -36,6 +37,16 @@ def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
 
     compute = ComputeService(provider)
     adapter = compute.adapter
+    # Thread the service identity through: a fresh adapter has no
+    # _service_id, so _resolve_network_name() falls back to plain
+    # 'smsly-net' and the promoted canonical container loses its
+    # project-scoped bridge (live incident: app on smsly-net while its
+    # redis-shared addon alias lived on smsly-net-<project8> only).
+    if hasattr(adapter, "_resolve_network_name"):
+        try:
+            adapter._service_id = str(service.id)
+        except Exception:
+            pass
 
     if not hasattr(adapter, 'promote_container'):
         target_type = "remote" if provider.provider_type == CloudProvider.ProviderType.REMOTE else "lite_agent"
@@ -135,7 +146,14 @@ def auto_promote_staged_deployments():
             # crashed away). Fail the row fast with a clear log instead of
             # error-spamming every 15 minutes forever. An UNHEALTHY or
             # stopped green may still recover, so those stay STAGED.
-            if isinstance(exc, docker.errors.NotFound):
+            # NOTE: promote_container() raises RuntimeError (not
+            # docker.errors.NotFound) for a missing green — match its
+            # "not found" message too (covered by
+            # test_missing_green_fails_row_fast).
+            if isinstance(exc, docker.errors.NotFound) or (
+                isinstance(exc, RuntimeError)
+                and "not found" in str(exc).lower()
+            ):
                 try:
                     deployment.status = Deployment.Status.FAILED
                     deployment.finished_at = timezone.now()
