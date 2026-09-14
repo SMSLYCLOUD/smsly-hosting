@@ -148,7 +148,21 @@ class SecurityStatusView(GenericAPIView):
                     if bans_result.returncode == 0:
                         import json
                         bans = json.loads(bans_result.stdout)
-                        crowdsec["active_bans"] = len(bans) if isinstance(bans, list) else 0
+                        try:
+                            # Count what the UI can actually show: normalized
+                            # actionable bans, not raw records (which include
+                            # alert-only rows with no ban value). Falls back
+                            # to the raw length if normalization fails.
+                            from apps.crowdsec.services import get_crowdsec_service
+                            crowdsec["active_bans"] = len(
+                                get_crowdsec_service().get_decisions(
+                                    active=True, limit=500
+                                )
+                            )
+                        except Exception:
+                            crowdsec["active_bans"] = (
+                                len(bans) if isinstance(bans, list) else 0
+                            )
                     else:
                         crowdsec["active_bans"] = -1
                 except (FileNotFoundError, subprocess.TimeoutExpired, OSError, json.JSONDecodeError):

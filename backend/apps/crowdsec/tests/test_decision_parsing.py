@@ -143,6 +143,16 @@ class TestNormalizeDecision(TestCase):
         self.assertEqual(d.value, "1.2.3.4")
         self.assertEqual(d.end_time, "2026-09-13T04:00:00Z")
 
+    def test_ip_recovered_from_message_when_no_decision_entry(self):
+        """Alert-only records (empty nested decisions) still name the
+        attacker in the human summary — recover it for display/unban."""
+        raw = _live_shape()
+        raw["decisions"] = []
+        d = self.svc._normalize_decision(raw, {})
+        self.assertEqual(d.value, "34.39.228.253")
+        self.assertEqual(d.source_ip, "34.39.228.253")
+        self.assertEqual(d.scenario, "crowdsecurity/http-sensitive-files")
+
     def test_host_attribution(self):
         from unittest.mock import patch
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -27,8 +28,6 @@ def _parse_go_duration(value: Any) -> Optional[float]:
     """Parse a Go duration string (e.g. '2h34m39s', '45m', '20s') to seconds."""
     if not value or not isinstance(value, str):
         return None
-    import re
-
     total = 0.0
     matched = False
     for amount, unit in re.findall(r"(\d+(?:\.\d+)?)(ns|us|ms|s|m|h|d|w)", value):
@@ -336,6 +335,20 @@ class CrowdSecService:
         message = raw.get("message") or ""
         if not isinstance(message, str):
             message = ""
+
+        if not value and message:
+            # Records whose nested decisions array is empty carry no
+            # value/scope/type — but the human summary names the attacker
+            # ("Ip 1.2.3.4 performed 'scenario' ..."). Recover it so the
+            # ban is visible and actionable instead of an "unknown" row.
+            match = re.match(r"^Ip (\S+)\s+performed\s", message)
+            if match:
+                value = match.group(1)
+                if not source_ip:
+                    source_ip = value
+                logger.debug(
+                    "Decision %s: recovered ban IP from message", raw.get("id")
+                )
 
         return CrowdSecDecision(
             id=str(inner.get("id") or raw.get("id") or raw.get("uuid") or ""),
