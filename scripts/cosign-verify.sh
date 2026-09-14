@@ -76,6 +76,26 @@ _cosign_get_repo() {
     echo "$repo_url" | sed 's|^https://github.com/||' | sed 's|\.git$||'
 }
 
+COSIGN_IMAGE=""
+
+# Runs one `cosign verify`, capturing output.
+# Returns 0 = verified, 2 = skipped (registry auth required: a private
+# image with no `docker login` cannot be verified — non-fatal),
+# 1 = genuine verification failure (output already echoed).
+_cosign_try_verify() {
+    local _out=""
+    if _out="$("$COSIGN_BINARY" verify "$@" 2>&1)"; then
+        echo "$_out"
+        return 0
+    fi
+    if echo "$_out" | grep -qi "UNAUTHORIZED\|authentication required"; then
+        echo "[cosign] SKIP: $COSIGN_IMAGE requires registry auth (private image?) — signature check skipped"
+        return 2
+    fi
+    echo "$_out"
+    return 1
+}
+
 cosign_verify_image() {
     local image="$1"
     if [ -z "$image" ]; then
@@ -84,6 +104,7 @@ cosign_verify_image() {
     fi
 
     _cosign_ensure_binary || return 1
+    COSIGN_IMAGE="$image"
 
     local cosign_keys="/opt/smsly-hosting/cosign-keys"
     local private_key="${COSIGN_PRIVATE_KEY_PATH:-${cosign_keys}/cosign.key}"
@@ -92,33 +113,39 @@ cosign_verify_image() {
     # ── Private-key verification (preferred for self-hosted nodes) ─────
     if [ -f "$public_key" ]; then
         echo "[cosign] Verifying $image (public key)..."
-        if "$COSIGN_BINARY" verify --key "$public_key" "$image" ; then
-            echo "[cosign] ✓ Signature verified (public key) for $image"
+        local _rc1=""
+        _cosign_try_verify --key "$public_key" "$image" && { echo "[cosign] ✓ Signature verified (public key) for $image"; return 0; }
+        _rc1=$?
+        if [ "$_rc1" -eq 2 ]; then
             return 0
         fi
     fi
 
     # ── Keyless Sigstore verification (CI-built images) ───────────────
-    local repo_identity
+    local repo_identity=""
     repo_identity="$(_cosign_get_repo)"
     local issuer="https://token.actions.githubusercontent.com"
     local identity="https://github.com/${repo_identity}/.github/workflows/deploy.yml@refs/heads/main"
 
     echo "[cosign] Verifying $image (keyless)..."
-    if "$COSIGN_BINARY" verify \
+    local _rc2=""
+    _cosign_try_verify \
         --certificate-oidc-issuer "$issuer" \
         --certificate-identity "$identity" \
-        "$image" ; then
-        echo "[cosign] ✓ Signature verified for $image"
+        "$image" && { echo "[cosign] ✓ Signature verified for $image"; return 0; }
+    _rc2=$?
+    if [ "$_rc2" -eq 2 ]; then
         return 0
     fi
 
     local identity2="https://github.com/${repo_identity}/.github/workflows/cosign-sign.yml@refs/heads/main"
-    if "$COSIGN_BINARY" verify \
+    local _rc3=""
+    _cosign_try_verify \
         --certificate-oidc-issuer "$issuer" \
         --certificate-identity "$identity2" \
-        "$image" ; then
-        echo "[cosign] ✓ Signature verified for $image"
+        "$image" && { echo "[cosign] ✓ Signature verified for $image"; return 0; }
+    _rc3=$?
+    if [ "$_rc3" -eq 2 ]; then
         return 0
     fi
 
