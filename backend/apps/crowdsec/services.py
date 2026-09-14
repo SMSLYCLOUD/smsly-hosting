@@ -293,16 +293,21 @@ class CrowdSecService:
         if not first_seen:
             first_seen = start_time
 
-        end_time = raw.get("end_time") or raw.get("stop_at") or ""
+        end_time = raw.get("end_time") or ""
         if not isinstance(end_time, str):
             end_time = ""
-        if not end_time and start_time:
+        if not end_time:
+            # NOTE: the top-level `stop_at` is the *alert bucket* end, not
+            # the ban expiry — using it wrongly expires live bans. The
+            # nested decision `duration` counts DOWN the remaining ban TTL,
+            # so expiry is anchored at fetch time, not at created_at.
             seconds = _parse_go_duration(duration)
-            start_dt = _parse_dt(start_time)
-            if seconds and start_dt:
+            if seconds:
                 from datetime import timedelta
 
-                end_time = (start_dt + timedelta(seconds=seconds)).isoformat()
+                end_time = (
+                    datetime.now(timezone.utc) + timedelta(seconds=seconds)
+                ).isoformat()
 
         source = raw.get("source")
         source = source if isinstance(source, dict) else {}

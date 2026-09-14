@@ -120,10 +120,17 @@ class TestNormalizeDecision(TestCase):
         self.assertEqual(d.ip_range, "34.32.0.0/11")
 
     def test_live_shape_computes_expiry(self):
+        from datetime import datetime, timezone
+
         d = self.svc._normalize_decision(_live_shape(), {})
-        # start 00:06:55 + 2h34m39s -> 02:41:34 same day (UTC)
-        self.assertTrue(d.end_time.startswith("2026-09-14T02:41:34"))
+        # duration counts down the remaining TTL: expiry ~= now + 2h34m39s.
         self.assertEqual(d.duration, "2h34m39s")
+        end_dt = datetime.fromisoformat(d.end_time)
+        remaining = (end_dt - datetime.now(timezone.utc)).total_seconds()
+        self.assertTrue(
+            2 * 3600 + 34 * 60 < remaining <= 2 * 3600 + 34 * 60 + 120,
+            remaining,
+        )
 
     def test_flat_shape_still_parses(self):
         d = self.svc._normalize_decision({
