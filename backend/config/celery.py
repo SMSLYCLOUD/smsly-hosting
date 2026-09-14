@@ -126,6 +126,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.reap_unhealthy_staged_deployments': {'queue': 'deploy'},
     'apps.deployments.tasks.ensure_addon_network_aliases': {'queue': 'deploy'},
     'apps.crowdsec.tasks.crowdsec_auto_unblock': {'queue': 'fast'},
+    'apps.crowdsec.tasks.crowdsec_first_strike_sync': {'queue': 'fast'},
     'apps.deployments.tasks.apply_service_resource_limits': {'queue': 'fast'},
     'apps.mcp.tasks.ensure_mcp_server_running': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_transfers': {'queue': 'fast'},
@@ -424,6 +425,13 @@ app.conf.beat_schedule = {
     # Disabled mode leaves every ban for manual Unblock clicks.
     'crowdsec-auto-unblock-every-15m': {
         'task': 'apps.crowdsec.tasks.crowdsec_auto_unblock',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
+    # CrowdSec first-strike sync: enforce capacity-1 overrides for
+    # exploit-content scenarios (toggle on the Settings page).
+    'crowdsec-first-strike-sync-every-15m': {
+        'task': 'apps.crowdsec.tasks.crowdsec_first_strike_sync',
         'schedule': 900.0,
         'options': {'expires': 900.0},
     },

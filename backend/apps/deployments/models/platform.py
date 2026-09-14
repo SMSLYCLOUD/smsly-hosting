@@ -651,6 +651,13 @@ class PlatformConfig(models.Model):
         default=24,
         help_text="Bans older than this many hours are auto-removed by the "
                   "periodic sweeper (only when auto-unblock is enabled).")
+    crowdsec_first_strike_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text="Ban on the FIRST exploit-content probe (sensitive files, "
+                  "path traversal, admin-interface probing) instead of "
+                  "waiting for the scenario bucket to fill. Behavioral "
+                  "buckets (404 probing, crawlers, bruteforce) always keep "
+                  "their thresholds to avoid false positives.")
 
     # ── SPIFFE mTLS ─────────────────────────────────────────────────────
     mtls_enabled = models.BooleanField(

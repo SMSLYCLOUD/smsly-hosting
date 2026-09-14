@@ -87,6 +87,7 @@ class DomainConfigView(GenericAPIView):
             'crowdsec_enroll_key_set': bool(config.crowdsec_enroll_key),
             'crowdsec_auto_unblock_enabled': config.crowdsec_auto_unblock_enabled,
             'crowdsec_auto_unblock_after_hours': config.crowdsec_auto_unblock_after_hours,
+            'crowdsec_first_strike_enabled': config.crowdsec_first_strike_enabled,
             # SMTP
             'smtp_host': config.smtp_host,
             'smtp_port': config.smtp_port,
@@ -176,6 +177,9 @@ class DomainConfigView(GenericAPIView):
             if 'crowdsec_auto_unblock_enabled' in data:
                 config.crowdsec_auto_unblock_enabled = _parse_bool(
                     data.get('crowdsec_auto_unblock_enabled'))
+            if 'crowdsec_first_strike_enabled' in data:
+                config.crowdsec_first_strike_enabled = _parse_bool(
+                    data.get('crowdsec_first_strike_enabled'))
             if 'crowdsec_auto_unblock_after_hours' in data:
                 try:
                     hours = int(data.get('crowdsec_auto_unblock_after_hours'))

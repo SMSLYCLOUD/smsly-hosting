@@ -119,6 +119,21 @@ export function SecurityScanningCard({ config, onChange }: SecurityCardProps) {
               </div>
               <div className="flex items-center justify-between rounded-lg border p-4">
                 <div className="space-y-0.5">
+                  <Label className="text-base">First-strike blocking</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Ban on the first exploit probe (sensitive files, path traversal,
+                    admin-interface scans) instead of waiting for the scenario bucket
+                    to fill. 404/crawler/bruteforce buckets keep their thresholds
+                    to avoid false positives.
+                  </p>
+                </div>
+                <Switch
+                  checked={config.crowdsec_first_strike_enabled ?? true}
+                  onCheckedChange={(v) => onChange("crowdsec_first_strike_enabled", v)}
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div className="space-y-0.5">
                   <Label className="text-base">Automatic unblocking</Label>
                   <p className="text-sm text-muted-foreground">
                     Automatically remove bans older than the retention window below.
