@@ -578,7 +578,13 @@ def attach_container_to_platform_bridge(container_id: str, service_name: str) ->
             return True
         try:
             net = client.networks.get(bridge)
-            net.connect(container)
+            # Pass explicit aliases: a bare connect leaves the endpoint
+            # with Docker's auto alias only, which has caused
+            # hard-to-trace DNS gaps after repair-time attaches.
+            net.connect(
+                container,
+                aliases=[service_name, f"{service_name}.default.internal"],
+            )
             logger.info(
                 "Attached %s (%s) to platform bridge %s",
                 service_name, container_id[:12], bridge,
@@ -636,7 +642,15 @@ def attach_container_to_service_network(service, container_id: str) -> bool:
             return True
         try:
             net = client.networks.get(network_name)
-            net.connect(container)
+            # Explicit aliases (same convention as the deploy/promote
+            # paths): a bare connect is what left repaired containers
+            # resolvable by container name but invisible under the
+            # service aliases other components expect.
+            service_name = getattr(service, "name", "") or ""
+            net.connect(
+                container,
+                aliases=[service_name, f"{service_name}.default.internal"],
+            )
             logger.info(
                 "Attached %s (%s) to scoped network %s",
                 getattr(service, "name", "?"), str(container_id)[:12],
