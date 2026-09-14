@@ -11143,7 +11143,13 @@ ensure_celery_workers_running
 " || true
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
-    PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head"  || true)"
+    # Guarded read: the marker is absent on re-exec'd runs whose prior pass
+    # already consumed it, and on runs where the git-sync checkpoint was
+    # restored without the file (previously printed a bare `cat:` error).
+    PRE_HEAD=""
+    if [ -f "$INSTALL_DIR/.pre-update-head" ] && [ -s "$INSTALL_DIR/.pre-update-head" ]; then
+        PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" || true)"
+    fi
     CURRENT_HEAD="$(cd "$INSTALL_DIR" && git rev-parse HEAD  || true)"
     CODE_CHANGED=false
     if [ -n "$PRE_HEAD" ] && [ "$PRE_HEAD" != "$CURRENT_HEAD" ]; then
