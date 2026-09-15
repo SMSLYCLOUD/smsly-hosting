@@ -86,8 +86,10 @@ _harden_openappsec_verify() {
         # Attachment signal: the agent never logs the word "attachment"
         # (it logs nano-service installs + policy loads), so grep the
         # ENVOY side — its golang filter logs a verdict per inspected
-        # request. Envoy verdicts + shadow parity = attached and serving.
-        if docker logs --since 30m smsly-appsec-envoy 2>/dev/null | grep -qiE "verdict"; then
+        # request. Note the vendor typo: the message reads "verict",
+        # not "verdict" — match it verbatim. Envoy verdicts + shadow
+        # parity = attached and serving.
+        if docker logs --since 30m smsly-appsec-envoy 2>/dev/null | grep -qiE "verict"; then
             _harden_log ok "open-appsec agent+envoy up (attachment verdicts flowing)"
         else
             _harden_log warn "open-appsec up but no attachment verdicts in envoy log yet — check shadow parity"
