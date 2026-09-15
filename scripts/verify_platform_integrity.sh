@@ -317,26 +317,33 @@ ensure_openappsec_shadow_parity() {
     #  (b) real domain over plain HTTP -> Caddy's 308 to https (we compare
     #      status + Location, never follow it — following leaves the box
     #      through Cloudflare and hangs the check).
+    # Baselines are taken INSIDE the Caddy netns (docker exec): host
+    # loopback to published :80 is flaky under load (docker-proxy
+    # hairpin) while container-to-container is rock solid — and the
+    # shadow path under test is container-to-container too.
     local direct_a
-    direct_a=$(timeout 15 curl -s -o /dev/null -w '%{http_code}' -H "Host: shadow-probe.invalid" "http://127.0.0.1:80/" 2>/dev/null || true)
+    direct_a=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: shadow-probe.invalid" http://127.0.0.1:80/ 2>&1 | grep 'HTTP/' | tail -n 1 | awk '{print $2}' || true)
     local shadow_a
     shadow_a=$(timeout 15 curl -s -o /dev/null -w '%{http_code}' -H "Host: shadow-probe.invalid" "http://127.0.0.1:$shadow_port/" 2>/dev/null || true)
-    local direct_b
-    direct_b=$(timeout 15 curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" "http://127.0.0.1:80/health" 2>/dev/null || true)
+    local direct_raw
+    direct_raw=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: $domain" http://127.0.0.1:80/health 2>&1 || true)
     local shadow_b
     shadow_b=$(timeout 15 curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" "http://127.0.0.1:$shadow_port/health" 2>/dev/null || true)
     if [ -z "$direct_a" ]; then
-        log "openappsec shadow check skipped (direct Caddy :80 unreachable)"
+        log "openappsec shadow check skipped (Caddy netns unreachable)"
         return 0
     fi
     if [ -z "$shadow_a" ]; then
         log "ALERT: openappsec shadow envoy not serving on 127.0.0.1:$shadow_port — attachment may be down; edge cutover BLOCKED until fixed"
         return 0
     fi
-    if [ "$direct_a" = "$shadow_a" ] && [ "$direct_b" = "$shadow_b" ]; then
-        log "openappsec shadow parity OK (filter transparent: 400=$direct_a redirect='$direct_b')"
+    # Reduce the wget -S dump to "code location" to match curl's format.
+    local direct_b_norm
+    direct_b_norm="$(echo "$direct_raw" | grep 'HTTP/' | tail -n 1 | awk '{print $2}') $(echo "$direct_raw" | grep -i '^  Location:' | tail -n 1 | awk '{print $2}')"
+    if [ "$direct_a" = "$shadow_a" ] && [ -n "$direct_b_norm" ] && [ "$shadow_b" = "$direct_b_norm" ]; then
+        log "openappsec shadow parity OK (filter transparent: 400=$direct_a redirect='$direct_b_norm')"
     else
-        log "ALERT: openappsec shadow DIVERGES from direct Caddy (direct 400=$direct_a redirect='$direct_b' vs shadow 400=$shadow_a redirect='$shadow_b') — edge cutover BLOCKED until fixed"
+        log "ALERT: openappsec shadow DIVERGES from direct Caddy (direct 400=$direct_a redirect='$direct_b_norm' vs shadow 400=$shadow_a redirect='$shadow_b') — edge cutover BLOCKED until fixed"
     fi
 }
 
