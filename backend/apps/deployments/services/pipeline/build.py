@@ -27,6 +27,12 @@ from .utils import _read_env_file
 
 logger = logging.getLogger(__name__)
 
+# Bounds for the failure-tail drain (no bare magic numbers in the new
+# failure path). The SDK stream can be megabytes on big builds; only the
+# tail ever explains a failure.
+BUILD_FAIL_TAIL_LINES = 60
+BUILD_FAIL_TAIL_CHARS = 8000
+
 
 class BuildMixin:
     def _build_image(self):
@@ -568,6 +574,39 @@ class BuildMixin:
 
 
 
+    def _drain_build_log_tail(self, build_log) -> str:
+        """Best-effort drain of an abandoned SDK build stream.
+
+        When ``client.images.build`` raises, its output generator is
+        left holding the daemon-side reason. Consume it boundedly and
+        return the redacted tail ("" when there is nothing to drain).
+        Never raises — diagnostics must not mask the original failure.
+        """
+        if build_log is None:
+            return ""
+        lines: list = []
+        try:
+            for entry in build_log:
+                if not isinstance(entry, dict):
+                    continue
+                text = entry.get("error") or entry.get("errorDetail", {}).get("message")
+                if not text:
+                    text = entry.get("stream") or ""
+                if text:
+                    lines.append(str(text).strip())
+        except Exception as exc:
+            lines.append(f"[stream ended: {exc}]")
+        tail = "\n".join(line for line in lines if line)
+        tail = tail[-(BUILD_FAIL_TAIL_LINES * 200):]
+        tail = "\n".join(tail.splitlines()[-BUILD_FAIL_TAIL_LINES:])
+        redacted = redact_values(
+            tail[-BUILD_FAIL_TAIL_CHARS:],
+            getattr(self, "secret_values", None) or [],
+        )
+        if not redacted.strip():
+            return ""
+        return "\n[docker daemon build-output tail]\n" + redacted + "\n"
+
     def _build_via_docker_py(
         self,
         context_dir: str,
@@ -703,6 +742,7 @@ class BuildMixin:
                     tar.add(context_dir, arcname=".")
             tar_buffer.seek(0)
 
+            build_log = None
             try:
                 client = get_docker_client()
                 build_kwargs: dict = {
@@ -719,6 +759,16 @@ class BuildMixin:
             except Exception as exc:
                 err_str = str(exc) or type(exc).__name__
                 redacted_err = redact_values(err_str, self.secret_values)
+                # The SDK abandons the streamed build output when it raises —
+                # drain it (bounded) so the daemon-side reason (OOMKilled,
+                # executor failure, disk pressure, broken pipe under load)
+                # lands in build_logs instead of vanishing. Without this,
+                # failures present as a bare "Docker build failed" with a
+                # clean-looking log (2026-09-15: 170 clean lines, zero error
+                # text, 18 min gone, nothing to diagnose).
+                streamed_tail = self._drain_build_log_tail(build_log)
+                if streamed_tail:
+                    append_log(self.deployment, streamed_tail)
                 # BuildKit cache corruption -> prune and retry once
                 if (
                     is_buildkit_cache_error(redacted_err)
@@ -737,7 +787,9 @@ class BuildMixin:
                         "Docker cache corruption detected after "
                         "automatic recovery attempt."
                     ) from exc
-                raise BuildError("Docker build failed") from exc
+                raise BuildError(
+                    f"Docker build failed: {(streamed_tail or redacted_err)[-500:]}"
+                ) from exc
 
             # Drain the build log generator
             log_chunks = []

@@ -907,6 +907,7 @@ wait_for_container_ready() {
     local timeout_seconds="${2:-180}"
     local elapsed=0
     local state=""
+    local start_attempts=0
 
     [ -z "$raw_target" ] && return 1
 
@@ -918,6 +919,17 @@ wait_for_container_ready() {
         if [ "$state" = "healthy" ] || [ "$state" = "running" ]; then
             echo -e "${GREEN}  OK $raw_target is $state${NC}"
             return 0
+        fi
+        # A container stuck in "created" was built by compose but never
+        # started — the daemon goes sluggish under load and the start is
+        # silently lost (seen twice on celery/backend after updates; a
+        # manual `docker start` recovered every time). Nudge it directly
+        # instead of WARNing for the whole timeout: bounded (3 attempts,
+        # one per 30s) so a genuinely broken container can't churn forever.
+        if [ "$state" = "created" ] && [ "$start_attempts" -lt 3 ] && [ "$((elapsed % 30))" -eq 0 ]; then
+            start_attempts=$((start_attempts + 1))
+            echo -e "${YELLOW}  → $raw_target stuck in 'created' (attempt $start_attempts/3) — nudging docker start${NC}"
+            timeout -k 5 60 docker start "$container_name" >/dev/null 2>&1 || true
         fi
         sleep 5
         elapsed=$((elapsed + 5))

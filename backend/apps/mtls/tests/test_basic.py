@@ -105,12 +105,14 @@ class MtlsStatusApiTests(TestCase):
         )
 
     def test_mtls_status_returns_401_unauthenticated(self):
-        # Unauthenticated APIClient requests hit SessionAuthentication
-        # CSRF enforcement, which answers 403 (not 401) for anonymous
-        # calls. This documents the live behavior — do not "fix" the
-        # view to return 401 without reviewing the auth design.
+        # Unauthenticated API calls answer 401 with code="unauthenticated"
+        # (apps.core.exception_handler normalises NotAuthenticated; the
+        # frontend redirects to login on 401). An older revision of this
+        # test documented 403 (SessionAuthentication CSRF) — that has not
+        # been the live behavior since the handler landed.
         resp = self.client.get(f'/api/v1/services/{self.service.id}/mtls/status/')
-        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(resp.data.get('code'), 'unauthenticated')
 
     def test_mtls_status_returns_config(self):
         self.client.force_authenticate(self.user)
