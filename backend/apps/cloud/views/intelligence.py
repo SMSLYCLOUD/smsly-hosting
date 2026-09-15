@@ -593,14 +593,37 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             status=EcosystemPlan.Status.SCANNING,
         )
 
-        task = ecosystem_scan_task.delay(
-            str(request.user.id),
-            30,
-            ai_provider=ai_provider,
-            selected_repos=selected_repos,
-            plan_id=str(plan_record.id),
-            project_id=str(project.id) if project else None,
-        )
+        try:
+            task = ecosystem_scan_task.delay(
+                str(request.user.id),
+                30,
+                ai_provider=ai_provider,
+                selected_repos=selected_repos,
+                plan_id=str(plan_record.id),
+                project_id=str(project.id) if project else None,
+            )
+        except Exception as exc:
+            # The broker can be unreachable while RabbitMQ restarts
+            # (2026-09-15: .delay() raised OperationalError -> DRF 500,
+            # and the orphaned 'scanning' row then 429'd every retry).
+            # Fail the row with the reason and answer 503 so the caller
+            # retries instead of staring at a stuck scan.
+            logger.exception(
+                "Ecosystem scan enqueue failed for user %s", request.user.id
+            )
+            plan_record.status = EcosystemPlan.Status.FAILED
+            plan_record.error_message = (
+                "Scan queue unavailable (message broker unreachable). "
+                "Please retry in a minute."
+            )
+            plan_record.save(update_fields=["status", "error_message", "updated_at"])
+            return Response(
+                {
+                    "error": "Scan queue unavailable, please retry in a minute.",
+                    "code": "broker_unreachable",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         plan_record.scan_task_id = task.id
         plan_record.save(update_fields=['scan_task_id'])
