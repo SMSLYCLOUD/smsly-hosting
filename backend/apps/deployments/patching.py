@@ -188,7 +188,7 @@ def is_valid_host(host_str: str) -> bool:
 
     # 5. Addons
     try:
-        from apps.deployments.models_addons import Addon
+        from apps.deployments.models.addons import Addon
         if Addon.objects.filter(public_domain=domain).exists():
             return True
     except Exception as exc:

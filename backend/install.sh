@@ -10848,8 +10848,9 @@ if not created and not cp.is_active:
     backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
     timeout -k 5 120 docker exec -i "$backend_container" python manage.py shell -c "
 from apps.deployments.models import Deployment, Service
-from apps.deployments.models_addons import Addon
-from apps.deployments.tasks import provision_addon_task, recover_stalled_queued_deployments
+from apps.deployments.models.addons import Addon
+from apps.deployments.tasks import provision_addon_task
+from apps.deployments.tasks.deployment.tasks_deploy import recover_stalled_queued_deployments
 from django.db.models import Count
 
 # Re-queue deployments

@@ -56,11 +56,19 @@ CREDS
         # -----------------------------------------------------------------------------
         echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
         echo "
+from django.db.models import Q
 from apps.cloud.models import CloudProvider
-cp, created = CloudProvider.objects.get_or_create(
-    provider_type='LOCAL',
-    defaults={'name': 'Local Docker', 'is_active': True}
-)
+# Scope-aware: the ecosystem task auto-creates a second LOCAL provider
+# (scope='ecosystem'), so a bare get_or_create(provider_type='LOCAL')
+# raises MultipleObjectsReturned. The installer owns the platform row.
+cp = (CloudProvider.objects.filter(provider_type='LOCAL').filter(Q(scope='platform') | Q(scope='')).order_by('created_at').first())
+created = False
+if cp is None:
+    cp = CloudProvider.objects.create(
+        provider_type='LOCAL',
+        name='Local Docker', scope='platform', is_active=True,
+    )
+    created = True
 if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
@@ -75,11 +83,19 @@ fi
 if [ "$MODE_AGENT_LITE" != "true" ]; then
     echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
     echo "
+from django.db.models import Q
 from apps.cloud.models import CloudProvider
-cp, created = CloudProvider.objects.get_or_create(
-    provider_type='LOCAL',
-    defaults={'name': 'Local Docker', 'is_active': True}
-)
+# Scope-aware: the ecosystem task auto-creates a second LOCAL provider
+# (scope='ecosystem'), so a bare get_or_create(provider_type='LOCAL')
+# raises MultipleObjectsReturned. The installer owns the platform row.
+cp = (CloudProvider.objects.filter(provider_type='LOCAL').filter(Q(scope='platform') | Q(scope='')).order_by('created_at').first())
+created = False
+if cp is None:
+    cp = CloudProvider.objects.create(
+        provider_type='LOCAL',
+        name='Local Docker', scope='platform', is_active=True,
+    )
+    created = True
 if not created and not cp.is_active:
     cp.is_active = True
     cp.save()

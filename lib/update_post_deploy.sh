@@ -33,11 +33,19 @@ fi
     # ─── Ensure Local Docker cloud provider exists ──────────────────────────
     echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
     echo "
+from django.db.models import Q
 from apps.cloud.models import CloudProvider
-cp, created = CloudProvider.objects.get_or_create(
-    provider_type='LOCAL',
-    defaults={'name': 'Local Docker', 'is_active': True}
-)
+# Scope-aware: the ecosystem task auto-creates a second LOCAL provider
+# (scope='ecosystem'), so a bare get_or_create(provider_type='LOCAL')
+# raises MultipleObjectsReturned. The installer owns the platform row.
+cp = (CloudProvider.objects.filter(provider_type='LOCAL').filter(Q(scope='platform') | Q(scope='')).order_by('created_at').first())
+created = False
+if cp is None:
+    cp = CloudProvider.objects.create(
+        provider_type='LOCAL',
+        name='Local Docker', scope='platform', is_active=True,
+    )
+    created = True
 if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
@@ -81,8 +89,9 @@ if not created and not cp.is_active:
     backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
     timeout -k 5 120 docker exec -i "$backend_container" python manage.py shell -c "
 from apps.deployments.models import Deployment, Service
-from apps.deployments.models_addons import Addon
-from apps.deployments.tasks import provision_addon_task, recover_stalled_queued_deployments
+from apps.deployments.models.addons import Addon
+from apps.deployments.tasks import provision_addon_task
+from apps.deployments.tasks.deployment.tasks_deploy import recover_stalled_queued_deployments
 from django.db.models import Count
 
 # Re-queue deployments
