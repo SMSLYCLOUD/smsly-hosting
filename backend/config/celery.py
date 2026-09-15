@@ -173,6 +173,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks_spiffe.sync_spiffe_entries_task': {'queue': 'deploy'},
     'apps.mtls.tasks.inject_mtls_task': {'queue': 'deploy'},
     'apps.mtls.tasks.sync_svid_metadata_task': {'queue': 'celery'},
+    'apps.mtls.tasks.repair_stale_sidecars_task': {'queue': 'deploy'},
     'apps.deployments.services.provisioner.provision_server': {'queue': 'deploy'},
     # Health monitoring is long-running and must not starve deployment work.
     'apps.core.services.health_monitor.monitor_health_task': {'queue': 'celery'},
@@ -504,6 +505,11 @@ app.conf.beat_schedule = {
     'sync-svid-metadata-every-hour': {
         'task': 'apps.mtls.tasks.sync_svid_metadata_task',
         'schedule': crontab(minute=15),
+    },
+    'repair-stale-sidecars-every-15m': {
+        'task': 'apps.mtls.tasks.repair_stale_sidecars_task',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
     },
     # Cleanup Docker build cache daily
     'cleanup-build-cache-daily': {

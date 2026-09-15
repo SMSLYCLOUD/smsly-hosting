@@ -527,7 +527,11 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                             "SPIRE entry ensure failed for %s: %s",
                             service.name, entry_exc,
                         )
-                    EnvoySidecar.inject_sidecar(service)
+                    # remount_if_stale recreates a sidecar left over from
+                    # before the 2026-09-15 resolver fix (empty decoy
+                    # mount, never any SVID) — a bare inject would report
+                    # already_running and keep it SVID-less forever.
+                    EnvoySidecar.remount_if_stale(service)
                     if not EnvoySidecar.wait_sidecar_ready(service):
                         # Mesh is mandatory ONLY for ecosystem services.
                         # For everything else a failed sidecar must degrade

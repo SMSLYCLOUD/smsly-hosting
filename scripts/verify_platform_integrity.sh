@@ -298,6 +298,35 @@ ensure_spire_volumes_not_shadowed() {
     log "spire volume shadow check complete"
 }
 
+# ── 10b. Running sidecars must not mount a bare decoy socket ──────
+# Alert-only (the repair-stale-sidecars beat does the healing): a
+# running envoy-* sidecar whose /opt/spire/run source is a bare
+# spire-* volume is SVID-less — SDS dials an empty dir. Namespaced
+# (smsly-*) mounts are healthy.
+ensure_sidecar_mounts_current() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local sidecars
+    sidecars=$(docker ps --format '{{.Names}}' 2>/dev/null | grep '^envoy-' || true)
+    [ -z "$sidecars" ] && { log "no envoy sidecars — skipping mount check"; return 0; }
+    local s
+    local src
+    for s in $sidecars; do
+        src=$(docker inspect "$s" --format '{{range .Mounts}}{{if eq .Destination "/opt/spire/run"}}{{.Source}}|{{.Name}} {{end}}{{end}}' 2>/dev/null || true)
+        [ -z "$src" ] && {
+            log "ALERT: sidecar $s has no /opt/spire/run mount (SVID-less) — repair-stale-sidecars beat will remount"
+            continue
+        }
+        case "$src" in
+            *volumes/smsly-*|smsly-*)
+                ;; # namespaced mount — healthy
+            *volumes/spire-*|spire-*)
+                log "ALERT: sidecar $s mounts bare spire decoy at /opt/spire/run (SVID-less) — repair-stale-sidecars beat will remount"
+                ;;
+        esac
+    done
+    log "sidecar mount check complete"
+}
+
 # ── 11. open-appsec shadow must track direct Caddy byte-for-byte ───
 # Phase-1 WAF rides a loopback shadow port through the attachment
 # filter. If the filter ever mangles/blocks legitimate traffic, the
@@ -366,6 +395,7 @@ ensure_traefik_middlewares
 ensure_traefik_service_conflicts
 ensure_caddy_logs_writable
 ensure_spire_volumes_not_shadowed
+ensure_sidecar_mounts_current
 ensure_cf_bouncer_running
 ensure_fail2ban_running
 ensure_openappsec_shadow_parity

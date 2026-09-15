@@ -683,6 +683,47 @@ class EnvoySidecar:
             }
 
     @staticmethod
+    def remount_if_stale(service) -> dict:
+        """Inject, recreating first when the socket mount is stale.
+
+        Sidecars injected before the 2026-09-15 resolver fix mount the
+        auto-created EMPTY bare decoy volume — SDS can never reach
+        agent.sock and no SVID is ever issued. A bare
+        ``inject_sidecar`` reports ``already_running`` for those and the
+        caller keeps an SVID-less sidecar forever (identity-service
+        redeploy 2026-09-15 proved it). This helper checks mount health
+        first and recreates exactly the stale sidecars (app untouched).
+
+        Returns the inject result dict with a ``remounted`` flag (True
+        when the sidecar was recreated). Inject errors propagate so
+        callers keep their tolerate-and-warn contract.
+        """
+        mount_check = EnvoySidecar.check_socket_mount_healthy(service)
+        if mount_check.get("healthy") or "unavailable" in str(
+            mount_check.get("reason", "")
+        ):
+            # Current mounts — or daemon/sidecar unreachable, in which
+            # case there is nothing informed to recreate: default path
+            # (no-op when running, fresh inject when missing).
+            result = EnvoySidecar.inject_sidecar(service)
+            result["remounted"] = False
+            return result
+        status = EnvoySidecar.get_sidecar_status(service)
+        if status.get("status") == "running":
+            logger.warning(
+                "Recreating SVID-less sidecar for %s (%s)",
+                service.name, mount_check.get("reason"),
+            )
+            EnvoySidecar.remove_sidecar(service)
+        else:
+            # Corpse (Created/Exited/Dead): sweep without touching
+            # anything running, then inject fresh below.
+            EnvoySidecar.remove_orphan_sidecar(service)
+        result = EnvoySidecar.inject_sidecar(service)
+        result["remounted"] = True
+        return result
+
+    @staticmethod
     def wait_sidecar_ready(service, timeout_seconds: int = 120) -> bool:
         """Wait until the sidecar is serving with an issued SVID.
 

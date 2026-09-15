@@ -11,7 +11,11 @@ import datetime
 from celery import shared_task
 from django.utils import timezone
 
-from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, RETRY_DELAY_STANDARD
+from apps.deployments.constants import (
+    TASK_TIME_LIMIT_QUICK,
+    TASK_TIME_LIMIT_STANDARD,
+    RETRY_DELAY_STANDARD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +169,138 @@ def sync_svid_metadata_task():
         if sync_svid_for_service(config.service, client=client):
             synced += 1
     return {"synced": synced, "checked": checked}
+
+
+@shared_task(
+    name="apps.mtls.tasks.repair_stale_sidecars_task",
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1],
+)
+def repair_stale_sidecars_task():
+    """Remount SVID-less sidecars and remove orphans (every 15m).
+
+    Closes the loop the manual repair endpoint left open: sidecars
+    injected before the 2026-09-15 resolver fix mount the empty decoy
+    volume, and the deploy path used to keep them (``already_running``)
+    — so without this beat nothing ever healed them and the Services
+    page showed "SVID Missing" forever.
+
+    Per enabled-sidecar service (never raises — best-effort per
+    service, errors are collected into the result):
+    * app running + sidecar stale/missing -> remount (or fresh inject)
+    * app gone + sidecar present (any state) -> remove the orphan so it
+      stops pinning decoy volumes (redeploy re-injects on return)
+    * deploy in flight (non-terminal Deployment touched in the last
+      30m) -> skip, the pipeline owns the sidecar right now
+
+    Phase 2 sweeps sidecar containers whose Service row is gone
+    entirely (the repair endpoint only iterates live rows).
+    """
+    import datetime
+
+    from apps.cloud.docker_client import get_docker_client
+    from apps.deployments.models import Deployment, Service
+    from apps.mtls.models import MtlsConfig
+    from apps.mtls.services.envoy_sidecar import EnvoySidecar
+
+    result = {
+        "remounted": [], "injected": [], "orphans_removed": [],
+        "skipped_in_flight": [], "errors": [],
+    }
+    try:
+        client = get_docker_client()
+    except Exception as exc:
+        logger.warning("Sidecar repair skipped (docker unavailable): %s", exc)
+        result["errors"].append(f"docker unavailable: {exc}")
+        return result
+
+    try:
+        cutoff = timezone.now() - datetime.timedelta(minutes=30)
+        # In-flight = every non-terminal status (a recent one means the
+        # pipeline owns the sidecar right now). Terminal: *_FAILED,
+        # ACTIVE, CANCELLED, INACTIVE, ROLLED_BACK.
+        in_flight = set(
+            Deployment.objects.filter(updated_at__gt=cutoff)
+            .filter(status__in=[
+                Deployment.Status.QUEUED, Deployment.Status.REVIEW,
+                Deployment.Status.BUILDING,
+                Deployment.Status.AWAITING_APPROVAL,
+                Deployment.Status.BACKUP_RUNNING,
+                Deployment.Status.MIGRATION_PLANNING,
+                Deployment.Status.MIGRATION_RUNNING,
+                Deployment.Status.DEPLOYING,
+                Deployment.Status.HEALTH_CHECK, Deployment.Status.STAGED,
+                Deployment.Status.ROLLING_BACK,
+            ])
+            .values_list("service_id", flat=True)
+        )
+    except Exception as exc:
+        logger.debug("In-flight guard unavailable, proceeding: %s", exc)
+        in_flight = set()
+
+    for config in MtlsConfig.objects.filter(
+        enabled=True, sidecar_enabled=True
+    ).select_related("service"):
+        svc = config.service
+        try:
+            if svc.id in in_flight:
+                result["skipped_in_flight"].append(svc.name)
+                continue
+            app = EnvoySidecar._find_main_container(client, svc)
+            sidecar_state = EnvoySidecar.get_sidecar_status(svc).get("status")
+            if app is None:
+                if sidecar_state not in (None, "not_found"):
+                    removed = EnvoySidecar.remove_sidecar(svc)
+                    if removed.get("status") == "removed":
+                        result["orphans_removed"].append(svc.name)
+                        logger.info(
+                            "Removed orphan sidecar for %s (no app container)",
+                            svc.name,
+                        )
+                continue
+            out = EnvoySidecar.remount_if_stale(svc)
+            if out.get("remounted"):
+                result["remounted"].append(svc.name)
+            elif out.get("status") == "injected":
+                result["injected"].append(svc.name)
+        except Exception as exc:
+            logger.warning("Sidecar repair failed for %s: %s", svc.name, exc)
+            result["errors"].append(f"{svc.name}: {exc}")
+
+    # Phase 2: sidecars whose Service row no longer exists.
+    try:
+        for container in (
+            client.containers.list(all=True, filters={"label": "envoy_sidecar=true"}) or []
+        ):
+            try:
+                labels = getattr(container, "labels", None) or {}
+                cname = str(
+                    labels.get("smsly.blue_green.canonical_name")
+                    or labels.get("com.paas.service") or ""
+                ).strip()
+                if not cname or Service.objects.filter(name=cname).exists():
+                    continue
+                try:
+                    container.stop(timeout=5)
+                except Exception:
+                    pass
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    continue
+                try:
+                    EnvoySidecar._remove_config_file(
+                        type("Svc", (), {"name": cname})()
+                    )
+                except Exception:
+                    pass
+                result["orphans_removed"].append(getattr(container, "name", cname))
+                logger.info("Removed row-less orphan sidecar %s", cname)
+            except Exception as exc:
+                logger.debug("Row-less orphan sweep skipped a container: %s", exc)
+    except Exception as exc:
+        logger.debug("Row-less orphan sweep unavailable: %s", exc)
+    return result
 
 
 def _read_workload_cert_expiry(client, service):
