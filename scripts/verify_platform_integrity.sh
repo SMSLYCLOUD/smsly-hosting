@@ -308,26 +308,35 @@ ensure_openappsec_shadow_parity() {
     docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "smsly-appsec-envoy" || return 0
     local shadow_port
     shadow_port=$(grep -E '^OPENAPPSEC_SHADOW_HTTP_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)
-    [ -z "$shadow_port" ] && shadow_port="8081"
+    [ -z "$shadow_port" ] && shadow_port="18081"
     local domain
     domain=$(grep -E '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)
     [ -z "$domain" ] && domain="localhost"
-    local direct_body
-    direct_body=$(timeout 15 curl -sf -H "Host: $domain" "http://127.0.0.1:80/health" 2>/dev/null || true)
-    local shadow_body
-    shadow_body=$(timeout 15 curl -sf -H "Host: $domain" "http://127.0.0.1:$shadow_port/health" 2>/dev/null || true)
-    if [ -z "$direct_body" ]; then
-        log "openappsec shadow check skipped (direct Caddy :80/health unreachable)"
+    # Deterministic probes only (no upstream timing involved):
+    #  (a) unknown Host -> Caddy's fast 400, no proxying;
+    #  (b) real domain over plain HTTP -> Caddy's 308 to https (we compare
+    #      status + Location, never follow it — following leaves the box
+    #      through Cloudflare and hangs the check).
+    local direct_a
+    direct_a=$(timeout 15 curl -s -o /dev/null -w '%{http_code}' -H "Host: shadow-probe.invalid" "http://127.0.0.1:80/" 2>/dev/null || true)
+    local shadow_a
+    shadow_a=$(timeout 15 curl -s -o /dev/null -w '%{http_code}' -H "Host: shadow-probe.invalid" "http://127.0.0.1:$shadow_port/" 2>/dev/null || true)
+    local direct_b
+    direct_b=$(timeout 15 curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" "http://127.0.0.1:80/health" 2>/dev/null || true)
+    local shadow_b
+    shadow_b=$(timeout 15 curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" "http://127.0.0.1:$shadow_port/health" 2>/dev/null || true)
+    if [ -z "$direct_a" ]; then
+        log "openappsec shadow check skipped (direct Caddy :80 unreachable)"
         return 0
     fi
-    if [ -z "$shadow_body" ]; then
+    if [ -z "$shadow_a" ]; then
         log "ALERT: openappsec shadow envoy not serving on 127.0.0.1:$shadow_port — attachment may be down; edge cutover BLOCKED until fixed"
         return 0
     fi
-    if [ "$direct_body" = "$shadow_body" ]; then
-        log "openappsec shadow parity OK (filter transparent)"
+    if [ "$direct_a" = "$shadow_a" ] && [ "$direct_b" = "$shadow_b" ]; then
+        log "openappsec shadow parity OK (filter transparent: 400=$direct_a redirect='$direct_b')"
     else
-        log "ALERT: openappsec shadow DIVERGES from direct Caddy — filter is mangling traffic; edge cutover BLOCKED until fixed"
+        log "ALERT: openappsec shadow DIVERGES from direct Caddy (direct 400=$direct_a redirect='$direct_b' vs shadow 400=$shadow_a redirect='$shadow_b') — edge cutover BLOCKED until fixed"
     fi
 }
 

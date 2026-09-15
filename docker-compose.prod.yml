@@ -1597,7 +1597,7 @@ services:
   # Containers only start when OPENAPPSEC_ENABLED=1 (lib/harden_openappsec.sh);
   # a plain `up -d` never touches them. NEVER --remove-orphans here.
   appsec-agent:
-    image: ghcr.io/openappsec/agent:${OPENAPPSEC_VERSION:-latest}
+    image: ghcr.io/openappsec/agent:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-agent
     restart: unless-stopped
     # Upstream model: attachment <-> agent share SysV SHM (their compose
@@ -1641,7 +1641,8 @@ services:
     command: -c /envoy.yaml
     ports:
       # Shadow only — loopback, never public. Cutover flips these to 80/443.
-      - "${OPENAPPSEC_SHADOW_BIND:-127.0.0.1}:${OPENAPPSEC_SHADOW_HTTP_PORT:-8081}:8081"
+      # NOTE: 8081 is taken by Traefik's loopback binding — shadow lives on 18081.
+      - "${OPENAPPSEC_SHADOW_BIND:-127.0.0.1}:${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}:8081"
     depends_on:
       - appsec-agent
     networks:
@@ -1654,7 +1655,7 @@ services:
           memory: ${OPENAPPSEC_ENVOY_MEMORY_LIMIT:-1G}
           cpus: "2.0"
   appsec-shared-storage:
-    image: ghcr.io/openappsec/smartsync-shared-files:${OPENAPPSEC_VERSION:-latest}
+    image: ghcr.io/openappsec/smartsync-shared-files:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-shared-storage
     restart: unless-stopped
     ipc: host
@@ -1670,7 +1671,7 @@ services:
         limits:
           memory: ${OPENAPPSEC_STORAGE_MEMORY_LIMIT:-512M}
   appsec-smartsync:
-    image: ghcr.io/openappsec/smartsync:${OPENAPPSEC_VERSION:-latest}
+    image: ghcr.io/openappsec/smartsync:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-smartsync
     restart: unless-stopped
     environment:
@@ -1686,7 +1687,7 @@ services:
         limits:
           memory: ${OPENAPPSEC_SMARTSYNC_MEMORY_LIMIT:-1G}
   appsec-tuning-svc:
-    image: ghcr.io/openappsec/smartsync-tuning:${OPENAPPSEC_VERSION:-latest}
+    image: ghcr.io/openappsec/smartsync-tuning:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-tuning-svc
     restart: unless-stopped
     environment:

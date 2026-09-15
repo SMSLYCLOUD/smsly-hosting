@@ -53,7 +53,7 @@ _harden_openappsec_bootstrap() {
         return 1
     fi
     # Blocking start — wait for the shadow port to answer.
-    local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-8081}"
+    local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}"
     local i=""
     for i in $(seq 1 30); do
         if timeout 5 bash -c "echo > /dev/tcp/127.0.0.1/$shadow_port" 2>/dev/null; then
@@ -85,7 +85,7 @@ _harden_openappsec_verify() {
     if [ "$_fail" = "0" ]; then
         # Attachment signal: the agent logs attachment registration; the
         # envoy must serve the shadow path identically to direct Caddy.
-        local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-8081}"
+        local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}"
         if docker logs --since 30m smsly-appsec-agent 2>/dev/null | grep -qiE "attach"; then
             _harden_log ok "open-appsec agent+envoy up (attachment seen in agent log)"
         else
