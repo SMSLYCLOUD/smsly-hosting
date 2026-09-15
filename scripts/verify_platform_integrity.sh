@@ -258,6 +258,46 @@ ensure_cf_bouncer_running() {
     fi
 }
 
+# ── 10. SPIRE socket volumes must not be shadowed by bare decoys ────
+# 2026-09-15 incident: every ecosystem sidecar mounted the auto-created
+# EMPTY bare volume spire-ecosystem-agent-socket instead of the real
+# smsly-spire_spire-ecosystem-agent-socket — Envoy SDS never reached
+# agent.sock, no SVID was ever issued, all mTLS-gated deploys failed.
+# The resolver fix stops new mounts; this guard heals already-poisoned
+# hosts by removing the decoy once nothing references it (AGENTS.md #24).
+ensure_spire_volumes_not_shadowed() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local all_vols
+    all_vols=$(docker volume ls --format '{{.Name}}' 2>/dev/null || true)
+    [ -z "$all_vols" ] && { log "no docker volumes — skipping spire shadow check"; return 0; }
+    local v
+    for v in $all_vols; do
+        case "$v" in
+            *spire-*socket|*spire-*svids) ;;
+            *) continue ;;
+        esac
+        case "$v" in
+            smsly-*) continue ;;
+        esac
+        local namespaced
+        namespaced=$(echo "$all_vols" | grep -E "^smsly-[^_]+_${v}$" || true)
+        [ -z "$namespaced" ] && continue
+        log "ALERT: bare spire volume $v is shadowed by namespaced $namespaced (empty-decoy trap)"
+        local users
+        users=$(docker ps -aq --filter "volume=$v" 2>/dev/null || true)
+        if [ -z "$users" ]; then
+            if docker volume rm "$v" >/dev/null 2>&1; then
+                log "removed unused shadow decoy volume $v"
+            else
+                log "ALERT: could not remove shadow decoy volume $v"
+            fi
+        else
+            log "ALERT: shadow decoy $v still mounted by containers — redeploy affected services to pick up $namespaced, then re-run"
+        fi
+    done
+    log "spire volume shadow check complete"
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -266,6 +306,7 @@ ensure_migrations
 ensure_traefik_middlewares
 ensure_traefik_service_conflicts
 ensure_caddy_logs_writable
+ensure_spire_volumes_not_shadowed
 ensure_cf_bouncer_running
 ensure_fail2ban_running
 log "integrity check complete"

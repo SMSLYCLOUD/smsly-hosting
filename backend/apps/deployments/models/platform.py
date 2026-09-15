@@ -447,7 +447,7 @@ class PlatformConfig(models.Model):
 
     # ── Auto-Scaling ──────────────────────────────────────────────────
     scale_max_replicas = models.PositiveIntegerField(
-        default=5,
+        default=12,
         help_text="Maximum number of replica containers allowed per service")
     scale_cpu_high = models.PositiveIntegerField(
         default=80,

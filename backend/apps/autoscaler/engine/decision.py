@@ -33,7 +33,7 @@ DEFAULT_CPU_HIGH = float(os.environ.get("SCALE_CPU_HIGH", "70"))
 DEFAULT_CPU_CRITICAL = float(os.environ.get("SCALE_CPU_CRITICAL", "90"))
 DEFAULT_CPU_LOW = float(os.environ.get("SCALE_CPU_LOW", "25"))
 DEFAULT_MEM_GROWTH_MB_MIN = float(os.environ.get("SCALE_MEM_TREND_MB", "25"))
-DEFAULT_MAX_REPLICAS = int(os.environ.get("SCALE_MAX_REPLICAS", "5"))
+DEFAULT_MAX_REPLICAS = int(os.environ.get("SCALE_MAX_REPLICAS", "10"))
 DEFAULT_COOLDOWN_UP_MIN = int(os.environ.get("SCALE_COOLDOWN_MIN", "3"))
 DEFAULT_COOLDOWN_DOWN_MIN = int(os.environ.get("SCALE_COOLDOWN_DOWN_MIN", "10"))
 
@@ -41,6 +41,16 @@ DEFAULT_COOLDOWN_DOWN_MIN = int(os.environ.get("SCALE_COOLDOWN_DOWN_MIN", "10"))
 # (mirrors the previous scaling_ai behaviour) but degrades gracefully if
 # the per-service autoscale_cpu_target is set instead.
 TARGET_CPU_PER_INSTANCE = 50
+
+# ── Scale-step sizes (env-overridable) ──────────────────────────────────
+# Demanding services elongate by 2 (high urgency) or 4 (critical/OOM)
+# replicas per tick instead of trickling +1, so the platform absorbs
+# spikes within one or two ticks. Deep-idle services contract 2 at a
+# time toward min_replicas — 0 allowed, since the primary container
+# keeps serving and only the extra replicas park (scale-to-zero).
+SCALE_UP_STEP_HIGH = int(os.environ.get("SCALE_UP_STEP_HIGH", "2"))
+SCALE_UP_STEP_CRITICAL = int(os.environ.get("SCALE_UP_STEP_CRITICAL", "4"))
+SCALE_DOWN_STEP_DEEP_IDLE = int(os.environ.get("SCALE_DOWN_STEP_DEEP_IDLE", "2"))
 
 
 @dataclass
@@ -150,11 +160,11 @@ class DecisionEngine:
             r.action = 'scale_up'
             r.urgency = 'critical'
             r.reason = 'OOM/crash detected — immediate scaling.'
-            # Single replica per event: a persistent OOM re-fires on the
-            # next tick for escalation, while a transient spike heals
-            # without stranding a burst of unneeded replicas.
+            # Critical burst, not a trickle: a persistent OOM re-fires on
+            # the next tick for further escalation, while a transient
+            # spike heals via the deep-idle fast scale-down path.
             r.scale_up_by = min(
-                1,
+                SCALE_UP_STEP_CRITICAL,
                 max(1, self.max_replicas - self.running_replicas),
             )
             return r
@@ -189,16 +199,20 @@ class DecisionEngine:
                 needed = 0
             if needed <= 0 and (cpu >= cpu_target_eff or mem_trend > self.mem_growth_mb_min):
                 needed = 1  # at least one if above threshold
+            # Elongate under pressure: high urgency jumps by 2, critical
+            # by 4 — the formula still wins when it demands even more.
+            if cpu >= cpu_critical_eff:
+                r.urgency = 'critical'
+                needed = max(needed, SCALE_UP_STEP_CRITICAL)
+            elif cpu >= 80:
+                r.urgency = 'high'
+                needed = max(needed, SCALE_UP_STEP_HIGH)
+            else:
+                r.urgency = 'medium'
             headroom = self.max_replicas - self.running_replicas
             needed = min(needed, headroom)
             if needed > 0:
                 r.action = 'scale_up'
-                if cpu >= cpu_critical_eff:
-                    r.urgency = 'critical'
-                elif cpu >= 80:
-                    r.urgency = 'high'
-                else:
-                    r.urgency = 'medium'
                 r.scale_up_by = needed
                 r.reason = (
                     f'CPU at {cpu:.0f}% — {total_instances} instances '
@@ -220,9 +234,16 @@ class DecisionEngine:
             and cpu <= self.cpu_low
             and not scale_down_cooldown
         ):
+            # Contract fast when deeply idle (≤ half the low watermark):
+            # remove 2 at a time down toward min_replicas — 0 included,
+            # which parks every extra replica while the primary keeps
+            # serving (scale-to-zero). The reconciler clamps to whatever
+            # is actually removable, so this never overshoots min.
+            removable = self.running_replicas - self.min_replicas
+            step = SCALE_DOWN_STEP_DEEP_IDLE if cpu <= self.cpu_low / 2 else 1
             r.action = 'scale_down'
             r.urgency = 'low'
-            r.scale_down_by = 1
+            r.scale_down_by = min(max(step, 1), removable)
             r.reason = (
                 f'CPU at {cpu:.0f}% with {self.running_replicas} extra '
                 f'replicas — removing {r.scale_down_by}.'

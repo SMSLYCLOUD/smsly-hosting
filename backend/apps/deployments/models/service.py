@@ -36,9 +36,9 @@ def default_service_resources() -> tuple:
     except Exception:
         mem_gb = 4.0
     if cores >= 8 and mem_gb >= 16:
-        return 3.0, 6144
+        return 4.0, 8192
     if cores >= 4 and mem_gb >= 8:
-        return 2.0, 4096
+        return 4.0, 6144
     return 2.0, 2048
 
 
@@ -293,7 +293,7 @@ class Service(TimeStampedModel):
     min_replicas = models.IntegerField(  # type: ignore[var-annotated]
         default=1, validators=[MinValueValidator(0)])
     max_replicas = models.IntegerField(  # type: ignore[var-annotated]
-        default=3, validators=[MinValueValidator(1)])
+        default=8, validators=[MinValueValidator(1)])
     autoscale_cpu_target = models.IntegerField(  # type: ignore[var-annotated]
         default=80, help_text="Target CPU utilization percentage for the autoscaler")
     vpa_enabled = models.BooleanField(  # type: ignore[var-annotated]
