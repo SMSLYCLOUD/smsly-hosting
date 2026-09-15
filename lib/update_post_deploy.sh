@@ -780,6 +780,22 @@ RESTORE_EOF
         echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
     fi
 
+    # ─── Install/update platform integrity timer (hourly guards) ───────
+    # verify_platform_integrity.sh holds every fail-closed guard (spire
+    # shadows, sidecar mounts, WAF parity, CF bouncer, middlewares) but
+    # was only run during updates — schedule it hourly (2026-09-15: the
+    # integrity log had been empty since Sep 11).
+    if [ -f "$INSTALL_DIR/scripts/verify_platform_integrity.sh" ]; then
+        echo -e "${BLUE}  → Installing platform integrity check timer...${NC}"
+        chmod +x "$INSTALL_DIR/scripts/verify_platform_integrity.sh"
+        cp "$INSTALL_DIR/scripts/smsly-integrity.service" /etc/systemd/system/smsly-integrity.service  || true
+        cp "$INSTALL_DIR/scripts/smsly-integrity.timer" /etc/systemd/system/smsly-integrity.timer  || true
+        systemctl daemon-reload
+        systemctl enable smsly-integrity.timer || echo -e "${YELLOW}    ⚠ systemctl enable integrity timer failed (non-fatal)${NC}"
+        systemctl restart smsly-integrity.timer || echo -e "${YELLOW}    ⚠ systemctl restart integrity timer failed (non-fatal)${NC}"
+        echo -e "${GREEN}  ✓ smsly-integrity timer installed and started${NC}"
+    fi
+
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
 
     # ─── Security verify ──────────────────────────────────────────────────

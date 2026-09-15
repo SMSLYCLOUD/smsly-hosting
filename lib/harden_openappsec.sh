@@ -83,13 +83,14 @@ _harden_openappsec_verify() {
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-agent 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-agent — container not running"; _fail=1; }
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-envoy 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-envoy — container not running"; _fail=1; }
     if [ "$_fail" = "0" ]; then
-        # Attachment signal: the agent logs attachment registration; the
-        # envoy must serve the shadow path identically to direct Caddy.
-        local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}"
-        if docker logs --since 30m smsly-appsec-agent 2>/dev/null | grep -qiE "attach"; then
-            _harden_log ok "open-appsec agent+envoy up (attachment seen in agent log)"
+        # Attachment signal: the agent never logs the word "attachment"
+        # (it logs nano-service installs + policy loads), so grep the
+        # ENVOY side — its golang filter logs a verdict per inspected
+        # request. Envoy verdicts + shadow parity = attached and serving.
+        if docker logs --since 30m smsly-appsec-envoy 2>/dev/null | grep -qiE "verdict"; then
+            _harden_log ok "open-appsec agent+envoy up (attachment verdicts flowing)"
         else
-            _harden_log warn "open-appsec up but no attachment mention in agent log yet — check shadow parity"
+            _harden_log warn "open-appsec up but no attachment verdicts in envoy log yet — check shadow parity"
         fi
         return 0
     fi

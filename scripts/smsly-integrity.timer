@@ -1,0 +1,11 @@
+[Unit]
+Description=Run SMSLY Hosting Platform Integrity Check hourly
+
+[Timer]
+OnBootSec=5min
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

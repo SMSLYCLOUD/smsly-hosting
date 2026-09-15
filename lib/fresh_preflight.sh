@@ -55,9 +55,19 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     if [ -n "$(git status --porcelain )" ]; then
         echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
         git stash push --include-untracked -m "install-sync-$(date +%s)"  || true
+        _STASHED_SYNC=1
     fi
     if ! git fetch origin "$SMSLY_BRANCH"  || ! git reset --hard "origin/$SMSLY_BRANCH" ; then
         echo -e "${RED}  ✗ Git update failed for $SMSLY_BRANCH. SSL verification is always enforced — check network or CA certificates.${NC}"
+    elif [ "${_STASHED_SYNC:-0}" = "1" ]; then
+        # Restore what the stash swept (stashes were never popped, so
+        # every reinstall permanently archived local state). On conflict
+        # keep the stash and continue — fresh files generate below.
+        if git stash pop 2>/dev/null; then
+            echo -e "${GREEN}  ✓ Restored pre-sync local state from stash${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Stash pop conflicted — stash kept (git stash list), continuing with fresh code${NC}"
+        fi
     fi
 else
     echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"

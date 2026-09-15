@@ -1,0 +1,10 @@
+[Unit]
+Description=SMSLY Hosting Platform Integrity Check
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/smsly-hosting/scripts/verify_platform_integrity.sh
+StandardOutput=append:/var/log/smsly-integrity.log
+StandardError=append:/var/log/smsly-integrity.log

@@ -122,6 +122,25 @@ ensure_spire_running() {
     fi
 }
 
+# ── 3b. Falco must be CAPTURING, not just running ───────────────────
+# 2026-09-15: 400+ restarts with status healthy — scap_init died ~15s
+# after every start (probe predates kernel 7.x) while the healthcheck
+# passed inside each crash window. Alert on the signature; never
+# restart here (harden owns the lifecycle, this is the tripwire).
+ensure_falco_capturing() {
+    command -v docker >/dev/null 2>&1 || return 0
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "smsly-falco" || return 0
+    local restarts
+    restarts=$(docker inspect -f '{{.RestartCount}}' smsly-falco 2>/dev/null || echo 0)
+    if [ "${restarts:-0}" -ge 10 ] 2>/dev/null; then
+        if docker logs --since 10m smsly-falco 2>/dev/null | grep -q "Initialization issues during scap_init"; then
+            log "ALERT: falco crash-looping on scap_init (${restarts} restarts, 0 events captured) — probe incompatible with kernel $(uname -r), bump FALCO_VERSION"
+            return 0
+        fi
+    fi
+    log "falco capturing (restarts=${restarts:-?})"
+}
+
 # ── 4. Edge Shield lockdown must stay enforced ────────────────────────
 # The 80/443 Cloudflare-only firewall is the anti-bypass layer of the
 # BGP-hijack defense (deploy_edge_shield). If the rules vanish (reboot
@@ -389,6 +408,7 @@ ensure_openappsec_shadow_parity() {
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
+ensure_falco_capturing
 ensure_edge_lockdown
 ensure_migrations
 ensure_traefik_middlewares

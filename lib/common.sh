@@ -26,8 +26,21 @@ ensure_local_ignores() {
             echo "caddy-config/" >> "$gitignore_path"
             needs_update=true
         fi
+        # Runtime-generated WAF policy dirs. The agent first-run writes
+        # local_policy.yaml here and the updater stashes --include-untracked:
+        # without these ignores every update sweeps the live policy into a
+        # dead stash and the agent falls back to baked-in defaults
+        # (2026-09-15: conf/ + localconfig/ vanished mid-update).
+        if ! grep -q "^infrastructure/openappsec/conf/" "$gitignore_path"; then
+            echo "infrastructure/openappsec/conf/" >> "$gitignore_path"
+            needs_update=true
+        fi
+        if ! grep -q "^infrastructure/openappsec/localconfig/" "$gitignore_path"; then
+            echo "infrastructure/openappsec/localconfig/" >> "$gitignore_path"
+            needs_update=true
+        fi
         if [ "$needs_update" = "true" ]; then
-            echo -e "${BLUE}  → Added builds/ and caddy-config/ to local .gitignore to prevent Git stash hangs${NC}"
+            echo -e "${BLUE}  → Added runtime dirs to local .gitignore to prevent Git stash data loss${NC}"
         fi
     fi
 }

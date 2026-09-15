@@ -260,6 +260,19 @@ if [ -f "$INSTALL_DIR/scripts/monitor_infra.sh" ]; then
     echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
 fi
 
+# Install platform integrity check (hourly guards: spire shadows,
+# sidecar mounts, WAF parity, CF bouncer, middlewares, falco capture).
+if [ -f "$INSTALL_DIR/scripts/verify_platform_integrity.sh" ]; then
+    echo -e "${BLUE}  → Installing platform integrity check timer...${NC}"
+    chmod +x "$INSTALL_DIR/scripts/verify_platform_integrity.sh"
+    cp "$INSTALL_DIR/scripts/smsly-integrity.service" /etc/systemd/system/smsly-integrity.service  || true
+    cp "$INSTALL_DIR/scripts/smsly-integrity.timer" /etc/systemd/system/smsly-integrity.timer  || true
+    systemctl daemon-reload
+    systemctl enable smsly-integrity.timer || echo -e "${YELLOW}    ⚠ smsly-integrity timer enable failed${NC}"
+    systemctl restart smsly-integrity.timer || echo -e "${YELLOW}    ⚠ smsly-integrity timer restart failed${NC}"
+    echo -e "${GREEN}  ✓ smsly-integrity timer installed and started${NC}"
+fi
+
 # Install platform update watcher and caddy watcher services
 if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
     echo -e "${BLUE}  → Installing platform update and Caddy config watcher services...${NC}"

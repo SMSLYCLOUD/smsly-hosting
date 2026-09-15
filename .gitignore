@@ -63,6 +63,11 @@ Thumbs.db
 # Workloads and runtime configs
 builds/
 caddy-config/
+# open-appsec agent first-run writes live policy here; the updater
+# stashes --include-untracked, so these must never be stash candidates
+# (2026-09-15: conf/ + localconfig/ vanished mid-update).
+infrastructure/openappsec/conf/
+infrastructure/openappsec/localconfig/
 .update-backups/
 .smsly_install_state*
 update-custom-domain-celery.yml

@@ -20,7 +20,7 @@ const defenseLayers = [
     desc: 'Falco monitors syscall activity across all containers using eBPF. It detects unauthorized process execution, shell spawning, sensitive file access, reverse shells, and privilege escalation attempts in real time.',
     details: [
       'Driver: modern_eBPF (no kernel headers needed, kernel >= 5.8)',
-      'Image: falcosecurity/falco:0.39.2',
+      'Image: falcosecurity/falco:0.44.1 (pinned via FALCO_VERSION)',
       'JSON output for structured alerting',
       'Capabilities: SYS_PTRACE, SYS_ADMIN, SYS_RESOURCE (minimum for eBPF)',
     ],

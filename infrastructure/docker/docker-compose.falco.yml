@@ -11,10 +11,13 @@
 #   - Requires kernel >= 5.8 with BTF (/sys/kernel/btf/vmlinux)
 #   - No driver installation needed — probe is bundled in the Falco binary
 #   - Requires tracefs mount for BPF program loading
+# Version is pinned via FALCO_VERSION (never float): the bundled probe
+# must match the host kernel generation — 0.39.2 predates kernel 7.x
+# and dies in scap_init in a restart loop (2026-09-15, 400+ restarts).
 
 services:
   falco:
-    image: falcosecurity/falco:0.39.2
+    image: falcosecurity/falco:${FALCO_VERSION:-0.44.1}
     container_name: smsly-falco
     restart: unless-stopped
     # Modern eBPF least-privileged mode (per falco.org/docs/setup/container/)
@@ -43,13 +46,18 @@ services:
     networks:
       - smsly-net
     pid: host
-    # Healthcheck: confirm Falco is producing events
+    # Healthcheck must NOT pass while Falco crash-loops: scap_init
+    # failure kills PID 1 ~15s after start, so a short start_period
+    # reports "healthy" inside every crash window (2026-09-15: 400+
+    # restarts, Events detected: 0, status healthy). Container restarts
+    # reset health state, so a 150s start period means only a Falco
+    # that actually survives capture init ever leaves "starting".
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 150s
 
 networks:
   smsly-net:

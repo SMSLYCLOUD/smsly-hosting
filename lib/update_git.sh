@@ -40,6 +40,20 @@ if ! is_checkpoint_done "update_git_synced"; then
             GIT_UPDATE_OK=false
         else
             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH"  || true
+            # Restore what the pre-pull stash swept. Stashes were NEVER
+            # popped, so every update permanently archived local state —
+            # including untracked runtime dirs (2026-09-15: openappsec
+            # conf/ + localconfig/ vanished into stash@{n}). Pop only the
+            # stash we just created (marker-guarded); on conflict keep the
+            # stash and warn loudly instead of failing the update.
+            if [ -f "$INSTALL_DIR/.git-stash-marker" ]; then
+                if git stash pop 2>/dev/null; then
+                    echo -e "${GREEN}  ✓ Restored pre-update local state from stash${NC}"
+                else
+                    echo -e "${YELLOW}  ⚠ Stash pop conflicted — stash kept (git stash list), update continues on fresh code${NC}"
+                fi
+                rm -f "$INSTALL_DIR/.git-stash-marker"  || true
+            fi
         fi
     fi
 

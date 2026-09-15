@@ -38,6 +38,18 @@ _harden_falco_verify() {
         _harden_log warn "falco — container not running"
         return 1
     fi
+    # Running is not capturing: a scap_init failure kills PID 1 ~15s
+    # after start and the loop reports healthy inside every crash
+    # window (2026-09-15: 400+ restarts, 0 events). Fail loudly when
+    # the probe never survives init.
+    local restarts=""
+    restarts=$(docker inspect -f '{{.RestartCount}}' smsly-falco 2>/dev/null || echo 0)
+    if [ "${restarts:-0}" -ge 10 ] 2>/dev/null; then
+        if docker logs --since 10m smsly-falco 2>/dev/null | grep -q "Initialization issues during scap_init"; then
+            _harden_log warn "falco — crash-looping on scap_init (${restarts} restarts, probe incompatible with kernel?)"
+            return 1
+        fi
+    fi
     _harden_log ok "falco deployed"
     return 0
 }

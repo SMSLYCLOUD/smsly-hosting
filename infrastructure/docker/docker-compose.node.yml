@@ -420,9 +420,11 @@ services:
 
   # ============================================================
   # OPTIONAL: Falco (Runtime Security — NODE_FALCO=1)
+  # Version pinned via FALCO_VERSION (never float): the bundled
+  # modern_ebpf probe must match the host kernel generation.
   # ============================================================
   falco:
-    image: falcosecurity/falco:0.39.2
+    image: falcosecurity/falco:${FALCO_VERSION:-0.44.1}
     restart: unless-stopped
     cap_drop:
       - ALL
@@ -444,12 +446,16 @@ services:
     networks:
       - smsly-net
     pid: host
+    # start_period 150s: scap_init failure kills PID 1 ~15s after start,
+    # so a short window reports "healthy" inside every crash window.
+    # Restarts reset health state — only surviving capture init leaves
+    # "starting" (2026-09-15 incident).
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 150s
     deploy:
       resources:
         limits:

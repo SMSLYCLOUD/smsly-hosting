@@ -1515,8 +1515,21 @@ ensure_local_ignores() {
             echo "caddy-config/" >> "$gitignore_path"
             needs_update=true
         fi
+        # Runtime-generated WAF policy dirs. The agent first-run writes
+        # local_policy.yaml here and the updater stashes --include-untracked:
+        # without these ignores every update sweeps the live policy into a
+        # dead stash and the agent falls back to baked-in defaults
+        # (2026-09-15: conf/ + localconfig/ vanished mid-update).
+        if ! grep -q "^infrastructure/openappsec/conf/" "$gitignore_path"; then
+            echo "infrastructure/openappsec/conf/" >> "$gitignore_path"
+            needs_update=true
+        fi
+        if ! grep -q "^infrastructure/openappsec/localconfig/" "$gitignore_path"; then
+            echo "infrastructure/openappsec/localconfig/" >> "$gitignore_path"
+            needs_update=true
+        fi
         if [ "$needs_update" = "true" ]; then
-            echo -e "${BLUE}  → Added builds/ and caddy-config/ to local .gitignore to prevent Git stash hangs${NC}"
+            echo -e "${BLUE}  → Added runtime dirs to local .gitignore to prevent Git stash data loss${NC}"
         fi
     fi
 }
@@ -3466,6 +3479,18 @@ _harden_falco_verify() {
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         _harden_log warn "falco — container not running"
         return 1
+    fi
+    # Running is not capturing: a scap_init failure kills PID 1 ~15s
+    # after start and the loop reports healthy inside every crash
+    # window (2026-09-15: 400+ restarts, 0 events). Fail loudly when
+    # the probe never survives init.
+    local falco_restarts=""
+    falco_restarts=$(docker inspect -f '{{.RestartCount}}' smsly-falco 2>/dev/null || echo 0)
+    if [ "${falco_restarts:-0}" -ge 10 ] 2>/dev/null; then
+        if docker logs --since 10m smsly-falco 2>/dev/null | grep -q "Initialization issues during scap_init"; then
+            _harden_log warn "falco — crash-looping on scap_init (${falco_restarts} restarts, probe incompatible with kernel?)"
+            return 1
+        fi
     fi
     _harden_log ok "falco deployed"
     return 0
@@ -8284,6 +8309,18 @@ _harden_falco_verify() {
         _harden_log warn "falco — container not running"
         return 1
     fi
+    # Running is not capturing: a scap_init failure kills PID 1 ~15s
+    # after start and the loop reports healthy inside every crash
+    # window (2026-09-15: 400+ restarts, 0 events). Fail loudly when
+    # the probe never survives init.
+    local falco_restarts=""
+    falco_restarts=$(docker inspect -f '{{.RestartCount}}' smsly-falco 2>/dev/null || echo 0)
+    if [ "${falco_restarts:-0}" -ge 10 ] 2>/dev/null; then
+        if docker logs --since 10m smsly-falco 2>/dev/null | grep -q "Initialization issues during scap_init"; then
+            _harden_log warn "falco — crash-looping on scap_init (${falco_restarts} restarts, probe incompatible with kernel?)"
+            return 1
+        fi
+    fi
     _harden_log ok "falco deployed"
     return 0
 }
@@ -9384,6 +9421,18 @@ _harden_falco_verify() {
         _harden_log warn "falco — container not running"
         return 1
     fi
+    # Running is not capturing: a scap_init failure kills PID 1 ~15s
+    # after start and the loop reports healthy inside every crash
+    # window (2026-09-15: 400+ restarts, 0 events). Fail loudly when
+    # the probe never survives init.
+    local falco_restarts=""
+    falco_restarts=$(docker inspect -f '{{.RestartCount}}' smsly-falco 2>/dev/null || echo 0)
+    if [ "${falco_restarts:-0}" -ge 10 ] 2>/dev/null; then
+        if docker logs --since 10m smsly-falco 2>/dev/null | grep -q "Initialization issues during scap_init"; then
+            _harden_log warn "falco — crash-looping on scap_init (${falco_restarts} restarts, probe incompatible with kernel?)"
+            return 1
+        fi
+    fi
     _harden_log ok "falco deployed"
     return 0
 }
@@ -9956,6 +10005,20 @@ if ! is_checkpoint_done "update_git_synced"; then
             GIT_UPDATE_OK=false
         else
             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH"  || true
+            # Restore what the pre-pull stash swept. Stashes were NEVER
+            # popped, so every update permanently archived local state —
+            # including untracked runtime dirs (2026-09-15: openappsec
+            # conf/ + localconfig/ vanished into stash@{n}). Pop only the
+            # stash we just created (marker-guarded); on conflict keep the
+            # stash and warn loudly instead of failing the update.
+            if [ -f "$INSTALL_DIR/.git-stash-marker" ]; then
+                if git stash pop 2>/dev/null; then
+                    echo -e "${GREEN}  ✓ Restored pre-update local state from stash${NC}"
+                else
+                    echo -e "${YELLOW}  ⚠ Stash pop conflicted — stash kept (git stash list), update continues on fresh code${NC}"
+                fi
+                rm -f "$INSTALL_DIR/.git-stash-marker"  || true
+            fi
         fi
     fi
 
@@ -11541,6 +11604,22 @@ RESTORE_EOF
         echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
     fi
 
+    # ─── Install/update platform integrity timer (hourly guards) ───────
+    # verify_platform_integrity.sh holds every fail-closed guard (spire
+    # shadows, sidecar mounts, WAF parity, CF bouncer, middlewares) but
+    # was only run during updates — schedule it hourly (2026-09-15: the
+    # integrity log had been empty since Sep 11).
+    if [ -f "$INSTALL_DIR/scripts/verify_platform_integrity.sh" ]; then
+        echo -e "${BLUE}  → Installing platform integrity check timer...${NC}"
+        chmod +x "$INSTALL_DIR/scripts/verify_platform_integrity.sh"
+        cp "$INSTALL_DIR/scripts/smsly-integrity.service" /etc/systemd/system/smsly-integrity.service  || true
+        cp "$INSTALL_DIR/scripts/smsly-integrity.timer" /etc/systemd/system/smsly-integrity.timer  || true
+        systemctl daemon-reload
+        systemctl enable smsly-integrity.timer || echo -e "${YELLOW}    ⚠ systemctl enable integrity timer failed (non-fatal)${NC}"
+        systemctl restart smsly-integrity.timer || echo -e "${YELLOW}    ⚠ systemctl restart integrity timer failed (non-fatal)${NC}"
+        echo -e "${GREEN}  ✓ smsly-integrity timer installed and started${NC}"
+    fi
+
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
 
     # ─── Security verify ──────────────────────────────────────────────────
@@ -11870,9 +11949,19 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     if [ -n "$(git status --porcelain )" ]; then
         echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
         git stash push --include-untracked -m "install-sync-$(date +%s)"  || true
+        _STASHED_SYNC=1
     fi
     if ! git fetch origin "$SMSLY_BRANCH"  || ! git reset --hard "origin/$SMSLY_BRANCH" ; then
         echo -e "${RED}  ✗ Git update failed for $SMSLY_BRANCH. SSL verification is always enforced — check network or CA certificates.${NC}"
+    elif [ "${_STASHED_SYNC:-0}" = "1" ]; then
+        # Restore what the stash swept (stashes were never popped, so
+        # every reinstall permanently archived local state). On conflict
+        # keep the stash and continue — fresh files generate below.
+        if git stash pop 2>/dev/null; then
+            echo -e "${GREEN}  ✓ Restored pre-sync local state from stash${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Stash pop conflicted — stash kept (git stash list), continuing with fresh code${NC}"
+        fi
     fi
 else
     echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"
@@ -12518,6 +12607,18 @@ _harden_falco_verify() {
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         _harden_log warn "falco — container not running"
         return 1
+    fi
+    # Running is not capturing: a scap_init failure kills PID 1 ~15s
+    # after start and the loop reports healthy inside every crash
+    # window (2026-09-15: 400+ restarts, 0 events). Fail loudly when
+    # the probe never survives init.
+    local falco_restarts=""
+    falco_restarts=$(docker inspect -f '{{.RestartCount}}' smsly-falco 2>/dev/null || echo 0)
+    if [ "${falco_restarts:-0}" -ge 10 ] 2>/dev/null; then
+        if docker logs --since 10m smsly-falco 2>/dev/null | grep -q "Initialization issues during scap_init"; then
+            _harden_log warn "falco — crash-looping on scap_init (${falco_restarts} restarts, probe incompatible with kernel?)"
+            return 1
+        fi
     fi
     _harden_log ok "falco deployed"
     return 0
@@ -14832,6 +14933,19 @@ if [ -f "$INSTALL_DIR/scripts/monitor_infra.sh" ]; then
     systemctl enable smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ smsly-infra-monitor timer enable failed${NC}"
     systemctl restart smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ smsly-infra-monitor timer restart failed${NC}"
     echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
+fi
+
+# Install platform integrity check (hourly guards: spire shadows,
+# sidecar mounts, WAF parity, CF bouncer, middlewares, falco capture).
+if [ -f "$INSTALL_DIR/scripts/verify_platform_integrity.sh" ]; then
+    echo -e "${BLUE}  → Installing platform integrity check timer...${NC}"
+    chmod +x "$INSTALL_DIR/scripts/verify_platform_integrity.sh"
+    cp "$INSTALL_DIR/scripts/smsly-integrity.service" /etc/systemd/system/smsly-integrity.service  || true
+    cp "$INSTALL_DIR/scripts/smsly-integrity.timer" /etc/systemd/system/smsly-integrity.timer  || true
+    systemctl daemon-reload
+    systemctl enable smsly-integrity.timer || echo -e "${YELLOW}    ⚠ smsly-integrity timer enable failed${NC}"
+    systemctl restart smsly-integrity.timer || echo -e "${YELLOW}    ⚠ smsly-integrity timer restart failed${NC}"
+    echo -e "${GREEN}  ✓ smsly-integrity timer installed and started${NC}"
 fi
 
 # Install platform update watcher and caddy watcher services
