@@ -5,10 +5,22 @@
 # to 80/443 with SNI chains — separate change with its own rollback.
 # Gated by OPENAPPSEC_ENABLED=1 in .env (default 0 = fully inert).
 
+# Resolve the kill-switch from the shell env first, then straight from
+# .env (callers don't always export it — e.g. direct lib invocation).
+# Returns 0 (true) when the WAF stack should be up.
+_harden_openappsec_is_enabled() {
+    [ "${OPENAPPSEC_ENABLED:-0}" = "1" ] && return 0
+    if [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        local _file_flag=""
+        _file_flag=$(grep -E '^OPENAPPSEC_ENABLED=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
+        [ "$_file_flag" = "1" ] && return 0
+    fi
+    return 1
+}
+
 _harden_openappsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
-    local enabled="${OPENAPPSEC_ENABLED:-0}"
-    if [ "$enabled" != "1" ]; then
+    if ! _harden_openappsec_is_enabled; then
         echo -e "${BLUE}  → [harden] open-appsec disabled (OPENAPPSEC_ENABLED!=1) — skipping${NC}"
         return 0
     fi
@@ -57,8 +69,7 @@ _harden_openappsec_bootstrap() {
 
 _harden_openappsec_verify() {
     command -v docker >/dev/null 2>&1 || return 0
-    local enabled="${OPENAPPSEC_ENABLED:-0}"
-    if [ "$enabled" != "1" ]; then
+    if ! _harden_openappsec_is_enabled; then
         # Inert by design — not a failure. (If containers exist while
         # disabled, flag it: a half-on WAF is worse than off.)
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-appsec-"; then
