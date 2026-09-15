@@ -128,6 +128,11 @@ class TestFirstStrikeSync(TestCase):
                     return _result(stdout="CVE-2017-9841.yaml\n")
                 if sub[0] == "cat":
                     return _result(stdout=HUB_YAML)
+                if sub[0] == "test":
+                    # Post-removal verify: the file is gone.
+                    gone = _result(stdout="")
+                    gone.returncode = 1
+                    return gone
                 if sub[:2] == ["cscli", "scenarios"]:
                     return _result(stdout="ok")
                 if sub == ["crowdsec", "-t", "-c", "/etc/crowdsec/config.yaml"]:
@@ -145,6 +150,8 @@ class TestFirstStrikeSync(TestCase):
         self.assertTrue(res["reloaded"])
         flat = [" ".join(c) for c in calls]
         self.assertTrue(any("scenarios remove" in c for c in flat))
+        # Collection-member originals require --force (rc 0 alone lies).
+        self.assertTrue(any("--force" in c for c in flat))
         self.assertTrue(any(c.startswith("kill") for c in flat))
 
     def test_enabled_converged_is_noop(self):
@@ -182,6 +189,39 @@ class TestFirstStrikeSync(TestCase):
         self.assertEqual(res["status"], "ok")
         self.assertFalse(res["changed"])
         self.assertFalse(res["reloaded"])
+
+    def test_refused_removal_not_reported_as_applied(self):
+        """rc 0 from `scenarios remove` is not success: collection members
+        are refused with a warning (2026-09-14 live incident). Only a
+        post-state check counts."""
+
+        def fake(*cmd, **kwargs):
+            cmd = list(cmd)
+            if cmd[:2] == ["exec", "smsly-crowdsec"]:
+                sub = cmd[2:]
+                if sub[:2] == ["cscli", "scenarios"] and sub[2] == "list":
+                    return _result(stdout=self._hub_list(installed=True))
+                if sub[0] == "ls":
+                    return _result(stdout="CVE-2017-9841.yaml\n")
+                if sub[0] == "cat":
+                    return _result(stdout=HUB_YAML)
+                if sub[0] == "test":
+                    # File persists: removal refused despite rc 0.
+                    return _result(stdout="")
+                if sub[:2] == ["cscli", "scenarios"]:
+                    return _result(stdout="Nothing to install or remove.")
+                if sub == ["crowdsec", "-t", "-c", "/etc/crowdsec/config.yaml"]:
+                    return _result(stdout="test done")
+                return _result(stdout="")
+            if cmd[0] == "cp":
+                return _result(stdout="")
+            return _result(stdout="")
+
+        res = _run_sync(fake, enabled=True)
+        self.assertEqual(res["status"], "ok")
+        self.assertFalse(
+            [a for a in res["applied"] if a.startswith("removed:")]
+        )
 
     def test_disabled_restores_originals(self):
         calls = []

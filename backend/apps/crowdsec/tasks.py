@@ -215,6 +215,15 @@ def _list_hub_scenarios() -> dict[str, str]:
     return out
 
 
+def _scenario_file_present(filename: str) -> bool:
+    """True when a file still exists in the CrowdSec scenarios dir."""
+    check = _docker(
+        "exec", "smsly-crowdsec", "test", "-e",
+        f"{_FIRST_STRIKE_SCENARIOS_DIR}/{filename}", timeout=30,
+    )
+    return check.returncode == 0
+
+
 def _list_override_files() -> set[str]:
     result = _docker(
         "exec", "smsly-crowdsec", "ls", _FIRST_STRIKE_SCENARIOS_DIR, timeout=30
@@ -384,17 +393,25 @@ def crowdsec_first_strike_sync():
                         continue
                 status = installed.get(hub_name, "enabled")
                 if status != "disabled" and hub_name in installed:
+                    # NOTE: cscli exits 0 even when it REFUSES (scenario is
+                    # a member of installed collections — it prints
+                    # "Nothing to install or remove" as a warning). Always
+                    # verify post-state, or the sync believes removals it
+                    # never performed (2026-09-14 live incident).
                     remove = _docker(
                         "exec", "smsly-crowdsec", "cscli", "scenarios",
-                        "remove", hub_name, timeout=60,
+                        "remove", hub_name, "--force", timeout=60,
                     )
-                    if remove.returncode == 0:
+                    still_there = _scenario_file_present(
+                        hub_name.split("/", 1)[1] + ".yaml"
+                    )
+                    if remove.returncode == 0 and not still_there:
                         changed = True
                         applied.append(f"removed:{hub_name}")
                     else:
                         logger.warning(
                             "CrowdSec first-strike: could not remove %s: %s",
-                            hub_name, (remove.stderr or "")[:200],
+                            hub_name, (remove.stderr or remove.stdout or "")[:200],
                         )
             else:
                 if filename in overrides:
