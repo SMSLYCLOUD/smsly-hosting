@@ -1017,6 +1017,8 @@ def mtls_repair(request, service_id):
     # ── 3. Missing sidecars ─────────────────────────────────────────────
     sidecars_injected = []
     sidecar_errors = []
+    sidecars_remounted = []
+    sidecar_remount_errors = []
     for svc in scope:
         try:
             config = MtlsConfig.objects.filter(
@@ -1028,6 +1030,29 @@ def mtls_repair(request, service_id):
 
             sidecar = EnvoySidecar.get_sidecar_status(svc)
             if sidecar.get("status") == "running":
+                # Running but possibly SVID-less: pre-2026-09-15 sidecars
+                # mount the empty bare decoy (or nothing) — SDS can never
+                # reach agent.sock. Recreate with current mounts; the app
+                # container is untouched (seconds of sidecar absence only).
+                mount_check = EnvoySidecar.check_socket_mount_healthy(svc)
+                if mount_check.get("healthy"):
+                    continue
+                if "unavailable" in str(mount_check.get("reason", "")):
+                    continue  # daemon hiccup — don't churn on unknowns
+                try:
+                    EnvoySidecar.remove_sidecar(svc)
+                    result = EnvoySidecar.inject_sidecar(svc)
+                    sidecars_remounted.append(svc.name)
+                    logger.info(
+                        "mTLS repair: remounted sidecar for %s (%s): %s",
+                        svc.name, mount_check.get("reason"),
+                        result.get("status"),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "mTLS repair remount failed for %s: %s", svc.name, exc)
+                    sidecar_remount_errors.append(
+                        {"service": svc.name, "error": str(exc)})
                 continue
             try:
                 from apps.cloud.docker_client import get_docker_client
@@ -1090,6 +1115,8 @@ def mtls_repair(request, service_id):
         "mtls_normalized": mtls_normalized,
         "sidecars_injected": sidecars_injected,
         "sidecar_errors": sidecar_errors,
+        "sidecars_remounted": sidecars_remounted,
+        "sidecar_remount_errors": sidecar_remount_errors,
         "orphan_containers_removed": orphan_containers_removed,
     })
 

@@ -606,6 +606,70 @@ class EnvoySidecar:
             }
 
     @staticmethod
+    def _socket_mount_source(mounts) -> str | None:
+        """Source volume of the SPIRE socket mount in a Mounts list.
+
+        Pure function (no Docker) so the repair check is unit-testable.
+        Accepts docker-py Mounts entries (Destination/Source) and the
+        inspect-API shape (Target/Name).
+        """
+        for mount in mounts or []:
+            if not isinstance(mount, dict):
+                continue
+            destination = mount.get("Destination") or mount.get("Target")
+            if destination == SPIRE_AGENT_SOCKET_CONTAINER_PATH:
+                return mount.get("Source") or mount.get("Name")
+        return None
+
+    @staticmethod
+    def check_socket_mount_healthy(service) -> dict:
+        """True when the sidecar mounts the CURRENT resolved SPIRE socket.
+
+        Sidecars injected before the 2026-09-15 resolver fix mount the
+        auto-created EMPTY bare volume (or nothing at all) — SDS can
+        never reach agent.sock, no SVID is ever issued, and the Services
+        page shows "SVID Missing" forever. The repair endpoint uses this
+        to recreate exactly those sidecars (app container untouched).
+        Never raises: repair must degrade to "unknown", never 500.
+        """
+        sidecar_name = EnvoySidecar.get_sidecar_name(service)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            from apps.deployments.services.mtls_integration import (
+                resolve_spire_volume_name,
+            )
+
+            expected = resolve_spire_volume_name(SPIRE_AGENT_SOCKET_VOLUME)
+            client = get_docker_client()
+            container = client.containers.get(sidecar_name)
+            try:
+                container.reload()
+            except Exception:
+                pass
+            mounted = EnvoySidecar._socket_mount_source(
+                (getattr(container, "attrs", None) or {}).get("Mounts")
+            )
+            if mounted == expected:
+                return {
+                    "healthy": True, "mounted": mounted,
+                    "expected": expected, "reason": "socket mount current",
+                }
+            reason = (
+                "socket mount missing — SDS has no path to agent.sock"
+                if not mounted
+                else f"stale socket mount {mounted} — expected {expected}"
+            )
+            return {
+                "healthy": False, "mounted": mounted,
+                "expected": expected, "reason": reason,
+            }
+        except Exception as exc:
+            return {
+                "healthy": False, "mounted": None, "expected": "",
+                "reason": f"mount check unavailable: {exc}",
+            }
+
+    @staticmethod
     def wait_sidecar_ready(service, timeout_seconds: int = 120) -> bool:
         """Wait until the sidecar is serving with an issued SVID.
 
