@@ -321,17 +321,17 @@ ensure_openappsec_shadow_parity() {
     # loopback to published :80 is flaky under load (docker-proxy
     # hairpin) while container-to-container is rock solid — and the
     # shadow path under test is container-to-container too.
-    # --max-redirect=0: wget follows redirects by default even with
-    # --spider, which would compare a followed-200 against curl's
-    # unfollowed-308 (false divergence).
+    # BusyBox wget (Caddy image) has no --max-redirect: it follows the
+    # 308, so we parse the FIRST HTTP block (Caddy's own answer) and
+    # ignore followed hops; curl never follows without -L, matching it.
     local direct_a
-    direct_a=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --max-redirect=0 --header "Host: shadow-probe.invalid" http://127.0.0.1:80/ 2>&1 | grep 'HTTP/' | tail -n 1 | awk '{print $2}' || true)
+    direct_a=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: shadow-probe.invalid" http://127.0.0.1:80/ 2>&1 | grep 'HTTP/' | head -n 1 | awk '{print $2}' || true)
     # Shadow fetches retry: the loopback hairpin to the published shadow
     # port flakes under load — one bad attempt must not cry divergence.
     local shadow_a
     shadow_a=$(for _try in 1 2 3; do timeout 15 curl -s -o /dev/null -w '%{http_code}' -H "Host: shadow-probe.invalid" "http://127.0.0.1:$shadow_port/" 2>/dev/null && break || sleep 3; done | tail -n 1)
     local direct_raw
-    direct_raw=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --max-redirect=0 --header "Host: $domain" http://127.0.0.1:80/health 2>&1 || true)
+    direct_raw=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: $domain" http://127.0.0.1:80/health 2>&1 || true)
     local shadow_b
     shadow_b=$(for _try in 1 2 3; do timeout 15 curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" "http://127.0.0.1:$shadow_port/health" 2>/dev/null && break || sleep 3; done | tail -n 1)
     # curl prints 000 on connection failure — normalise to empty so the
@@ -346,13 +346,14 @@ ensure_openappsec_shadow_parity() {
         log "ALERT: openappsec shadow envoy not serving on 127.0.0.1:$shadow_port — attachment may be down; edge cutover BLOCKED until fixed"
         return 0
     fi
-    # Reduce the wget -S dump to "code location" to match curl's format.
+    # Reduce the wget -S dump to "code location" to match curl's format —
+    # first HTTP block / first Location only (later ones are followed hops).
     local direct_b_norm
-    direct_b_norm="$(echo "$direct_raw" | grep 'HTTP/' | tail -n 1 | awk '{print $2}') $(echo "$direct_raw" | grep -i '^  Location:' | tail -n 1 | awk '{print $2}')"
+    direct_b_norm="$(echo "$direct_raw" | grep 'HTTP/' | head -n 1 | awk '{print $2}') $(echo "$direct_raw" | grep -i '^  Location:' | head -n 1 | awk '{print $2}')"
     if [ "$direct_a" = "$shadow_a" ] && [ -n "$direct_b_norm" ] && [ "$shadow_b" = "$direct_b_norm" ]; then
-        log "openappsec shadow parity OK (filter transparent: 400=$direct_a redirect='$direct_b_norm')"
+        log "openappsec shadow parity OK (filter transparent: probe=$direct_a redirect='$direct_b_norm')"
     else
-        log "ALERT: openappsec shadow DIVERGES from direct Caddy (direct 400=$direct_a redirect='$direct_b_norm' vs shadow 400=$shadow_a redirect='$shadow_b') — edge cutover BLOCKED until fixed"
+        log "ALERT: openappsec shadow DIVERGES from direct Caddy (direct probe=$direct_a redirect='$direct_b_norm' vs shadow probe=$shadow_a redirect='$shadow_b') — edge cutover BLOCKED until fixed"
     fi
 }
 
