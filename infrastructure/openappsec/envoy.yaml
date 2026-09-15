@@ -1,0 +1,61 @@
+# open-appsec Envoy — PHASE 1 SHADOW (no traffic impact).
+# Listens on loopback-only 8081 and forwards to the live Caddy on :80
+# through the open-appsec attachment filter, so we prove the filter
+# loads, inspects, and forwards byte-identically before any 80/443
+# cutover. Phase 2 replaces this file with the edge config (80/443,
+# SNI chains from Caddy certs, upstream https://caddy:8443).
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: 9901 }
+static_resources:
+  listeners:
+  - name: shadow_http
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8081 }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: shadow_http
+          # Preserve the client chain Cloudflare built: CF appends the
+          # real client IP to X-Forwarded-For; Envoy must append (not
+          # overwrite) so Caddy/CrowdSec keep seeing true clients.
+          use_remote_address: false
+          xff_num_trusted_hops: 0
+          http_filters:
+          - name: envoy.filters.http.golang
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.golang.v3alpha.Config
+              library_id: cp_nano_filter
+              library_path: "/usr/lib/libenvoy_attachment.so"
+              plugin_name: cp_nano_filter
+              plugin_config:
+                "@type": type.googleapis.com/xds.type.v3.TypedStruct
+                value:
+                  prefix_localreply_body: "Configured local reply from go"
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+          route_config:
+            name: shadow_route
+            virtual_hosts:
+            - name: shadow_all
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/" }
+                route:
+                  cluster: caddy_direct
+                  timeout: 30s
+  clusters:
+  - name: caddy_direct
+    connect_timeout: 5s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: caddy_direct
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: caddy, port_value: 80 }

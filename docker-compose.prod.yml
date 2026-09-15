@@ -1587,6 +1587,144 @@ services:
           memory: ${CADDY_MEMORY_LIMIT:-512M}
           cpus: "1.0"
 
+  # ── open-appsec WAF (edge-first, detect-learn shadow) ──────────────
+  # Phase 1: agent + Envoy-with-attachment on SHADOW ports (loopback
+  # only) — zero traffic impact. The attachment inspects a copy of the
+  # routing path (shadow 8081 -> caddy:80) so we prove the filter loads
+  # and forwards byte-identically before any 80/443 cutover.
+  # Phase 2 (cutover): envoy takes 80/443, Caddy drops to loopback
+  # high ports (Caddy WAF-mode generation + SNI map) — separate change.
+  # Containers only start when OPENAPPSEC_ENABLED=1 (lib/harden_openappsec.sh);
+  # a plain `up -d` never touches them. NEVER --remove-orphans here.
+  appsec-agent:
+    image: ghcr.io/openappsec/agent:${OPENAPPSEC_VERSION:-latest}
+    container_name: smsly-appsec-agent
+    restart: unless-stopped
+    # Upstream model: attachment <-> agent share SysV SHM (their compose
+    # uses ipc:host on agent/envoy/storage alike). Scoped service-sharing
+    # risks silent learning loss — mirror upstream, single host only.
+    ipc: host
+    environment:
+      - SHARED_STORAGE_HOST=appsec-shared-storage
+      - LEARNING_HOST=appsec-smartsync
+      - TUNING_HOST=appsec-tuning-svc
+      - AGENT_TOKEN=${OPENAPPSEC_AGENT_TOKEN:-}
+      # Local declarative policy stays authoritative and auto-reloads on
+      # change (SaaS token only LINKS the deployment for visibility).
+      - autoPolicyLoad=true
+      - registered_server=Envoy
+    volumes:
+      - ./infrastructure/openappsec/conf:/etc/cp/conf:z
+      - appsec_data:/etc/cp/data
+      - appsec_logs:/var/log/nano_agent
+      - ./infrastructure/openappsec/localconfig:/ext/appsec:z
+    command: /cp-nano-agent
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${OPENAPPSEC_AGENT_MEMORY_LIMIT:-2G}
+  appsec-envoy:
+    image: ghcr.io/openappsec/envoy-attachment:${OPENAPPSEC_ENVOY_VERSION:-1.34.4}
+    container_name: smsly-appsec-envoy
+    restart: unless-stopped
+    ipc: host
+    environment:
+      - ENVOY_UID=0
+      - CONCURRENCY_CALC=numOfCores
+      - CONCURRENCY_NUMBER=
+    volumes:
+      - ./infrastructure/openappsec/envoy.yaml:/envoy.yaml:ro,z
+    command: -c /envoy.yaml
+    ports:
+      # Shadow only — loopback, never public. Cutover flips these to 80/443.
+      - "${OPENAPPSEC_SHADOW_BIND:-127.0.0.1}:${OPENAPPSEC_SHADOW_HTTP_PORT:-8081}:8081"
+    depends_on:
+      - appsec-agent
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${OPENAPPSEC_ENVOY_MEMORY_LIMIT:-1G}
+          cpus: "2.0"
+  appsec-shared-storage:
+    image: ghcr.io/openappsec/smartsync-shared-files:${OPENAPPSEC_VERSION:-latest}
+    container_name: smsly-appsec-shared-storage
+    restart: unless-stopped
+    ipc: host
+    user: root
+    volumes:
+      - appsec_smartsync_storage:/db
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${OPENAPPSEC_STORAGE_MEMORY_LIMIT:-512M}
+  appsec-smartsync:
+    image: ghcr.io/openappsec/smartsync:${OPENAPPSEC_VERSION:-latest}
+    container_name: smsly-appsec-smartsync
+    restart: unless-stopped
+    environment:
+      - SHARED_STORAGE_HOST=appsec-shared-storage
+    depends_on:
+      - appsec-shared-storage
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${OPENAPPSEC_SMARTSYNC_MEMORY_LIMIT:-1G}
+  appsec-tuning-svc:
+    image: ghcr.io/openappsec/smartsync-tuning:${OPENAPPSEC_VERSION:-latest}
+    container_name: smsly-appsec-tuning-svc
+    restart: unless-stopped
+    environment:
+      - SHARED_STORAGE_HOST=appsec-shared-storage
+      - QUERY_DB_PASSWORD=${OPENAPPSEC_DB_PASSWORD:-appsec-tuning-pw}
+      - QUERY_DB_HOST=appsec-db
+      - QUERY_DB_USER=postgres
+    volumes:
+      - ./infrastructure/openappsec/conf:/etc/cp/conf:ro,z
+    depends_on:
+      - appsec-shared-storage
+      - appsec-db
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${OPENAPPSEC_TUNING_MEMORY_LIMIT:-1G}
+  appsec-db:
+    image: postgres:${OPENAPPSEC_POSTGRES_VERSION:-18}
+    container_name: smsly-appsec-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD=${OPENAPPSEC_DB_PASSWORD:-appsec-tuning-pw}
+      - POSTGRES_USER=postgres
+    volumes:
+      - appsec_postgres_data:/var/lib/postgresql
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${OPENAPPSEC_DB_MEMORY_LIMIT:-512M}
+
   # ── Observability Stack ─────────────────────────────────────────────
   # Loki + Promtail + Grafana + Prometheus + cAdvisor + Node Exporter
   # Previously in infrastructure/docker/docker-compose.observability.yml
@@ -2121,3 +2259,9 @@ volumes:
   spire-ecosystem-agent-data: null
   spire-ecosystem-agent-socket: null
   spire-ecosystem-agent-svids: null
+
+  # open-appsec WAF volumes (agent data/logs, learning storage + tuning DB)
+  appsec_data: null
+  appsec_logs: null
+  appsec_smartsync_storage: null
+  appsec_postgres_data: null

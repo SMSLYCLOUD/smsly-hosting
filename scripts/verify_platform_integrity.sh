@@ -298,6 +298,39 @@ ensure_spire_volumes_not_shadowed() {
     log "spire volume shadow check complete"
 }
 
+# ── 11. open-appsec shadow must track direct Caddy byte-for-byte ───
+# Phase-1 WAF rides a loopback shadow port through the attachment
+# filter. If the filter ever mangles/blocks legitimate traffic, the
+# shadow response diverges from direct Caddy — fail the check LOUDLY
+# long before any 80/443 cutover. Skipped when disabled (inert).
+ensure_openappsec_shadow_parity() {
+    command -v docker >/dev/null 2>&1 || return 0
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "smsly-appsec-envoy" || return 0
+    local shadow_port
+    shadow_port=$(grep -E '^OPENAPPSEC_SHADOW_HTTP_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)
+    [ -z "$shadow_port" ] && shadow_port="8081"
+    local domain
+    domain=$(grep -E '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)
+    [ -z "$domain" ] && domain="localhost"
+    local direct_body
+    direct_body=$(timeout 15 curl -sf -H "Host: $domain" "http://127.0.0.1:80/health" 2>/dev/null || true)
+    local shadow_body
+    shadow_body=$(timeout 15 curl -sf -H "Host: $domain" "http://127.0.0.1:$shadow_port/health" 2>/dev/null || true)
+    if [ -z "$direct_body" ]; then
+        log "openappsec shadow check skipped (direct Caddy :80/health unreachable)"
+        return 0
+    fi
+    if [ -z "$shadow_body" ]; then
+        log "ALERT: openappsec shadow envoy not serving on 127.0.0.1:$shadow_port — attachment may be down; edge cutover BLOCKED until fixed"
+        return 0
+    fi
+    if [ "$direct_body" = "$shadow_body" ]; then
+        log "openappsec shadow parity OK (filter transparent)"
+    else
+        log "ALERT: openappsec shadow DIVERGES from direct Caddy — filter is mangling traffic; edge cutover BLOCKED until fixed"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -309,4 +342,5 @@ ensure_caddy_logs_writable
 ensure_spire_volumes_not_shadowed
 ensure_cf_bouncer_running
 ensure_fail2ban_running
+ensure_openappsec_shadow_parity
 log "integrity check complete"

@@ -18,6 +18,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/harden_auditd.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_kernel.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_docker_daemon.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_crowdsec.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/harden_openappsec.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_falco.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_container_runtime.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/harden_trivy.sh"
@@ -180,6 +181,7 @@ harden_security_bootstrap() {
     _harden_kernel_bootstrap       || { _harden_failures=$((_harden_failures + 1)); }
     _harden_docker_daemon_bootstrap || { _harden_failures=$((_harden_failures + 1)); }
     _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+    _harden_openappsec_bootstrap || { _harden_failures=$((_harden_failures + 1)); }
     _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
     _harden_spire_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
     # Unguarded like kernel/docker-daemon above (best-effort hardening must
@@ -221,6 +223,8 @@ harden_security_verify() {
     if ! _harden_docker_daemon_verify; then failures=$((failures + 1)); fi
     checks=$((checks + 1))
     if ! _harden_crowdsec_verify; then failures=$((failures + 1)); fi
+    checks=$((checks + 1))
+    if ! _harden_openappsec_verify; then failures=$((failures + 1)); fi
     checks=$((checks + 1))
     if ! _harden_falco_verify; then failures=$((failures + 1)); fi
     checks=$((checks + 1))
