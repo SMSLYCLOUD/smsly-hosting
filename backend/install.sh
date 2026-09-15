@@ -17,10 +17,6 @@ export SMSLY_SERVICE_PROXY_UPSTREAM=${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
 export SMSLY_BRANCH="${SMSLY_BRANCH:-master}"
 export SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
 
-# Mirror of lib/00-vars.sh: node-mode predicate used across the inlined
-# lib code below. Keep in sync (2026-09-15: was missing entirely).
-is_node_mode() { [ "${MODE_NODE:-false}" = "true" ]; }
-
 # ─── Root Check ──────────────────────────────────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
     echo -e "\033[0;31mERROR: This script must be run as root.\033[0m"

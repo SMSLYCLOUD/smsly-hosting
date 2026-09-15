@@ -3,6 +3,11 @@ source "$_SCRIPT_DIR/logging.sh"
 source "$_SCRIPT_DIR/validation.sh"
 source "$_SCRIPT_DIR/network.sh"
 source "$_SCRIPT_DIR/docker.sh"
+# utils.sh MUST be sourced here (not just via install.sh's full lib loop):
+# this file is also sourced standalone in `bash -c` subshells, and
+# docker.sh's refresh paths call is_node_mode() from lib/utils.sh —
+# without this line those subshells die with "command not found" (2026-09-15).
+source "$_SCRIPT_DIR/utils.sh"
 
 ensure_local_ignores() {
     local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
