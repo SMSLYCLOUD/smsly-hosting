@@ -61,6 +61,21 @@ class SocketMountSourceTests(TestCase):
             EnvoySidecar._socket_mount_source(["junk", *_mounts(NAMESPACED)]),
             NAMESPACED)
 
+    def test_normalises_daemon_host_path(self):
+        # Live daemons report the host path, not the volume name — the
+        # 2026-09-15 repair run proved a raw comparison always mismatches
+        # (and would churn-recreate healthy sidecars every run).
+        mounts = _mounts(
+            "/var/lib/docker/volumes/" + NAMESPACED + "/_data")
+        self.assertEqual(
+            EnvoySidecar._socket_mount_source(mounts), NAMESPACED)
+
+    def test_normalises_decoy_host_path(self):
+        mounts = _mounts(
+            "/var/lib/docker/volumes/" + DECOY + "/_data")
+        self.assertEqual(
+            EnvoySidecar._socket_mount_source(mounts), DECOY)
+
 
 class CheckSocketMountHealthyTests(TestCase):
     @patch("apps.deployments.services.mtls_integration.resolve_spire_volume_name")

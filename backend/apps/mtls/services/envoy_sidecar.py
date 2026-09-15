@@ -607,18 +607,31 @@ class EnvoySidecar:
 
     @staticmethod
     def _socket_mount_source(mounts) -> str | None:
-        """Source volume of the SPIRE socket mount in a Mounts list.
+        """Volume NAME behind the SPIRE socket mount in a Mounts list.
 
         Pure function (no Docker) so the repair check is unit-testable.
         Accepts docker-py Mounts entries (Destination/Source) and the
-        inspect-API shape (Target/Name).
+        inspect-API shape (Target/Name). Normalises the daemon's host
+        path form (/var/lib/docker/volumes/<name>/_data) back to the
+        volume NAME — without this, a healthy namespaced mount never
+        equals the resolved short name and repair would churn-recreate
+        every healthy sidecar on every run (caught live 2026-09-15).
         """
         for mount in mounts or []:
             if not isinstance(mount, dict):
                 continue
             destination = mount.get("Destination") or mount.get("Target")
-            if destination == SPIRE_AGENT_SOCKET_CONTAINER_PATH:
-                return mount.get("Source") or mount.get("Name")
+            if destination != SPIRE_AGENT_SOCKET_CONTAINER_PATH:
+                continue
+            source = mount.get("Source") or mount.get("Name") or ""
+            parts = str(source).split("/")
+            if len(parts) >= 5 and parts[1:4] == ["var", "lib", "docker"]:
+                try:
+                    volumes_index = parts.index("volumes")
+                    return parts[volumes_index + 1] or None
+                except (ValueError, IndexError):
+                    pass
+            return source or None
         return None
 
     @staticmethod

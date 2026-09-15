@@ -1039,6 +1039,17 @@ def mtls_repair(request, service_id):
                     continue
                 if "unavailable" in str(mount_check.get("reason", "")):
                     continue  # daemon hiccup — don't churn on unknowns
+                # Never orphan: without a running app container inject
+                # would fail AFTER we removed the sidecar (caught live
+                # 2026-09-15) — leave it for the redeploy path instead.
+                try:
+                    from apps.cloud.docker_client import get_docker_client
+                    _client = get_docker_client()
+                    _app = _client.containers.get(svc.name)
+                    if _app.status != "running":
+                        continue
+                except Exception:
+                    continue
                 try:
                     EnvoySidecar.remove_sidecar(svc)
                     result = EnvoySidecar.inject_sidecar(svc)
