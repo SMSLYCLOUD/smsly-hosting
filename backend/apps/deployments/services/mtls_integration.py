@@ -56,29 +56,39 @@ def resolve_spire_volume_name(short_name: str) -> str:
     """Resolve a SPIRE named volume to the real Docker volume name.
 
     Compose stacks prefix volumes with the project name (e.g.
-    ``smsly-hosting_spire-ecosystem-agent-socket``), so the bare short
+    ``smsly-spire_spire-ecosystem-agent-socket``), so the bare short
     name usually does not exist — mounting it would make Docker create
     an EMPTY volume that shadows the real socket directory. Prefer the
     exact name, else the unique ``*_<short>`` match, else the short
     name unchanged (caller decides whether to mount or skip).
+
+    Namespace matches ALWAYS win over a bare same-name volume: a bare
+    volume is usually an auto-created EMPTY decoy from an older mount,
+    and returning it re-poisons every new container (2026-09-15: all
+    ecosystem sidecars mounted the empty ``spire-ecosystem-agent-socket``
+    decoy instead of ``smsly-spire_spire-ecosystem-agent-socket`` — Envoy
+    SDS could never reach agent.sock, no SVID was ever issued, and every
+    mTLS-gated deploy failed at the sidecar-ready gate).
     """
     try:
         from apps.cloud.docker_client import get_docker_client
         names = [v.name for v in get_docker_client().volumes.list()]
     except Exception:
         return short_name
-    prefixed = sorted(
+    suffixed = sorted(
         v for v in names
-        if v.endswith(short_name) and v.startswith("smsly-hosting_")
+        if v.endswith('_' + short_name) and v != short_name
     )
-    if prefixed:
-        return prefixed[0]
+    hosted = [v for v in suffixed if v.startswith("smsly-hosting_")]
+    if hosted:
+        return hosted[0]
+    spire = [v for v in suffixed if v.startswith("smsly-spire_")]
+    if spire:
+        return spire[0]
+    if suffixed:
+        return suffixed[0]
     if short_name in names:
         return short_name
-    suffix = '_' + short_name
-    matches = sorted(v for v in names if v.endswith(suffix))
-    if matches:
-        return matches[0]
     return short_name
 
 
