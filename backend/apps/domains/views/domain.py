@@ -88,6 +88,11 @@ class DomainConfigView(GenericAPIView):
             'crowdsec_auto_unblock_enabled': config.crowdsec_auto_unblock_enabled,
             'crowdsec_auto_unblock_after_hours': config.crowdsec_auto_unblock_after_hours,
             'crowdsec_first_strike_enabled': config.crowdsec_first_strike_enabled,
+            'crowdsec_cf_enabled': config.crowdsec_cf_enabled,
+            'crowdsec_cf_account_id': config.crowdsec_cf_account_id,
+            'crowdsec_cf_action': config.crowdsec_cf_action,
+            'crowdsec_cf_api_token_set': bool(config.crowdsec_cf_api_token),
+            'crowdsec_cf_bouncer_key_set': bool(config.crowdsec_cf_bouncer_key),
             # SMTP
             'smtp_host': config.smtp_host,
             'smtp_port': config.smtp_port,
@@ -180,6 +185,27 @@ class DomainConfigView(GenericAPIView):
             if 'crowdsec_first_strike_enabled' in data:
                 config.crowdsec_first_strike_enabled = _parse_bool(
                     data.get('crowdsec_first_strike_enabled'))
+            if 'crowdsec_cf_enabled' in data:
+                config.crowdsec_cf_enabled = _parse_bool(
+                    data.get('crowdsec_cf_enabled'))
+            if 'crowdsec_cf_account_id' in data:
+                account_id = str(data.get('crowdsec_cf_account_id') or '').strip()
+                if account_id and not re.fullmatch(r'[a-fA-F0-9]{32}', account_id):
+                    return Response(
+                        {'error': 'crowdsec_cf_account_id must be the 32-hex-char Cloudflare account ID'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                config.crowdsec_cf_account_id = account_id.lower() if account_id else ''
+            if 'crowdsec_cf_action' in data:
+                action = str(data.get('crowdsec_cf_action') or '').strip()
+                if action not in ('block', 'managed_challenge'):
+                    return Response(
+                        {'error': "crowdsec_cf_action must be 'block' or 'managed_challenge'"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                config.crowdsec_cf_action = action
+            if 'crowdsec_cf_api_token' in data:
+                config.crowdsec_cf_api_token = str(data.get('crowdsec_cf_api_token') or '').strip()
             if 'crowdsec_auto_unblock_after_hours' in data:
                 try:
                     hours = int(data.get('crowdsec_auto_unblock_after_hours'))

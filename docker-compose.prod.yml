@@ -1340,6 +1340,28 @@ services:
           cpus: '${CROWDSEC_CPU_LIMIT:-0.50}'
           memory: ${CROWDSEC_MEMORY_LIMIT:-512M}
 
+  crowdsec-cloudflare-bouncer:
+    # Pushes CrowdSec bans to Cloudflare account IP lists (edge blocking).
+    # Managed by lib/harden_crowdsec.sh: without a rendered config file
+    # this stays idle (sleep) instead of crash-looping.
+    image: crowdsecurity/cloudflare-bouncer:latest
+    container_name: smsly-cloudflare-bouncer
+    restart: unless-stopped
+    depends_on:
+      - crowdsec
+    entrypoint: ["/bin/sh", "-c", 'if [ ! -s /etc/crowdsec/bouncers/crowdsec-cloudflare-bouncer.yaml ]; then echo "[cf-bouncer] no config - idle (enable in Settings > Security)"; exec sleep infinity; fi; exec /usr/local/bin/crowdsec-cloudflare-bouncer -c /etc/crowdsec/bouncers/crowdsec-cloudflare-bouncer.yaml']
+    volumes:
+      - ./crowdsec/cloudflare-bouncer.yaml:/etc/crowdsec/bouncers/crowdsec-cloudflare-bouncer.yaml:ro,z
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          cpus: '${CROWDSEC_CF_CPU_LIMIT:-0.25}'
+          memory: ${CROWDSEC_CF_MEMORY_LIMIT:-128M}
+
   traefik:
     image: traefik:v3.6
     restart: unless-stopped

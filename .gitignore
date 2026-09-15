@@ -199,3 +199,4 @@ infrastructure/pxe-server/
 /verify_github.sh
 /wait_falco.sh
 /strip_livekit.py
+crowdsec/cloudflare-bouncer.yaml

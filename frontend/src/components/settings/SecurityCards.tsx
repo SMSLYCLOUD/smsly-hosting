@@ -7,6 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Shield, AlertTriangle, Ban, Loader2, RefreshCw } from "lucide-react";
 import { crowdsecApi, CrowdSecDecision } from "@/lib/api";
 import { ThreatDecisionCard } from "@/components/crowdsec/ThreatDecisionCard";
@@ -160,6 +167,59 @@ export function SecurityScanningCard({ config, onChange }: SecurityCardProps) {
                   Simulated (non-enforcing) decisions are never auto-removed.
                 </p>
               </div>
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div className="space-y-0.5">
+                  <Label className="text-base">Cloudflare edge blocking</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Push bans to Cloudflare account IP lists so attackers are
+                    dropped at the CDN before reaching the origin. The Traefik
+                    bouncer keeps enforcing locally as backup.
+                  </p>
+                </div>
+                <Switch
+                  checked={config.crowdsec_cf_enabled ?? false}
+                  onCheckedChange={(v) => onChange("crowdsec_cf_enabled", v)}
+                />
+              </div>
+              {config.crowdsec_cf_enabled && (
+                <div className="space-y-4 mt-3 ml-1">
+                  <div className="space-y-2">
+                    <Label>Cloudflare Account ID</Label>
+                    <Input
+                      placeholder="32 hex chars from the dashboard URL"
+                      value={config.crowdsec_cf_account_id ?? ""}
+                      onChange={(e) => onChange("crowdsec_cf_account_id", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Cloudflare API Token</Label>
+                    <Input
+                      type="password"
+                      placeholder={config.crowdsec_cf_api_token_set ? "•••••••• (Saved)" : "Custom token with account Firewall/IP List write access"}
+                      onChange={(e) => onChange("crowdsec_cf_api_token", e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Custom token scoped to your account with Firewall and IP
+                      List write access. Never shown again after saving.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Edge action</Label>
+                    <Select
+                      value={config.crowdsec_cf_action ?? "block"}
+                      onValueChange={(v) => onChange("crowdsec_cf_action", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="block" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="block">Block (harshest)</SelectItem>
+                        <SelectItem value="managed_challenge">Managed challenge</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

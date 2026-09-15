@@ -239,6 +239,25 @@ ensure_fail2ban_running() {
     fi
 }
 
+# ── 9. Cloudflare bouncer must stay in sync when enabled ─────────────
+# The bouncer pushes bans to Cloudflare account IP lists. If its config
+# is missing (or the container died), edge enforcement silently stops
+# while the Traefik plugin keeps working — worth an alert, not silence.
+ensure_cf_bouncer_running() {
+    command -v docker >/dev/null 2>&1 || return 0
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "smsly-cloudflare-bouncer"; then
+        log "cloudflare bouncer not running (ok when disabled in Settings > Security)"
+        return 0
+    fi
+    local last_pull=""
+    last_pull=$(timeout 30 docker exec smsly-crowdsec cscli bouncers list -o json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); [print(x.get('last_pull','')) for x in (d if isinstance(d,list) else d.get('bouncers',d)) if str(x.get('name',''))=='cloudflare-bouncer']" 2>/dev/null | head -n 1) || true
+    if [ -z "$last_pull" ]; then
+        log "ALERT: cloudflare-bouncer registered but never pulled decisions — edge blocking is stale; run install.sh --update"
+    else
+        log "cloudflare bouncer active (last LAPI pull $last_pull)"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -247,5 +266,6 @@ ensure_migrations
 ensure_traefik_middlewares
 ensure_traefik_service_conflicts
 ensure_caddy_logs_writable
+ensure_cf_bouncer_running
 ensure_fail2ban_running
 log "integrity check complete"
