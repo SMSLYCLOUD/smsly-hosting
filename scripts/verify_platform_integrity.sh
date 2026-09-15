@@ -321,14 +321,23 @@ ensure_openappsec_shadow_parity() {
     # loopback to published :80 is flaky under load (docker-proxy
     # hairpin) while container-to-container is rock solid — and the
     # shadow path under test is container-to-container too.
+    # --max-redirect=0: wget follows redirects by default even with
+    # --spider, which would compare a followed-200 against curl's
+    # unfollowed-308 (false divergence).
     local direct_a
-    direct_a=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: shadow-probe.invalid" http://127.0.0.1:80/ 2>&1 | grep 'HTTP/' | tail -n 1 | awk '{print $2}' || true)
+    direct_a=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --max-redirect=0 --header "Host: shadow-probe.invalid" http://127.0.0.1:80/ 2>&1 | grep 'HTTP/' | tail -n 1 | awk '{print $2}' || true)
+    # Shadow fetches retry: the loopback hairpin to the published shadow
+    # port flakes under load — one bad attempt must not cry divergence.
     local shadow_a
-    shadow_a=$(timeout 15 curl -s -o /dev/null -w '%{http_code}' -H "Host: shadow-probe.invalid" "http://127.0.0.1:$shadow_port/" 2>/dev/null || true)
+    shadow_a=$(for _try in 1 2 3; do timeout 15 curl -s -o /dev/null -w '%{http_code}' -H "Host: shadow-probe.invalid" "http://127.0.0.1:$shadow_port/" 2>/dev/null && break || sleep 3; done | tail -n 1)
     local direct_raw
-    direct_raw=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: $domain" http://127.0.0.1:80/health 2>&1 || true)
+    direct_raw=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --max-redirect=0 --header "Host: $domain" http://127.0.0.1:80/health 2>&1 || true)
     local shadow_b
-    shadow_b=$(timeout 15 curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" "http://127.0.0.1:$shadow_port/health" 2>/dev/null || true)
+    shadow_b=$(for _try in 1 2 3; do timeout 15 curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" "http://127.0.0.1:$shadow_port/health" 2>/dev/null && break || sleep 3; done | tail -n 1)
+    # curl prints 000 on connection failure — normalise to empty so the
+    # "not serving" branch (not the "diverges" branch) fires.
+    [ "$shadow_a" = "000" ] && shadow_a=""
+    case "$shadow_b" in 000*) shadow_b="" ;; esac
     if [ -z "$direct_a" ]; then
         log "openappsec shadow check skipped (Caddy netns unreachable)"
         return 0
