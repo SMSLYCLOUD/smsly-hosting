@@ -14,6 +14,26 @@ from rest_framework.response import Response
 from apps.deployments.models import EnvironmentVariable, Service
 from apps.deployments.models.core import PlatformConfig
 from ._helpers import EmptySerializer, _normalize_request_domain, _parse_bool, _rewrite_public_domain
+
+
+def _crowdsec_cf_bouncer_running() -> bool:
+    """Runtime truth for the Cloudflare edge bouncer (never raises).
+
+    The Settings card otherwise shows only saved fields — an operator
+    can't tell enforcing from idle. Best-effort docker probe.
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "name=smsly-cloudflare-bouncer",
+             "--format", "{{.Status}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return "Up" in (result.stdout or "")
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
 class DomainConfigView(GenericAPIView):
     """
     Manage platform domain & SSL configuration.
@@ -93,6 +113,7 @@ class DomainConfigView(GenericAPIView):
             'crowdsec_cf_action': config.crowdsec_cf_action,
             'crowdsec_cf_api_token_set': bool(config.crowdsec_cf_api_token),
             'crowdsec_cf_bouncer_key_set': bool(config.crowdsec_cf_bouncer_key),
+            'crowdsec_cf_bouncer_running': _crowdsec_cf_bouncer_running(),
             # SMTP
             'smtp_host': config.smtp_host,
             'smtp_port': config.smtp_port,

@@ -39,6 +39,8 @@ interface VulnReport {
 export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
   const [report, setReport] = useState<VulnReport | null>(null);
   const [crowdsec, setCrowdsec] = useState<any>(null);
+  const [openappsec, setOpenappsec] = useState<any>(null);
+  const [falco, setFalco] = useState<any>(null);
   const [serviceWafDisabled, setServiceWafDisabled] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +115,8 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
         setCrowdsec(null);
         setStatusFailed(true);
       }
+      setOpenappsec(sysRes?.data?.openappsec ?? null);
+      setFalco(sysRes?.data?.falco ?? null);
 
       if (hasUsableReport(latest?.vulnerability_report)) {
         setReport(latest.vulnerability_report);
@@ -191,7 +195,7 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
             Platform status unavailable (request failed) — showing unknown, not off. Refresh to retry.
           </p>
         )}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
           <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
             <div className="text-[10px] text-muted-foreground uppercase mb-1">WAF Status</div>
             <div className="font-semibold text-foreground">
@@ -224,6 +228,45 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
           <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
             <div className="text-[10px] text-muted-foreground uppercase mb-1">Bouncer Integration</div>
             <div className="font-semibold text-emerald-400">Traefik Middleware</div>
+          </div>
+          <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
+            <div className="text-[10px] text-muted-foreground uppercase mb-1">open-appsec WAF</div>
+            <div className="font-semibold text-foreground">
+              {statusFailed || !openappsec ? (
+                "Unknown"
+              ) : !openappsec.enabled ? (
+                "Disabled"
+              ) : openappsec.agent_running && openappsec.envoy_running ? (
+                <>Shadow · {openappsec.policy_mode === "prevent" ? "Prevent" : "Detect-learn"}{openappsec.verdicts_recent ? "" : " (idle)"}</>
+              ) : (
+                "Degraded"
+              )}
+            </div>
+          </div>
+          <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
+            <div className="text-[10px] text-muted-foreground uppercase mb-1">Falco Runtime</div>
+            <div className="font-semibold text-foreground flex items-center gap-1.5">
+              {statusFailed || !falco ? (
+                "Unknown"
+              ) : !falco.running ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  Offline
+                </>
+              ) : falco.capturing === true ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  Capturing
+                </>
+              ) : falco.capturing === false ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  Running, not capturing
+                </>
+              ) : (
+                "Running"
+              )}
+            </div>
           </div>
         </div>
       </div>

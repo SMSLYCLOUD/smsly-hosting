@@ -15,7 +15,7 @@ const SERVICE_GROUPS = [
   { label: "Queue", keys: ["rabbitmq"] },
   { label: "Proxy", keys: ["traefik", "caddy", "route-fallback", "socket-proxy", "frps"] },
   { label: "Observability", keys: ["grafana", "loki", "promtail", "prometheus", "alertmanager", "cadvisor", "node-exporter"] },
-  { label: "Security", keys: ["crowdsec", "smsly-falco", "infisical"] },
+  { label: "Security", keys: ["crowdsec", "smsly-falco", "infisical", "appsec-agent", "appsec-envoy", "appsec-db", "appsec-smartsync", "appsec-tuning-svc", "appsec-shared-storage"] },
   { label: "Registry & Build", keys: ["registry", "docker-mirror", "verdaccio", "buildkitd"] },
   { label: "Other", keys: ["apt-cacher", "docker-labels"] },
 ];
@@ -29,7 +29,7 @@ const OPTIONAL_SERVICES = new Set([
   "redis-replica", "redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3",
   "celery-fast", "celery-deploy", "caddy", "route-fallback", "socket-proxy", "frps",
   "grafana", "loki", "promtail", "prometheus", "alertmanager", "cadvisor", "node-exporter",
-  "crowdsec", "smsly-falco", "infisical", "registry", "docker-mirror", "verdaccio", "buildkitd",
+  "crowdsec", "smsly-falco", "infisical", "appsec-agent", "appsec-envoy", "appsec-db", "appsec-smartsync", "appsec-tuning-svc", "appsec-shared-storage", "registry", "docker-mirror", "verdaccio", "buildkitd",
   "apt-cacher", "docker-labels"
 ]);
 

@@ -356,6 +356,9 @@ class SystemConfigView(GenericAPIView):
             'grafana', 'loki', 'promtail', 'prometheus', 'alertmanager',
             'cadvisor', 'node-exporter',
             'crowdsec', 'smsly-falco', 'infisical',
+            'appsec-agent', 'appsec-envoy', 'appsec-db',
+            'appsec-smartsync', 'appsec-tuning-svc',
+            'appsec-shared-storage',
             'registry', 'docker-mirror', 'verdaccio', 'buildkitd',
             'apt-cacher', 'docker-labels',
         ]

@@ -183,6 +183,16 @@ export function SecurityScanningCard({ config, onChange }: SecurityCardProps) {
               </div>
               {config.crowdsec_cf_enabled && (
                 <div className="space-y-4 mt-3 ml-1">
+                  <div className="flex items-center justify-between rounded-lg border p-3">
+                    <span className="text-sm text-muted-foreground">Edge bouncer status</span>
+                    <Badge variant="outline" className="text-[10px]">
+                      {config.crowdsec_cf_bouncer_running
+                        ? "Running — bans enforced at Cloudflare"
+                        : config.crowdsec_cf_api_token_set && config.crowdsec_cf_account_id
+                          ? "Configured — starts on next update"
+                          : "Idle — needs API token + account ID"}
+                    </Badge>
+                  </div>
                   <div className="space-y-2">
                     <Label>Cloudflare Account ID</Label>
                     <Input

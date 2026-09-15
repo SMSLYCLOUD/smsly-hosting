@@ -1,5 +1,6 @@
 """security views."""
 import logging
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,16 @@ class SecurityStatusView(GenericAPIView):
             seccomp["enabled"] = False
 
         # ── Falco ───────────────────────────────────────────────────
-        falco = {"running": False, "container": "smsly-falco", "driver": "unknown", "events_detected": 0}
+        # "running" alone lies: a scap_init failure kills PID 1 ~15s
+        # after start and the loop reports Up inside every crash window
+        # (2026-09-15: 400+ restarts, 0 events, status healthy). Report
+        # restarts + a best-effort capturing signal so the UI can render
+        # Degraded instead of green.
+        falco = {
+            "running": False, "container": "smsly-falco",
+            "driver": "unknown", "events_detected": 0,
+            "restarts": 0, "capturing": None,
+        }
         try:
             ps_result = subprocess.run(
                 ["docker", "ps", "--filter", f"name={falco['container']}",
@@ -99,6 +109,29 @@ class SecurityStatusView(GenericAPIView):
             falco["running"] = "Up" in (ps_result.stdout or "")
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             falco["running"] = False
+        if falco["running"]:
+            try:
+                restart_result = subprocess.run(
+                    ["docker", "inspect", "-f", "{{.RestartCount}}",
+                     falco["container"]],
+                    capture_output=True, text=True, timeout=10,
+                )
+                falco["restarts"] = int((restart_result.stdout or "0").strip() or 0)
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
+                pass
+            try:
+                scap_result = subprocess.run(
+                    ["docker", "logs", "--since", "10m", falco["container"]],
+                    capture_output=True, text=True, timeout=15,
+                )
+                scap_log = (scap_result.stdout or "") + (scap_result.stderr or "")
+                # None (unknown) when logs are unavailable — only report
+                # False on positive failure evidence, never on error.
+                falco["capturing"] = (
+                    "Initialization issues during scap_init" not in scap_log
+                ) if (scap_result.returncode == 0) else None
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
         if falco["running"]:
             try:
                 driver_result = subprocess.run(
@@ -169,6 +202,98 @@ class SecurityStatusView(GenericAPIView):
                     crowdsec["active_bans"] = -1
             else:
                 crowdsec["active_bans"] = 0
+        # First-strike wiring proof: the toggle is in config, but the
+        # capacity-1 overrides only enforce when the scenario files
+        # exist inside the engine. Report runtime truth separately —
+        # always present so the UI contract is uniform.
+        crowdsec["first_strike_enabled"] = bool(
+            getattr(config, "crowdsec_first_strike_enabled", True)
+        )
+        crowdsec["first_strike_active"] = False
+        if crowdsec["running"]:
+            try:
+                fs_result = subprocess.run(
+                    ["docker", "exec", crowdsec["container"],
+                     "sh", "-c", "ls /etc/crowdsec/scenarios/ | grep -c first-strike"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                crowdsec["first_strike_active"] = (
+                    fs_result.returncode == 0
+                    and (fs_result.stdout or "").strip().isdigit()
+                    and int((fs_result.stdout or "0").strip()) > 0
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
+                pass
+
+        # ── open-appsec WAF (detect-learn shadow) ─────────────────────
+        # No Settings toggle exists (env-gated: OPENAPPSEC_ENABLED); the
+        # UI had zero visibility into the stack. Report liveness +
+        # attachment proof (recent envoy verdicts) + policy mode.
+        openappsec = {
+            "enabled": False, "agent_running": False,
+            "envoy_running": False, "policy_mode": "unknown",
+            "verdicts_recent": False, "shadow_port": 18081,
+        }
+        try:
+            import os
+            openappsec["enabled"] = (
+                os.getenv("OPENAPPSEC_ENABLED", "0").strip() == "1"
+            )
+            port_result = subprocess.run(
+                ["docker", "port", "smsly-appsec-envoy"],
+                capture_output=True, text=True, timeout=10,
+            )
+            import re as _re
+            # `docker port` prints "8081/tcp -> 127.0.0.1:18081"
+            # (container-port first); accept either order.
+            _port_match = _re.search(
+                r"8081/tcp\s*->\s*\S+:(\d+)", port_result.stdout or "")
+            if _port_match is None:
+                _port_match = _re.search(
+                    r"127\.0\.0\.1:(\d+)->8081/tcp", port_result.stdout or "")
+            if _port_match:
+                openappsec["shadow_port"] = int(_port_match.group(1))
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+        if openappsec["enabled"]:
+            for _ctr, _key in (
+                ("smsly-appsec-agent", "agent_running"),
+                ("smsly-appsec-envoy", "envoy_running"),
+            ):
+                try:
+                    _ps = subprocess.run(
+                        ["docker", "ps", "--filter", f"name={_ctr}",
+                         "--format", "{{.Status}}"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    openappsec[_key] = "Up" in (_ps.stdout or "")
+                except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                    pass
+            if openappsec["agent_running"]:
+                try:
+                    _pol = subprocess.run(
+                        ["docker", "exec", "smsly-appsec-agent",
+                         "cat", "/etc/cp/conf/local_policy.yaml"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    _pol_text = _pol.stdout or ""
+                    if "mode: prevent" in _pol_text or "override-mode: prevent" in _pol_text:
+                        openappsec["policy_mode"] = "prevent"
+                    elif "detect-learn" in _pol_text:
+                        openappsec["policy_mode"] = "detect-learn"
+                except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                    pass
+            if openappsec["envoy_running"]:
+                try:
+                    _ver = subprocess.run(
+                        ["docker", "logs", "--since", "30m", "smsly-appsec-envoy"],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    _ver_log = (_ver.stdout or "") + (_ver.stderr or "")
+                    # Vendor typo is verbatim: "got final verict: 1".
+                    openappsec["verdicts_recent"] = "verict" in _ver_log.lower()
+                except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                    pass
 
         # ── UFW ─────────────────────────────────────────────────────
         ufw = {"active": False}
@@ -280,6 +405,7 @@ class SecurityStatusView(GenericAPIView):
             "no_new_privileges": no_new_privs,
             "falco": falco,
             "crowdsec": crowdsec,
+            "openappsec": openappsec,
             "ufw": ufw,
             "fail2ban": fail2ban,
             "auditd": auditd,
