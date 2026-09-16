@@ -184,7 +184,14 @@
           fi
           # Same class: traefik_dynamic is a bind-type named volume on
           # this dir — a missing device fails container creation.
-          mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+          # A volume created while the dir was missing stays broken, so
+          # drop it in exactly that case for recreation.
+          if [ ! -d "$INSTALL_DIR/traefik-dynamic" ]; then
+              mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+              docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+          else
+              mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+          fi
           if $_already_migrated; then
               # Data is already on postgres-primary — switch to prod compose
               # immediately but ensure the HA stack is up first.

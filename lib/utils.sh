@@ -165,8 +165,14 @@ reconcile_compose_stack_after_resume() {
     # traefik_dynamic named volume is a bind of this dir, and a missing
     # device fails container creation with "no such file or directory"
     # (fresh-install incident — the dir was absent while the volume
-    # existed). Same class as the bouncer-yaml file guard.
-    mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+    # existed). Same class as the bouncer-yaml file guard. A volume
+    # created while the dir was missing stays broken — drop it then.
+    if [ ! -d "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" ]; then
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+        docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+    else
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+    fi
 
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
 }

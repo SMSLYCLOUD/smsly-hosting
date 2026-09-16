@@ -179,7 +179,16 @@ ensure_infrastructure_permissions
 mkdir -p "$INSTALL_DIR/caddy-config" "$INSTALL_DIR/caddy-logs"
 # Pre-create the Traefik dynamic-config dir (canary WRR files). The
 # traefik_dynamic volume bind-mounts it; a missing dir breaks the mount.
-mkdir -p "$INSTALL_DIR/traefik-dynamic"
+# If the dir was missing when the volume was first created, the volume
+# object is stuck broken (mounts keep failing after the dir appears) —
+# drop it so compose recreates it. Safe: bind volumes store nothing
+# themselves; the files live in this dir (empty on fresh installs).
+if [ ! -d "$INSTALL_DIR/traefik-dynamic" ]; then
+    mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+    docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+else
+    mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+fi
 # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted as a
 # FILE by the crowdsec-cloudflare-bouncer service. Guarantee it (empty =
 # the bouncer idles) before any compose up; drop daemon-poisoned dirs.
