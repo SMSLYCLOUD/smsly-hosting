@@ -15,7 +15,12 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
+    _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
+    (apt-get update || \
+     (_smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g' && apt-get update) || \
+     (_smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g' && apt-get update)) && \
+    apt-get install -y --no-install-recommends \
     git python3 make g++
 
 COPY frontend/package.json frontend/package-lock.json ./
@@ -35,9 +40,16 @@ ENV PORT=8080
 ARG INSTALL_BUILD_DEPS=true
 
 # --- System packages + supervisor + PostgreSQL client ---
+# (Mirror resilience: same fallback as the frontend stage above —
+# some provider networks cannot reach Debian's official CDN.)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
+    _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
+    (apt-get update || \
+     (_smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g' && apt-get update) || \
+     (_smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g' && apt-get update)) && \
+    apt-get install -y --no-install-recommends \
     ca-certificates curl wget bash \
     gcc git libpq-dev postgresql-client \
     supervisor gettext-base gnupg libstdc++6

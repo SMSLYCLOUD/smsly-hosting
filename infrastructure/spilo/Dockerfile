@@ -6,7 +6,15 @@
 # file already provides (SCOPE, ETCD3_HOST, POD_IP, PGUSER_SUPERUSER, ...).
 FROM postgres:16
 
-RUN apt-get update \
+# Mirror resilience: some provider networks cannot reach Debian's official
+# CDN (persistent TCP timeouts — 2026-09-17 fresh-install incident).
+# Official first, then independent vendor mirrors (same snippet as the
+# backend and monolithic Dockerfiles).
+RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
+ _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
+ (apt-get update || \
+  (_smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g' && apt-get update) || \
+  (_smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g' && apt-get update)) \
  && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-dev gcc libc6-dev curl ca-certificates \
  && pip3 install --break-system-packages --no-cache-dir \

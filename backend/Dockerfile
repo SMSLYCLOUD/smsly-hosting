@@ -5,8 +5,18 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+# Mirror resilience: some provider networks cannot reach Debian's official
+# CDN (deb/security.debian.org: persistent TCP timeouts while Hub, GitHub
+# and PyPI work — 2026-09-17 fresh-install incident). Official first (zero
+# behavior change where it works), then independent vendor mirrors.
+# Hostname-only rewrite: codename-agnostic and safe for both classic and
+# DEB822 source layouts.
+RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true && \
+    _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
+    (apt-get update || \
+     (_smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g' && apt-get update) || \
+     (_smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g' && apt-get update)) && \
+    apt-get install -y --no-install-recommends \
     gcc \
     git \
     libpq-dev \
