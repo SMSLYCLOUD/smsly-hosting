@@ -14,8 +14,14 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
-from apps.deployments import tasks
 from apps.deployments.models import Deployment, Service
+
+# Canonical locations (post-subpackage refactor; AGENTS.md #9): the
+# helpers must be patched where they are looked up, not on the legacy
+# `apps.deployments.tasks` monolith namespace.
+from apps.deployments.tasks.deploy import deploy_container as dc_module
+from apps.deployments.tasks.deploy import health as health_module
+from apps.deployments.tasks.deployment import tasks_deploy as tasks_deploy_module
 
 
 class QueuedReplicasSnapshotTests(TestCase):
@@ -49,14 +55,14 @@ class QueuedReplicasSnapshotTests(TestCase):
 
         compute = MagicMock()
         compute.deploy_container.return_value = MagicMock(resource_id='cid')
-        with patch.object(tasks, 'ComputeService', return_value=compute), \
-             patch.object(tasks, '_local_container_timeout_seconds', return_value=1), \
-             patch.object(tasks, '_wait_for_local_container_healthy', return_value=True), \
-             patch.object(tasks, '_regenerate_caddyfile', return_value=None), \
-             patch.object(tasks, '_wait_for_local_route_ready', return_value=True), \
-             patch.object(tasks, '_run_managed_image_post_deploy_hooks', return_value=None), \
-             patch.object(tasks, '_post_deploy_monitor'):
-            tasks._deploy_container(self.deployment, self.provider, 'img:1')
+        with patch.object(dc_module, 'ComputeService', return_value=compute), \
+             patch.object(health_module, '_local_container_timeout_seconds', return_value=1), \
+             patch.object(health_module, '_wait_for_local_container_healthy', return_value=True), \
+             patch.object(dc_module, '_regenerate_caddyfile', return_value=None), \
+             patch.object(health_module, '_wait_for_local_route_ready', return_value=True), \
+             patch.object(dc_module, '_run_managed_image_post_deploy_hooks', return_value=None), \
+             patch.object(tasks_deploy_module, '_post_deploy_monitor'):
+            dc_module._deploy_container(self.deployment, self.provider, 'img:1')
 
         kwargs = compute.deploy_container.call_args.kwargs
         self.assertEqual(kwargs['replicas'], 1)
@@ -76,14 +82,14 @@ class QueuedReplicasSnapshotTests(TestCase):
 
         compute = MagicMock()
         compute.deploy_container.return_value = MagicMock(resource_id='cid2')
-        with patch.object(tasks, 'ComputeService', return_value=compute), \
-             patch.object(tasks, '_local_container_timeout_seconds', return_value=1), \
-             patch.object(tasks, '_wait_for_local_container_healthy', return_value=True), \
-             patch.object(tasks, '_regenerate_caddyfile', return_value=None), \
-             patch.object(tasks, '_wait_for_local_route_ready', return_value=True), \
-             patch.object(tasks, '_run_managed_image_post_deploy_hooks', return_value=None), \
-             patch.object(tasks, '_post_deploy_monitor'):
-            tasks._deploy_container(legacy, self.provider, 'img:2')
+        with patch.object(dc_module, 'ComputeService', return_value=compute), \
+             patch.object(health_module, '_local_container_timeout_seconds', return_value=1), \
+             patch.object(health_module, '_wait_for_local_container_healthy', return_value=True), \
+             patch.object(dc_module, '_regenerate_caddyfile', return_value=None), \
+             patch.object(health_module, '_wait_for_local_route_ready', return_value=True), \
+             patch.object(dc_module, '_run_managed_image_post_deploy_hooks', return_value=None), \
+             patch.object(tasks_deploy_module, '_post_deploy_monitor'):
+            dc_module._deploy_container(legacy, self.provider, 'img:2')
 
         kwargs = compute.deploy_container.call_args.kwargs
         self.assertEqual(kwargs['replicas'], 2)

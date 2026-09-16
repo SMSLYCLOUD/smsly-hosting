@@ -16,6 +16,13 @@ from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
 from apps.deployments.tasks.deployment.tasks_deploy import recover_stalled_queued_deployments
 
+# Patch targets must be the defining module's namespace (AGENTS.md #9):
+# queue.py binds AsyncResult/enqueue at import time, so patching
+# `celery.result.AsyncResult` or the `apps.deployments.tasks` monolith
+# never intercepts — the real broker call ran instead (44s eager
+# deploys inside unit tests) and every count assertion failed.
+QUEUE = "apps.deployments.tasks.deploy.queue"
+
 
 class RecoverStalledTests(TestCase):
     def setUp(self):
@@ -34,8 +41,8 @@ class RecoverStalledTests(TestCase):
             provider=self.provider,
         )
 
-    @patch("celery.result.AsyncResult")
-    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
+    @patch(QUEUE + ".AsyncResult")
+    @patch(QUEUE + ".enqueue_smart_deploy_task")
     def test_started_task_is_skipped(self, enqueue_mock, async_result_mock):
         Deployment.objects.create(
             service=self.service,
@@ -51,8 +58,8 @@ class RecoverStalledTests(TestCase):
         self.assertEqual(result["queued"], 0)
         enqueue_mock.assert_not_called()
 
-    @patch("celery.result.AsyncResult")
-    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
+    @patch(QUEUE + ".AsyncResult")
+    @patch(QUEUE + ".enqueue_smart_deploy_task")
     def test_failure_state_is_requeued(self, enqueue_mock, async_result_mock):
         deployment = Deployment.objects.create(
             service=self.service,
@@ -69,10 +76,11 @@ class RecoverStalledTests(TestCase):
             deployment_id=str(deployment.id),
             provider_id=str(self.provider.id),
             skip_review=False,
+            fast_deploy=False,
         )
 
-    @patch("celery.result.AsyncResult")
-    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
+    @patch(QUEUE + ".AsyncResult")
+    @patch(QUEUE + ".enqueue_smart_deploy_task")
     def test_pending_state_is_requeued(self, enqueue_mock, async_result_mock):
         """PENDING means the task ID has no record in the result backend
         (either never published, or already cleared) — re-queue is safe.
