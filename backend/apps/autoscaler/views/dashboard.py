@@ -364,7 +364,9 @@ def _run_autoscaler_check():
     total_mem = config.get('total_system_mb', _get_system_memory())
     infra_reserve = config.get('infra_reserve_mb', 512)
     _record_history(services, total_mem, infra_reserve)
-    decisions = _decide_scaling(services)
+    # Records legacy advice into the decisions timeline (side effect);
+    # the return value is intentionally unused — see NOTE below.
+    _decide_scaling(services)
     # NOTE: legacy advice is recorded for the timeline but NOT applied
     # here. Applying only ever drove Docker Swarm / K8s workloads; on
     # this platform every service is a plain container, so each apply
