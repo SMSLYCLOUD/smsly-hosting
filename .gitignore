@@ -63,9 +63,18 @@ Thumbs.db
 # Workloads and runtime configs
 builds/
 caddy-config/
+caddy-logs/
+traefik-dynamic/
+# Secrets must never be committed or swept by the updater's
+# `git stash push --include-untracked` (preflight sync).
+.infisical.env
+cosign-keys/
 # open-appsec agent first-run writes live policy here; the updater
 # stashes --include-untracked, so these must never be stash candidates
 # (2026-09-15: conf/ + localconfig/ vanished mid-update).
+# Same class, 2026-09-17: EMPTY traefik-dynamic/ vanished the same way
+# (git never stores empty dirs, so the stash pop could not restore it)
+# and broke every traefik_dynamic bind mount until recreated.
 infrastructure/openappsec/conf/
 infrastructure/openappsec/localconfig/
 .update-backups/
