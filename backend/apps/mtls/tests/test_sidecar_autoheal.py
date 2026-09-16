@@ -28,6 +28,42 @@ def _service(name="shop"):
     return svc
 
 
+class InjectRaceTests(TestCase):
+    def test_create_conflict_degrades_to_already_running(self):
+        """Beat + deploy racing the same create must not fail the deploy."""
+        import docker
+
+        svc = _service()
+        svc.internal_port = 8000
+        svc.mtls_config = MagicMock(trust_domain="ecosystem.local", spiffe_id="")
+        client = MagicMock()
+        client.containers.get.side_effect = Exception("not found")
+        client.containers.run.side_effect = docker.errors.APIError(
+            "Conflict. The container name is already in use", response=MagicMock(status_code=409), explanation="conflict",
+        )
+        with patch("apps.cloud.docker_client.get_docker_client", return_value=client), \
+            patch.object(EnvoySidecar, "_find_main_container", return_value=MagicMock(id="abc")), \
+            patch.object(EnvoySidecar, "generate_config", return_value="cfg"), \
+            patch.object(EnvoySidecar, "ensure_sidecar_image", return_value="img"):
+            result = EnvoySidecar.inject_sidecar(svc)
+        self.assertEqual(result["status"], "already_running")
+
+    def test_compose_uses_resolved_volumes_not_decoy(self):
+        """Compose injection must mount the namespaced socket, never the bare decoy."""
+        svc = _service()
+        svc.internal_port = 8000
+        svc.mtls_config = MagicMock(enabled=True, trust_domain="ecosystem.local")
+        with patch(
+            "apps.deployments.services.mtls_integration.resolve_spire_volume_name",
+            side_effect=lambda short: NAMESPACED if "socket" in short else "smsly-spire_spire-ecosystem-agent-svids",
+        ):
+            out = EnvoySidecar.inject_sidecar_compose(svc, {})
+        svc_vols = out["services"][EnvoySidecar.get_sidecar_name(svc)]["volumes"]
+        self.assertTrue(any(v.startswith(NAMESPACED + ":") for v in svc_vols))
+        self.assertFalse(any(v.startswith(DECOY + ":") for v in svc_vols))
+        self.assertIn(NAMESPACED, out["volumes"])
+
+
 class RemountIfStaleTests(TestCase):
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.inject_sidecar")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.check_socket_mount_healthy")
@@ -126,13 +162,16 @@ class RepairStaleSidecarsTaskTests(TestCase):
                 service=svc, status=deploy_status, commit_hash="abc1234")
         return svc
 
+    @patch("apps.mtls.tasks.sync_svid_for_service")
+    @patch("apps.mtls.tasks._ensure_spire_entry_best_effort")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.remove_sidecar")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.remount_if_stale")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.get_sidecar_status")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar._find_main_container")
     @patch("apps.cloud.docker_client.get_docker_client")
     def test_stale_with_running_app_remounted(
-        self, mock_get_client, mock_find, mock_state, mock_remount, mock_remove
+        self, mock_get_client, mock_find, mock_state, mock_remount, mock_remove,
+        mock_ensure, mock_sync
     ):
         from apps.mtls.tasks import repair_stale_sidecars_task
 
@@ -142,16 +181,40 @@ class RepairStaleSidecarsTaskTests(TestCase):
         mock_find.return_value = MagicMock(name="app")
         mock_state.return_value = {"status": "running"}
         mock_remount.return_value = {"status": "injected", "remounted": True}
+        mock_sync.return_value = True
         result = repair_stale_sidecars_task.run()
         self.assertIn("heal-stale", result["remounted"])
         mock_remove.assert_not_called()
 
+    def test_healed_sidecar_without_svid_reported(self):
+        """Remounted but SVID-less stays visible in errors, not silent success."""
+        from apps.mtls.tasks import repair_stale_sidecars_task
+
+        svc = self._svc("heal-nosvid")
+        with patch("apps.cloud.docker_client.get_docker_client") as mock_get_client, \
+            patch("apps.mtls.services.envoy_sidecar.EnvoySidecar._find_main_container") as mock_find, \
+            patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.get_sidecar_status") as mock_state, \
+            patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.remount_if_stale") as mock_remount, \
+            patch("apps.mtls.tasks._ensure_spire_entry_best_effort"), \
+            patch("apps.mtls.tasks.sync_svid_for_service", return_value=False):
+            mock_get_client.return_value = MagicMock()
+            mock_get_client.return_value.containers.list.return_value = []
+            mock_find.return_value = MagicMock(name="app")
+            mock_state.return_value = {"status": "running"}
+            mock_remount.return_value = {"status": "injected", "remounted": True}
+            result = repair_stale_sidecars_task.run()
+        self.assertIn("heal-nosvid", result["remounted"])
+        self.assertTrue(any("heal-nosvid" in e for e in result["errors"]))
+
+    @patch("apps.mtls.tasks.sync_svid_for_service")
+    @patch("apps.mtls.tasks._ensure_spire_entry_best_effort")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.remove_sidecar")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.get_sidecar_status")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar._find_main_container")
     @patch("apps.cloud.docker_client.get_docker_client")
     def test_orphan_running_sidecar_removed(
-        self, mock_get_client, mock_find, mock_state, mock_remove
+        self, mock_get_client, mock_find, mock_state, mock_remove,
+        mock_ensure, mock_sync
     ):
         from apps.mtls.tasks import repair_stale_sidecars_task
 
@@ -164,11 +227,12 @@ class RepairStaleSidecarsTaskTests(TestCase):
         result = repair_stale_sidecars_task.run()
         self.assertIn("heal-orphan", result["orphans_removed"])
 
+    @patch("apps.mtls.tasks._ensure_spire_entry_best_effort")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.remount_if_stale")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar._find_main_container")
     @patch("apps.cloud.docker_client.get_docker_client")
     def test_in_flight_deploy_skipped(
-        self, mock_get_client, mock_find, mock_remount
+        self, mock_get_client, mock_find, mock_remount, mock_ensure
     ):
         from apps.mtls.tasks import repair_stale_sidecars_task
 
@@ -180,12 +244,15 @@ class RepairStaleSidecarsTaskTests(TestCase):
         mock_find.assert_not_called()
         mock_remount.assert_not_called()
 
+    @patch("apps.mtls.tasks.sync_svid_for_service")
+    @patch("apps.mtls.tasks._ensure_spire_entry_best_effort")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.remount_if_stale")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar.get_sidecar_status")
     @patch("apps.mtls.services.envoy_sidecar.EnvoySidecar._find_main_container")
     @patch("apps.cloud.docker_client.get_docker_client")
     def test_terminal_deploy_not_skipped(
-        self, mock_get_client, mock_find, mock_state, mock_remount
+        self, mock_get_client, mock_find, mock_state, mock_remount,
+        mock_ensure, mock_sync
     ):
         from apps.mtls.tasks import repair_stale_sidecars_task
 

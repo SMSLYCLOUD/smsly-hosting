@@ -10,6 +10,12 @@ import { PageHeader } from "@/components/ui/page-header";
 import { useSpaceOps } from "@/context/SpaceOpsContext";
 import { Loader2, CheckCircle, XCircle, Rocket, Terminal, GitBranch, Clock, AlertTriangle, ArrowLeft } from "lucide-react";
 import api from "@/lib/api";
+import {
+  isDeploymentFailed,
+  isDeploymentInProgress,
+  isDeploymentLive,
+  isDeploymentTerminal,
+} from "@/lib/deploymentStatus";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -29,13 +35,15 @@ export default function DeploymentWatchPage() {
         const res = await api.get(`/deployments/${id}/`);
         setDeployment(res.data);
 
-        // Map status to SpaceOps Visual Layer
+        // Map status to SpaceOps Visual Layer (backend-parity states —
+        // see lib/deploymentStatus; SUCCESS/PENDING/RUNNING are never
+        // emitted by the backend).
         const status = res.data.status;
-        if (status === 'ACTIVE' || status === 'SUCCESS') {
+        if (isDeploymentLive(status)) {
             setSpaceOpsState({ mode: 'success', intensity: 'low' });
-        } else if (status === 'FAILED') {
+        } else if (isDeploymentFailed(status)) {
             setSpaceOpsState({ mode: 'failed', intensity: 'medium' });
-        } else if (['PENDING', 'BUILDING', 'DEPLOYING'].includes(status)) {
+        } else if (isDeploymentInProgress(status)) {
             setSpaceOpsState({ mode: 'deploying', intensity: 'high' });
         } else {
             setSpaceOpsState({ mode: 'idle', intensity: 'low' });
@@ -59,7 +67,7 @@ export default function DeploymentWatchPage() {
 
   useEffect(() => {
     // Simulate streaming logs if active
-    if (!deployment || ['ACTIVE', 'SUCCESS', 'FAILED'].includes(deployment.status)) return;
+    if (!deployment || isDeploymentTerminal(deployment.status)) return;
 
     const interval = setInterval(() => {
         setLogs(prev => prev + `[${new Date().toISOString()}] Waiting for status update...\n`);
@@ -89,9 +97,9 @@ export default function DeploymentWatchPage() {
       );
   }
 
-  const isFailed = deployment.status === 'FAILED';
-  const isActive = ['ACTIVE', 'SUCCESS'].includes(deployment.status);
-  const isDeploying = ['PENDING', 'BUILDING', 'DEPLOYING'].includes(deployment.status);
+  const isFailed = isDeploymentFailed(deployment?.status);
+  const isActive = isDeploymentLive(deployment?.status);
+  const isDeploying = isDeploymentInProgress(deployment?.status);
 
   return (
     <DashboardShell>
@@ -137,7 +145,7 @@ export default function DeploymentWatchPage() {
                                         <span className="font-medium">Queued</span>
                                     </div>
                                     <div className="flex items-center gap-3 text-sm">
-                                        {(isDeploying && deployment.status !== 'PENDING') || isActive || isFailed ? (
+                                        {isDeploying || isActive || isFailed ? (
                                             <CheckCircle size={16} className="text-emerald-500" />
                                         ) : isDeploying ? (
                                             <Loader2 size={16} className="text-blue-500 animate-spin" />

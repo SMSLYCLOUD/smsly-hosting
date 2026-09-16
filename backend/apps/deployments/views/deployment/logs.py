@@ -88,14 +88,29 @@ class LogsActionsMixin:
     def build_logs(self, request: object, pk: str | None = None) -> Response:
         """
         Get build logs for a deployment (REST fallback for non-WebSocket).
-        GET /api/v1/deployments/{id}/build-logs/
+        GET /api/v1/deployments/{id}/build-logs/?tail=20000 (chars, cap 200k)
         """
         deployment = self.get_object()
+        try:
+            keep = max(0, min(int(request.query_params.get('tail', 0) or 0), 200000))
+        except (TypeError, ValueError):
+            keep = 0
+        build = deployment.build_logs or ""
+        runtime = getattr(deployment, 'runtime_logs', '') or ''
+        truncated = False
+        if keep:
+            if len(build) > keep:
+                build = build[-keep:]
+                truncated = True
+            if len(runtime) > keep:
+                runtime = runtime[-keep:]
+                truncated = True
         return Response({
             'id': str(deployment.id),
             'status': deployment.status,
-            'build_logs': deployment.build_logs,
-            'runtime_logs': getattr(deployment, 'runtime_logs', '') or '',
+            'build_logs': build,
+            'runtime_logs': runtime,
+            'logs_truncated': truncated,
             'started_at': deployment.started_at,
             'finished_at': deployment.finished_at,
             'duration_seconds': deployment.duration_seconds,

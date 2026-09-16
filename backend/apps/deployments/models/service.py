@@ -1,6 +1,7 @@
 import ipaddress
 import logging
 import re
+import time
 import uuid
 
 from django.conf import settings
@@ -14,6 +15,12 @@ from apps.cloud.models import CloudProvider
 from .core import TimeStampedModel
 
 logger = logging.getLogger(__name__)
+
+
+_INTERNAL_ADDRESSES_TTL_SECONDS = 30
+# pk -> (monotonic_ts, addrs). Per-process (per gunicorn worker); dropped
+# on worker recycle. See Service.generate_internal_addresses.
+_INTERNAL_ADDRESSES_CACHE: dict = {}
 
 
 # ── Host-scaled service defaults ──────────────────────────────────────
@@ -822,6 +829,28 @@ class Service(TimeStampedModel):
         ).count()
 
     def generate_internal_addresses(self) -> list[dict]:
+        """Return the container's IPs and the Docker networks it's on.
+
+        Process-level TTL cache (30s): the detail page polls every 3s and
+        each serialization would otherwise do a synchronous Docker
+        `containers.get + reload`. Container IPs only change on recreate,
+        so a 30s-stale entry self-corrects on the next poll.
+        """
+        now = time.monotonic()
+        if self.pk is None:
+            return self._generate_internal_addresses_uncached()
+        hit = _INTERNAL_ADDRESSES_CACHE.get(self.pk)
+        if hit is not None and now - hit[0] < _INTERNAL_ADDRESSES_TTL_SECONDS:
+            return hit[1]
+        addrs = self._generate_internal_addresses_uncached()
+        _INTERNAL_ADDRESSES_CACHE[self.pk] = (now, addrs)
+        # Bound growth on hosts churning through service PKs.
+        if len(_INTERNAL_ADDRESSES_CACHE) > 2048:
+            oldest = min(_INTERNAL_ADDRESSES_CACHE, key=lambda k: _INTERNAL_ADDRESSES_CACHE[k][0])
+            del _INTERNAL_ADDRESSES_CACHE[oldest]
+        return addrs
+
+    def _generate_internal_addresses_uncached(self) -> list[dict]:
         """Return the container's IPs and the Docker networks it's on.
 
         Used by the service detail page to surface the IPs that other

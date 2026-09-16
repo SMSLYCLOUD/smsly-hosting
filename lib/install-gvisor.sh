@@ -22,7 +22,8 @@ _ensure_docker_runsc_registration() {
         echo '{}' > "$DAEMON_JSON"
     fi
 
-    python3 -c "
+    local _runsc_reg_out=""
+    _runsc_reg_out="$(python3 -c "
 import json, sys
 
 daemon = '$DAEMON_JSON'
@@ -42,10 +43,13 @@ if current != new_entry:
     print(f'  Registered runsc at {runsc_path} in {daemon}')
 else:
     print(f'  runsc already registered correctly at {runsc_path}')
-"
+    ")"
 
-    # Restart Docker if runtime was changed
-    if command -v systemctl ; then
+    # Restart Docker only if registration changed daemon.json — an
+    # unconditional restart kills all running containers on every re-run.
+    if echo "$_runsc_reg_out" | grep -q "already registered correctly"; then
+        echo "  Docker restart skipped (runsc registration unchanged)"
+    elif command -v systemctl ; then
         systemctl daemon-reload
         systemctl restart docker
         echo "  Docker restarted with runsc support"

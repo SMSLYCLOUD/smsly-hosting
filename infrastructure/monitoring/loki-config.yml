@@ -37,7 +37,9 @@ schema_config:
         period: 24h
 
 limits_config:
-  retention_period: 30d
+  # Tunable via LOKI_RETENTION (compose passes it through with
+  # -config.expand-env=true; default matches PROMETHEUS_RETENTION=30d).
+  retention_period: ${LOKI_RETENTION:-30d}
   ingestion_rate_mb: 50
   ingestion_burst_size_mb: 100
   max_streams_per_user: 100000

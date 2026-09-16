@@ -93,9 +93,15 @@ scrape_configs:
             request_host: RequestHost
             method: RequestMethod
             status: DownstreamStatus
+            # Weighted canary attribution: which backend served the request
+            # (live vs green container IP:port) and through which router.
+            service_addr: ServiceAddr
+            router_name: RouterName
       - labels:
           method:
           status:
+          service_addr:
+          router_name:
       - metrics:
           http_requests_total:
             type: Counter

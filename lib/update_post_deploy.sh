@@ -140,13 +140,16 @@ if d_count > 0:
 
     echo -e "\n${GREEN}  ✨ Update complete. Self-healing applied.${NC}"
 
-    timeout -k 5 120 bash -c "
-export COMPOSE_FILE='$COMPOSE_FILE'
-source '$INSTALL_DIR/lib/env.sh'
-source '$INSTALL_DIR/lib/common.sh'
-source '$INSTALL_DIR/lib/platform.sh'
-sync_platform_domain_state '$INSTALL_DIR/.env'
-" || echo -e "${YELLOW}  ⚠ Domain state sync timed out (non-fatal)${NC}"
+    # NOTE: heredoc (not `bash -c "..."`) on purpose: the bundle regen
+    # pipeline inlines `source` lines, and a source line inside a
+    # double-quoted string would break backend/install.sh syntax.
+    export COMPOSE_FILE INSTALL_DIR
+    timeout -k 5 120 bash <<'SMSLY_SYNC_EOF' || echo -e "${YELLOW}  ⚠ Domain state sync timed out (non-fatal)${NC}"
+source "$INSTALL_DIR/lib/env.sh"
+source "$INSTALL_DIR/lib/common.sh"
+source "$INSTALL_DIR/lib/platform.sh"
+sync_platform_domain_state "$INSTALL_DIR/.env"
+SMSLY_SYNC_EOF
 
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
@@ -393,16 +396,18 @@ if d and d != 'localhost':
     fi
     fi
 
-    timeout -k 5 600 bash -c "
-export COMPOSE_FILE='$COMPOSE_FILE'
-source '$INSTALL_DIR/lib/common.sh' 
+    # NOTE: heredocs (not `bash -c "..."`) on purpose: the bundle regen
+    # pipeline inlines `source` lines, and a source line inside a
+    # double-quoted string would break backend/install.sh syntax.
+    export COMPOSE_FILE INSTALL_DIR
+    timeout -k 5 600 bash <<'SMSLY_REFRESH_EOF' || true
+source "$INSTALL_DIR/lib/common.sh"
 safe_refresh_runtime_services
-" || true
-    timeout -k 5 300 bash -c "
-export COMPOSE_FILE='$COMPOSE_FILE'
-source '$INSTALL_DIR/lib/common.sh' 
+SMSLY_REFRESH_EOF
+    timeout -k 5 300 bash <<'SMSLY_WORKERS_EOF' || true
+source "$INSTALL_DIR/lib/common.sh"
 ensure_celery_workers_running
-" || true
+SMSLY_WORKERS_EOF
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
     # Guarded read: the marker is absent on re-exec'd runs whose prior pass
@@ -798,17 +803,33 @@ RESTORE_EOF
 
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
 
+    # ─── WAF converge (open-appsec is full-gated AND env-gated) ─────────
+    # Rebuild subset-ups keep full-profile containers untouched, so a
+    # disabled WAF started by a plain `up` would linger and fail the
+    # verify below. Converge before verifying.
+    if command -v _harden_openappsec_reconcile >/dev/null 2>&1; then
+        _harden_openappsec_reconcile || true
+    fi
+
     # ─── Security verify ──────────────────────────────────────────────────
     if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
         harden_security_verify
     fi
 
     # ─── Image signature verification ────────────────────────────────────
+    # Verifies the images this stack actually runs (built as
+    # smsly-hosting-backend/frontend:latest). Images absent locally are
+    # skipped quietly — the check is informational, never blocking.
     if command -v cosign  && [ -f "$INSTALL_DIR/scripts/cosign-verify.sh" ]; then
         echo -e "${BLUE}  → Verifying production image signatures...${NC}"
         source "$INSTALL_DIR/scripts/cosign-verify.sh"
-        cosign_verify_image "smsly/backend:latest" || \
-            echo -e "${YELLOW}  ⚠ Backend image signature verification failed (non-fatal on existing installs)${NC}"
+        for _verify_image in smsly-hosting-backend:latest smsly-hosting-frontend:latest; do
+            if docker image inspect "$_verify_image" >/dev/null 2>&1; then
+                cosign_verify_image "$_verify_image" || \
+                    echo -e "${YELLOW}  ⚠ Image signature verification failed for $_verify_image (non-fatal on existing installs)${NC}"
+            fi
+        done
+        unset _verify_image
     fi
 
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"

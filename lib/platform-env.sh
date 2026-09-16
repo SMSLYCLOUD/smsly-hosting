@@ -238,6 +238,19 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "NODE_CROWDSEC" "1" "Enable CrowdSec WAF/IPS"
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
+    # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
+    # ~1-2GB real). Fill-if-absent so an explicit operator value survives
+    # updates; mirrors the fresh_config sizing ladder.
+    if [ -z "$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")" ]; then
+        local _waf_ram_mb=""
+        _waf_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$_waf_ram_mb" ] || _waf_ram_mb=8192
+        if [ "$_waf_ram_mb" -ge 8192 ]; then
+            env_set_value "$env_file" "OPENAPPSEC_ENABLED" "1"
+        else
+            env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
+        fi
+    fi
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -275,21 +288,107 @@ ensure_env_runtime_defaults() {
     # DB HA mode + compose profiles: without COMPOSE_PROFILES the profiled
     # db/postgres services are never created and every backend crashes with
     # "could not translate host name db" (2026-09-10 fresh-install incident).
-    local _db_ha_mode
+    # Default is full (run everything): local-ha|patroni|external + medium
+    # (observability) + full (Falco, SPIRE servers, apt-cacher, verdaccio).
+    local _db_ha_mode=""
     _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
     [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
     env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
-    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "Compose profiles to activate (matches the DB HA mode)"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "${_db_ha_mode},medium,full" "Compose profiles to activate (DB mode + observability + full stack)"
+    # Backfill older installs that predate the full default (local-ha or
+    # local-ha,medium): ensure the current DB mode + medium + full are
+    # present, and drop any STALE db-mode token (local-ha|patroni|external)
+    # so two postgres stacks never start side by side (haproxy :7000
+    # would clash with frps :7000). Idempotent, case-insensitive.
+    local _prof_cur="" _prof_new=""
+    _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
+    if command -v python3 >/dev/null 2>&1; then
+        _prof_new="$(DB_MODE="$_db_ha_mode" CUR_PROF="$_prof_cur" python3 -c '
+import os
+mode = os.environ.get("DB_MODE", "local-ha").strip() or "local-ha"
+cur = os.environ.get("CUR_PROF", "")
+db_modes = {"local-ha", "patroni", "external"}
+seen = set()
+out = []
+for tok in [t.strip() for t in cur.split(",")]:
+    if not tok:
+        continue
+    low = tok.lower()
+    if low in db_modes and low != mode.lower():
+        continue
+    if low not in seen:
+        seen.add(low)
+        out.append(tok)
+for want in [mode, "medium", "full"]:
+    if want.lower() not in seen:
+        seen.add(want.lower())
+        out.append(want)
+print(",".join(out))
+' || true)"
+        if [ -n "$_prof_new" ] && [ "$_prof_new" != "$_prof_cur" ]; then
+            env_set_value "$env_file" "COMPOSE_PROFILES" "$_prof_new"
+        fi
+    else
+        env_append_csv_values "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "medium" "full" > /dev/null
+    fi
+    # Read-replica routing must name the replica the compose stack actually
+    # starts. Empty here + compose-level default used to agree by accident;
+    # make it explicit so .env, pgcat, and the dashboard disagree never.
+    # External mode keeps operator-managed values (never overwrite).
+    local _replica_hosts=""
+    _replica_hosts="$(env_get_value "$env_file" "DB_REPLICA_HOSTS")"
+    if [ -z "$_replica_hosts" ]; then
+        case "$_db_ha_mode" in
+            patroni) env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001" ;;
+            local-ha) env_set_value "$env_file" "DB_REPLICA_HOSTS" "postgres-replica:5432" ;;
+        esac
+    fi
+    # Idle-minimal sizing (mirrors fresh_config; fill-if-absent so
+    # operator-tuned values survive updates). DB buffer changes take
+    # effect on the next postgres recreate; gunicorn/celery on the next
+    # worker restart (update/refresh flows recreate them).
+    local _size_ram_mb="" _size_cpus=""
+    _size_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+    [ -n "$_size_ram_mb" ] || _size_ram_mb=8192
+    _size_cpus="$(nproc 2>/dev/null || echo 4)"
+    local _want_workers="" _want_buffers="" _want_cache=""
+    if [ "$_size_cpus" -le 2 ]; then _want_workers=2; else _want_workers=4; fi
+    if [ "$_size_ram_mb" -le 4096 ]; then _want_buffers=256MB; _want_cache=1GB
+    elif [ "$_size_ram_mb" -le 8192 ]; then _want_buffers=512MB; _want_cache=2GB
+    else _want_buffers=1GB; _want_cache=4GB; fi
+    env_ensure_var "$env_file" "GUNICORN_WORKERS" "$_want_workers" "Gunicorn workers (host-sized; burst via autoscaler)"
+    env_ensure_var "$env_file" "DB_SHARED_BUFFERS" "$_want_buffers" "Postgres shared buffers (host-sized; pinned shm)"
+    env_ensure_var "$env_file" "DB_EFFECTIVE_CACHE_SIZE" "$_want_cache" "Postgres planner cache hint (no RAM cost)"
+    env_ensure_var "$env_file" "CELERY_QUEUES" "celery,fast,deploy" "Main worker drains all queues (burst workers idle-stop safely)"
+    env_ensure_var "$env_file" "CELERY_AUTOSCALE_ENABLED" "true" "Idle-stop burst workers on empty queues"
+    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "30d" "Prometheus TSDB retention (main driver of metrics disk+RAM growth; 7d on small hosts)"
+    env_ensure_var "$env_file" "LOKI_RETENTION" "30d" "Loki log retention (set together with PROMETHEUS_RETENTION)"
+    env_ensure_var "$env_file" "FALCO_MEMORY_LIMIT" "512M" "Falco runtime-security memory cap (node stack defaults to 256M)"
     # Registry public bind: without an explicit override the compose
     # fallback is a hardcoded IP from another host and the registry port
     # bind kills the whole install (2026-09-10 fresh-install incident).
     # This runs on every update path (unlike the overrides step, which
     # resume can skip), so the key is always repaired.
-    local _rt_bind
+    local _rt_bind=""
     _rt_bind="$(env_get_value "$env_file" "REGISTRY_PUBLIC_BIND_IP")"
     if [ -z "$_rt_bind" ] || ! _registry_bind_ip_is_local "$_rt_bind"; then
         _rt_bind="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9][0-9.]*$' | grep -v '^127\.' | head -1 || true)"
         [ -n "$_rt_bind" ] && env_set_value "$env_file" "REGISTRY_PUBLIC_BIND_IP" "$_rt_bind"
+    fi
+    # Mesh bind fallback: the compose default (10.100.0.1) only exists when
+    # the WireGuard mesh is up. If wg0 failed (no kernel module, VPS
+    # without wireguard), binding it kills the ENTIRE compose deployment
+    # with "cannot assign requested address". Only the untouched default
+    # is ever rewritten — an explicitly set mesh IP is the operator's
+    # intent and is left alone (fresh_deploy validates it fail-closed).
+    # 127.0.0.2 is loopback-range (always bindable) and distinct from the
+    # 127.0.0.1 first bind, so the triple-bind stays conflict-free while
+    # single-host pulls keep working via 127.0.0.1/registry:5000.
+    local _rt_mesh=""
+    _rt_mesh="$(env_get_value "$env_file" "REGISTRY_MESH_BIND_IP")"
+    if { [ -z "$_rt_mesh" ] || [ "$_rt_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+        env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
+        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
     fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
@@ -463,11 +562,26 @@ ensure_env_runtime_defaults() {
             echo -e "${GREEN}  OK DATABASE_URL migrated${NC}"
         fi
 
-        local expected_direct_url
+        local expected_direct_url=""
         if [ "$MODE_AGENT_LITE" = "true" ]; then
             expected_direct_url="postgresql://${MASTER_DB_USER:-smsly_admin}:${MASTER_DB_PASSWORD:-$postgres_password}@${MASTER_MESH_IP:-db}:5432/smsly_hosting"
         else
-            expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+            # Direct endpoint follows the DB mode (migrations bypass the
+            # pooler): local-ha talks to postgres-primary, patroni goes
+            # through HAProxy's write port, external uses the managed
+            # host from PGCAT_DB_HOST/PORT. env_ensure_var below only
+            # fills when missing, so operator-customized URLs survive.
+            local _direct_host="postgres-primary" _direct_port="5432"
+            case "$_db_ha_mode" in
+                patroni) _direct_host="haproxy"; _direct_port="5000" ;;
+                external)
+                    _direct_host="$(env_get_value "$env_file" "PGCAT_DB_HOST")"
+                    [ -n "$_direct_host" ] || _direct_host="postgres-primary"
+                    _direct_port="$(env_get_value "$env_file" "PGCAT_DB_PORT")"
+                    [ -n "$_direct_port" ] || _direct_port="5432"
+                    ;;
+            esac
+            expected_direct_url="postgresql://smsly_admin:${postgres_password}@${_direct_host}:${_direct_port}/smsly_hosting"
         fi
 
         if [ -z "$current_database_url" ]; then

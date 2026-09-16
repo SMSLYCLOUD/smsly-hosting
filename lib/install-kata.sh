@@ -22,7 +22,8 @@ _ensure_docker_kata_registration() {
         echo '{}' > "$DAEMON_JSON"
     fi
 
-    python3 -c "
+    local _kata_reg_out=""
+    _kata_reg_out="$(python3 -c "
 import json
 
 daemon = '$DAEMON_JSON'
@@ -42,9 +43,13 @@ if current != new_entry:
     print(f'  Registered kata-runtime at {kata_path} in {daemon}')
 else:
     print(f'  kata-runtime already registered correctly at {kata_path}')
-"
+    ")"
 
-    if command -v systemctl ; then
+    # Restart Docker only if registration changed daemon.json — an
+    # unconditional restart kills all running containers on every re-run.
+    if echo "$_kata_reg_out" | grep -q "already registered correctly"; then
+        echo "  Docker restart skipped (kata-runtime registration unchanged)"
+    elif command -v systemctl ; then
         systemctl daemon-reload
         systemctl restart docker
         echo "  Docker restarted with kata-runtime support"
@@ -115,6 +120,8 @@ main() {
     if command -v kata-runtime ; then
         local KATA_PATH
         KATA_PATH="$(command -v kata-runtime)"
+        local _kata_daemon_before=""
+        _kata_daemon_before="$(cat "$DAEMON_JSON" 2>/dev/null || echo '')"
         python3 -c "
 import json, sys
 with open('$DAEMON_JSON') as f:
@@ -133,17 +140,10 @@ with open('$DAEMON_JSON', 'w') as f:
 
     if command -v systemctl ; then
         systemctl daemon-reload
-        # Only restart Docker if daemon.json actually changed (avoids killing containers on re-run)
-        if python3 -c "
-import json
-with open('/etc/docker/daemon.json') as f:
-    cfg = json.load(f)
-runtimes = cfg.get('runtimes', {})
-if 'kata-runtime' in runtimes and runtimes['kata-runtime'].get('path', '').strip():
-    exit(0)
-else:
-    exit(1)
-" ; then
+        # Only restart Docker if daemon.json actually changed (avoids killing
+        # containers on re-run; the old check ran after the write, so it
+        # always saw the new entry and skipped the needed restart).
+        if [ "$(cat "$DAEMON_JSON" 2>/dev/null || echo '')" = "$_kata_daemon_before" ]; then
             echo "  Docker already has kata-runtime registered — skipping restart"
         else
             systemctl restart docker

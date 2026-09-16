@@ -96,9 +96,16 @@ if ! _registry_tls_ok; then
         echo -e "${YELLOW}        -keyout /opt/smsly-hosting/certs/registry.key \\${NC}"
         echo -e "${YELLOW}        -out    /opt/smsly-hosting/certs/registry.crt \\${NC}"
         echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
+        echo -e "${RED}    ✗ Aborting: continuing would leave registry:2.8.3 crash-looping on 'tls: private key does not match public key'. Fix the pair, then re-run with --resume.${NC}"
+        exit 1
     else
         echo -e "${BLUE}    Restarting registry container to pick up new TLS certs...${NC}"
-        docker restart smsly-hosting-registry-1 || echo -e "${YELLOW}    ⚠ Registry restart failed${NC}"
+        _reg_target="smsly-hosting-registry-1"
+        if command -v resolve_container_target >/dev/null 2>&1; then
+            _reg_target="$(resolve_container_target "smsly-hosting-registry-1" || echo "smsly-hosting-registry-1")"
+        fi
+        timeout 60 docker restart "$_reg_target" || echo -e "${YELLOW}    ⚠ Registry restart failed${NC}"
+        unset _reg_target
     fi
 fi
 if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
@@ -116,6 +123,12 @@ print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.g
     fi
     env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
     env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
+    # Export into the shell: docker_login() below (and the post-stack retry)
+    # reads REGISTRY_USER/REGISTRY_PASSWORD from the environment. On fresh
+    # installs the shell never sourced them (the template has no
+    # REGISTRY_PASSWORD yet), so without this the login silently no-ops
+    # and every authenticated push/pull 401s.
+    export REGISTRY_USER="${REGISTRY_USER:-smsly-registry}" REGISTRY_PASSWORD="$REGISTRY_PASS"
 fi
 echo -e "${GREEN}  ✓ Registry auth + TLS configured${NC}"
 
@@ -127,10 +140,46 @@ install_registry_docker_certs
 # pull base images during builds without 403 errors.
 docker_login
 
+# ─── Fail-closed registry bind validation ────────────────────────────
+# The registry publishes :5000 on three host IPs (loopback, mesh,
+# public). A non-local bind IP aborts the WHOLE `up` with "cannot
+# assign requested address", and REGISTRY_BIND_IP=0.0.0.0 overlaps both
+# other binds on :5000 ("port is already allocated"). Catch both here
+# with the fix attached instead of dumping a compose traceback.
+# 127/8 is always bindable (covers the 127.0.0.2 mesh fallback).
+if [ "${REGISTRY_BIND_IP:-127.0.0.1}" = "0.0.0.0" ]; then
+    echo -e "${RED}  ✗ REGISTRY_BIND_IP=0.0.0.0 overlaps the mesh/public :5000 binds.${NC}"
+    echo -e "${YELLOW}    Unset REGISTRY_BIND_IP in $INSTALL_DIR/.env (multi-bind is the supported topology) and re-run.${NC}"
+    exit 1
+fi
+_reg_bind_ok=true
+for _reg_entry in "REGISTRY_BIND_IP:${REGISTRY_BIND_IP:-127.0.0.1}" \
+    "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}" \
+    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}"; do
+    _reg_var="${_reg_entry%%:*}"
+    _reg_ip="${_reg_entry#*:}"
+    if echo "$_reg_ip" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        continue
+    fi
+    if ! _registry_bind_ip_is_local "$_reg_ip" 2>/dev/null; then
+        echo -e "${RED}  ✗ ${_reg_var}=${_reg_ip} is not assigned to this host — registry :5000 bind would fail.${NC}"
+        _reg_bind_ok=false
+    fi
+done
+if [ "$_reg_bind_ok" != "true" ]; then
+    echo -e "${YELLOW}    Fix: set each to an IP from \`hostname -I\` (or 127.0.0.1), or unset REGISTRY_MESH_BIND_IP handling to platform-env (it parks a missing mesh on 127.0.0.2).${NC}"
+    echo -e "${YELLOW}    Then re-run with --resume: sudo bash install.sh --resume${NC}"
+    exit 1
+fi
+unset _reg_bind_ok _reg_entry _reg_var _reg_ip
+
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
 # Pre-create caddy bind-mount directories (needed by compose volume driver)
 mkdir -p "$INSTALL_DIR/caddy-config" "$INSTALL_DIR/caddy-logs"
+# Pre-create the Traefik dynamic-config dir (canary WRR files). The
+# traefik_dynamic volume bind-mounts it; a missing dir breaks the mount.
+mkdir -p "$INSTALL_DIR/traefik-dynamic"
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: disabling master-only Caddy services before Traefik bind.${NC}"
     true
@@ -204,6 +253,14 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         timeout -k 5 240 docker compose -f "$COMPOSE_FILE" up -d apt-cacher verdaccio 2>&1 | tail -3 || \
             echo -e "${YELLOW}  ⚠ Build-cache services start failed (non-fatal)${NC}"
     fi
+    # ─── WAF converge (open-appsec is full-gated AND env-gated) ────────
+    # A plain `up` with the default full profiles starts the shadow WAF
+    # even when OPENAPPSEC_ENABLED=0; converge it down so disabled stays
+    # inert (and harden verify stays green). Guarded for old checkouts
+    # whose inlined harden copy predates the reconcile helper.
+    if command -v _harden_openappsec_reconcile >/dev/null 2>&1; then
+        _harden_openappsec_reconcile || true
+    fi
     # Deploy docker-labels exporter to all remote nodes and regenerate target files
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
@@ -222,8 +279,15 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
             echo -e "${BLUE}  → Provisioning Infisical secret manager...${NC}"
             docker volume create infisical_data  || true
 
-            # Create the infisical database in Postgres if it doesn't exist
+            # Create the infisical database in Postgres if it doesn't exist.
+            # Endpoint follows the DB mode: local-ha uses the primary
+            # container directly, patroni goes through HAProxy's write
+            # port as the superuser (any node may be leader), external
+            # has no local database (skip with a clear message).
             _db_container=""
+            _db_user=""
+            _infisical_db_host="smsly-postgres-primary"
+            _infisical_via_haproxy=false
             # HA mode: smsly-postgres-primary
             if docker ps --format '{{.Names}}' | grep -q '^smsly-postgres-primary$'; then
                 _db_container="smsly-postgres-primary"
@@ -232,8 +296,33 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
             elif docker ps --format '{{.Names}}' | grep -q '^smsly-hosting-db-1$'; then
                 _db_container="smsly-hosting-db-1"
                 _db_user="${POSTGRES_USER:-postgres}"
+            # Patroni HA: any healthy node means the cluster is up; writes
+            # go through HAProxy so leadership never matters here.
+            elif docker ps --format '{{.Names}}' | grep -qE '^smsly-patroni-[123]$'; then
+                _infisical_db_host="haproxy"
+                _infisical_via_haproxy=true
             fi
-            if [ -n "$_db_container" ]; then
+            # The compose file interpolates INFISICAL_DB_HOST (defaults to
+            # smsly-postgres-primary); export the mode-correct value.
+            export INFISICAL_DB_HOST="$_infisical_db_host"
+            if [ "$_infisical_via_haproxy" = "true" ]; then
+                if [ -n "${PATRONI_SUPERUSER_PASSWORD:-}" ]; then
+                    _db_exists=$(timeout 30 docker run --rm --network smsly-net \
+                        -e PGPASSWORD="$PATRONI_SUPERUSER_PASSWORD" postgres:16-alpine \
+                        psql -h haproxy -p 5000 -U postgres -d postgres -tc \
+                        "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
+                    if [ "$_db_exists" != "1" ]; then
+                        timeout 30 docker run --rm --network smsly-net \
+                            -e PGPASSWORD="$PATRONI_SUPERUSER_PASSWORD" postgres:16-alpine \
+                            psql -h haproxy -p 5000 -U postgres -d postgres -c \
+                            "CREATE DATABASE infisical;"  && \
+                            echo -e "${GREEN}  ✓ Created infisical database (via haproxy)${NC}" || \
+                            echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}  ⚠ PATRONI_SUPERUSER_PASSWORD unset — skipping infisical database creation${NC}"
+                fi
+            elif [ -n "$_db_container" ]; then
                 _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
@@ -243,7 +332,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
                 fi
             else
-                echo -e "${YELLOW}  ⚠ No Postgres container found — skipping infisical database creation${NC}"
+                echo -e "${YELLOW}  ⚠ No Postgres container found (external DB mode?) — skipping infisical database creation${NC}"
             fi
 
             # Generate env file on the volume
@@ -268,12 +357,25 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                 echo -e "${YELLOW}  ⚠ Infisical env incomplete — skipping Infisical${NC}"
             else
                 chmod 600 "$INFISICAL_ENV_FILE"
+                # Persist the host path so later `up` invocations (update
+                # flows, manual compose) resolve the same env_file without
+                # relying on this shell's export.
+                env_set_value "$INSTALL_DIR/.env" "INFISICAL_ENV_FILE" "$INFISICAL_ENV_FILE"
                 # DB credentials: the compose file defaults
                 # (postgres/postgres) never match HA hosts — export the real
-                # ones for interpolation.
+                # ones for interpolation. Patroni authenticates as the
+                # superuser through HAProxy (see above).
                 _pg_pass="$(grep '^POSTGRES_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)"
+                if [ "$_infisical_via_haproxy" = "true" ]; then
+                    _db_user="postgres"
+                    _pg_pass="${PATRONI_SUPERUSER_PASSWORD:-}"
+                fi
                 if [ -n "${_db_user:-}" ] && [ -n "$_pg_pass" ]; then
                     export POSTGRES_USER="$_db_user" POSTGRES_PASSWORD="$_pg_pass"
+                    # INFISICAL_DB_HOST was exported during DB detection
+                    # above; re-export defensively (this block may run in
+                    # flows where detection was skipped).
+                    export INFISICAL_DB_HOST="$_infisical_db_host"
                     _redis_pass="$(grep '^REDIS_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)"
                     if [ -n "$_redis_pass" ]; then
                         export REDIS_PASSWORD="$_redis_pass"
@@ -292,7 +394,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                     -f "$_INFISICAL_COMPOSE" up -d  && \
                     echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
                     echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
-                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD
+                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD INFISICAL_DB_HOST
             fi
         fi
     fi

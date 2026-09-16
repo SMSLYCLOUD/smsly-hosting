@@ -319,7 +319,9 @@ export interface Service {
   id: string;
   name: string;
   slug: string;
-  status: 'ACTIVE' | 'DELETION_PENDING' | 'DELETION_FAILED' | 'UPDATING' | 'STOPPED';
+  // Backend Service.Status: ACTIVE | DELETION_PENDING | DELETION_FAILED
+  // | DELETED | UNKNOWN. No UPDATING/STOPPED, no lowercase variants.
+  status: 'ACTIVE' | 'DELETION_PENDING' | 'DELETION_FAILED' | 'DELETED' | 'UNKNOWN';
   repository_url?: string;
   branch?: string;
   internal_port?: number;
@@ -332,7 +334,10 @@ export interface Service {
   path_redirects?: { path: string; target: string }[];
   host_aliases?: { host: string; rewrite_root: string }[];
   node_url?: string | null;
-  domain_instances?: { domain: string; verified: boolean }[];
+  // Wire shape: {domain_name, status, dns_expected, dns_actual,
+  // last_error, verified, ssl_active, issued_at, expires_at}
+  // (backend serializers/service.py get_domain_instances).
+  domain_instances?: { domain_name: string; verified: boolean; status?: string; ssl_active?: boolean }[];
   domain_verified?: boolean;
   verification_token?: string;
   staging_domain?: string;
@@ -527,6 +532,10 @@ export interface Deployment {
   commit_message?: string;
   status: string;
   build_logs?: string;
+  runtime_logs?: string;
+  // Set when the payload was truncated via ?tail= (polling). Full text
+  // needs an untailed fetch.
+  logs_truncated?: boolean;
   vulnerability_report?: any;
   pipeline_stages?: { name: string; status: string; duration?: number }[];
   ai_diagnosis?: string;
@@ -666,8 +675,9 @@ export const servicesApi = {
     const response = await api.get(`/services/${serviceId}/deployments/`);
     return extractDataList(response);
   },
-  getDeployment: async (id: string): Promise<Deployment> => {
-    const response = await api.get(`/deployments/${id}/`);
+  getDeployment: async (id: string, tail?: number): Promise<Deployment> => {
+    const response = await api.get(
+      tail ? `/deployments/${id}/?tail=${tail}` : `/deployments/${id}/`);
     return response.data;
   },
   getScanReport: async (serviceId: string): Promise<{
@@ -708,7 +718,10 @@ export const servicesApi = {
     const response = await api.post('/deployments/bulk-cancel/', { deployment_ids: deploymentIds });
     return response.data;
   },
-  promoteDeployment: async (deploymentId: string): Promise<{ status: string; message?: string }> => {
+  promoteDeployment: async (deploymentId: string): Promise<{
+    status?: string; message?: string; warnings?: string[];
+    deployment?: Deployment;
+  }> => {
     const response = await api.post(`/deployments/${deploymentId}/promote/`);
     return response.data;
   },
@@ -2327,6 +2340,7 @@ export interface AutoscalerBudget {
 
 export interface AutoscalerStatus {
   status: string;
+  _stale?: boolean;
   uptime_seconds: number;
   check_interval: number;
   last_check_at: string | null;

@@ -71,6 +71,36 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
             return DeploymentTimelineSerializer
         return DeploymentSerializer
 
+    def retrieve(self, request, *args, **kwargs):
+        """Retrieve with optional `?tail=N` log truncation.
+
+        The detail page polls this endpoint every few seconds; without
+        tail the full build_logs/runtime_logs blobs (MBs) re-transfer on
+        every tick alongside the live WS stream. tail=N keeps the last N
+        characters of each blob and sets logs_truncated so the UI can
+        offer a full fetch.
+        """
+        response = super().retrieve(request, *args, **kwargs)
+        tail = request.query_params.get('tail')
+        if tail is None or not isinstance(response.data, dict):
+            return response
+        try:
+            keep = max(0, min(int(tail), 200000))
+        except (TypeError, ValueError):
+            return response
+        if not keep:
+            return response
+        data = dict(response.data)
+        truncated = False
+        for key in ('build_logs', 'runtime_logs'):
+            val = data.get(key)
+            if isinstance(val, str) and len(val) > keep:
+                data[key] = val[-keep:]
+                truncated = True
+        data['logs_truncated'] = truncated
+        response.data = data
+        return response
+
 
     def get_queryset(self):
         """Return deployments for services accessible to the requesting user."""

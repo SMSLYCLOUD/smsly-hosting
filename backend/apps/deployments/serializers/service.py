@@ -196,7 +196,9 @@ class ServiceListSerializer(serializers.ModelSerializer):
     node_metadata = serializers.SerializerMethodField()
     node_url = serializers.SerializerMethodField()
     running_replicas = serializers.SerializerMethodField()
-    internal_addresses = serializers.SerializerMethodField()
+    # NOTE: no internal_addresses here on purpose — it costs a synchronous
+    # Docker inspect per row. The detail serializer serves it (TTL-cached);
+    # no list consumer renders it (InternalNetworkCard is detail-fed).
 
     class Meta:
         model = Service
@@ -209,16 +211,18 @@ class ServiceListSerializer(serializers.ModelSerializer):
             'wildcard_redirect_custom_domain', 'wildcard_internal_only',
             'path_redirects', 'host_aliases',
             'env_scan_depth', 'running_replicas',
-            'internal_addresses',
+            # Plain model columns (no extra queries): the shared Service
+            # type promises them, so list consumers must see them too.
+            'deploy_strategy', 'canary_percentage', 'promotion_policy',
         ]
 
     def get_running_replicas(self, obj):
         return getattr(obj, 'running_replicas_count', 0)
 
     def get_internal_addresses(self, obj):
-        """Cached at serialization time so the service list page can
-        show each service's internal IP without an N+1 Docker inspect
-        burst."""
+        """Cached at serialization time so repeated serialization of the
+        same object in one request needs a single lookup (the Docker call
+        itself is TTL-cached in Service.generate_internal_addresses)."""
         if not getattr(obj, '_internal_addresses_cache', None):
             obj._internal_addresses_cache = obj.generate_internal_addresses()
         return obj._internal_addresses_cache
@@ -734,9 +738,10 @@ class ServiceSerializer(serializers.ModelSerializer):
         ]
 
     def get_internal_addresses(self, obj):
-        """Same as the list serializer's get_internal_addresses — returns
-        the container's IP(s) and the Docker networks it's attached to so
-        the detail page can show the recommended inter-service URL."""
+        """Detail-only field (removed from the list serializer: one Docker
+        inspect per row per poll). Returns the container's IP(s) and the
+        Docker networks it's attached to so the detail page can show the
+        recommended inter-service URL."""
         if not getattr(obj, '_internal_addresses_cache', None):
             obj._internal_addresses_cache = obj.generate_internal_addresses()
         return obj._internal_addresses_cache

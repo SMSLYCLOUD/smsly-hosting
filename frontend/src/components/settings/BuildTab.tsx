@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Service, servicesApi, githubApi, gitlabApi, bitbucketApi } from '@/lib/api';
+import { firstApiError } from '@/lib/apiErrors';
 import { useToast } from '@/components/ui/use-toast';
 import { BuildpackSelector, BuildpackType } from '@/components/deployments/BuildpackSelector';
 import { FolderRoot, Container, Layers, AlertTriangle, GitBranch, Github, Filter, Bot } from 'lucide-react';
@@ -25,6 +26,25 @@ export function BuildTab({ service }: BuildTabProps) {
   const [watchPaths, setWatchPaths] = useState<string>((service.watch_paths || []).join('\n'));
   const [botPrStrategy, setBotPrStrategy] = useState<string>(service.bot_pr_strategy || 'DEPLOY');
   const [saving, setSaving] = useState(false);
+
+  // Seed-once keyed by service id (AGENTS.md #21): the parent polls a
+  // fresh service object every 3s with the SAME id — reseeding from the
+  // object reference would revert in-progress edits mid-keystroke.
+  // A different id (navigation without remount) reseeds everything.
+  const seededIdRef = useRef(service.id);
+  useEffect(() => {
+    if (seededIdRef.current === service.id) return;
+    seededIdRef.current = service.id;
+    setRepositoryUrl(service.repository_url || '');
+    setBranch(service.branch || 'main');
+    setBuildpack(service.buildpack || 'DOCKER');
+    setRootDirectory(service.root_directory || '/');
+    setBuildCommand(service.build_command || '');
+    setDeployMode(service.deploy_mode || 'SINGLE');
+    setWatchPaths((service.watch_paths || []).join('\n'));
+    setBotPrStrategy(service.bot_pr_strategy || 'DEPLOY');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [service.id]);
 
   // Branch fetching state
   const [branches, setBranches] = useState<any[]>([]);
@@ -67,11 +87,11 @@ export function BuildTab({ service }: BuildTabProps) {
         title: "Build settings updated",
         description: `Service will use ${deployMode === 'COMPOSE' ? 'Docker Compose' : buildpack} from "${rootDirectory}" for the next deployment.`,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
       toast({
         title: "Update failed",
-        description: "Could not save build settings.",
+        description: firstApiError(error?.response?.data, "Could not save build settings."),
         variant: "destructive",
       });
     } finally {

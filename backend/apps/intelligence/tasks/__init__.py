@@ -57,14 +57,21 @@ def _process_service_anomaly(
 ) -> dict[str, int]:
     """Analyze one service and apply fixes for high-confidence issues."""
     latest_deployment = (
-        service.deployments.order_by("-created_at").only("id", "build_logs").first()
+        service.deployments.order_by("-created_at").only("id", "build_logs", "runtime_logs").first()
     )
     if not latest_deployment and service.health_status != "unhealthy":
         return {"issues_count": 0, "fixed_count": 0}
 
+    # AGENTS.md #22: crash output lives in runtime_logs, build output in
+    # build_logs. The anomaly scan covers live (possibly crash-looping)
+    # services, so it must read both — build_logs alone is blind to
+    # runtime crashes.
     logs = ""
-    if latest_deployment and latest_deployment.build_logs:
-        logs = latest_deployment.build_logs[-20000:]
+    if latest_deployment:
+        if latest_deployment.build_logs:
+            logs += latest_deployment.build_logs[-10000:]
+        if latest_deployment.runtime_logs:
+            logs += "\n--- runtime logs ---\n" + latest_deployment.runtime_logs[-10000:]
 
     issues: list[dict[str, object]] = analyzer.analyze_logs(logs)
 

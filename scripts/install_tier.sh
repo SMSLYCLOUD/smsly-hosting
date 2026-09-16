@@ -6,7 +6,7 @@
 #   full   : 8 vCPU /16GB /200GB  — everything (Falco, CrowdSec, Spire, Apt-Cacher, Verdaccio)
 set -euo pipefail
 
-TIER="${1:-medium}"
+TIER="${1:-full}"
 case "$TIER" in
   lite|medium|full) ;;
   *) echo "Usage: $0 [lite|medium|full]"; echo "  lite   = core only"; echo "  medium = core + observability"; echo "  full   = all services"; exit 1;;
@@ -25,7 +25,7 @@ DB_HA="${DB_HA:-local-ha}"
 case "$TIER" in
   lite)   PROFILES="$DB_HA" ;;
   medium) PROFILES="$DB_HA,medium" ;;
-  full)   PROFILES="$DB_HA,full" ;;
+  full)   PROFILES="$DB_HA,medium,full" ;;
 esac
 
 echo "==> Stack tier: $TIER  (COMPOSE_PROFILES=$PROFILES)"

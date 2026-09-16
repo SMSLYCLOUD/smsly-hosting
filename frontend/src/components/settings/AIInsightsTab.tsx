@@ -14,6 +14,7 @@ import { SecurityStatusTab } from "@/components/insights/SecurityStatusTab";
 import { IncidentReportTab } from "@/components/settings/IncidentReportTab";
 import { LogsTab } from "@/components/logs/LogsTab";
 import { LogsView } from "@/components/logs/LogsView";
+import { isDeploymentLive } from "@/lib/deploymentStatus";
 
 interface JulesEntry {
   deployment_id: string;
@@ -375,7 +376,7 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
               <div className="flex items-center gap-2 mb-4">
                 <Server className="w-4 h-4 text-blue-500" />
                 <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider">Latest Deployment</h4>
-                <Badge variant={serviceInfo.latest_deployment.status === "SUCCESS" || serviceInfo.latest_deployment.status === "RUNNING" ? "outline" : "destructive"} className="text-[10px] ml-auto">
+                <Badge variant={isDeploymentLive(serviceInfo.latest_deployment.status) ? "outline" : "destructive"} className="text-[10px] ml-auto">
                   {serviceInfo.latest_deployment.status}
                 </Badge>
               </div>

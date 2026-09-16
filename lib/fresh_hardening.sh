@@ -72,11 +72,13 @@ log "Increasing swap by ${ADD_SWAP_MB}MB. Creating ${NEW_SWAPFILE}..."
 if fallocate -l ${ADD_SWAP_MB}M "$NEW_SWAPFILE" ; then
     chmod 600 "$NEW_SWAPFILE"
     mkswap "$NEW_SWAPFILE" 
-    swapon "$NEW_SWAPFILE"  || true
+    # Priority 10 like the installer swapfile: below zram (100), so
+    # compressed RAM stays the first overflow tier.
+    swapon -p 10 "$NEW_SWAPFILE"  || swapon "$NEW_SWAPFILE"  || true
 
     # Make it permanent
     if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
-        echo "$NEW_SWAPFILE none swap sw 0 0" >> /etc/fstab
+        echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
     fi
 
     log "Successfully added ${ADD_SWAP_MB}MB of swap. Total swap is now approx ${NEW_TOTAL_MB}MB."
@@ -86,10 +88,10 @@ else
     if dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count=$ADD_SWAP_MB status=none; then
         chmod 600 "$NEW_SWAPFILE"
         mkswap "$NEW_SWAPFILE" 
-        swapon "$NEW_SWAPFILE"  || true
+        swapon -p 10 "$NEW_SWAPFILE"  || swapon "$NEW_SWAPFILE"  || true
 
         if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
-            echo "$NEW_SWAPFILE none swap sw 0 0" >> /etc/fstab
+            echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
         fi
 
         log "Successfully added ${ADD_SWAP_MB}MB of swap via dd. Total swap is now approx ${NEW_TOTAL_MB}MB."
@@ -109,6 +111,27 @@ if ! grep -q "$OOM_SCRIPT" /etc/crontab ; then
     echo -e "${GREEN}  ✓ OOM Auto-Adjuster installed and scheduled via cron${NC}"
 else
     echo -e "${GREEN}  ✓ OOM Auto-Adjuster already scheduled${NC}"
+fi
+
+# ─── Host memory tuning: KSM page merging + zram compressed swap ──────
+# KSM dedupes identical pages across the Python worker fleet (20-40% of
+# worker RSS at <1% CPU); zram compresses cold pages in RAM before the
+# kernel touches disk swap. Both are best-effort (VPS kernels without
+# KSM/zram skip quietly) and re-applied every boot via systemd.
+if [ -f "$INSTALL_DIR/scripts/setup-memory-tuning.sh" ]; then
+    chmod +x "$INSTALL_DIR/scripts/setup-memory-tuning.sh"  || true
+    bash "$INSTALL_DIR/scripts/setup-memory-tuning.sh" || true
+    if [ -f "$INSTALL_DIR/scripts/smsly-memory-tuning.service" ]; then
+        cp "$INSTALL_DIR/scripts/smsly-memory-tuning.service" /etc/systemd/system/smsly-memory-tuning.service  || true
+        systemctl daemon-reload  || true
+        systemctl enable smsly-memory-tuning.service  || echo -e "${YELLOW}    ⚠ smsly-memory-tuning enable failed (non-fatal)${NC}"
+        # Already applied live above; `start` (not `restart`) only refreshes
+        # RemainAfterExit state and is a no-op when already active.
+        systemctl start smsly-memory-tuning.service  || true
+        echo -e "${GREEN}  ✓ Host memory tuning (KSM+zram) installed and applied${NC}"
+    fi
+else
+    echo -e "${YELLOW}  ⚠ setup-memory-tuning.sh missing — KSM/zram tuning skipped${NC}"
 fi
 
 # Platform integrity guard (hourly): registry TLS pair, egress NIC rules,

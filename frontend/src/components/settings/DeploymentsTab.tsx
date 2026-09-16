@@ -191,13 +191,26 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const handlePromote = async (deployment: Deployment) => {
         try {
             setPromotingId(deployment.id);
-            await servicesApi.promoteDeployment(deployment.id);
-            toast({ title: "Promotion triggered", description: "Routing will swap to the new container momentarily." });
+            const res = await servicesApi.promoteDeployment(deployment.id);
+            // Success can still carry readiness warnings (e.g. soak
+            // shortened, canary unmeasured) — surface them, don't swallow.
+            toast({
+                title: "Promotion triggered",
+                description: [
+                    res?.message || "Routing will swap to the new container momentarily.",
+                    ...((res?.warnings || []) as string[]),
+                ].join("\n"),
+            });
             setTimeout(() => { void loadDeployments(); }, 2000);
         } catch (err: any) {
             console.error(err);
-            const msg = err?.response?.data?.error || 'Promote failed';
-            toast({ title: msg, variant: "destructive" });
+            // 409 readiness blocks arrive as {error, blockers[], warnings[]} —
+            // render each failing gate, not just the generic sentence.
+            const data = err?.response?.data || {};
+            const blockers = Array.isArray(data.blockers) ? data.blockers as string[] : [];
+            const warnings = Array.isArray(data.warnings) ? data.warnings as string[] : [];
+            const lines = [data.error || 'Promote failed', ...blockers, ...warnings].filter(Boolean);
+            toast({ title: lines.join("\n"), variant: "destructive" });
         } finally {
             setPromotingId(null);
         }

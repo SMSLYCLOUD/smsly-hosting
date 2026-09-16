@@ -14,7 +14,14 @@ _harden_falco_bootstrap() {
     # created during stack deploy (fresh_deploy.sh) — the harden bootstrap
     # runs earlier, so create it here if missing.
     docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    # Explicit project: docker-compose.falco.yml pins no `name:`, so the
+    # project would otherwise derive from the cwd and fork a shadow
+    # project with a duplicate smsly-falco container_name (2026-09-04
+    # class). smsly-hosting matches docker-compose.prod.yml `name:` and
+    # the full-profile falco service (same container_name, no named
+    # volumes, so the two definitions converge on one container).
     docker compose \
+        -p smsly-hosting \
         "${env_args[@]}" \
         -f "$compose_file" \
         up -d --force-recreate --pull always || echo -e "${YELLOW}    ⚠ falco docker compose up failed${NC}"

@@ -354,10 +354,15 @@ class EnvoySidecar:
 
         sidecar_name = EnvoySidecar.get_sidecar_name(service)
 
-        # Check if sidecar already exists
+        # Check if sidecar already exists (reload: status is cached
+        # on get and a stale "running" would keep an SVID-less decoy).
         try:
             existing = client.containers.get(sidecar_name)
-            if existing.status == "running":
+            try:
+                existing.reload()
+            except Exception:
+                pass
+            if getattr(existing, "status", "") == "running":
                 logger.info("Envoy sidecar already running for %s", service.name)
                 return {"status": "already_running", "name": sidecar_name}
             else:
@@ -474,7 +479,18 @@ class EnvoySidecar:
                 "name": sidecar_name,
                 "container_id": container.id[:12],
             }
-        except Exception:
+        except Exception as exc:
+            # Race: beat + deploy (or two deploys) both passed the
+            # already_running check, one created first. A 409 is the
+            # desired end state — report it, don't fail the deploy.
+            _detail = str(exc)
+            _status = getattr(exc, "status_code", None)
+            if _status == 409 or "already in use" in _detail or "Conflict" in _detail:
+                logger.info(
+                    "Envoy sidecar %s appeared during inject for %s — treating as already_running",
+                    sidecar_name, service.name,
+                )
+                return {"status": "already_running", "name": sidecar_name}
             # Injection failed: drop the config we just wrote so a stale
             # file can never confuse the next attempt (inject always
             # re-renders it from scratch).
@@ -573,10 +589,14 @@ class EnvoySidecar:
             sidecar_name = EnvoySidecar.get_sidecar_name(service)
             client = get_docker_client()
             container = client.containers.get(sidecar_name)
+            try:
+                container.reload()
+            except Exception:
+                pass
 
             # Check health via Envoy admin API
             healthy = False
-            if container.status == "running":
+            if getattr(container, "status", "") == "running":
                 try:
                     # Use docker exec to check health
                     result = container.exec_run(
@@ -840,6 +860,23 @@ class EnvoySidecar:
         sidecar_name = EnvoySidecar.get_sidecar_name(service)
         app_port = service.internal_port or 8000
 
+        # Resolve the REAL socket/svids volumes (namespaced
+        # smsly-spire_*), never the bare decoy: a bare external name
+        # makes Docker create an EMPTY volume shadowing the real socket
+        # (2026-09-15: every sidecar mounted the empty decoy, SDS never
+        # reached agent.sock, no SVID ever issued). Falls back to bare
+        # only when the daemon is unreachable at compose-render time.
+        socket_vol = SPIRE_AGENT_SOCKET_VOLUME
+        svids_vol = SPIRE_SVIDS_VOLUME
+        try:
+            from apps.deployments.services.mtls_integration import (
+                resolve_spire_volume_name as _resolve_vol,
+            )
+            socket_vol = _resolve_vol(SPIRE_AGENT_SOCKET_VOLUME)
+            svids_vol = _resolve_vol(SPIRE_SVIDS_VOLUME)
+        except Exception:
+            pass
+
         # Add sidecar service
         if "services" not in compose_data:
             compose_data["services"] = {}
@@ -855,8 +892,8 @@ class EnvoySidecar:
                 "APP_PORT": str(app_port),
             },
             "volumes": [
-                f"{SPIRE_AGENT_SOCKET_VOLUME}:{SPIRE_AGENT_SOCKET_CONTAINER_PATH}:ro",
-                f"{SPIRE_SVIDS_VOLUME}:{SPIRE_SVIDS_CONTAINER_PATH}:ro",
+                f"{socket_vol}:{SPIRE_AGENT_SOCKET_CONTAINER_PATH}:ro",
+                f"{svids_vol}:{SPIRE_SVIDS_CONTAINER_PATH}:ro",
             ],
             "security_opt": ["no-new-privileges:true"],
             "cap_drop": ["ALL"],
@@ -879,13 +916,13 @@ class EnvoySidecar:
         if "volumes" not in compose_data:
             compose_data["volumes"] = {}
 
-        compose_data["volumes"][SPIRE_AGENT_SOCKET_VOLUME] = {
+        compose_data["volumes"][socket_vol] = {
             "external": True,
-            "name": SPIRE_AGENT_SOCKET_VOLUME,
+            "name": socket_vol,
         }
-        compose_data["volumes"][SPIRE_SVIDS_VOLUME] = {
+        compose_data["volumes"][svids_vol] = {
             "external": True,
-            "name": SPIRE_SVIDS_VOLUME,
+            "name": svids_vol,
         }
 
         return compose_data

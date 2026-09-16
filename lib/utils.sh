@@ -153,6 +153,14 @@ reconcile_compose_stack_after_resume() {
         exit "$reconcile_rc"
     fi
 
+    # Named volumes (caddy_data/caddy_logs) may be root-owned if the
+    # checkpoints that chown them were skipped on resume — every future
+    # `caddy reload` would then fail while the file keeps changing
+    # (AGENTS.md #23). Re-apply ownership after any resume reconcile.
+    if command -v ensure_infrastructure_permissions >/dev/null 2>&1; then
+        ensure_infrastructure_permissions || true
+    fi
+
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
 }
 

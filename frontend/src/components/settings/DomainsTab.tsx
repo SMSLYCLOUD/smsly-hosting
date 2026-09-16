@@ -497,7 +497,10 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
         try {
             const oldDomain = service.staging_domain || '';
             const newDomain = stagingDomain.trim() || '';
-            const updated = await servicesApi.update(service.id, { staging_domain: newDomain || undefined });
+            // Send "" (not undefined) when clearing: JSON.stringify drops
+            // undefined keys, so omitting the key would silently keep the
+            // old domain while the toast promises auto-generation.
+            const updated = await servicesApi.update(service.id, { staging_domain: newDomain });
             setService(prev => ({ ...prev, ...updated }));
             if (oldDomain !== newDomain) {
                 setStagingVerified(null);

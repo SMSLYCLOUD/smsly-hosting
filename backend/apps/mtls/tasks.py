@@ -171,6 +171,68 @@ def sync_svid_metadata_task():
     return {"synced": synced, "checked": checked}
 
 
+def _ensure_spire_entry_best_effort(service, mtls_config=None) -> None:
+    """Ensure the SPIRE registration entry exists (never raises).
+
+    The deploy path creates the entry BEFORE the sidecar requests an
+    SVID; without it the agent denies the workload and a remounted
+    sidecar stays SVID-less forever while the beat reports success.
+    Same trust-domain branching as the deploy pipeline (platform.local
+    -> platform server, else ecosystem server). Failures only log —
+    the remount + sync below still report clearly.
+    """
+    try:
+        from apps.deployments.tasks_spiffe import (
+            _create_spire_entry,
+            _entry_path,
+            _list_spire_entries,
+            _live_ecosystem_agent_id,
+            _live_platform_agent_id,
+            PLATFORM_SPIFFE_TRUST_DOMAIN,
+        )
+        trust_domain = ""
+        try:
+            trust_domain = str(
+                getattr(mtls_config, "trust_domain", "")
+                or getattr(getattr(service, "mtls_config", None), "trust_domain", "")
+                or ""
+            ).strip()
+        except Exception:
+            pass
+        if trust_domain == PLATFORM_SPIFFE_TRUST_DOMAIN:
+            from apps.deployments.tasks_spiffe import (
+                _list_platform_spire_entries,
+            )
+            listed = _list_platform_spire_entries()
+        else:
+            listed = _list_spire_entries()
+        if listed is None:
+            # Server unreachable — abort, don't blind-create. The next
+            # 15m tick retries; a blind create here only adds log noise
+            # and duplicate attempts while the daemon is down.
+            logger.debug("SPIRE entry list unavailable for %s — skipping ensure", service.name)
+            return
+        want_path = f"/service/{service.name}"
+        if any(_entry_path(e) == want_path for e in listed):
+            return
+        created = False
+        if trust_domain == PLATFORM_SPIFFE_TRUST_DOMAIN:
+            created = bool(_create_spire_entry(
+                service.name,
+                parent_id=_live_platform_agent_id(),
+                trust_domain=PLATFORM_SPIFFE_TRUST_DOMAIN,
+            ))
+        else:
+            created = bool(_create_spire_entry(
+                service.name,
+                parent_id=_live_ecosystem_agent_id(),
+            ))
+        if created:
+            logger.info("Created missing SPIRE entry for %s (repair beat)", service.name)
+    except Exception as exc:
+        logger.debug("SPIRE entry ensure skipped for %s: %s", getattr(service, "name", "?"), exc)
+
+
 @shared_task(
     name="apps.mtls.tasks.repair_stale_sidecars_task",
     soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
@@ -258,11 +320,36 @@ def repair_stale_sidecars_task():
                             svc.name,
                         )
                 continue
-            out = EnvoySidecar.remount_if_stale(svc)
+            out = None
+            try:
+                # Entry BEFORE remount: with no matching registration the
+                # agent denies the workload and the fresh sidecar stays
+                # SVID-less while we report success.
+                _ensure_spire_entry_best_effort(svc, getattr(svc, "mtls_config", config))
+                out = EnvoySidecar.remount_if_stale(svc)
+            except Exception as exc:
+                logger.warning("Sidecar repair failed for %s: %s", svc.name, exc)
+                result["errors"].append(f"{svc.name}: {exc}")
+                continue
             if out.get("remounted"):
                 result["remounted"].append(svc.name)
             elif out.get("status") == "injected":
                 result["injected"].append(svc.name)
+            else:
+                continue
+            # Verify the healed sidecar actually serves an SVID (fast
+            # /certs read, not a full 120s wait — the beat must not
+            # serialize behind slow SDS under host pressure). A missing
+            # SVID lands in errors so the dashboard signal stays honest
+            # instead of reporting a successful heal with no identity.
+            try:
+                if not sync_svid_for_service(svc, client=client):
+                    result["errors"].append(
+                        f"{svc.name}: sidecar healed but no SVID issued yet "
+                        "(entry/agent may still be converging)"
+                    )
+            except Exception as exc:
+                logger.debug("SVID verify skipped for %s: %s", svc.name, exc)
         except Exception as exc:
             logger.warning("Sidecar repair failed for %s: %s", svc.name, exc)
             result["errors"].append(f"{svc.name}: {exc}")

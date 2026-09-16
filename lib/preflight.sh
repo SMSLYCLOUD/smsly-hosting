@@ -20,9 +20,15 @@ check_hardware() {
     ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     local ram_mb=$((ram_kb / 1024))
     echo -e "${BLUE}  RAM: ${ram_mb}MB${NC}"
-    if [ "$ram_mb" -lt 950 ]; then # Allow some margin for 1GB VPS
-        echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). Grid requires at least 1GB.${NC}"
+    # Full-profile default (observability + WAF + caches + SPIRE) is
+    # heavy: 2GB is the hard floor, below 4GB expect build/swap pressure.
+    if [ "$ram_mb" -lt 1900 ]; then
+        echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). Grid requires at least 2GB for the default full stack.${NC}"
         exit 1
+    fi
+    if [ "$ram_mb" -lt 3800 ]; then
+        echo -e "${YELLOW}  ⚠ Low RAM ($ram_mb MB). The full stack is sized for 4GB+; frontend builds may swap heavily.${NC}"
+        echo -e "${YELLOW}    Small hosts: finish the install, then slim via sudo ./scripts/install_tier.sh medium${NC}"
     fi
 
     local cores
@@ -155,6 +161,13 @@ apt_run() {
 
 ensure_system_swap() {
     echo -e "${BLUE}  → Ensuring system swap is sufficient (Target: 3x-4x RAM)...${NC}"
+    # zram FIRST: compressed swap in RAM (priority 100) absorbs cold pages
+    # before disk ever spins. The setup is idempotent; its swap counts in
+    # the `free` measurement below, so less disk swap is provisioned
+    # automatically. Best-effort: VPS kernels without zram skip quietly.
+    if [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/setup-memory-tuning.sh" ]; then
+        bash "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/setup-memory-tuning.sh" >/dev/null 2>&1 || true
+    fi
     local current_ram_mb
     current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
 
@@ -237,10 +250,12 @@ ensure_system_swap() {
         fi
         chmod 600 "$swapfile"
         mkswap "$swapfile"
-        swapon "$swapfile"  || true
+        # Priority 10: below zram (100) so compressed RAM is consumed
+        # first, above the kernel default so overflow ordering is explicit.
+        swapon -p 10 "$swapfile"  || swapon "$swapfile"  || true
         # Make permanent (idempotent)
         if ! grep -q "$swapfile" /etc/fstab ; then
-            echo "$swapfile none swap sw 0 0" >> /etc/fstab
+            echo "$swapfile none swap sw,pri=10 0 0" >> /etc/fstab
         fi
         echo -e "${GREEN}  ✓ Swap file created and activated (${needed_mb}MB)${NC}"
     else

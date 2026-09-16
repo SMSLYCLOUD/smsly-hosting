@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { servicesApi, EnvVar } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +46,12 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
   const [bulkText, setBulkText] = useState("");
   const [bulkSaving, setBulkSaving] = useState(false);
   const [unmaskedSecrets, setUnmaskedSecrets] = useState<Record<number, string>>({});
+  // Dirty-guard for the 10s self-poll (AGENTS.md #21 pattern): while an
+  // edit/add/delete/save sequence is in flight, ticks must not reseed
+  // `vars` — a tick between delete+create resurrects the deleted row and
+  // `v` goes stale between render and save. Explicit loads after each
+  // mutation still run; only background ticks defer.
+  const busyRef = useRef(false);
 
   const handleBulkImport = async () => {
     const lines = bulkText
@@ -69,6 +75,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
       return;
     }
     setBulkSaving(true);
+    busyRef.current = true;
     let added = 0;
     let updated = 0;
     try {
@@ -110,6 +117,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
       toast({ title: "Bulk import failed", variant: "destructive" });
     } finally {
       setBulkSaving(false);
+      busyRef.current = false;
     }
   };
 
@@ -126,12 +134,15 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
 
   useEffect(() => {
     void loadVars();
-    const interval = setInterval(loadVars, 10000);
+    const interval = setInterval(() => {
+      if (!busyRef.current) void loadVars();
+    }, 10000);
     return () => clearInterval(interval);
   }, [loadVars]);
 
   const handleAdd = async () => {
     if (!newKey || !newValue) return;
+    busyRef.current = true;
     try {
       await servicesApi.createEnvVar(serviceId, {
         key: newKey,
@@ -146,6 +157,8 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
       toast({ title: "Variable added" });
     } catch (err) {
       toast({ title: "Failed to add variable", variant: "destructive" });
+    } finally {
+      busyRef.current = false;
     }
   };
 
@@ -159,6 +172,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
       }))
     )
       return;
+    busyRef.current = true;
     try {
       await servicesApi.deleteEnvVar(serviceId, id);
       await loadVars();
@@ -166,10 +180,13 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
       toast({ title: "Variable deleted" });
     } catch (err) {
       toast({ title: "Failed to delete variable", variant: "destructive" });
+    } finally {
+      busyRef.current = false;
     }
   };
 
   const startEdit = (v: EnvVar) => {
+    busyRef.current = true;
     setEditingId(v.id);
     setEditValue(v.value);
     // Make sure the value is visible while editing
@@ -223,6 +240,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
   const cancelEdit = () => {
     setEditingId(null);
     setEditValue("");
+    busyRef.current = false;
   };
 
   const handleSaveEdit = async (v: EnvVar) => {
@@ -248,6 +266,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
       toast({ title: "Failed to update variable", variant: "destructive" });
     } finally {
       setSaving(false);
+      busyRef.current = false;
     }
   };
 

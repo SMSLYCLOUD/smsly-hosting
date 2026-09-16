@@ -3,13 +3,14 @@
 # Brings up agent + Envoy-with-attachment on LOOPBACK shadow port only
 # (no 80/443 touch, zero traffic impact). Phase 2 cutover flips Envoy
 # to 80/443 with SNI chains — separate change with its own rollback.
-# Gated by OPENAPPSEC_ENABLED=1 in .env (default 0 = fully inert).
+# Default ON (OPENAPPSEC_ENABLED=1): the shadow proves the filter before
+# any cutover. 0 = fully inert (containers converged down by reconcile).
 
 # Resolve the kill-switch from the shell env first, then straight from
 # .env (callers don't always export it — e.g. direct lib invocation).
 # Returns 0 (true) when the WAF stack should be up.
 _harden_openappsec_is_enabled() {
-    [ "${OPENAPPSEC_ENABLED:-0}" = "1" ] && return 0
+    [ "${OPENAPPSEC_ENABLED:-1}" = "1" ] && return 0
     if [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
         local _file_flag=""
         _file_flag=$(grep -E '^OPENAPPSEC_ENABLED=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
@@ -22,6 +23,7 @@ _harden_openappsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     if ! _harden_openappsec_is_enabled; then
         echo -e "${BLUE}  → [harden] open-appsec disabled (OPENAPPSEC_ENABLED!=1) — skipping${NC}"
+        _harden_openappsec_reconcile || true
         return 0
     fi
     local conf_dir="$INSTALL_DIR/infrastructure/openappsec/conf"
@@ -64,6 +66,31 @@ _harden_openappsec_bootstrap() {
     done
     # Record resolved digests so image updates are deliberate, not silent.
     docker inspect smsly-appsec-agent smsly-appsec-envoy --format '{{.RepoDigests}}' 2>/dev/null > "$conf_dir/.digests" || true
+    return 0
+}
+
+_harden_openappsec_reconcile() {
+    # Converge running state with the kill-switch. Enabled path is owned
+    # by the bootstrap (policy seed + explicit up); disabled path must
+    # actively down strays: full-profile `up` starts these containers even
+    # when OPENAPPSEC_ENABLED=0, and the verify step fails closed on
+    # "disabled but running". Explicit stop+rm, never --remove-orphans
+    # (AGENTS.md #16). Non-fatal by design.
+    command -v docker >/dev/null 2>&1 || return 0
+    if _harden_openappsec_is_enabled; then
+        return 0
+    fi
+    local stray=""
+    stray="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^smsly-appsec-' || true)"
+    [ -n "$stray" ] || return 0
+    echo -e "${BLUE}  → [harden] open-appsec disabled — stopping stray WAF containers...${NC}"
+    local env_args=()
+    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+    local compose_file="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" stop --timeout 15 \
+        appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" rm -f \
+        appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
     return 0
 }
 

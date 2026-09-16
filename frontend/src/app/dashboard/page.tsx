@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { useServiceStatusUpdates, getStatusColor, getStatusIcon } from "@/lib/websocket";
+import { isServiceFailed, isServiceRunning, isServiceStopped } from "@/lib/deploymentStatus";
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardOverview | null>(null);
@@ -98,11 +99,12 @@ export default function DashboardPage() {
 
   const calculateServiceStats = () => {
     if (wsServices.length > 0) {
-      const running = wsServices.filter(s => 
-        s.status === 'ACTIVE' || s.status === 'building' || s.status === 'deploying' || s.status === 'review'
-      ).length;
-      const failed = wsServices.filter(s => s.status === 'FAILED' || s.status === 'deletion_failed').length;
-      const stopped = wsServices.filter(s => s.status === 'DELETION_PENDING').length;
+      // Backend-parity service states (models/service.py Status):
+      // ACTIVE / DELETION_PENDING / DELETION_FAILED / DELETED / UNKNOWN.
+      // There is no building/deploying/review or lowercase variant.
+      const running = wsServices.filter(s => isServiceRunning(s.status)).length;
+      const failed = wsServices.filter(s => isServiceFailed(s.status)).length;
+      const stopped = wsServices.filter(s => isServiceStopped(s.status)).length;
       
       return { running, failed, stopped, total: wsServices.length };
     }

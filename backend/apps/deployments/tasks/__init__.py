@@ -47,9 +47,13 @@ from apps.deployments.tasks.data.tasks_backup import (  # noqa: F401
     cleanup_old_backups_task,
     create_server_backup_task,
     create_service_backup_task,
+    create_snapshot_task,
     purge_user_backups_task,
     restore_server_backup_task,
     restore_service_backup_task,
+    run_scheduled_backups_task,
+    run_scheduled_snapshots_task,
+    verify_backup_integrity_task,
 )
 
 # ── Re-exports from resource_limits ───────────────────────────────

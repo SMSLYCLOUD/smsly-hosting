@@ -203,7 +203,7 @@ else
     # `${line#*=}` strips only up to the FIRST '=', preserving the value.
     while IFS= read -r _smsly_secrets_line; do
         case "$_smsly_secrets_line" in
-            SECRET_KEY=*|FIELD_ENCRYPTION_KEY=*|POSTGRES_PASSWORD=*|REDIS_PASSWORD=*|RABBITMQ_PASSWORD=*|GATEWAY_SECRET=*|GITHUB_WEBHOOK_SECRET=*|AUTOSCALER_API_TOKEN=*|FRP_AUTH_TOKEN=*|PGCAT_ADMIN_PASSWORD=*|REPLICATION_PASSWORD=*|SENTINEL_PASSWORD=*|REGISTRY_HTTP_SECRET=*|CROWDSEC_BOUNCER_KEY=*)
+            SECRET_KEY=*|FIELD_ENCRYPTION_KEY=*|POSTGRES_PASSWORD=*|REDIS_PASSWORD=*|RABBITMQ_PASSWORD=*|GATEWAY_SECRET=*|GITHUB_WEBHOOK_SECRET=*|AUTOSCALER_API_TOKEN=*|FRP_AUTH_TOKEN=*|PGCAT_ADMIN_PASSWORD=*|REPLICATION_PASSWORD=*|SENTINEL_PASSWORD=*|REGISTRY_HTTP_SECRET=*|CROWDSEC_BOUNCER_KEY=*|COSIGN_PASSWORD=*|PATRONI_SUPERUSER_PASSWORD=*|CADDY_ASK_SECRET=*|BACKUP_ENCRYPTION_KEY=*|GRAFANA_PASSWORD=*)
                 _smsly_secrets_key="${_smsly_secrets_line%%=*}"
                 _smsly_secrets_val="${_smsly_secrets_line#*=}"
                 printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
@@ -245,10 +245,19 @@ else
     # environments with pre-populated known_hosts should set this to "true".
     [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="false"
     # Read-replica plumbing (used by pgcat for replica routing).
-    # Initialize empty defaults so set -u doesn't trip on them later.
+    # Default follows the DB mode so the replica that the compose stack
+    # actually starts is also the one pgcat routes to (previously empty
+    # here while compose defaulted to postgres-replica:5432 — same
+    # effective value, but .env and runtime disagreed).
     [ -n "${REPLICATION_PASSWORD:-}" ] || REPLICATION_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${SENTINEL_PASSWORD:-}" ] || SENTINEL_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-    [ -n "${DB_REPLICA_HOSTS:-}" ] || DB_REPLICA_HOSTS=""
+    if [ -z "${DB_REPLICA_HOSTS:-}" ]; then
+        case "${DB_HA_ENABLED:-local-ha}" in
+            patroni) DB_REPLICA_HOSTS="haproxy:5001" ;;
+            external) DB_REPLICA_HOSTS="" ;;
+            *) DB_REPLICA_HOSTS="postgres-replica:5432" ;;
+        esac
+    fi
 
     # Validate Fernet key format (both keys must be 32 url-safe base64 bytes;
     # plain `openssl rand -base64` output is NOT url-safe and fails ~75% of
@@ -293,6 +302,9 @@ except Exception:
     echo -e "${BLUE}  → Bootstrapping Cosign signing keypair...${NC}"
     mkdir -p "$INSTALL_DIR/cosign-keys"
     COSIGN_PASSWORD="${COSIGN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))"  || openssl rand -hex 32  || echo 'cosign-placeholder')}"
+    # NOTE: persisted via the .env template below (this block runs before
+    # .env exists on fresh installs), matching update_preflight which
+    # persists it unconditionally.
     COSIGN_PRIVATE_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.key"
     COSIGN_PUBLIC_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.pub"
     if [ ! -f "$COSIGN_PRIVATE_KEY_PATH" ] || [ ! -f "$COSIGN_PUBLIC_KEY_PATH" ]; then
@@ -304,7 +316,6 @@ except Exception:
                 mv cosign.pub "$COSIGN_PUBLIC_KEY_PATH"
                 chmod 600 "$COSIGN_PRIVATE_KEY_PATH"
                 chmod 644 "$COSIGN_PUBLIC_KEY_PATH"
-                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD"
                 env_set_value "$INSTALL_DIR/.env" "COSIGN_PRIVATE_KEY_PATH" "$COSIGN_PRIVATE_KEY_PATH"
                 echo -e "${GREEN}    ✓ Cosign keypair created at $INSTALL_DIR/cosign-keys/${NC}"
             else
@@ -362,7 +373,9 @@ except Exception:
         [ -n "$_detected_sentinels" ] && SENTINEL_HOSTS="$_detected_sentinels"
     fi
     # Compute effective compose profiles BEFORE the template: the
-    # observability stack is 'medium'-gated, so always include it.
+    # observability stack is 'medium'-gated and the security/build-cache
+    # stack (Falco, SPIRE servers, apt-cacher, verdaccio) is 'full'-gated.
+    # Full is the default so a fresh install runs everything.
     # NOTE: this MUST live here, not inside the template heredoc below.
     # Unquoted heredocs still run backtick/${} expansions, and the bare
     # ${COMPOSE_PROFILES} + `medium`/`full` backticks that used to live in
@@ -373,6 +386,44 @@ except Exception:
         *,medium,*) ;;
         *) COMPOSE_PROFILES="${COMPOSE_PROFILES},medium" ;;
     esac
+    case ",${COMPOSE_PROFILES}," in
+        *,full,*) ;;
+        *) COMPOSE_PROFILES="${COMPOSE_PROFILES},full" ;;
+    esac
+    # Size-aware runtime sizing BEFORE the template (same heredoc rule as
+    # above: compute here, interpolate there). Small hosts idle lean:
+    # fewer gunicorn workers, smaller Postgres shared buffers (pinned shm
+    # is the largest fixed idle cost). Burst ceilings are NOT touched, so
+    # heavy load can still consume up to the docker limits.
+    ENV_SCHED_CPUS="$(nproc 2>/dev/null || echo 4)"
+    ENV_SCHED_RAM_MB="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+    [ -n "$ENV_SCHED_RAM_MB" ] || ENV_SCHED_RAM_MB=8192
+    ENV_GUNICORN_WORKERS="${GUNICORN_WORKERS:-}"
+    if [ -z "$ENV_GUNICORN_WORKERS" ]; then
+        if [ "$ENV_SCHED_CPUS" -le 2 ]; then ENV_GUNICORN_WORKERS=2; else ENV_GUNICORN_WORKERS=4; fi
+    fi
+    ENV_DB_SHARED_BUFFERS="${DB_SHARED_BUFFERS:-}"
+    ENV_DB_EFFECTIVE_CACHE_SIZE="${DB_EFFECTIVE_CACHE_SIZE:-}"
+    if [ -z "$ENV_DB_SHARED_BUFFERS" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -le 4096 ]; then ENV_DB_SHARED_BUFFERS=256MB
+        elif [ "$ENV_SCHED_RAM_MB" -le 8192 ]; then ENV_DB_SHARED_BUFFERS=512MB
+        else ENV_DB_SHARED_BUFFERS=1GB; fi
+    fi
+    if [ -z "$ENV_DB_EFFECTIVE_CACHE_SIZE" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -le 4096 ]; then ENV_DB_EFFECTIVE_CACHE_SIZE=1GB
+        elif [ "$ENV_SCHED_RAM_MB" -le 8192 ]; then ENV_DB_EFFECTIVE_CACHE_SIZE=2GB
+        else ENV_DB_EFFECTIVE_CACHE_SIZE=4GB; fi
+    fi
+    ENV_CELERY_QUEUES="${CELERY_QUEUES:-celery,fast,deploy}"
+    # WAF shadow follows host size: the 6-container shadow costs ~1-2GB
+    # real — on small hosts that erases the idle headroom this sizing
+    # exists to protect. On at >=8GB RAM, off below. An explicit operator
+    # value (env preset or existing .env) always wins.
+    ENV_OPENAPPSEC_ENABLED="${OPENAPPSEC_ENABLED:-}"
+    if [ -z "$ENV_OPENAPPSEC_ENABLED" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -ge 8192 ]; then ENV_OPENAPPSEC_ENABLED=1; else ENV_OPENAPPSEC_ENABLED=0; fi
+    fi
+    echo -e "${BLUE}  → Runtime sizing: ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
@@ -405,7 +456,8 @@ DB_HA_ENABLED=${DB_HA_ENABLED:-local-ha}
 # defaulted to profiles=local-ha only, so the entire monitoring stack
 # silently never started (Grafana embeds 502'd, Loki blackouts went
 # unnoticed, autoscaler Prometheus targets stayed incomplete). Always
-# include 'medium'; 'full' (Falco, SPIRE, Verdaccio) stays opt-in.
+# include 'medium' and 'full' (Falco, SPIRE servers, apt-cacher,
+# verdaccio) so a fresh install runs everything by default.
 COMPOSE_PROFILES=$COMPOSE_PROFILES
 # PgCat upstream. patroni mode routes through HAProxy write/read ports.
 PGCAT_DB_HOST=${PGCAT_DB_HOST:-postgres-primary}
@@ -470,6 +522,18 @@ EOF
     else
         DOMAIN_ORIGINS="https://$DOMAIN"
     fi
+    # Direct-DB endpoint follows the DB mode (used by the DIRECT_DATABASE_URL
+    # template line below): local-ha talks to postgres-primary, patroni goes
+    # through HAProxy's write port, external uses the managed host.
+    _DIRECT_DB_HOST="postgres-primary"
+    _DIRECT_DB_PORT="5432"
+    case "${DB_HA_ENABLED:-local-ha}" in
+        patroni) _DIRECT_DB_HOST="haproxy"; _DIRECT_DB_PORT="5000" ;;
+        external)
+            _DIRECT_DB_HOST="${PGCAT_DB_HOST:-postgres-primary}"
+            _DIRECT_DB_PORT="${PGCAT_DB_PORT:-5432}"
+            ;;
+    esac
     cat >> "$ENV_TMP" <<EOF
 CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,$DOMAIN_ORIGINS,http://localhost:8090,http://$PUBLIC_IP
 CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,$DOMAIN_ORIGINS,http://$PUBLIC_IP
@@ -489,6 +553,11 @@ CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
 CADDY_CONFIG_DIR=/caddy-config
 PUBLIC_IP=$PUBLIC_IP
 
+# open-appsec WAF shadow (detect-learn on a loopback port — zero traffic
+# impact). Sized from host RAM above (on at >=8GB, off below); explicit
+# operator values always win. Set to 0 for fully inert.
+OPENAPPSEC_ENABLED=$ENV_OPENAPPSEC_ENABLED
+
 # Autoscaler API authentication (shared with smsly-autoscaler.service)
 AUTOSCALER_API_TOKEN=$AUTOSCALER_API_TOKEN
 
@@ -501,15 +570,44 @@ PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
 # Grafana admin password (used by the standalone observability stack)
 GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-}
 
+# Backup encryption (Fernet key + policy). The key is validated as Fernet
+# above; persisting it here (not just via backfill) keeps the template
+# the single written record of every required secret.
+BACKUP_ENCRYPTION_KEY=$BACKUP_ENCRYPTION_KEY
+BACKUP_REQUIRE_ENCRYPTION=$BACKUP_REQUIRE_ENCRYPTION
+
+# Cosign image-signing key password (keypair bootstrapped above; the
+# password must survive in .env so later updates can unlock the key).
+COSIGN_PASSWORD=$COSIGN_PASSWORD
+COSIGN_PRIVATE_KEY_PATH=$INSTALL_DIR/cosign-keys/cosign.key
+
 # Grafana external URL for browser embeds (auto-derived from domain)
 GRAFANA_EXTERNAL_URL=${DOMAIN_ORIGINS}/grafana
 
 # Direct database connection for migrations (bypasses PgCat pooler)
-DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@postgres-primary:5432/smsly_hosting
+DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@${_DIRECT_DB_HOST}:${_DIRECT_DB_PORT}/smsly_hosting
 
 # Private Docker registry (push/pull deployment images)
 CONTAINER_REGISTRY_URL=registry:5000
 REGISTRY_USER=smsly-registry
+
+# Runtime sizing (idle-minimal, burst-allowed). Computed from detected
+# hardware above; burst ceilings (celery autoscale maxima, docker memory
+# limits) stay untouched so heavy load can still consume.
+GUNICORN_WORKERS=$ENV_GUNICORN_WORKERS
+DB_SHARED_BUFFERS=$ENV_DB_SHARED_BUFFERS
+DB_EFFECTIVE_CACHE_SIZE=$ENV_DB_EFFECTIVE_CACHE_SIZE
+# Main celery worker drains ALL queues so burst workers (celery-fast,
+# celery-deploy) can idle-stop without stalling work.
+CELERY_QUEUES=$ENV_CELERY_QUEUES
+CELERY_AUTOSCALE_ENABLED=${CELERY_AUTOSCALE_ENABLED:-true}
+
+# Observability retention + Falco cap (operator-tunable; compose falls
+# back to the same defaults when unset, but persisting them here makes
+# .env the single record and lets small hosts pin 7d without compose edits).
+PROMETHEUS_RETENTION=${PROMETHEUS_RETENTION:-30d}
+LOKI_RETENTION=${LOKI_RETENTION:-30d}
+FALCO_MEMORY_LIMIT=${FALCO_MEMORY_LIMIT:-512M}
 
 # The installer runs first-boot Django setup explicitly after the stack starts.
 # Keep the web container from doing the same work while Compose is waiting on health.

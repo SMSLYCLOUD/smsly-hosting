@@ -4,10 +4,16 @@ import logging
 
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM
+
 logger = logging.getLogger(__name__)
 
 
-@shared_task(name="apps.deployments.tasks.deploy.caddy.sync_caddy_task")
+@shared_task(
+    soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
+    time_limit=TASK_TIME_LIMIT_MEDIUM[1],
+    name="apps.deployments.tasks.deploy.caddy.sync_caddy_task",
+)
 def sync_caddy_task():
     """Regenerate and apply Caddyfile, then push to all full nodes.
 

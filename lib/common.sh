@@ -58,9 +58,10 @@ CADDY_LAST_GOOD="$INSTALL_DIR/caddy-config/Caddyfile.smsly-last-good"
 # service profiles. Compose derives the project from cwd when no -p flag
 # is given, but profiles ONLY come from the environment (or --profile
 # flags): an invocation from another directory silently drops
-# profile-gated services (medium/full: loki, grafana, promtail...), and
-# `up --remove-orphans` then treats their running containers as orphans
-# and DELETES them. That is how Grafana vanished on a healthy host.
+# profile-gated services (medium/full: loki, grafana, promtail, falco,
+# spire, caches...), and `up --remove-orphans` then treats their running
+# containers as orphans and DELETES them. That is how Grafana vanished
+# on a healthy host. Default is full (run everything).
 ensure_compose_profiles() {
     if [ -n "${COMPOSE_PROFILES:-}" ]; then
         export COMPOSE_PROFILES
@@ -68,14 +69,14 @@ ensure_compose_profiles() {
     fi
     local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
     if [ -f "$env_file" ]; then
-        local val
+        local val=""
         val="$(grep -E '^COMPOSE_PROFILES=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
         if [ -n "$val" ]; then
             export COMPOSE_PROFILES="$val"
             return 0
         fi
     fi
-    export COMPOSE_PROFILES="local-ha,medium"
+    export COMPOSE_PROFILES="local-ha,medium,full"
 }
 
 acquire_install_lock() {

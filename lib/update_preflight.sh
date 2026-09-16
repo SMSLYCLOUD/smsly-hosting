@@ -87,6 +87,8 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"  || true
         env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"  || true
         chmod 600 "$INSTALL_DIR/auth/htpasswd"  || true
+        # Export so update-time docker_login() sees the fresh values.
+        export REGISTRY_USER="${REGISTRY_USER:-smsly-registry}" REGISTRY_PASSWORD="$REGISTRY_PASS"
     fi
 
     # Install registry cert into Docker's cert trust store so the daemon

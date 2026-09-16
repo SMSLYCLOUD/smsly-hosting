@@ -71,6 +71,8 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         fi
         env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
         env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
+        # Same export as fresh_deploy: recovery-time logins read the shell.
+        export REGISTRY_USER="${REGISTRY_USER:-smsly-registry}" REGISTRY_PASSWORD="$REGISTRY_PASS"
     fi
 
     # Install registry cert into Docker's cert trust store so the daemon

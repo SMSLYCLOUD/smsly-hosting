@@ -41,6 +41,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     Server accepts with ``Sec-WebSocket-Protocol: token`` so the actual
     auth key is never echoed in the WS handshake response.
+
+    Cookie/session fallback: when the subprotocol token is absent or
+    invalid but ``scope[user]`` is an authenticated active user (e.g.
+    session/OAuth browsers that never exchanged a WS token), that user
+    is accepted. Deployment ownership is always verified afterwards.
     """
 
     def __init__(self, *args, **kwargs):
@@ -96,6 +101,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 return
 
             self.user = await self._authenticate_token(token_key)
+            if not self.user:
+                # Cookie/session fallback (same as platform_update.py):
+                # browsers with a valid session but no exchanged WS token
+                # (session/OAuth login, throttled exchange) authenticate
+                # via QueryStringAuthMiddleware's scope[user] instead of
+                # failing closed here. Ownership is still verified below.
+                scope_user = self.scope.get('user')
+                if (scope_user is not None
+                        and getattr(scope_user, 'is_authenticated', False)
+                        and getattr(scope_user, 'is_active', False)):
+                    self.user = scope_user
             if not self.user:
                 logger.warning(
                     "WebSocket connection rejected: Invalid token for "

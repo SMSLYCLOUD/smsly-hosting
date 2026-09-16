@@ -357,11 +357,11 @@ ensure_infrastructure_permissions() {
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
 
     if command -v docker ; then
-        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data)$')"
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
         for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
-                docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
                 echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
             fi
@@ -847,13 +847,20 @@ safe_refresh_runtime_services() {
 }
 
 ensure_celery_workers_running() {
+    # Always-on: `celery` drains ALL queues (CELERY_QUEUES=celery,fast,deploy)
+    # and `celery-beat` owns the schedule. Burst workers (celery-fast,
+    # celery-deploy) are owned by celery-worker-autoscaler when enabled —
+    # restarting them here would undo every idle scale-down — so they are
+    # only enforced in static-capacity mode.
+    local mandatory=(celery celery-beat)
+    local burst=(celery-deploy celery-fast)
+    local want=("${mandatory[@]}")
+    if [ "${CELERY_AUTOSCALE_ENABLED:-true}" != "true" ]; then
+        want+=("${burst[@]}")
+    fi
     local celery_services=()
     local down_services=()
-    local base_workers=(celery celery-deploy celery-fast celery-beat)
-    if [ "${CELERY_AUTOSCALE_ENABLED:-false}" != "true" ]; then
-        base_workers+=(celery-2 celery-3)
-    fi
-    for svc in "${base_workers[@]}"; do
+    for svc in "${want[@]}"; do
         if docker compose -f "$COMPOSE_FILE" config --services  | grep -qx "$svc"; then
             celery_services+=("$svc")
         fi
@@ -872,21 +879,9 @@ ensure_celery_workers_running() {
         return 0
     fi
     echo -e "${YELLOW}  ⚠ Celery workers down: ${down_services[*]}. Restarting...${NC}"
-    local base_down=()
-    local extra_down=()
-    for svc in "${down_services[@]}"; do
-        case "$svc" in
-            celery-2|celery-3) extra_down+=("$svc") ;;
-            *) base_down+=("$svc") ;;
-        esac
-    done
-    if [ "${#base_down[@]}" -gt 0 ]; then
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${base_down[@]}" || \
-            timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${base_down[@]}" || echo -e "${YELLOW}    ⚠ Celery workers restart failed${NC}"
-    fi
-    if [ "${#extra_down[@]}" -gt 0 ]; then
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" --profile extra-workers up -d --force-recreate --no-deps "${extra_down[@]}" || \
-            timeout -k 5 60 docker compose -f "$COMPOSE_FILE" --profile extra-workers up -d --force-recreate "${extra_down[@]}" || echo -e "${YELLOW}    ⚠ Extra celery workers restart failed${NC}"
+    if [ "${#down_services[@]}" -gt 0 ]; then
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${down_services[@]}" || \
+            timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${down_services[@]}" || echo -e "${YELLOW}    ⚠ Celery workers restart failed${NC}"
     fi
     local all_ok=true
     for svc in "${down_services[@]}"; do

@@ -99,7 +99,7 @@ _harden_spire_start_agent() {
         return 0
     fi
     local token
-    token="$(docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    token="$(timeout 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
@@ -129,12 +129,36 @@ _harden_spire_bootstrap() {
     local spire_file="$INSTALL_DIR/docker-compose.spire.yml"
     [ -f "$spire_file" ] || { _harden_log warn "spire compose file missing"; return 1; }
     docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    # Single project (smsly-hosting) for servers AND agents: prod
+    # (docker-compose.prod.yml, name: smsly-hosting) manages the same
+    # logical volumes, so a split project would fork the trust roots
+    # (smsly-spire_* vs smsly-hosting_*) and prod `up --remove-orphans`
+    # with full active would recreate the servers empty. The -p flag is
+    # required because docker-compose.spire.yml pins no `name:`.
+    # One-time migration for pre-existing smsly-spire_* server volumes:
+    # copy trust-root data into the smsly-hosting_* volume when the
+    # target is missing/empty and the source is non-empty. Non-fatal.
+    local _src="" _dst="" _pair=""
+    for _pair in "smsly-spire_spire-server-data smsly-hosting_spire-server-data" "smsly-spire_spire-ecosystem-server-data smsly-hosting_spire-ecosystem-server-data"; do
+        _src="${_pair%% *}"
+        _dst="${_pair##* }"
+        if docker volume inspect "$_src" >/dev/null 2>&1; then
+            if ! docker volume inspect "$_dst" >/dev/null 2>&1; then
+                docker volume create "$_dst" >/dev/null 2>&1 || true
+            fi
+            if [ -z "$(timeout -k 5 60 docker run --rm -v "$_dst:/dst:ro" alpine:3.19 ls -A /dst 2>/dev/null)" ] && [ -n "$(timeout -k 5 60 docker run --rm -v "$_src:/src:ro" alpine:3.19 ls -A /src 2>/dev/null)" ]; then
+                timeout -k 5 120 docker run --rm -v "$_src:/src:ro" -v "$_dst:/dst" alpine:3.19 sh -c 'cp -a /src/. /dst/' >/dev/null 2>&1 && \
+                    _harden_log ok "spire trust-root migrated ${_src} -> ${_dst}" || \
+                    _harden_log warn "spire trust-root migration ${_src} -> ${_dst} failed (non-fatal)"
+            fi
+        fi
+    done
     # Servers are idempotent under compose (running services are kept).
-    docker compose -p smsly-spire -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+    docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
         _harden_log warn "spire servers failed to start"
         return 1
     }
-    local _i
+    local _i=""
     for _i in $(seq 1 30); do
         if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server 2>/dev/null)" = "true" ] && \
            [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-server-ecosystem 2>/dev/null)" = "true" ]; then
@@ -143,10 +167,14 @@ _harden_spire_bootstrap() {
         sleep 2
     done
     sleep 5
+    # Agent volumes MUST match the smsly-hosting project prefix used by
+    # prod and the migration above — a bare or smsly-spire-prefixed
+    # socket volume mounts an empty decoy (SVID-less sidecars, AGENTS.md
+    # #24, guarded hourly by verify_platform_integrity.sh).
     _harden_spire_start_agent "smsly-spire-agent" "smsly-spire-server" "$INSTALL_DIR/infrastructure/spire/agent.conf" \
         "smsly-hosting_spire-agent-data" "smsly-hosting_spire-agent-socket" "smsly-hosting_spire-agent-svids" || return 1
     _harden_spire_start_agent "smsly-spire-agent-ecosystem" "smsly-spire-server-ecosystem" "$INSTALL_DIR/infrastructure/spire/agent-ecosystem.conf" \
-        "smsly-spire_spire-ecosystem-agent-data" "smsly-spire_spire-ecosystem-agent-socket" "smsly-spire_spire-ecosystem-agent-svids" || return 1
+        "smsly-hosting_spire-ecosystem-agent-data" "smsly-hosting_spire-ecosystem-agent-socket" "smsly-hosting_spire-ecosystem-agent-svids" || return 1
     # Sidecar image last: non-fatal (the registry may not be up yet on a
     # fresh install; deploy-time pull and the next update retry it).
     _harden_envoy_image_bootstrap || true

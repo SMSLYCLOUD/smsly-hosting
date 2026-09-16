@@ -101,25 +101,33 @@
      if [ -f "$_env_file" ] && [ "$MODE_NODE" != "true" ]; then
          echo -e "${BLUE}[UPDATE] Verifying critical envs in $_env_file...${NC}"
          _missing_count=0
-         # Each line: <VAR_NAME>=<generator>
-           _env_generators=(
-               "REDIS_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-               "RABBITMQ_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-               "GATEWAY_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
-               "GITHUB_WEBHOOK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
-               "AUTOSCALER_API_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
-               "FRP_AUTH_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
-               "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(48))"  || true)"
-               "REGISTRY_HTTP_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-                "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || python3 -c "import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())")"
-               "REPLICATION_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-               "SENTINEL_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-               "CROWDSEC_BOUNCER_KEY|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-           )
-         for _entry in "${_env_generators[@]}"; do
-             _key="${_entry%%|*}"
-             _generator="${_entry#*|}"
-             if ! grep -q "^${_key}=" "$_env_file" ; then
+          # Each line: <VAR_NAME>=<generator>
+            # Keep in sync with scripts/generate_env_secrets.py
+            # SECRET_DEFINITIONS (plus BACKUP_REQUIRE_ENCRYPTION policy).
+            _env_generators=(
+                "REDIS_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+                "RABBITMQ_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+                "GATEWAY_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+                "GITHUB_WEBHOOK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+                "AUTOSCALER_API_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+                "FRP_AUTH_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+                "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(48))"  || true)"
+                "REGISTRY_HTTP_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+                 "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || python3 -c "import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())")"
+                "REPLICATION_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+                "SENTINEL_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+                "CROWDSEC_BOUNCER_KEY|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+                "CADDY_ASK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+                "PATRONI_SUPERUSER_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+                "GRAFANA_PASSWORD|$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))"  || true)"
+            )
+          for _entry in "${_env_generators[@]}"; do
+              _key="${_entry%%|*}"
+              _generator="${_entry#*|}"
+              # Treat missing AND empty as absent: old templates wrote
+              # `KEY=` placeholders (e.g. GRAFANA_PASSWORD=) that read as
+              # "present" to a bare grep but fail every consumer.
+              if ! grep -q "^${_key}=.\+" "$_env_file" ; then
                  if [ -n "$_generator" ]; then
                      echo -e "${YELLOW}  → Auto-generating missing $_key${NC}"
                      env_set_value "$_env_file" "$_key" "$_generator"
@@ -648,8 +656,15 @@
             # Ensure the infisical data volume exists
             docker volume create infisical_data  || true
 
-            # Create the infisical database in Postgres if it doesn't exist
+            # Create the infisical database in Postgres if it doesn't exist.
+            # Endpoint follows the DB mode (see lib/fresh_deploy.sh for the
+            # full rationale): local-ha uses the primary container directly,
+            # patroni goes through HAProxy's write port as the superuser,
+            # external has no local database (skip with a clear message).
             _db_container=""
+            _db_user=""
+            _infisical_db_host="smsly-postgres-primary"
+            _infisical_via_haproxy=false
             # HA mode: smsly-postgres-primary
             if docker ps --format '{{.Names}}' | grep -q '^smsly-postgres-primary$'; then
                 _db_container="smsly-postgres-primary"
@@ -658,8 +673,33 @@
             elif docker ps --format '{{.Names}}' | grep -q '^smsly-hosting-db-1$'; then
                 _db_container="smsly-hosting-db-1"
                 _db_user="${POSTGRES_USER:-postgres}"
+            # Patroni HA: any healthy node means the cluster is up; writes
+            # go through HAProxy so leadership never matters here.
+            elif docker ps --format '{{.Names}}' | grep -qE '^smsly-patroni-[123]$'; then
+                _infisical_db_host="haproxy"
+                _infisical_via_haproxy=true
             fi
-            if [ -n "$_db_container" ]; then
+            # The compose file interpolates INFISICAL_DB_HOST (defaults to
+            # smsly-postgres-primary); export the mode-correct value.
+            export INFISICAL_DB_HOST="$_infisical_db_host"
+            if [ "$_infisical_via_haproxy" = "true" ]; then
+                if [ -n "${PATRONI_SUPERUSER_PASSWORD:-}" ]; then
+                    _db_exists=$(timeout 30 docker run --rm --network smsly-net \
+                        -e PGPASSWORD="$PATRONI_SUPERUSER_PASSWORD" postgres:16-alpine \
+                        psql -h haproxy -p 5000 -U postgres -d postgres -tc \
+                        "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
+                    if [ "$_db_exists" != "1" ]; then
+                        timeout 30 docker run --rm --network smsly-net \
+                            -e PGPASSWORD="$PATRONI_SUPERUSER_PASSWORD" postgres:16-alpine \
+                            psql -h haproxy -p 5000 -U postgres -d postgres -c \
+                            "CREATE DATABASE infisical;"  && \
+                            echo -e "${GREEN}  ✓ Created infisical database (via haproxy)${NC}" || \
+                            echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}  ⚠ PATRONI_SUPERUSER_PASSWORD unset — skipping infisical database creation${NC}"
+                fi
+            elif [ -n "$_db_container" ]; then
                 _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
@@ -669,7 +709,7 @@
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
                 fi
             else
-                echo -e "${YELLOW}  ⚠ No Postgres container found — skipping infisical database creation${NC}"
+                echo -e "${YELLOW}  ⚠ No Postgres container found (external DB mode?) — skipping infisical database creation${NC}"
             fi
 
             # Generate env file on the volume (if not already present)
@@ -695,12 +735,21 @@
                 echo -e "${YELLOW}  ⚠ Infisical env incomplete — skipping Infisical${NC}"
             else
                 chmod 600 "$INFISICAL_ENV_FILE"
+                # Persist the host path so later `up` invocations resolve
+                # the same env_file without relying on this shell's export.
+                env_set_value "$INSTALL_DIR/.env" "INFISICAL_ENV_FILE" "$INFISICAL_ENV_FILE"  || true
                 # DB credentials: the compose file defaults
                 # (postgres/postgres) never match HA hosts — export the real
-                # ones for interpolation.
+                # ones for interpolation. Patroni authenticates as the
+                # superuser through HAProxy (see above).
                 _pg_pass="$(grep '^POSTGRES_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)"
+                if [ "$_infisical_via_haproxy" = "true" ]; then
+                    _db_user="postgres"
+                    _pg_pass="${PATRONI_SUPERUSER_PASSWORD:-}"
+                fi
                 if [ -n "${_db_user:-}" ] && [ -n "$_pg_pass" ]; then
                     export POSTGRES_USER="$_db_user" POSTGRES_PASSWORD="$_pg_pass"
+                    export INFISICAL_DB_HOST="$_infisical_db_host"
                     _redis_pass="$(grep '^REDIS_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)"
                     if [ -n "$_redis_pass" ]; then
                         export REDIS_PASSWORD="$_redis_pass"
@@ -720,7 +769,7 @@
                     -f "$_INFISICAL_COMPOSE" up -d  && \
                     echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
                     echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
-                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD
+                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD INFISICAL_DB_HOST
             fi
         fi
 
@@ -768,6 +817,15 @@
             timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
         fi
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
+        # ─── Build-cache images (apt-cacher-ng floats :latest) ──────────
+        # Fresh deploy starts these explicitly; refresh their images here
+        # so updates don't pin stale cache daemons forever. Non-fatal.
+        # Explicit service names: profile-proof, no --remove-orphans.
+        echo -e "${BLUE}  → Refreshing build-cache images (apt-cacher, verdaccio)...${NC}"
+        timeout -k 5 240 docker compose -f "$COMPOSE_FILE" pull --ignore-pull-failures apt-cacher verdaccio 2>&1 | tail -3 || \
+            echo -e "${YELLOW}  ⚠ Build-cache image refresh failed (non-fatal)${NC}"
+        timeout -k 5 120 docker compose -f "$COMPOSE_FILE" up -d --no-deps apt-cacher verdaccio 2>&1 | tail -3 || \
+            echo -e "${YELLOW}  ⚠ Build-cache services restart failed (non-fatal)${NC}"
     fi
     if [ -n "${CROWDSEC_BOUNCER_KEY:-}" ]; then
         echo -e "${BLUE}  → Registering CrowdSec Bouncer...${NC}"

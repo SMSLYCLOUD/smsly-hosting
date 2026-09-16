@@ -149,7 +149,7 @@ def provision_bundle_task(
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1])
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1], name="apps.deployments.tasks_bundles.reprovision_bundle_task")
 def reprovision_bundle_task(
     self,
     bundle_id: str,

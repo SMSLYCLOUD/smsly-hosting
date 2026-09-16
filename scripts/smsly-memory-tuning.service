@@ -1,0 +1,17 @@
+[Unit]
+Description=SMSLY Hosting memory tuning (KSM page merging + zram compressed swap)
+After=local-fs.target systemd-modules-load.service
+Before=swap.target
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/smsly-hosting/scripts/setup-memory-tuning.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=swap.target

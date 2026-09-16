@@ -48,6 +48,25 @@ ensure_caddy_logs_writable() {
     fi
 }
 
+# ── 8. Traefik dynamic dir must exist (weighted canary files) ─────
+# The backend writes per-service canary WRR files to the host path
+# backing the traefik_dynamic volume (/opt/smsly-hosting/traefik-dynamic,
+# mounted into Traefik at /etc/traefik/dynamic). A missing dir breaks the
+# bind mount and silently disables every canary split — ensure it here.
+ensure_traefik_dynamic_dir() {
+    local dir="/opt/smsly-hosting/traefik-dynamic"
+    if [ -d "$dir" ]; then
+        log "traefik-dynamic dir OK"
+        return 0
+    fi
+    log "ALERT: $dir missing — creating (canary splits need it)"
+    if mkdir -p "$dir" 2>/dev/null; then
+        log "traefik-dynamic dir created"
+    else
+        log "ALERT: traefik-dynamic dir creation FAILED — canary splits will fail"
+    fi
+}
+
 # ── 1. Registry TLS pair ─────────────────────────────────────────────
 ensure_registry_pair() {
     local crt="$CERTS/registry.crt" key="$CERTS/registry.key"
@@ -169,12 +188,12 @@ ensure_migrations() {
         return 0
     fi
     local check_output
-    check_output=$(docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
+    check_output=$(timeout 120 docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
         -w /app "$backend_container" \
         python manage.py migrate --check --noinput 2>&1) || true
     if echo "$check_output" | grep -q "Your models have changes"; then
         log "ALERT: pending migrations detected — applying now"
-        docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
+        timeout 300 docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
             -w /app "$backend_container" \
             python manage.py migrate --noinput 2>&1 | tail -3
         log "migrations applied"
@@ -405,6 +424,43 @@ ensure_openappsec_shadow_parity() {
     fi
 }
 
+# ── 12. Host memory tuning (KSM + zram) must stay applied ────────────
+# KSM merging and zram swap are the idle-minimal half of the resource
+# strategy. Both are best-effort (VPS kernels without them skip quietly),
+# so this guard heals-or-reports rather than failing: re-run the setup
+# script when the knobs exist but are off, log-and-skip otherwise.
+ensure_memory_tuning() {
+    local setup="$INSTALL_DIR/scripts/setup-memory-tuning.sh"
+    # KSM: kernel present but merging off (and not operator-disabled)?
+    if [ -f /sys/kernel/mm/ksm/run ] && [ "${SMSLY_DISABLE_KSM:-0}" != "1" ]; then
+        if [ "$(cat /sys/kernel/mm/ksm/run 2>/dev/null || echo 0)" != "1" ]; then
+            if [ -x "$setup" ] && bash "$setup" >/dev/null 2>&1; then
+                log "KSM was off — re-applied via setup-memory-tuning.sh"
+            else
+                log "ALERT: KSM available but off and re-apply failed"
+            fi
+        else
+            local shared=""
+            shared=$(awk '{print $1}' /sys/kernel/mm/ksm/pages_sharing 2>/dev/null || echo 0)
+            log "KSM active (sharing ${shared} pages)"
+        fi
+    else
+        log "KSM not applicable (absent kernel support or disabled) — skipping"
+    fi
+    # zram: unit enabled but no zram swap active (and not disabled)?
+    if [ "${SMSLY_DISABLE_ZRAM:-0}" != "1" ] && systemctl is-enabled smsly-memory-tuning.service >/dev/null 2>&1; then
+        if ! grep -q '^/dev/zram' /proc/swaps 2>/dev/null; then
+            if [ -x "$setup" ] && bash "$setup" >/dev/null 2>&1 && grep -q '^/dev/zram' /proc/swaps 2>/dev/null; then
+                log "zram swap was missing — re-applied via setup-memory-tuning.sh"
+            else
+                log "ALERT: memory-tuning unit enabled but no zram swap active"
+            fi
+        else
+            log "zram swap active"
+        fi
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -414,9 +470,11 @@ ensure_migrations
 ensure_traefik_middlewares
 ensure_traefik_service_conflicts
 ensure_caddy_logs_writable
+ensure_traefik_dynamic_dir
 ensure_spire_volumes_not_shadowed
 ensure_sidecar_mounts_current
 ensure_cf_bouncer_running
 ensure_fail2ban_running
 ensure_openappsec_shadow_parity
+ensure_memory_tuning
 log "integrity check complete"

@@ -287,6 +287,13 @@ export default function AutoscalerPage() {
           </div>
         </div>
 
+        {status?._stale && (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-2.5 text-xs text-amber-200">
+            <AlertTriangle size={14} className="shrink-0 text-amber-500" />
+            <span>Showing last known data — the live check timed out (daemon under pressure). Numbers may be stale; Force Check retries.</span>
+          </div>
+        )}
+
         {/* ── Hero: Memory Budget Ring ─────────────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <Card className="col-span-1 border-border/50 bg-gradient-to-b from-card to-card/50">

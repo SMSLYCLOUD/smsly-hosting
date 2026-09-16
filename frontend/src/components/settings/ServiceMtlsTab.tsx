@@ -49,10 +49,11 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
                 (report.env_repaired?.length ?? 0) +
                 (report.mtls_normalized?.length ?? 0) +
                 (report.sidecars_injected?.length ?? 0) +
+                (report.sidecars_remounted?.length ?? 0) +
                 (report.orphan_containers_removed?.length ?? 0);
             toast({
                 title: fixedCount > 0 ? `Repair complete — ${fixedCount} fix(es) applied` : 'Repair complete — nothing to fix',
-                description: 'Env placeholders, mTLS config, sidecars, and orphan containers were checked.',
+                description: 'Env placeholders, mTLS config, sidecars (including stale-mount remounts), and orphan containers were checked.',
             });
             void load();
         } catch (error: any) {
@@ -143,6 +144,10 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
                                 {repairReport.sidecars_injected?.length ? repairReport.sidecars_injected.join(', ') : 'none'}
                             </li>
                             <li>
+                                <span className="font-semibold">Stale sidecars remounted:</span>{' '}
+                                {repairReport.sidecars_remounted?.length ? repairReport.sidecars_remounted.join(', ') : 'none'}
+                            </li>
+                            <li>
                                 <span className="font-semibold">Orphan containers removed:</span>{' '}
                                 {repairReport.orphan_containers_removed?.length ? repairReport.orphan_containers_removed.join(', ') : 'none'}
                             </li>
@@ -150,6 +155,12 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
                                 <li className="text-destructive">
                                     <span className="font-semibold">Sidecar errors:</span>{' '}
                                     {repairReport.sidecar_errors.map((item: any) => `${item.service}: ${item.error}`).join('; ')}
+                                </li>
+                            ) : null}
+                            {repairReport.sidecar_remount_errors?.length ? (
+                                <li className="text-destructive">
+                                    <span className="font-semibold">Remount errors:</span>{' '}
+                                    {repairReport.sidecar_remount_errors.map((item: any) => `${item.service}: ${item.error}`).join('; ')}
                                 </li>
                             ) : null}
                         </ul>

@@ -137,25 +137,45 @@ else
     echo -e "${RED}  ✗ Only $RUNNING_COUNT/$TOTAL_COUNT containers running${NC}"
 fi
 
-# ─── Check 3: Observability stack present ─────────────────────────────
+# ─── Check 3: Observability + full stack present ──────────────────────
 # loki/promtail/grafana/cadvisor/docker-labels/alertmanager are
-# profile-gated (medium/full). Fresh installs used to default to profiles
-# without them, finishing "green" while blind. Warn loudly (non-blocking:
-# tiny hosts may intentionally skip them).
+# profile-gated (medium/full); falco/spire-servers/apt-cacher/verdaccio/
+# appsec are full-gated. Fresh installs default to full (run everything),
+# finishing "green" while blind or unprotected otherwise. Warn loudly
+# (non-blocking: tiny hosts may intentionally skip them).
 echo -e "${BLUE}  → [3/4] Checking observability stack...${NC}"
 OBS_MISSING=""
-for _obs in smsly-loki smsly-promtail smsly-grafana smsly-cadvisor smsly-docker-labels smsly-prometheus smsly-alertmanager; do
+for _obs in smsly-loki smsly-promtail smsly-grafana smsly-cadvisor smsly-docker-labels smsly-prometheus smsly-alertmanager smsly-node-exporter; do
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_obs"; then
         OBS_MISSING="${OBS_MISSING} ${_obs}"
     fi
 done
 if [ -z "$OBS_MISSING" ]; then
-    echo -e "${GREEN}  ✓ Observability stack present (loki/promtail/grafana/cadvisor/docker-labels/prometheus/alertmanager)${NC}"
+    echo -e "${GREEN}  ✓ Observability stack present (loki/promtail/grafana/cadvisor/docker-labels/prometheus/alertmanager/node-exporter)${NC}"
 else
     echo -e "${YELLOW}  ⚠ Observability services missing:${OBS_MISSING}${NC}"
     echo -e "${YELLOW}    Grafana embeds will 502, Loki stays empty, and autoscaler targets stay incomplete.${NC}"
-    echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'medium', then:${NC}"
+    echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'medium,full', then:${NC}"
     echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d loki promtail grafana cadvisor docker-labels alertmanager${NC}"
+fi
+# Full-stack presence (warn-only): falco + spire servers + build caches.
+# SPIRE agents are intentionally excluded here — they never start via
+# compose profiles (single-use join tokens, AGENTS.md #18); their owner
+# is lib/harden.sh _harden_spire_bootstrap and harden_security_verify.
+echo -e "${BLUE}  → [3/4] Checking full-profile stack...${NC}"
+FULL_MISSING=""
+for _full in smsly-falco smsly-spire-server smsly-spire-server-ecosystem smsly-apt-cacher smsly-verdaccio; do
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_full"; then
+        FULL_MISSING="${FULL_MISSING} ${_full}"
+    fi
+done
+if [ -z "$FULL_MISSING" ]; then
+    echo -e "${GREEN}  ✓ Full-profile stack present (falco/spire-servers/apt-cacher/verdaccio)${NC}"
+else
+    echo -e "${YELLOW}  ⚠ Full-profile services missing:${FULL_MISSING}${NC}"
+    echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'full', then:${NC}"
+    echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d falco spire-server spire-server-ecosystem apt-cacher verdaccio${NC}"
+    echo -e "${YELLOW}    (spire agents start via join-token bootstrap, not compose: see lib/harden.sh)${NC}"
 fi
 
 # ─── Check 4: Swap is sufficient ──────────────────────────────────────────
@@ -273,6 +293,20 @@ if [ -f "$INSTALL_DIR/scripts/verify_platform_integrity.sh" ]; then
     echo -e "${GREEN}  ✓ smsly-integrity timer installed and started${NC}"
 fi
 
+# Install encrypted database backup (daily 02:30, 7-day retention).
+# The unit maps BACKUP_ENCRYPTION_KEY from .env to BACKUP_PASS, so no
+# extra secret handling is needed. Non-fatal on hosts without systemd.
+if [ -f "$INSTALL_DIR/scripts/backup.sh" ] && [ -f "$INSTALL_DIR/scripts/smsly-backup.timer" ]; then
+    echo -e "${BLUE}  → Installing encrypted database backup timer...${NC}"
+    chmod +x "$INSTALL_DIR/scripts/backup.sh"
+    cp "$INSTALL_DIR/scripts/smsly-backup.service" /etc/systemd/system/smsly-backup.service  || true
+    cp "$INSTALL_DIR/scripts/smsly-backup.timer" /etc/systemd/system/smsly-backup.timer  || true
+    systemctl daemon-reload
+    systemctl enable smsly-backup.timer || echo -e "${YELLOW}    ⚠ smsly-backup timer enable failed${NC}"
+    systemctl restart smsly-backup.timer || echo -e "${YELLOW}    ⚠ smsly-backup timer restart failed${NC}"
+    echo -e "${GREEN}  ✓ smsly-backup timer installed and started${NC}"
+fi
+
 # Install platform update watcher and caddy watcher services
 if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
     echo -e "${BLUE}  → Installing platform update and Caddy config watcher services...${NC}"
@@ -285,7 +319,8 @@ if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
     echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services installed and started${NC}"
 fi
 
-# Install Celery Worker Autoscaler (scales celery-2/celery-3 based on queue depth)
+# Install Celery Worker Autoscaler (idle-stops burst workers celery-fast /
+# celery-deploy on empty queues; the primary worker drains all queues)
 if [ -f "$INSTALL_DIR/scripts/celery-worker-autoscaler.sh" ]; then
     echo -e "${BLUE}  → Installing Celery Worker Autoscaler service...${NC}"
     chmod +x "$INSTALL_DIR/scripts/celery-worker-autoscaler.sh"
@@ -294,7 +329,7 @@ if [ -f "$INSTALL_DIR/scripts/celery-worker-autoscaler.sh" ]; then
     if [ "${CELERY_AUTOSCALE_ENABLED:-true}" = "true" ]; then
         systemctl enable celery-autoscaler || echo -e "${YELLOW}    ⚠ celery-autoscaler enable failed${NC}"
         systemctl restart celery-autoscaler || echo -e "${YELLOW}    ⚠ celery-autoscaler restart failed${NC}"
-        echo -e "${GREEN}  ✓ celery-autoscaler service installed and started (scaling celery-2/3 on demand)${NC}"
+        echo -e "${GREEN}  ✓ celery-autoscaler service installed and started (idle-stops burst workers on demand)${NC}"
     else
         systemctl disable celery-autoscaler 2>/dev/null || true
         systemctl stop celery-autoscaler 2>/dev/null || true

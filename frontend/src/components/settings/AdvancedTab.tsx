@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
 const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false, loading: () => <Skeleton className="h-[400px] w-full" /> });
 import { Service, servicesApi } from '@/lib/api';
+import { firstApiError } from '@/lib/apiErrors';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,6 +36,26 @@ export function AdvancedTab({ service }: { service: Service }) {
     const [pruning, setPruning] = useState(false);
     const [pruned, setPruned] = useState('');
 
+    // Seed-once keyed by service id (AGENTS.md #21): same pattern as
+    // BuildTab — the 3s parent poll must not reseed, a new id must.
+    const seededIdRef = useRef(service.id);
+    useEffect(() => {
+        if (seededIdRef.current === service.id) return;
+        seededIdRef.current = service.id;
+        const nextRegistry = service.effective_registry || '';
+        const nextDefault = nextRegistry
+            ? `${nextRegistry}/${service.name}`
+            : (service.docker_image || '');
+        setConfig({
+            docker_image: service.docker_image || nextDefault,
+            start_command: service.start_command || '',
+            restart_policy: service.restart_policy || 'unless-stopped',
+        });
+        setScanDepth(service.env_scan_depth || 'shallow');
+        setFastDeploy(service.fast_deploy_enabled ?? null);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [service.id]);
+
     const handleSave = async () => {
         setSaving(true);
         setError('');
@@ -54,7 +75,7 @@ export function AdvancedTab({ service }: { service: Service }) {
             setSaved(true);
             setTimeout(() => setSaved(false), 3000);
         } catch (err: any) {
-            setError(err?.response?.data?.detail || 'Failed to save configuration');
+            setError(firstApiError(err?.response?.data, 'Failed to save configuration'));
         } finally {
             setSaving(false);
         }
@@ -73,7 +94,7 @@ export function AdvancedTab({ service }: { service: Service }) {
             await servicesApi.delete(service.id);
             window.location.href = '/dashboard';
         } catch (err: any) {
-            setError(err?.response?.data?.detail || 'Failed to delete service');
+            setError(firstApiError(err?.response?.data, 'Failed to delete service'));
             setSaving(false);
         }
     };
@@ -93,7 +114,7 @@ export function AdvancedTab({ service }: { service: Service }) {
             const result = await servicesApi.pruneDocker(service.id);
             setPruned(`Removed ${result.containers_removed} containers and ${result.deployments_deleted} deployment records; reclaimed ${result.space_reclaimed_mb} MB.`);
         } catch (err: any) {
-            setError(err?.response?.data?.detail || 'Failed to prune service Docker state');
+            setError(firstApiError(err?.response?.data, 'Failed to prune service Docker state'));
         } finally {
             setPruning(false);
         }
@@ -530,6 +551,9 @@ function PromotionPolicyCard({ service }: { service: Service }) {
                         type="number" min={0} max={100} placeholder={String(service.canary_percentage ?? 10)}
                         value={canaryPct} onChange={(e) => markDirty(() => setCanaryPct(e.target.value))}
                     />
+                    <p className="text-xs text-muted-foreground">
+                        Intent only — traffic shifts when you press Apply in Domains → Traffic Split.
+                    </p>
                 </div>
             </div>
             <div className="mt-6 space-y-4">

@@ -1042,11 +1042,20 @@ def mtls_repair(request, service_id):
                 # Never orphan: without a running app container inject
                 # would fail AFTER we removed the sidecar (caught live
                 # 2026-09-15) — leave it for the redeploy path instead.
+                # Label lookup (not name): blue-green/canonical names
+                # differ from the container name; reload: cached status
+                # lies about stopped containers.
                 try:
                     from apps.cloud.docker_client import get_docker_client
                     _client = get_docker_client()
-                    _app = _client.containers.get(svc.name)
-                    if _app.status != "running":
+                    _app = EnvoySidecar._find_main_container(_client, svc)
+                    if _app is None:
+                        continue
+                    try:
+                        _app.reload()
+                    except Exception:
+                        pass
+                    if getattr(_app, "status", "") != "running":
                         continue
                 except Exception:
                     continue
@@ -1068,8 +1077,14 @@ def mtls_repair(request, service_id):
             try:
                 from apps.cloud.docker_client import get_docker_client
                 client = get_docker_client()
-                app_container = client.containers.get(svc.name)
-                if app_container.status != "running":
+                app_container = EnvoySidecar._find_main_container(client, svc)
+                if app_container is None:
+                    continue
+                try:
+                    app_container.reload()
+                except Exception:
+                    pass
+                if getattr(app_container, "status", "") != "running":
                     continue
             except Exception:
                 # No running app container — sidecar injection would fail.

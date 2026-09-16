@@ -121,7 +121,10 @@ class BundleProvisioner:
             self._ensure_network(network_name)
 
             # Start the stack
-            self._compose_up(compose_path, network_name)
+            self._compose_up(
+                compose_path, network_name,
+                bundle_name=bundle.name, service_id=service_id,
+            )
 
             # Extract connection info for each service
             for svc in resolved_services:
@@ -179,8 +182,9 @@ class BundleProvisioner:
         if not os.path.isfile(compose_path):
             return ""
 
-        cmd = ["docker", "compose", "-f", compose_path, "logs",
-               "--tail", str(min(tail, 2000)), "--timestamps"]
+        cmd = self._compose_base(bundle_name, service_id) + [
+            "logs", "--tail", str(min(tail, 2000)), "--timestamps",
+        ]
         if follow:
             cmd.append("-f")
         if component_name:
@@ -225,7 +229,7 @@ class BundleProvisioner:
 
         try:
             result = subprocess.run(
-                ["docker", "compose", "-f", compose_path, "ps", "--format", "json"],
+                self._compose_base(bundle_name, service_id) + ["ps", "--format", "json"],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
@@ -523,8 +527,7 @@ class BundleProvisioner:
         try:
             if os.path.isfile(compose_path):
                 subprocess.run(
-                    ["docker", "compose", "-f", compose_path, "down",
-                     "-v", "--remove-orphans"],
+                    self._compose_base(bundle_name, service_id) + ["down", "-v"],
                     capture_output=True, timeout=120,
                 )
                 os.remove(compose_path)
@@ -560,7 +563,7 @@ class BundleProvisioner:
 
         try:
             result = subprocess.run(
-                ["docker", "compose", "-f", compose_path, "ps", "-q"],
+                self._compose_base(bundle_name, service_id) + ["ps", "-q"],
                 capture_output=True, text=True, timeout=10,
             )
             container_ids = result.stdout.strip().split()
@@ -628,6 +631,26 @@ class BundleProvisioner:
         return os.path.join(
             "/app", "bundles", service_id, bundle_name, COMPOSE_FILE_NAME,
         )
+
+    def _project_name(self, bundle_name: str, service_id: str) -> str:
+        """Isolated compose project name for a bundle stack.
+
+        AGENTS.md #16: never rely on directory-derived project names with
+        ``--remove-orphans`` — two services deploying the same bundle name
+        would share a project and orphan-delete each other's containers.
+        """
+        safe = re.sub(r'[^a-z0-9-]', '-', bundle_name.lower()).strip('-')
+        return f"{BUNDLE_NETWORK_PREFIX}-{safe}-{service_id[:8]}"
+
+    def _compose_base(
+        self, bundle_name: str, service_id: str,
+    ) -> list[str]:
+        """Base ``docker compose`` argv with explicit isolated project."""
+        return [
+            "docker", "compose",
+            "-p", self._project_name(bundle_name, service_id),
+            "-f", self._compose_path(bundle_name, service_id),
+        ]
 
     def _container_name(
         self, bundle_name: str, service_id: str, component_name: str,
@@ -766,11 +789,22 @@ class BundleProvisioner:
 
         return compose_path
 
-    def _compose_up(self, compose_path: str, network_name: str) -> None:
-        """Run ``docker compose up -d`` and poll for container readiness."""
+    def _compose_up(
+        self, compose_path: str, network_name: str,
+        bundle_name: str = "", service_id: str = "",
+    ) -> None:
+        """Run ``docker compose up -d`` and poll for container readiness.
+
+        Project is always explicit (AGENTS.md #16) — never ``--remove-orphans``
+        without ``-p``. Callers should pass bundle_name/service_id; when they
+        are absent the project falls back to directory-derived naming.
+        """
+        if bundle_name and service_id:
+            base = self._compose_base(bundle_name, service_id)
+        else:
+            base = ["docker", "compose", "-f", compose_path]
         result = subprocess.run(
-            ["docker", "compose", "-f", compose_path, "up", "-d",
-             "--remove-orphans"],
+            base + ["up", "-d"],
             capture_output=True, text=True, timeout=300,
         )
         if result.returncode != 0:
@@ -780,17 +814,25 @@ class BundleProvisioner:
             )
 
         # Poll for container readiness instead of blind sleep
-        self._wait_for_containers(compose_path, timeout=30)
+        self._wait_for_containers(
+            compose_path, timeout=30,
+            bundle_name=bundle_name, service_id=service_id,
+        )
 
     def _wait_for_containers(
         self, compose_path: str, timeout: int = 30,
+        bundle_name: str = "", service_id: str = "",
     ) -> None:
         """Poll containers until they report running or timeout expires."""
+        if bundle_name and service_id:
+            base = self._compose_base(bundle_name, service_id)
+        else:
+            base = ["docker", "compose", "-f", compose_path]
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 result = subprocess.run(
-                    ["docker", "compose", "-f", compose_path, "ps", "-q"],
+                    base + ["ps", "-q"],
                     capture_output=True, text=True, timeout=5,
                 )
                 container_ids = [

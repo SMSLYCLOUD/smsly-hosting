@@ -136,6 +136,11 @@ export function GrafanaEmbed({ dashboard, service, time }: GrafanaEmbedProps) {
                 src={data.url}
                 className="w-full h-[calc(100vh-12rem)] border-0 bg-background"
                 allow="fullscreen"
+                // Fires on DNS/network-level failure only — an in-iframe
+                // Grafana login wall is cross-origin-opaque and can't be
+                // detected here. The embed relies on Grafana's anonymous
+                // viewer (default-on); otherwise use Open in Grafana.
+                onError={() => setError('Grafana frame failed to load. If you see a login wall, enable the anonymous viewer or open in Grafana directly.')}
             />
         </div>
     );

@@ -30,6 +30,20 @@ fix_domain_sync() {
     else
         _FRONTEND_URL_CHANGED="false"
     fi
+    # Same staleness trap for an ABSOLUTE NEXT_PUBLIC_API_URL bake: WS URLs
+    # derive from it while REST follows window.location.origin, so after a
+    # domain change the two disagree until rebuild. Relative (the default)
+    # is immune. The value itself is left alone (an absolute bake may be a
+    # deliberate split-host setup) — it just joins the rebuild decision.
+    _prev_api_url="$(grep -m1 '^NEXT_PUBLIC_API_URL=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+    case "$_prev_api_url" in
+        http://*|https://*)
+            _prev_api_host="$(printf '%s' "$_prev_api_url" | sed -E 's|^https?://([^/:]+).*|\1|')"
+            if [ "$_prev_api_host" != "$target_domain" ] && [ "$_prev_api_host" != "localhost" ]; then
+                _FRONTEND_URL_CHANGED="true"
+            fi
+            ;;
+    esac
 
     # Sync allowlists
     sync_env_domain_allowlists "$env_file" "$target_domain" "$(detect_public_ip)"

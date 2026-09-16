@@ -328,12 +328,19 @@ export default function ServiceDetailPage() {
         let stopped = false;
         const refresh = async () => {
             if (stopped) return;
+            // Background tabs don't need 3s freshness — skip the tick
+            // (the interval fires again when visible). Saves a full
+            // service+deployment fetch per hidden tab per tick.
+            if (typeof document !== 'undefined' && document.hidden) return;
             try {
                 const s = await servicesApi.get(id);
                 if (stopped) return;
                 setService(s);
                 if (s.latest_deployment) {
-                    const d = await servicesApi.getDeployment(s.latest_deployment.id);
+                    // Tailed: status/progress polling doesn't need MBs of
+                    // logs (the Logs tab streams live lines over WS and
+                    // fetches its own tails).
+                    const d = await servicesApi.getDeployment(s.latest_deployment.id, 20000);
                     if (!stopped) setDeployment(d);
                 }
             } catch (err: any) {

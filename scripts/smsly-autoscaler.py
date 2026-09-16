@@ -50,10 +50,39 @@ logger = logging.getLogger(__name__)
 # Configuration
 # =============================================================================
 
-# Total memory budget for all app containers (in MB)
-# Reserve ~2GB for OS + shared infra (Postgres, Redis, Ollama)
-TOTAL_SYSTEM_MB = int(os.environ.get('AUTOSCALER_TOTAL_MB', '10240'))  # 10GB default
-INFRA_RESERVE_MB = int(os.environ.get('AUTOSCALER_INFRA_RESERVE_MB', '2048'))  # 2GB for OS+infra
+# Total memory budget for all app containers (in MB).
+# Defaults to the HOST's real RAM (not a hardcoded 10GB box): on a small
+# VPS the old default budgeted phantom memory and the pressure math never
+# squeezed idle services. Override with AUTOSCALER_TOTAL_MB when the
+# autoscaler should manage a slice rather than the whole host.
+# Reserve ~2GB for OS + shared infra (Postgres, Redis), clamped so tiny
+# hosts keep at least half their RAM for apps.
+def _detect_host_total_mb() -> int | None:
+    try:
+        with open('/proc/meminfo', encoding='utf-8') as fh:
+            for line in fh:
+                if line.startswith('MemTotal:'):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+_TOTAL_FALLBACK_MB = 10240  # last resort: assume 10GB when undetectable
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+TOTAL_SYSTEM_MB = _env_int('AUTOSCALER_TOTAL_MB', _detect_host_total_mb() or _TOTAL_FALLBACK_MB)
+INFRA_RESERVE_MB = _env_int(
+    'AUTOSCALER_INFRA_RESERVE_MB',
+    min(2048, max(512, TOTAL_SYSTEM_MB // 4)),
+)
 APP_BUDGET_MB = TOTAL_SYSTEM_MB - INFRA_RESERVE_MB
 
 # Minimum memory per container (MB)

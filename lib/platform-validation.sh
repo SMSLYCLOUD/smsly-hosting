@@ -20,6 +20,12 @@ validate_env_file() {
         "FRONTEND_APP_URL"
         "CONTAINER_REGISTRY_URL"
         "REGISTRY_USER"
+        # Written by the fresh template (non-empty via fallbacks) and
+        # backfilled by ensure_env_runtime_defaults on older installs.
+        # Grafana >= 11 refuses an empty admin password; backups fail
+        # closed without a Fernet key.
+        "GRAFANA_PASSWORD"
+        "BACKUP_ENCRYPTION_KEY"
     )
     local missing_vars=()
     local invalid_vars=()

@@ -46,6 +46,13 @@ SECRET_DEFINITIONS = [
     ("COSIGN_PASSWORD", 32, "Password protecting the Cosign private key"),
     ("PATRONI_SUPERUSER_PASSWORD", 32, "Patroni superuser password for HA cluster"),
     ("CADDY_ASK_SECRET", 64, "Shared secret for Caddy on_demand_tls ask endpoint"),
+    # Fernet backup key (same format as FIELD_ENCRYPTION_KEY) and the
+    # Grafana admin password. These used to live only in installer
+    # fallbacks, so the "single source of truth" claim was false and
+    # consumers could disagree on formats. They are generated here now;
+    # installer fallbacks remain as belt-and-braces.
+    ("BACKUP_ENCRYPTION_KEY", "fernet", "Fernet key used to encrypt on-disk backups"),
+    ("GRAFANA_PASSWORD", "grafana", "Grafana admin password"),
 ]
 
 
@@ -55,28 +62,35 @@ def generate_secret_key(length: int = 50) -> str:
 
 
 def generate_fernet_key() -> str:
-    key = _generate_fernet_key()
-    if not key:
-        # Print a clear instruction that will be visible in the script output
-        print("FIELD_ENCRYPTION_KEY=__INSTALL_CRYPTOGRAPHY__", file=sys.stderr)
-        print("# Install cryptography and re-run to get FIELD_ENCRYPTION_KEY", file=sys.stderr)
-        return "__INSTALL_CRYPTOGRAPHY__"
-    return key
+    # Empty string signals "cryptography not installed". Callers MUST NOT
+    # persist or export an empty value — print_shell() skips it with a
+    # stderr warning, and shell consumers treat an absent key as missing
+    # (their inline fallbacks then generate a real one). A placeholder
+    # *value* here would be ingested as a genuine secret by any consumer
+    # grepping KEY= lines (2026-09: bogus Fernet key aborting installs).
+    return _generate_fernet_key()
 
 
 def generate_hex_secret(bytes_count: int) -> str:
     return secrets.token_hex(bytes_count)
 
 
+def generate_grafana_password() -> str:
+    alphabet = string.ascii_letters + string.digits + "-_"
+    return "".join(secrets.choice(alphabet) for _ in range(40))
+
+
 def generate_all() -> dict[str, str]:
     result = {}
-    for name, length_or_none, _desc in SECRET_DEFINITIONS:
-        if name == "FIELD_ENCRYPTION_KEY":
+    for name, length_or_kind, _desc in SECRET_DEFINITIONS:
+        if name in ("FIELD_ENCRYPTION_KEY", "BACKUP_ENCRYPTION_KEY"):
             result[name] = generate_fernet_key()
         elif name == "SECRET_KEY":
-            result[name] = generate_secret_key(length_or_none)
+            result[name] = generate_secret_key(length_or_kind)
+        elif name == "GRAFANA_PASSWORD":
+            result[name] = generate_grafana_password()
         else:
-            result[name] = generate_hex_secret(length_or_none)
+            result[name] = generate_hex_secret(length_or_kind)
     return result
 
 
@@ -95,9 +109,22 @@ def print_secrets(secrets_dict: dict[str, str]) -> None:
 
 
 def print_shell(secrets_dict: dict[str, str]) -> None:
-    """Print secrets as KEY=VALUE lines for shell consumption."""
+    """Print secrets as KEY=VALUE lines for shell consumption.
+
+    Keys with empty values (Fernet keys when `cryptography` is not
+    installed) are SKIPPED with a stderr warning — emitting
+    `KEY=` would make `set -u` consumers believe a value exists while
+    validators reject the empty string two steps later.
+    """
     for name, _length, _desc in SECRET_DEFINITIONS:
-        print(f"{name}={secrets_dict[name]}")
+        value = secrets_dict[name]
+        if not value:
+            print(
+                f"# WARNING: {name} skipped (pip3 install cryptography and re-run)",
+                file=sys.stderr,
+            )
+            continue
+        print(f"{name}={value}")
 
 
 def append_to_env(env_path: str, secrets_dict: dict[str, str], dry_run: bool = False) -> None:
@@ -109,6 +136,12 @@ def append_to_env(env_path: str, secrets_dict: dict[str, str], dry_run: bool = F
         with open(env_path, "a", encoding="utf-8") as f:
             f.write(f"\n# Auto-generated secrets ({__file__})\n")
             for name, _length, _desc in SECRET_DEFINITIONS:
+                # Never persist empty values (Fernet keys without
+                # `cryptography`): a `KEY=` line reads as "present" to
+                # presence checks but fails every format validator.
+                if not secrets_dict[name]:
+                    f.write(f"# {name}=<skipped: pip3 install cryptography and re-run>\n")
+                    continue
                 f.write(f"{name}={secrets_dict[name]}\n")
         print(f"Secrets appended to {env_path}")
     except OSError as e:

@@ -368,6 +368,10 @@ services:
     depends_on:
       haproxy:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     labels:
     - managed_by=smsly-hosting
 
@@ -620,7 +624,10 @@ services:
     #     IP as fallback fails the entire compose deployment with
     #     "cannot assign requested address" on any other host
     #     (2026-09-10 fresh-install incident).
-    # REGISTRY_BIND_IP=0.0.0.0 overrides everything (single-address mode).
+    # REGISTRY_BIND_IP defaults to loopback (first bind). Do NOT set it
+    # to 0.0.0.0: that overlaps the mesh/public :5000 binds below
+    # ("port is already allocated") — multi-bind on distinct IPs is the
+    # only supported topology, enforced fail-closed by fresh_deploy.sh.
     - "${REGISTRY_BIND_IP:-127.0.0.1}:5000:5000"
     - "${REGISTRY_MESH_BIND_IP:-10.100.0.1}:5000:5000"
     - "${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}:5000:5000"
@@ -800,6 +807,7 @@ services:
     - static_volume:/app/staticfiles
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - traefik_dynamic:/traefik-dynamic
     # SECURITY: install.sh is baked into the Docker image. The host bind
     # mount was overriding it with a stale copy, causing provisioning
     # failures (acquire_install_lock not found) until the host pulled.
@@ -921,6 +929,7 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
@@ -989,6 +998,7 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     tmpfs:
     - /tmp
@@ -1097,6 +1107,7 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - backups_data:/app/backups
@@ -1175,6 +1186,7 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - /opt/smsly-hosting/cosign-keys:/opt/smsly-hosting/cosign-keys:z
@@ -1387,6 +1399,10 @@ services:
     - --providers.docker=true
     - --providers.docker.exposedbydefault=false
     - --providers.docker.endpoint=tcp://traefik-socket-proxy:2375
+    # Weighted canary splits: file-provider WRR (hot-reloaded).
+    # Dynamic configs are written by the backend to traefik_dynamic.
+    - --providers.file.directory=/etc/traefik/dynamic
+    - --providers.file.watch=true
     # NOTE: no httpClientTimeout here on purpose. That flag applies to
     # EVERY provider call including the infinite Docker events stream,
     # so any value kills the stream on schedule ("context deadline
@@ -1433,6 +1449,7 @@ services:
     volumes:
     - letsencrypt_data:/letsencrypt
     - traefik_logs:/var/log/traefik
+    - traefik_dynamic:/etc/traefik/dynamic:ro
     depends_on:
       traefik-socket-proxy:
         condition: service_healthy
@@ -1605,9 +1622,12 @@ services:
   # and forwards byte-identically before any 80/443 cutover.
   # Phase 2 (cutover): envoy takes 80/443, Caddy drops to loopback
   # high ports (Caddy WAF-mode generation + SNI map) — separate change.
-  # Containers only start when OPENAPPSEC_ENABLED=1 (lib/harden_openappsec.sh);
-  # a plain `up -d` never touches them. NEVER --remove-orphans here.
+  # Containers are full-gated (default profiles start them) AND
+  # env-gated: lib/harden_openappsec.sh seeds policy and waits for the
+  # shadow port only when OPENAPPSEC_ENABLED=1. A plain `up` without the
+  # full profile never touches them. NEVER --remove-orphans here.
   appsec-agent:
+    profiles: ["full"]
     image: ghcr.io/openappsec/agent:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-agent
     restart: unless-stopped
@@ -1639,12 +1659,17 @@ services:
         limits:
           memory: ${OPENAPPSEC_AGENT_MEMORY_LIMIT:-2G}
   appsec-envoy:
+    profiles: ["full"]
     image: ghcr.io/openappsec/envoy-attachment:${OPENAPPSEC_ENVOY_VERSION:-1.34.4}
     container_name: smsly-appsec-envoy
     restart: unless-stopped
     ipc: host
     environment:
       - ENVOY_UID=0
+      # NOTE: worker-thread tuning (CONCURRENCY_CALC/NUMBER) is left at the
+      # vendor default — the attachment entrypoint's contract for those vars
+      # isn't documented in-tree, and guessing it wrong breaks the filter.
+      # If envoy RSS ever matters, measure first, then pin deliberately.
       - CONCURRENCY_CALC=numOfCores
       - CONCURRENCY_NUMBER=
     volumes:
@@ -1662,10 +1687,16 @@ services:
       - managed_by=smsly-hosting
     deploy:
       resources:
+        # Shadow phase: this proxy serves ONLY loopback probe traffic
+        # (infrastructure/openappsec/envoy.yaml forwards 127.0.0.1:8081 to
+        # caddy:80 — no production mirroring exists), so half a core and
+        # 512M is ~5-10x its idle footprint. Docker-enforced, no vendor
+        # semantics involved. Revisit at phase-2 (80/443) cutover.
         limits:
-          memory: ${OPENAPPSEC_ENVOY_MEMORY_LIMIT:-1G}
-          cpus: "2.0"
+          memory: ${OPENAPPSEC_ENVOY_MEMORY_LIMIT:-512M}
+          cpus: "0.50"
   appsec-shared-storage:
+    profiles: ["full"]
     image: ghcr.io/openappsec/smartsync-shared-files:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-shared-storage
     restart: unless-stopped
@@ -1682,6 +1713,7 @@ services:
         limits:
           memory: ${OPENAPPSEC_STORAGE_MEMORY_LIMIT:-512M}
   appsec-smartsync:
+    profiles: ["full"]
     image: ghcr.io/openappsec/smartsync:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-smartsync
     restart: unless-stopped
@@ -1698,6 +1730,7 @@ services:
         limits:
           memory: ${OPENAPPSEC_SMARTSYNC_MEMORY_LIMIT:-1G}
   appsec-tuning-svc:
+    profiles: ["full"]
     image: ghcr.io/openappsec/smartsync-tuning:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-tuning-svc
     restart: unless-stopped
@@ -1720,6 +1753,7 @@ services:
         limits:
           memory: ${OPENAPPSEC_TUNING_MEMORY_LIMIT:-1G}
   appsec-db:
+    profiles: ["full"]
     image: postgres:${OPENAPPSEC_POSTGRES_VERSION:-18}
     container_name: smsly-appsec-db
     restart: unless-stopped
@@ -1752,7 +1786,16 @@ services:
     volumes:
       - loki-data:/loki
       - ./infrastructure/monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
-    command: -config.file=/etc/loki/local-config.yaml
+    # -config.expand-env lets loki-config.yml read LOKI_RETENTION from the
+    # environment (same knob pattern as PROMETHEUS_RETENTION). Keep this
+    # command + environment identical to
+    # infrastructure/docker/docker-compose.observability.yml (both manage
+    # smsly-loki) or updates will recreate it back and forth.
+    command:
+      - -config.file=/etc/loki/local-config.yaml
+      - -config.expand-env=true
+    environment:
+      LOKI_RETENTION: ${LOKI_RETENTION:-30d}
     networks:
       - smsly-net
     healthcheck:
@@ -1826,8 +1869,15 @@ services:
       - managed_by=smsly-hosting
     depends_on:
       - loki
+    deploy:
+      resources:
+        # Small python poll loop; cap it like every other service so no
+        # container on the platform is unbounded (falco was the other one).
+        limits:
+          memory: ${LOKI_BRIDGE_MEMORY_LIMIT:-128M}
 
   prometheus:
+    profiles: ["medium", "full"]
     image: prom/prometheus:v2.48.0
     container_name: smsly-prometheus
     restart: unless-stopped
@@ -1842,7 +1892,11 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
+      # Retention is the main driver of prometheus disk + head-chunk RAM
+      # growth. Default keeps 30d of history; small hosts can set
+      # PROMETHEUS_RETENTION=7d to flatten growth (trades history depth,
+      # nothing else).
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}'
     networks:
       - smsly-net
     healthcheck:
@@ -1926,6 +1980,7 @@ services:
       - managed_by=smsly-hosting
 
   node-exporter:
+    profiles: ["medium", "full"]
     image: prom/node-exporter:v1.6.1
     container_name: smsly-node-exporter
     restart: unless-stopped
@@ -2067,11 +2122,25 @@ services:
       start_period: 150s
     labels:
       - managed_by=smsly-hosting
+    deploy:
+      resources:
+        # Falco was the only service without a cap: an event storm (or a
+        # leaky eBPF buffer) could grow it unboundedly. 512M is ~4x its
+        # steady state; a cap never reduces idle usage, it only bounds
+        # the worst case.
+        limits:
+          memory: ${FALCO_MEMORY_LIMIT:-512M}
 
   # ── SPIRE mTLS Infrastructure ───────────────────────────────────────
   # Platform trust domain: platform.local
   # Ecosystem trust domain: ecosystem.local
-  # Agents are started by spire-init after servers generate join tokens.
+  # Servers are full-gated and start with the default profiles.
+  # Agents are NEVER started via compose profiles: join tokens are
+  # single-use, minted per boot (AGENTS.md #18). They run with
+  # profiles ["manual"] + restart "no" so a plain `up` (even with full)
+  # can never crash-loop them with "join token was not provided".
+  # Lifecycle owner is lib/harden.sh _harden_spire_bootstrap (mint token
+  # + docker run) and apps/mtls/views.py::_start_agent_with_token.
 
   spire-server:
     profiles: ["full"]
@@ -2144,11 +2213,11 @@ services:
       - managed_by=smsly-hosting
 
   spire-agent:
-    profiles: ["full"]
+    profiles: ["manual"]
     image: ghcr.io/spiffe/spire-agent:1.9.6
     container_name: smsly-spire-agent
     hostname: spire-agent
-    restart: unless-stopped
+    restart: "no"
     volumes:
       - spire-agent-data:/opt/spire/data
       - spire-agent-socket:/opt/spire/run
@@ -2178,11 +2247,11 @@ services:
       - managed_by=smsly-hosting
 
   spire-agent-ecosystem:
-    profiles: ["full"]
+    profiles: ["manual"]
     image: ghcr.io/spiffe/spire-agent:1.9.6
     container_name: smsly-spire-agent-ecosystem
     hostname: spire-agent-ecosystem
-    restart: unless-stopped
+    restart: "no"
     volumes:
       - spire-ecosystem-agent-data:/opt/spire/data
       - spire-ecosystem-agent-socket:/opt/spire/run
@@ -2244,6 +2313,12 @@ volumes:
       type: none
       o: bind
       device: /opt/smsly-hosting/caddy-config
+  traefik_dynamic:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/smsly-hosting/traefik-dynamic
   caddy_data:
     driver: local
   backups_data: null

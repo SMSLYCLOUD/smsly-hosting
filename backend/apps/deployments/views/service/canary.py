@@ -376,16 +376,28 @@ def canary_verdict(variants: dict) -> tuple[str, list[str]]:
 class TrafficSplitMixin:
     """Traffic-split actions for the service viewset."""
 
-    @action(detail=True, methods=["post"], url_path="traffic-split")
-    def set_traffic_split(self, request, pk=None):
-        """Set the staging weight (0-100).
+    # NOTE: GET and POST MUST stay on a single @action. DRF collects
+    # actions via inspect.getmembers() (sorted by name), so two actions
+    # with the same url_path register in name order and Django serves
+    # only the first — POSTs then 405 against the GET-only pattern
+    # (same trap documented in meta.py for env_vars).
+    @action(detail=True, methods=["get", "post"], url_path="traffic-split")
+    def traffic_split(self, request, pk=None):
+        """Read (GET) or set (POST) the staging weight (0-100).
 
-        Validates through ServiceSerializer (expand/contract gate) WITHOUT
+        GET → build_traffic_split_status(service).
+        POST /api/v1/services/{id}/traffic-split/ {"canary_percentage": 25}
+        validates through ServiceSerializer (expand/contract gate) WITHOUT
         saving, writes the Traefik file-provider WRR config (hot-applied,
         no container recreates), then persists. A failed write leaves the
         row untouched. Caddy is not involved (single traefik:80 endpoint).
-        POST /api/v1/services/{id}/traffic-split/ {"canary_percentage": 25}
         """
+        if request.method == "GET":
+            service = self.get_object()
+            return Response(build_traffic_split_status(service))
+        return self.set_traffic_split(request, pk=pk)
+
+    def set_traffic_split(self, request, pk=None):
         service = self.get_object()
         assert_can_write(self.request.user, service)
         try:
@@ -479,11 +491,6 @@ class TrafficSplitMixin:
         payload = build_traffic_split_status(service)
         payload["traefik_applied"] = True
         return Response(payload)
-
-    @action(detail=True, methods=["get"], url_path="traffic-split")
-    def get_traffic_split(self, request, pk=None):
-        service = self.get_object()
-        return Response(build_traffic_split_status(service))
 
     @action(
         detail=True, methods=["get"], url_path="canary-metrics",

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Zap, Clock, RefreshCw, Radio, Copy, Check } from 'lucide-react';
 import { Deployment } from '@/lib/api';
+import { isDeploymentInProgress } from '@/lib/deploymentStatus';
 import { getWsUrl } from '@/lib/websocket';
 import { PipelineVisualizer, PipelineStage } from '@/components/deployments/PipelineVisualizer';
 import { useToast } from '@/components/ui/use-toast';
@@ -37,9 +38,9 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         }
     }, [deployment?.pipeline_stages]);
 
-    const isBuilding = deployment?.status === 'BUILDING'
-        || deployment?.status === 'QUEUED'
-        || deployment?.status === 'PENDING';
+    // Backend-parity: any in-flight pipeline state keeps the LIVE badge,
+    // not just BUILDING/QUEUED (the backend never emits PENDING).
+    const isBuilding = isDeploymentInProgress(deployment?.status);
 
     // ---- REST fallback: load build_logs from the deployment object ----
     // The deployment prop is refreshed every 3s by the parent, but on first
@@ -259,8 +260,11 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         if (logType === 'BUILD') {
             let cancelled = false;
             const fetchBuildLogs = async () => {
+                // Skip hidden-tab ticks; tailed endpoint (not the full
+                // deployment retrieve) so polls don't re-transfer MBs.
+                if (typeof document !== 'undefined' && document.hidden) return;
                 try {
-                    const res = await fetch(`/api/v1/deployments/${deployment.id}/`, {
+                    const res = await fetch(`/api/v1/deployments/${deployment.id}/build-logs/?tail=20000`, {
                         credentials: 'include',
                     });
                     if (cancelled) return;
@@ -288,6 +292,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         if (logType === 'RUNTIME') {
             let cancelled = false;
             const fetchRuntimeLogs = async () => {
+                if (typeof document !== 'undefined' && document.hidden) return;
                 try {
                     const res = await fetch(`/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
                         credentials: 'include',

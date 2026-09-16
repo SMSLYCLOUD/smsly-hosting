@@ -1,6 +1,10 @@
 #!/bin/bash
 # SMSLY Hosting Database Backup Script
-# Run this daily via cron: 0 2 * * * /opt/smsly-hosting/scripts/backup.sh
+# Scheduled daily via smsly-backup.timer (installed by the fresh installer
+# and refresh/update flows). Manual run:
+#   sudo BACKUP_PASS=<secret> ./scripts/backup.sh
+# When run from the timer, BACKUP_PASS falls back to BACKUP_ENCRYPTION_KEY
+# from /opt/smsly-hosting/.env (see scripts/smsly-backup.service).
 
 set -uo pipefail
 
@@ -29,12 +33,13 @@ mkdir -p "$BACKUP_DIR"
 
 echo -e "${YELLOW}[$(date)] Starting database backup...${NC}"
 
-# Get database credentials from running container
+# Get database credentials from running container (primary first, then any
+# postgres/patroni/db container — covers local-ha, patroni, and legacy names).
 DB_CONTAINER="${DB_CONTAINER:-smsly-postgres-primary}"
 
 # Check if container is running
 if ! docker ps --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
-    DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E "(postgres|db)" | head -1)
+    DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E "(postgres|patroni|db)" | head -1)
     if [ -z "$DB_CONTAINER" ]; then
         echo -e "${RED}Error: No PostgreSQL container found${NC}"
         exit 1

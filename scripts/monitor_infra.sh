@@ -51,9 +51,26 @@ SYSTEMD_TIMERS=(
 PROD_SERVICES=(
     "db" "pgcat" "redis-primary" "redis-replica" "redis-sentinel-1" "redis-sentinel-2" "redis-sentinel-3"
     "registry" "rabbitmq"
-    "backend" "celery" "celery-fast" "celery-deploy" "celery-beat"
+    "backend" "celery" "celery-beat"
     "frontend" "socket-proxy" "caddy"
 )
+
+# ─── Autoscaled burst workers (idle-minimal) ─────────────────────────────
+# celery-fast / celery-deploy are stopped by celery-worker-autoscaler when
+# queues are idle and restarted on pressure. Healing them here would undo
+# every scale-down within 60s, so they are only healed in static-capacity
+# mode (CELERY_AUTOSCALE_ENABLED != true). The primary `celery` worker
+# drains all queues, so scaled-down bursts never stall work.
+AUTOSCALED_SERVICES=(
+    "celery-fast" "celery-deploy"
+)
+
+# Autoscale mode for this tick (default true, matching fresh installs).
+AUTOSCALE_ON=true
+_autoscale_flag="$(grep -E '^CELERY_AUTOSCALE_ENABLED=' "$INSTALL_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+if [ "$_autoscale_flag" = "false" ] || [ "$_autoscale_flag" = "0" ] || [ "$_autoscale_flag" = "no" ]; then
+    AUTOSCALE_ON=false
+fi
 
 # ─── Observability stack (separate compose file) ────────────────────────
 OBS_SERVICES=(
@@ -208,15 +225,23 @@ for service in "${PROD_SERVICES[@]}"; do
     check_and_heal "$COMPOSE_FILE" "$service"
 done
 
+# Burst workers heal only in static mode; under autoscale a stopped burst
+# worker is an intended idle state, not a failure.
+if [ "$AUTOSCALE_ON" != "true" ]; then
+    for service in "${AUTOSCALED_SERVICES[@]}"; do
+        check_and_heal "$COMPOSE_FILE" "$service"
+    done
+fi
+
 if [ -f "$OBS_COMPOSE_FILE" ]; then
     for service in "${OBS_SERVICES[@]}"; do
         check_and_heal "$OBS_COMPOSE_FILE" "$service"
     done
 fi
 
-# â”€â”€â”€ Host pressure tripwire (load + steal + restart storms) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── Host pressure tripwire (load + steal + restart storms) ─────────
 # 2026-09-16: Vultr capped account CPU after sustained burn nobody
-# watched (load 40â†’300 over days while every dashboard stayed green).
+# watched (load 40→300 over days while every dashboard stayed green).
 # This logs ALERT lines (journal) when pressure exceeds safe bounds so
 # the next storm pages attention BEFORE the provider does. Alert-only:
 # never stops services, never changes config. Probes are /proc plus
@@ -238,11 +263,11 @@ check_host_pressure() {
         ''|*[!0-9]*) load1=0 ;;
     esac
     if [ "$load1" -gt $((cpus * 4)) ]; then
-        log "ALERT: host load ${load1} > 4x CPUs (${cpus}) â€” burn-out risk, check Vultr CPU graphs and `ps` top burners"
+        log "ALERT: host load ${load1} > 4x CPUs (${cpus}) — burn-out risk, check Vultr CPU graphs and `ps` top burners"
     fi
     # 2. Steal: ALERT past 25% across the tick interval, measured via a
     # statefile delta (no sleep inside the monitor). Sustained steal
-    # means the hypervisor is throttling us â€” provider ticket, not tuning.
+    # means the hypervisor is throttling us — provider ticket, not tuning.
     local state_file="/tmp/smsly-pressure-cpu"
     local cur_steal
     local cur_total
@@ -261,7 +286,7 @@ check_host_pressure() {
                     local steal_pct
                     steal_pct=$(( (cur_steal - prev_steal) * 100 / (cur_total - prev_total) ))
                     if [ "$steal_pct" -gt 25 ]; then
-                        log "ALERT: CPU steal ${steal_pct}% over last tick â€” hypervisor throttling suspected, provider ticket territory"
+                        log "ALERT: CPU steal ${steal_pct}% over last tick — hypervisor throttling suspected, provider ticket territory"
                     fi
                 fi
                 ;;

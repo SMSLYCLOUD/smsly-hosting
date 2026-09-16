@@ -189,7 +189,10 @@ class SafeDeployTaskHelpersTestCase(unittest.TestCase):
 
 
 class BranchPreviewManagerTestCase(TestCase):
-    def test_create_preview_urls_are_unique_for_same_branch(self):
+    def test_rebuild_keeps_stable_url_for_same_branch(self):
+        # Same branch + new commit REBUILDS the same row in place (stable
+        # URL developers can bookmark; Caddy routes one URL per branch).
+        # Per-commit URLs would churn subdomains on every push.
         user = User.objects.create_user(username="preview-url-user", password="p")
         service = Service.objects.create(name="preview-url-service", owner=user)
         manager = BranchPreviewManager()
@@ -197,6 +200,21 @@ class BranchPreviewManagerTestCase(TestCase):
         first = manager.create_preview(service, "feature/same", "a" * 7, user=user)
         second = manager.create_preview(service, "feature/same", "b" * 7, user=user)
 
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(first.preview_url, second.preview_url)
+        second.refresh_from_db()
+        self.assertEqual(second.commit_sha, "b" * 7)
+        self.assertEqual(second.status, PreviewEnvironment.Status.BUILDING)
+
+    def test_different_branches_get_different_urls(self):
+        user = User.objects.create_user(username="preview-url-user-2", password="p")
+        service = Service.objects.create(name="preview-url-service-2", owner=user)
+        manager = BranchPreviewManager()
+
+        first = manager.create_preview(service, "feature/one", "a" * 7, user=user)
+        second = manager.create_preview(service, "feature/two", "a" * 7, user=user)
+
+        self.assertNotEqual(first.id, second.id)
         self.assertNotEqual(first.preview_url, second.preview_url)
 
 
@@ -232,9 +250,16 @@ class PreviewProvisionJobTestCase(TestCase):
             status=PreviewEnvironment.Status.HEALTH_CHECK_RUNNING,
         )
 
+    @patch("apps.deployments.tasks.deployment.tasks_safedeploy.run_migration_validation_job")
     @patch("apps.deployments.tasks.deployment.tasks_safedeploy._dispatch_preview_deployment")
     @patch("apps.deployments.tasks.deployment.tasks_safedeploy._sync_preview_addons")
-    def test_provision_job_syncs_preview_service_and_dispatches_each_run(self, mock_sync_addons, mock_dispatch):
+    def test_provision_job_syncs_transient_and_queues_validation(
+        self, mock_sync_addons, mock_dispatch, mock_validation
+    ):
+        # provision_preview_service_job owns transient sync + addons +
+        # validation hand-off. Dispatch lives downstream in
+        # run_preview_tests_job (after validation passes), so provision
+        # must NOT dispatch — one dispatch per pipeline, never two.
         provision_preview_service_job(str(self.preview.id))
 
         transient = Service.objects.get(parent_service=self.parent, is_preview=True)
@@ -242,15 +267,42 @@ class PreviewProvisionJobTestCase(TestCase):
         self.assertEqual(transient.branch, self.preview.branch_name)
         self.assertEqual(transient.public_domain, "preview.example.com")
         self.assertEqual(mock_sync_addons.call_count, 1)
-        self.assertEqual(mock_dispatch.call_count, 1)
-        self.assertEqual(Deployment.objects.filter(service=transient).count(), 1)
-        copied_db_url = EnvironmentVariable.objects.get(service=transient, key="DATABASE_URL")
-        self.assertEqual(copied_db_url.value, "postgres://prod/prod")
+        mock_validation.delay.assert_called_once_with(str(self.preview.id))
+        mock_dispatch.assert_not_called()
+        self.assertEqual(Deployment.objects.filter(service=transient).count(), 0)
+        self.preview.refresh_from_db()
+        self.assertEqual(self.preview.status, PreviewEnvironment.Status.MIGRATION_RUNNING)
 
+        # Re-running for a new commit re-syncs without duplicating the row.
         self.preview.commit_sha = "b" * 7
         self.preview.save(update_fields=["commit_sha"])
         provision_preview_service_job(str(self.preview.id))
 
         self.assertEqual(mock_sync_addons.call_count, 2)
-        self.assertEqual(mock_dispatch.call_count, 2)
-        self.assertEqual(Deployment.objects.filter(service=transient).count(), 2)
+        self.assertEqual(mock_validation.delay.call_count, 2)
+        mock_dispatch.assert_not_called()
+        self.assertEqual(
+            Service.objects.filter(parent_service=self.parent, is_preview=True).count(), 1
+        )
+
+    @patch("apps.deployments.tasks.deployment.tasks_safedeploy._dispatch_preview_deployment")
+    @patch("apps.deployments.tasks.deployment.tasks_safedeploy._sync_preview_addons")
+    def test_tests_job_creates_deployment_and_dispatches(self, mock_sync_addons, mock_dispatch):
+        # End of the chain: validation + tests passed → exactly one
+        # Deployment on the transient service and one dispatch.
+        from apps.deployments.tasks.deployment.tasks_safedeploy import run_preview_tests_job
+
+        with patch(
+            "apps.deployments.tasks.deployment.tasks_safedeploy.run_migration_validation_job"
+        ):
+            provision_preview_service_job(str(self.preview.id))
+        transient = Service.objects.get(parent_service=self.parent, is_preview=True)
+
+        run_preview_tests_job(str(self.preview.id))
+
+        self.assertEqual(Deployment.objects.filter(service=transient).count(), 1)
+        self.assertEqual(mock_dispatch.call_count, 1)
+        self.preview.refresh_from_db()
+        self.assertEqual(
+            self.preview.status, PreviewEnvironment.Status.HEALTH_CHECK_RUNNING
+        )

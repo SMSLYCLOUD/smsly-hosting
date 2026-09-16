@@ -217,8 +217,11 @@ export default function ServerBackupsPage() {
     const connectBackupProgressWebSocket = (backupId: string) => {
         if (progressWsRef.current?.readyState === WebSocket.OPEN) return;
 
-        const token = typeof document !== 'undefined' ? document.cookie.replace(/(?:(?:^|.*;\s*)auth_token\s*=\s*([^;]*).*$)|^.*$/, '$1') : '';
-        const wsUrl = getWsUrl(`/ws/backup-progress/${backupId}/${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+        // Auth travels via the HttpOnly session cookie on the WS upgrade
+        // (see QueryStringAuthMiddleware) — never in ?token=. Reading
+        // document.cookie can't see HttpOnly cookies anyway, and a token
+        // in the URL would land in proxy logs/history/Referer.
+        const wsUrl = getWsUrl(`/ws/backup-progress/${backupId}/`);
 
         try {
             const ws = new WebSocket(wsUrl);

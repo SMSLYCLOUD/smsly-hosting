@@ -6,22 +6,27 @@
 # replica. It is intentionally idempotent: running it twice does not
 # break the deployment.
 #
-# What it does:
+# What it does (builtin-first):
 #   1. Generates a strong REPLICATION_PASSWORD (unless one is already
 #      set in .env).
-#   2. Ensures the primary ``db`` container is running with WAL
+#   2. If the compose stack's built-in postgres-replica is already
+#      streaming (default on local-ha fresh installs), just wires
+#      DB_REPLICA_HOSTS to it — no second replica is created.
+#   3. Otherwise (legacy stacks without a built-in replica) falls back
+#      to the overlay flow below:
+#   4. Ensures the primary ``db`` container is running with WAL
 #      settings that allow streaming replication (wal_level=replica,
 #      max_wal_senders>=1, max_replication_slots>=1).
-#   3. Creates the ``replicator`` role on the primary with the
+#   5. Creates the ``replicator`` role on the primary with the
 #      matching password (idempotent — uses IF NOT EXISTS).
-#   4. Brings up the ``db-replica`` service via the
+#   6. Brings up the ``db-replica`` service via the
 #      ``docker-compose.replica.yml`` overlay.
-#   5. Sets DB_REPLICA_HOSTS in .env so pgcat routes SELECTs to the
+#   7. Sets DB_REPLICA_HOSTS in .env so pgcat routes SELECTs to the
 #      replica.
-#   6. Restarts pgcat so it picks up the new DB_REPLICA_HOSTS value.
-#   7. Waits for the replica to finish its initial basebackup and
+#   8. Restarts pgcat so it picks up the new DB_REPLICA_HOSTS value.
+#   9. Waits for the replica to finish its initial basebackup and
 #      enter ``streaming`` state.
-#   8. Prints a verification summary.
+#   10. Prints a verification summary.
 #
 # Pre-conditions:
 #   * You are on the master VPS with the existing deployment healthy.
@@ -140,13 +145,13 @@ set_replica_env() {
     blue "[4/6] Setting DB_REPLICA_HOSTS in .env so pgcat routes SELECTs to the replica..."
     # Additive: if the operator already configured other replicas
     # (e.g. a remote-replica:5432 they manage themselves), preserve
-    # them and append db-replica:5432. Duplicates are de-duped so the
+    # them and append the new entry. Duplicates are de-duped so the
     # final list is canonical. If unset, the value is just the new
     # entry.
-    local existing
+    local entry="${1:-db-replica:5432}"
+    local existing=""
     existing="$(env_get DB_REPLICA_HOSTS)"
-    local entry="db-replica:5432"
-    local merged
+    local merged=""
     if [ -z "$existing" ]; then
         merged="$entry"
     else
@@ -157,6 +162,18 @@ set_replica_env() {
     fi
     env_set "DB_REPLICA_HOSTS" "$merged"
     green "  OK DB_REPLICA_HOSTS=$merged"
+}
+
+builtin_replica_ready() {
+    # True when the compose stack's built-in postgres-replica container
+    # exists and is itself in recovery (i.e. it IS a replica, not a
+    # promoted primary). Socket auth is trust locally, so no password
+    # is needed for this probe.
+    local replica_container=""
+    replica_container="$(docker compose -f "$COMPOSE_BASE" ps -q postgres-replica 2>/dev/null | head -1)"
+    [ -n "$replica_container" ] || return 1
+    timeout 15 docker exec "$replica_container" \
+        psql -U "$PG_USER" -d "$PG_DB" -tAc "SELECT pg_is_in_recovery();" 2>/dev/null | grep -q "t"
 }
 
 restart_pgcat() {
@@ -226,6 +243,34 @@ main() {
         green "  -> generated new REPLICATION_PASSWORD"
     else
         blue "  -> REPLICATION_PASSWORD already set, reusing"
+    fi
+
+    # Built-in first: modern stacks already run postgres-replica. If it
+    # is streaming, wiring it is the whole job — creating the overlay
+    # db-replica on top would double replicas for no benefit.
+    if builtin_replica_ready; then
+        blue "  -> Built-in postgres-replica is already streaming — no overlay needed"
+        set_replica_env "postgres-replica:5432"
+        restart_pgcat
+        wait_for_streaming
+        bold ""
+        bold "============================================================"
+        bold "  Read replica enabled (built-in postgres-replica)"
+        bold "============================================================"
+        cat <<EOF
+
+Next steps:
+  1. Confirm the replica is still in recovery:
+       docker exec smsly-postgres-replica \\
+         psql -U $PG_USER -d $PG_DB \\
+         -c "SELECT pg_is_in_recovery();"
+     (should return 't' — meaning "yes, I'm a replica")
+
+  2. Confirm pgcat knows about it:
+       docker exec smsly-hosting-pgcat-1 cat /etc/pgcat/pgcat.toml | grep -A1 shards
+     (the shards.0.servers list should now include ["postgres-replica", 5432, "replica"])
+EOF
+        return 0
     fi
 
     ensure_wal_settings

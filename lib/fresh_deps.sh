@@ -143,7 +143,7 @@ logpath = /var/log/auth.log
 maxretry = 3
 EOF
     systemctl enable fail2ban  || true
-    systemctl restart fail2ban  &
+    systemctl reload-or-restart fail2ban  &
     echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
 fi
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=SMSLY Hosting Encrypted Database Backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# backup.sh requires BACKUP_PASS in the environment. Prefer an explicit
+# BACKUP_PASS, else reuse BACKUP_ENCRYPTION_KEY from the install .env
+# (any string works as the openssl passphrase). Fail closed with a clear
+# message when neither exists instead of dumping an unencrypted backup.
+ExecStart=/bin/bash -c 'set -a; [ -f /opt/smsly-hosting/.env ] && source /opt/smsly-hosting/.env; set +a; BACKUP_PASS="${BACKUP_PASS:-${BACKUP_ENCRYPTION_KEY:-}}"; export BACKUP_PASS; if [ -z "$BACKUP_PASS" ]; then echo "smsly-backup: no BACKUP_PASS or BACKUP_ENCRYPTION_KEY in /opt/smsly-hosting/.env — backup skipped"; exit 1; fi; exec /opt/smsly-hosting/scripts/backup.sh'

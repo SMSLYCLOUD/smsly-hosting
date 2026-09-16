@@ -29,16 +29,19 @@ if [ -f /etc/os-release ]; then
 fi
 
 # ─── Disk space check (prevents mid-build OOM / no-space failures) ──────────
+# Full-profile default pulls/builds a large stack (frontend npm build,
+# backend image, observability + WAF images): 15GB free is the warning
+# line, 8GB post-cleanup is the hard floor.
 DISK_AVAIL_MB=$(df -BM / | tail -1 | awk '{print $4}' | tr -d 'M')
 echo -e "${BLUE}  Disk space available: ${DISK_AVAIL_MB}MB${NC}"
-if [ "$DISK_AVAIL_MB" -lt 3000 ]; then
-    echo -e "${YELLOW}  ⚠ Low disk space (${DISK_AVAIL_MB}MB). Recommended: 3GB+${NC}"
+if [ "$DISK_AVAIL_MB" -lt 15360 ]; then
+    echo -e "${YELLOW}  ⚠ Low disk space (${DISK_AVAIL_MB}MB). Recommended: 15GB+ free for the full stack.${NC}"
     echo -e "${YELLOW}    Attempting Docker cache cleanup...${NC}"
     docker system prune -f  || true
     docker builder prune -f  || true
     DISK_AVAIL_MB=$(df -BM / | tail -1 | awk '{print $4}' | tr -d 'M')
-    if [ "$DISK_AVAIL_MB" -lt 1500 ]; then
-        echo -e "${RED}  ✗ Insufficient disk space (${DISK_AVAIL_MB}MB). Need at least 1.5GB for fresh install.${NC}"
+    if [ "$DISK_AVAIL_MB" -lt 8192 ]; then
+        echo -e "${RED}  ✗ Insufficient disk space (${DISK_AVAIL_MB}MB). Need at least 8GB free for fresh install.${NC}"
         exit 1
     fi
     echo -e "${GREEN}  ✓ After cleanup: ${DISK_AVAIL_MB}MB available${NC}"
