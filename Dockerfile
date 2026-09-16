@@ -17,11 +17,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
     _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
-    (apt-get update || \
-     (_smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g' && apt-get update) || \
-     (_smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g' && apt-get update)) && \
-    apt-get install -y --no-install-recommends \
-    git python3 make g++
+    _smsly_apt_use_mirror() { case "$1" in \
+      leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g';; \
+      ovh) _smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g';; \
+    esac; }; \
+    for _m in official leaseweb ovh; do \
+      [ "$_m" != "official" ] && _smsly_apt_use_mirror "$_m"; \
+      apt-get update; \
+      if apt-get install -y --no-install-recommends \
+        git python3 make g++; then break; fi; \
+      [ "$_m" = "ovh" ] && exit 1; \
+    done
 
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -46,13 +52,19 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
     _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
-    (apt-get update || \
-     (_smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g' && apt-get update) || \
-     (_smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g' && apt-get update)) && \
-    apt-get install -y --no-install-recommends \
-    ca-certificates curl wget bash \
-    gcc git libpq-dev postgresql-client \
-    supervisor gettext-base gnupg libstdc++6
+    _smsly_apt_use_mirror() { case "$1" in \
+      leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g';; \
+      ovh) _smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g';; \
+    esac; }; \
+    for _m in official leaseweb ovh; do \
+      [ "$_m" != "official" ] && _smsly_apt_use_mirror "$_m"; \
+      apt-get update; \
+      if apt-get install -y --no-install-recommends \
+        ca-certificates curl wget bash \
+        gcc git libpq-dev postgresql-client \
+        supervisor gettext-base gnupg libstdc++6; then break; fi; \
+      [ "$_m" = "ovh" ] && exit 1; \
+    done
 
 # --- Optional: Docker CLI + buildx + nixpacks + trivy + cosign (for runtime container provisioning & security scanning) ---
 RUN if [ "$INSTALL_BUILD_DEPS" = "true" ]; then \

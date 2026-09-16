@@ -12,11 +12,18 @@ FROM postgres:16
 # backend and monolithic Dockerfiles).
 RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
  _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
- (apt-get update || \
-  (_smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g' && apt-get update) || \
-  (_smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g' && apt-get update)) \
- && apt-get install -y --no-install-recommends \
-      python3 python3-pip python3-dev gcc libc6-dev curl ca-certificates \
+ _smsly_apt_use_mirror() { case "$1" in \
+   leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g';; \
+   ovh) _smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g';; \
+ esac; }; \
+ for _m in official leaseweb ovh; do \
+   [ "$_m" != "official" ] && _smsly_apt_use_mirror "$_m"; \
+   apt-get update; \
+   if apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev gcc libc6-dev curl ca-certificates; then break; fi; \
+   [ "$_m" = "ovh" ] && exit 1; \
+ done \
+ && pip3 install --break-system-packages --no-cache-dir \
  && pip3 install --break-system-packages --no-cache-dir \
       "patroni[etcd3]==3.3.0" psycopg2-binary \
  && apt-get purge -y gcc libc6-dev python3-dev \

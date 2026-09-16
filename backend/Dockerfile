@@ -6,27 +6,34 @@ ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
 # Mirror resilience: some provider networks cannot reach Debian's official
-# CDN (deb/security.debian.org: persistent TCP timeouts while Hub, GitHub
-# and PyPI work — 2026-09-17 fresh-install incident). Official first (zero
-# behavior change where it works), then independent vendor mirrors.
-# Hostname-only rewrite: codename-agnostic and safe for both classic and
-# DEB822 source layouts.
-RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true && \
+# CDN (persistent TCP timeouts while Hub/GitHub/PyPI work). Worse, apt
+# exits 0 with empty indexes when every fetch fails, so the fallback
+# cannot key off the update's exit code — it retries the INSTALL across
+# official, then independent vendor mirrors. Official first: zero
+# behavior change where it works. Hostname-only rewrite: codename
+# agnostic, safe for classic and DEB822 layouts.
+RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
     _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
-    (apt-get update || \
-     (_smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g' && apt-get update) || \
-     (_smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g' && apt-get update)) && \
-    apt-get install -y --no-install-recommends \
-    gcc \
-    git \
-    libpq-dev \
-    postgresql-client \
-    curl \
-    wget \
-    iputils-ping \
-    dnsutils \
-    net-tools \
-    iptables \
+    _smsly_apt_use_mirror() { case "$1" in \
+      leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g';; \
+      ovh) _smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g';; \
+    esac; }; \
+    for _m in official leaseweb ovh; do \
+      [ "$_m" != "official" ] && _smsly_apt_use_mirror "$_m"; \
+      apt-get update; \
+      if apt-get install -y --no-install-recommends \
+        gcc \
+        git \
+        libpq-dev \
+        postgresql-client \
+        curl \
+        wget \
+        iputils-ping \
+        dnsutils \
+        net-tools \
+        iptables; then break; fi; \
+      [ "$_m" = "ovh" ] && exit 1; \
+    done \
     # SECURITY: the docker CLI is installed so the celery worker can
     # provision addons (POSTGRES/REDIS/RABBITMQ) via the socket-proxy
     # (DOCKER_HOST=tcp://socket-proxy:2375). The CLI talks to the proxy
