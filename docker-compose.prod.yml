@@ -887,7 +887,7 @@ services:
       celery -A config worker -l WARNING --pool=prefork
       --autoscale=${CELERY_AUTOSCALE:-4,0}
       --prefetch-multiplier=1
-      --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50}
+      --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-200}
       --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD:-524288}
       -Q ${CELERY_QUEUES:-celery}
     restart: unless-stopped
@@ -936,7 +936,10 @@ services:
       test:
       - CMD-SHELL
       - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      interval: 30s
+      # Stretched 30s->120s (2026-09-16): each ping boots a full Python
+      # interpreter plus broker roundtrip; at 30s x4 workers they piled
+      # up and burned ~0.6 core continuously under host CPU cap.
+      interval: 120s
       timeout: 20s
       retries: 5
       start_period: 300s
@@ -993,7 +996,9 @@ services:
       test:
       - CMD-SHELL
       - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      interval: 60s
+      # Stretched 60s->120s (2026-09-16): same ping pileup class as the
+      # workers above; halves steady healthcheck burn fleet-wide.
+      interval: 120s
       timeout: 20s
       retries: 5
       start_period: 300s
@@ -1106,7 +1111,10 @@ services:
       test:
       - CMD-SHELL
       - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      interval: 30s
+      # Stretched 30s->120s (2026-09-16): each ping boots a full Python
+      # interpreter plus broker roundtrip; at 30s x4 workers they piled
+      # up and burned ~0.6 core continuously under host CPU cap.
+      interval: 120s
       timeout: 20s
       retries: 5
       start_period: 300s
@@ -1182,7 +1190,10 @@ services:
       test:
       - CMD-SHELL
       - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      interval: 30s
+      # Stretched 30s->120s (2026-09-16): each ping boots a full Python
+      # interpreter plus broker roundtrip; at 30s x4 workers they piled
+      # up and burned ~0.6 core continuously under host CPU cap.
+      interval: 120s
       timeout: 20s
       retries: 5
       start_period: 300s
