@@ -29,7 +29,7 @@ class DjangoAdapterTestCase(unittest.TestCase):
     def test_classify_migration_risk_low(self):
         adapter = DjangoAdapter()
         operations = [
-            {'type': 'AddField', 'file': '0003_add_field.py'}
+            {'type': 'AddField', 'file': '0003_add_field.py', 'nullable': True, 'has_default': False}
         ]
         report = adapter.classify_migration_risk(operations)
 
@@ -38,6 +38,76 @@ class DjangoAdapterTestCase(unittest.TestCase):
         self.assertFalse(report['requires_backup'])
         self.assertTrue(report['can_auto_deploy'])
         self.assertEqual(report['risk_score'], 0)
+        self.assertTrue(report['is_expand_safe'])
+        self.assertEqual(report['expand_contract_phase'], 'EXPAND')
+        self.assertTrue(report['canary_allowed'])
+
+    def test_classify_expand_contract_phases(self):
+        adapter = DjangoAdapter()
+        # No ops → NONE, canary allowed.
+        report = adapter.classify_migration_risk([])
+        self.assertEqual(report['expand_contract_phase'], 'NONE')
+        self.assertTrue(report['canary_allowed'])
+        # NOT NULL AddField with no default → CONTRACT, canary blocked
+        # (legacy risk_level stays LOW — the block rides on the new keys).
+        report = adapter.classify_migration_risk(
+            [{'type': 'AddField', 'file': '0001.py', 'nullable': False, 'has_default': False}]
+        )
+        self.assertEqual(report['expand_contract_phase'], 'CONTRACT')
+        self.assertFalse(report['is_expand_safe'])
+        self.assertFalse(report['canary_allowed'])
+        self.assertTrue(report['requires_expand_contract'])
+        # RemoveField → CONTRACT, canary blocked.
+        report = adapter.classify_migration_risk([{'type': 'RemoveField', 'file': '0002.py'}])
+        self.assertEqual(report['expand_contract_phase'], 'CONTRACT')
+        self.assertFalse(report['canary_allowed'])
+        # Expand + contract in one release → MIXED, canary blocked.
+        report = adapter.classify_migration_risk([
+            {'type': 'AddField', 'file': '0003.py', 'nullable': True, 'has_default': False},
+            {'type': 'RemoveField', 'file': '0003.py'},
+        ])
+        self.assertEqual(report['expand_contract_phase'], 'MIXED')
+        self.assertFalse(report['canary_allowed'])
+
+    def test_canary_guard_allows_none_report(self):
+        from apps.deployments.services.safedeploy.canary_guard import canary_allowed_for_report
+        allowed, reasons = canary_allowed_for_report(None)
+        self.assertTrue(allowed)
+        self.assertEqual(reasons, [])
+
+    def test_canary_guard_recomputes_from_stored_ops(self):
+        """Instance rows recompute via the adapter (sees AddField flags)."""
+        from apps.deployments.models.safedeploy import MigrationValidation
+        from apps.deployments.services.safedeploy.canary_guard import (
+            validate_canary_enable,
+        )
+
+        class FakeService:
+            id = "svc-1"
+            deployments = None
+
+        unsafe = MigrationValidation(
+            status=MigrationValidation.Status.PASSED,
+            risk_level=MigrationValidation.RiskLevel.LOW,
+            detected_operations=[
+                {'type': 'AddField', 'file': '0001.py', 'nullable': False, 'has_default': False}
+            ],
+            reasons=[], recommendations=[],
+        )
+        allowed, reasons = validate_canary_enable(FakeService(), validation=unsafe)
+        self.assertFalse(allowed)
+        self.assertTrue(reasons)
+
+        safe = MigrationValidation(
+            status=MigrationValidation.Status.PASSED,
+            risk_level=MigrationValidation.RiskLevel.LOW,
+            detected_operations=[
+                {'type': 'AddField', 'file': '0001.py', 'nullable': True, 'has_default': False}
+            ],
+            reasons=[], recommendations=[],
+        )
+        allowed, _ = validate_canary_enable(FakeService(), validation=safe)
+        self.assertTrue(allowed)
 
 from apps.deployments.services.safedeploy.redaction import redact_secrets  # noqa: E402
 

@@ -173,3 +173,116 @@ class StagingRoutingTests(SimpleTestCase):
         # Should NOT have a staging router
         self.assertNotIn("traefik.http.routers.myapp-staging.rule", labels)
         self.assertNotIn("smsly.blue_green.staging_domain", labels)
+
+
+class HoldAutoPromoteGateTests(SimpleTestCase):
+    """The adapter hold fast-path (blue_green_auto_promote) must honor the
+    promotion readiness policy: ready → promote, blocked → hold green."""
+
+    def _build_adapter(self, has_live: bool = True):
+        docker_client = MagicMock()
+        docker_client.api.create_endpoint_config.return_value = {}
+        docker_client.api.create_networking_config.return_value = {}
+
+        live = MagicMock()
+        docker_client.containers.get.return_value = live
+
+        created = MagicMock()
+        created.id = "new-container-id"
+        docker_client.containers.create.return_value = created
+
+        adapter = object.__new__(LocalAdapter)
+        adapter.mode = "AUTO"
+        adapter.docker_client = docker_client
+        adapter.k8s_client = None
+        adapter.batch_v1 = None
+        adapter._service_id = "svc-1"
+        return adapter, docker_client
+
+    def _service_and_row(self):
+        svc = SimpleNamespace(
+            id="svc-1",
+            is_public=True,
+            deploy_strategy="ROLLING",
+            canary_percentage=0,
+            promotion_policy={},
+        )
+        row = SimpleNamespace(
+            id="dep-1",
+            status="BUILDING",
+            green_container_id="",
+            staged_at=None,
+            commit_hash="abc123",
+            service=svc,
+        )
+        return svc, row
+
+    def _deploy_hold(self, adapter, mock_load):
+        mock_load.return_value = SimpleNamespace(
+            use_ssl=True,
+            blue_green_staging_hold_seconds=30,
+            blue_green_auto_promote=True,
+        )
+        return adapter._deploy_docker(
+            name="myapp",
+            image="registry:5000/smsly/myapp:test",
+            env={
+                "PORT": "8000",
+                "PUBLIC_DOMAIN": "myapp.example.com",
+                "STAGING_DOMAIN": "staging-myapp.example.com",
+            },
+        )
+
+    @patch("time.sleep")
+    @patch.object(LocalAdapter, "promote_container", return_value="promoted-id")
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.services.safedeploy.promotion_guard._green_container_state",
+           return_value=("running", "healthy"))
+    @patch("apps.deployments.models.deployment.Deployment.objects")
+    @patch("apps.deployments.models.Service.objects.filter")
+    @patch("apps.deployments.models.Service.objects.get")
+    @patch("apps.deployments.models.PlatformConfig.load")
+    def test_hold_auto_promotes_when_ready(
+        self, mock_load, mock_get, mock_filter, mock_dep_objects,
+        _green_mock, _wait_mock, mock_promote, _sleep_mock,
+    ):
+        from apps.deployments.models import Service as _Svc
+
+        adapter, _docker_client = self._build_adapter()
+        svc, row = self._service_and_row()
+        mock_get.return_value = svc
+        mock_filter.return_value.first.return_value = SimpleNamespace(is_public=True)
+        mock_dep_objects.filter.return_value.order_by.return_value.first.return_value = row
+        self.assertIs(_Svc.objects.get, mock_get)
+
+        result = self._deploy_hold(adapter, mock_load)
+
+        mock_promote.assert_called_once_with("myapp", "new-container-id")
+        self.assertEqual(result, "promoted-id")
+
+    @patch("time.sleep")
+    @patch.object(LocalAdapter, "promote_container", return_value="promoted-id")
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.services.safedeploy.promotion_guard._green_container_state",
+           return_value=("exited", ""))
+    @patch("apps.deployments.models.deployment.Deployment.objects")
+    @patch("apps.deployments.models.Service.objects.filter")
+    @patch("apps.deployments.models.Service.objects.get")
+    @patch("apps.deployments.models.PlatformConfig.load")
+    def test_hold_defers_to_review_when_blocked(
+        self, mock_load, mock_get, mock_filter, mock_dep_objects,
+        _green_mock, _wait_mock, mock_promote, _sleep_mock,
+    ):
+        """Unhealthy green (default require_green_healthy) holds the
+        container for review instead of auto-promoting."""
+        adapter, _docker_client = self._build_adapter()
+        svc, row = self._service_and_row()
+        mock_get.return_value = svc
+        mock_filter.return_value.first.return_value = SimpleNamespace(is_public=True)
+        mock_dep_objects.filter.return_value.order_by.return_value.first.return_value = row
+
+        result = self._deploy_hold(adapter, mock_load)
+
+        mock_promote.assert_not_called()
+        _sleep_mock.assert_not_called()
+        self.assertEqual(result, "new-container-id")

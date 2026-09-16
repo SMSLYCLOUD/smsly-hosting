@@ -210,6 +210,14 @@ class LifecycleActionsMixin:
         except Exception as e:
             logger.error(f"Docker client error during cancel cleanup: {e}")
 
+        # A cancelled green must never keep receiving canary traffic: drop
+        # the Traefik split file (no-op when no split is active).
+        try:
+            from ...services.traefik_manager.canary_file import remove_canary_file
+            remove_canary_file(deployment.service)
+        except Exception as exc:
+            logger.debug("Canary file cleanup on cancel failed: %s", exc)
+
         deployment.save()
 
         # Regenerate Caddyfile if this was a STAGED deployment (remove
@@ -260,10 +268,22 @@ class LifecycleActionsMixin:
                 Deployment.Status.STAGED,
             ]
         )
+        # Capture owners BEFORE the bulk update (the queryset would
+        # otherwise re-evaluate to the already-cancelled rows = empty).
+        affected_service_ids = list(qs.values_list("service_id", flat=True).distinct())
         count = qs.update(
             status=Deployment.Status.CANCELLED,
             finished_at=timezone.now(),
         )
+
+        # Bulk-cancelled greens keep running (no per-row container cleanup
+        # here), but they must stop receiving canary traffic immediately.
+        try:
+            from ...services.traefik_manager.canary_file import remove_canary_file
+            for service_id in affected_service_ids:
+                remove_canary_file(str(service_id))
+        except Exception as exc:
+            logger.debug("Canary file cleanup on bulk-cancel failed: %s", exc)
 
         if count:
             AuditLog(
@@ -424,6 +444,17 @@ class LifecycleActionsMixin:
                 {'error': 'No active cloud provider configured'},
                 status=status.HTTP_400_BAD_REQUEST)
 
+        from ...services.safedeploy.promotion_guard import check_promotion_readiness
+        readiness = check_promotion_readiness(deployment, provider=provider)
+        if not readiness['ready']:
+            return Response(
+                {
+                    'error': 'Promotion blocked by readiness policy.',
+                    'blockers': readiness['blockers'],
+                    'warnings': readiness['warnings'],
+                },
+                status=status.HTTP_409_CONFLICT)
+
         try:
             _do_promote(deployment, provider)
         except Exception as exc:
@@ -434,5 +465,6 @@ class LifecycleActionsMixin:
 
         return Response({
             'message': 'Deployment promoted to ACTIVE',
+            'warnings': readiness['warnings'],
             'deployment': DeploymentSerializer(deployment).data,
         })

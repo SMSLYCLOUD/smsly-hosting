@@ -24,6 +24,7 @@ from apps.teams.permissions import assert_can_delete, assert_can_write, get_team
 
 logger = logging.getLogger(__name__)
 from .deploy import DeployActionsMixin
+from .canary import TrafficSplitMixin
 from .domains import DomainActionsMixin
 from .envvars import EnvVarActionsMixin
 from .files import FileBrowserActionsMixin
@@ -33,7 +34,7 @@ from .incident import IncidentMixin
 from .meta import MetaActionsMixin
 
 
-class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin, FileBrowserActionsMixin, AIRouterActionsMixin, PreviewActionsMixin, IncidentMixin, MetaActionsMixin, viewsets.ModelViewSet):
+class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, EnvVarActionsMixin, FileBrowserActionsMixin, AIRouterActionsMixin, PreviewActionsMixin, IncidentMixin, MetaActionsMixin, viewsets.ModelViewSet):
     """Service viewset composed from domain-specific mixins."""
     """
     Service Management and Nested Resources.

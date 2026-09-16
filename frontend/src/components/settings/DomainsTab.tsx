@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import api, { servicesApi, systemApi, Service, Deployment } from '@/lib/api';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import api, { servicesApi, systemApi, Service, Deployment, TrafficSplitStatus, CanaryMetrics } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,212 @@ interface DomainStatus {
     domain: string;
     verified: boolean | null; // null = not checked yet
     checking: boolean;
+}
+
+const TRAFFIC_PRESETS = [0, 10, 25, 40, 50, 100];
+
+function firstErrorMessage(data: any, fallback: string): string {
+    if (!data) return fallback;
+    if (typeof data === 'string') return data;
+    if (typeof data.error === 'string') return data.error;
+    for (const key of Object.keys(data)) {
+        const v = (data as any)[key];
+        if (Array.isArray(v) && v.length) return String(v[0]);
+        if (typeof v === 'string') return v;
+    }
+    return fallback;
+}
+
+function TrafficSplitCard({ serviceId, hasStaged }: { serviceId: string; hasStaged: boolean }) {
+    const confirm = useConfirm();
+    const [split, setSplit] = useState<TrafficSplitStatus | null>(null);
+    const [metrics, setMetrics] = useState<CanaryMetrics | null>(null);
+    const [draft, setDraft] = useState<number | null>(null);
+    const [applying, setApplying] = useState(false);
+    const dirtyRef = useRef(false);
+
+    const load = useCallback(async () => {
+        try {
+            const s = await servicesApi.getTrafficSplit(serviceId);
+            setSplit(s);
+            // Poll-safe seeding: never clobber the user's in-progress draft.
+            if (!dirtyRef.current) setDraft(s.staging_weight);
+            if (s.split_active) {
+                try {
+                    setMetrics(await servicesApi.getCanaryMetrics(serviceId, '30m'));
+                } catch {
+                    // Metrics backend may lag a fresh split; keep last values.
+                }
+            } else {
+                setMetrics(null);
+            }
+        } catch {
+            setSplit(null);
+        }
+    }, [serviceId]);
+
+    useEffect(() => {
+        dirtyRef.current = false;
+        setDraft(null);
+        void load();
+    }, [load]);
+
+    useEffect(() => {
+        const t = setInterval(() => {
+            if (!dirtyRef.current) void load();
+        }, 10000);
+        return () => clearInterval(t);
+    }, [load]);
+
+    const pick = (v: number) => {
+        dirtyRef.current = true;
+        setDraft(v);
+    };
+
+    const apply = async () => {
+        if (draft === null || applying) return;
+        const readScope = split?.get_only ? 'GET/HEAD reads' : 'reads AND writes';
+        if (!await confirm({
+            title: 'Set traffic split?',
+            message: draft === 0
+                ? 'Route all traffic back to the live container?'
+                : `Route ~${draft}% of live traffic (${readScope} — shared production database${split?.sticky ? '; sticky sessions on' : ''}) to the staging container?`,
+            confirmText: 'Apply',
+        })) return;
+        setApplying(true);
+        try {
+            const s = await servicesApi.setTrafficSplit(serviceId, draft);
+            setSplit(s);
+            setDraft(s.staging_weight);
+            dirtyRef.current = false;
+            toast({ title: 'Traffic split updated', description: `Staging now serves ~${s.staging_weight}% of traffic.` });
+            void load();
+        } catch (e: any) {
+            toast({ title: 'Split rejected', description: firstErrorMessage(e?.response?.data, 'The split was rejected.'), variant: 'destructive' });
+        } finally {
+            setApplying(false);
+        }
+    };
+
+    const abort = async () => {
+        if (applying) return;
+        if (!await confirm({
+            title: 'Abort traffic split?',
+            message: 'Immediately route 100% of traffic back to the live container?',
+            variant: 'destructive',
+            confirmText: 'Abort Split',
+        })) return;
+        setApplying(true);
+        try {
+            const s = await servicesApi.abortTrafficSplit(serviceId);
+            setSplit(s);
+            setDraft(0);
+            dirtyRef.current = false;
+            setMetrics(null);
+            toast({ title: 'Traffic split aborted', description: 'All traffic is back on live.' });
+        } catch (e: any) {
+            toast({ title: 'Abort failed', description: firstErrorMessage(e?.response?.data, 'Could not abort the split.'), variant: 'destructive' });
+        } finally {
+            setApplying(false);
+        }
+    };
+
+    const verdictColor = !metrics ? 'bg-muted text-muted-foreground'
+        : metrics.verdict === 'BLOCK' ? 'bg-red-500/10 text-red-500'
+        : metrics.verdict === 'WARN' ? 'bg-amber-500/10 text-amber-500'
+        : 'bg-emerald-500/10 text-emerald-500';
+
+    return (
+        <div className="mb-8">
+            <div className="flex items-center justify-between mb-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Traffic Split (Live vs Staging)</h4>
+                <div className="flex items-center gap-1.5">
+                    {split?.get_only && split.split_configured && (
+                        <span className="text-[10px] bg-violet-500/10 text-violet-500 px-1.5 py-0.5 rounded" title="Only GET/HEAD requests split — writes stay on live">GET-ONLY</span>
+                    )}
+                    {split?.sticky && split.split_configured && (
+                        <span className="text-[10px] bg-teal-500/10 text-teal-500 px-1.5 py-0.5 rounded" title="Clients are pinned to one variant with a sticky cookie">STICKY</span>
+                    )}
+                    {split && split.split_active ? (
+                        <span className="text-[10px] bg-sky-500/10 text-sky-500 px-1.5 py-0.5 rounded">
+                            {split.live_weight}/{split.staging_weight}
+                        </span>
+                    ) : (
+                        <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">100/0</span>
+                    )}
+                </div>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3">
+                Route a share of production traffic to the staged container and compare error rates before promoting.
+                {split?.get_only
+                    ? ' GET-only mode: only reads split — writes always stay on live.'
+                    : ' Both versions share the production database, so every split request — reads and writes — hits live data.'}
+                {split?.sticky
+                    ? ' Sticky sessions pin each client to one variant.'
+                    : ' Without sticky sessions, stateful clients may bounce between versions mid-session.'}
+                {!hasStaged && ' Push a staged deployment first — weights apply once a green container is live.'}
+            </p>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+                {TRAFFIC_PRESETS.map((v) => (
+                    <Button
+                        key={v}
+                        variant={draft === v ? 'default' : 'outline'}
+                        size="sm"
+                        className="h-7 px-2.5 text-xs"
+                        onClick={() => pick(v)}
+                    >
+                        {v}%
+                    </Button>
+                ))}
+                <Button size="sm" className="h-7 text-xs" disabled={draft === null || applying} onClick={() => void apply()}>
+                    {applying ? <Loader2 size={14} className="animate-spin" /> : 'Apply'}
+                </Button>
+                {split && split.split_active && (
+                    <Button variant="destructive" size="sm" className="h-7 text-xs" disabled={applying} onClick={() => void abort()}>
+                        Abort
+                    </Button>
+                )}
+            </div>
+            {split && split.split_configured && !split.split_active && (
+                <p className="text-xs text-amber-500 mb-3">Split is configured but not serving staging traffic yet — needs a live green container and an applied Traefik config.</p>
+            )}
+            {metrics && (
+                <div className="rounded-lg border border-border overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-2 bg-muted/30">
+                        <span className="text-xs text-muted-foreground">Last 30m · live vs staging</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${verdictColor}`}>{metrics.verdict}</span>
+                    </div>
+                    <table className="w-full text-xs">
+                        <thead>
+                            <tr className="text-muted-foreground text-left">
+                                <th className="px-3 py-1.5 font-medium">Upstream</th>
+                                <th className="px-3 py-1.5 font-medium text-right">Reqs</th>
+                                <th className="px-3 py-1.5 font-medium text-right">RPS</th>
+                                <th className="px-3 py-1.5 font-medium text-right">5xx %</th>
+                                <th className="px-3 py-1.5 font-medium text-right">p50</th>
+                                <th className="px-3 py-1.5 font-medium text-right">p95</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {([['live', metrics.live], ['staging', metrics.staging]] as const).map(([label, row]) => (
+                                <tr key={label} className="border-t border-border">
+                                    <td className="px-3 py-1.5 font-mono truncate max-w-[180px]" title={row.upstream || ''}>{label}</td>
+                                    <td className="px-3 py-1.5 text-right">{row.count}</td>
+                                    <td className="px-3 py-1.5 text-right">{row.rps}</td>
+                                    <td className="px-3 py-1.5 text-right">{row.err_rate}%</td>
+                                    <td className="px-3 py-1.5 text-right">{row.p50_ms != null ? `${row.p50_ms}ms` : '—'}</td>
+                                    <td className="px-3 py-1.5 text-right">{row.p95_ms != null ? `${row.p95_ms}ms` : '—'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {metrics.reasons.map((r, i) => (
+                        <p key={i} className="px-3 py-1.5 text-xs text-muted-foreground border-t border-border">{r}</p>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
 }
 
 export function DomainsTab({ service: initialService }: { service: Service }) {
@@ -840,6 +1046,9 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         </div>
                     </div>
                 ) : null}
+
+                {/* Traffic Split (Live vs Staging) */}
+                <TrafficSplitCard serviceId={service.id} hasStaged={!!stagedDeployment} />
 
                 {/* Custom Domains */}
                 <div>

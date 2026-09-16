@@ -526,7 +526,7 @@ ensure_bind_mount_permissions() {
     # (e.g. rootless Docker where container root is not host root).
 
 
-    _dirs="/caddy-config /app/staticfiles /opt/smsly-hosting/prometheus-targets"
+    _dirs="/caddy-config /app/staticfiles /opt/smsly-hosting/prometheus-targets /traefik-dynamic"
 
 
     for _d in $_dirs; do

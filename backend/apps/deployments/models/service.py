@@ -375,6 +375,18 @@ class Service(TimeStampedModel):
         default=10,
         help_text="Percentage of traffic routed to canary (1-100)")
 
+    # Per-service promotion-policy overrides. Keys mirror the
+    # PlatformConfig promote_* defaults (without the prefix):
+    # require_green_healthy, min_staging_seconds,
+    # require_migration_passed, require_approval_high_critical,
+    # block_when_canary_active, block_contract_unsafe.
+    # Only explicitly set keys win; missing keys inherit the platform
+    # default. Empty dict = fully inherit.
+    promotion_policy = models.JSONField(  # type: ignore[var-annotated]
+        default=dict, blank=True,
+        help_text="Per-service overrides for STAGED → ACTIVE promotion "
+                  "readiness (see PlatformConfig promote_* defaults).")
+
     # DEPRECATED: use deploy_strategy instead. Field is retained for DB schema
     # compatibility only — no application code should read or write it.
     use_blue_green = models.BooleanField(  # type: ignore[var-annotated]

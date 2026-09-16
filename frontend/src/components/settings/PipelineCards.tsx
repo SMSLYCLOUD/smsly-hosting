@@ -125,6 +125,74 @@ export function DeployPipelineCard({ config, onChange }: PipelineCardProps) {
           </div>
           <Switch checked={!!config.fast_deploy_default} onCheckedChange={(v) => onChange("fast_deploy_default", v)} />
         </div>
+        <div className="space-y-2 pt-2">
+          <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Promotion Readiness (STAGED → ACTIVE)</Label>
+          <p className="text-xs text-muted-foreground">
+            Conditions a staged deployment must meet before it may promote. Per-service overrides live in the service&apos;s promotion policy.
+          </p>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label>Require Healthy Green</Label>
+            <p className="text-xs text-muted-foreground">Block promotion while the green container is missing, stopped, or unhealthy (local targets).</p>
+          </div>
+          <Switch checked={config.promote_require_green_healthy ?? true} onCheckedChange={(v) => onChange("promote_require_green_healthy", v)} />
+        </div>
+        <div className="space-y-2">
+          <Label>Minimum Staging Soak Seconds (0-86400)</Label>
+          <Input
+            type="number"
+            min="0"
+            max="86400"
+            value={config.promote_min_staging_seconds ?? 0}
+            onChange={(e) => onChange("promote_min_staging_seconds", parseInt(e.target.value))}
+          />
+          <p className="text-xs text-muted-foreground">
+            How long a deployment must sit STAGED before promoting. Set to 0 for no soak requirement.
+          </p>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label>Require Passed Migration Check</Label>
+            <p className="text-xs text-muted-foreground">Block promotion unless this commit has a PASSED migration validation. Off by default (warn-only).</p>
+          </div>
+          <Switch checked={!!config.promote_require_migration_passed} onCheckedChange={(v) => onChange("promote_require_migration_passed", v)} />
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label>Require Approval for High-Risk Migrations</Label>
+            <p className="text-xs text-muted-foreground">Block promotion of HIGH/CRITICAL-risk migrations without an approved deployment approval.</p>
+          </div>
+          <Switch checked={config.promote_require_approval_high_critical ?? true} onCheckedChange={(v) => onChange("promote_require_approval_high_critical", v)} />
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label>Block Promotion While Canary Active</Label>
+            <p className="text-xs text-muted-foreground">Force an explicit ramp-to-100 or abort before promoting a split service.</p>
+          </div>
+          <Switch checked={!!config.promote_block_when_canary_active} onCheckedChange={(v) => onChange("promote_block_when_canary_active", v)} />
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label>Block Contract-Unsafe Promotion</Label>
+            <p className="text-xs text-muted-foreground">Block promotion when migrations are contract-unsafe (post-promote rollback would be impossible). Off by default — warns instead.</p>
+          </div>
+          <Switch checked={!!config.promote_block_contract_unsafe} onCheckedChange={(v) => onChange("promote_block_contract_unsafe", v)} />
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label>Canary: GET/HEAD Only</Label>
+            <p className="text-xs text-muted-foreground">Restrict weighted splits to reads — writes always stay on live. Safest for shared-DB splits. Applies on next weight change.</p>
+          </div>
+          <Switch checked={!!config.promote_canary_get_only} onCheckedChange={(v) => onChange("promote_canary_get_only", v)} />
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label>Canary: Sticky Sessions</Label>
+            <p className="text-xs text-muted-foreground">Pin clients to one variant with a cookie — for stateful sessions that break when bounced. Applies on next weight change.</p>
+          </div>
+          <Switch checked={!!config.promote_canary_sticky} onCheckedChange={(v) => onChange("promote_canary_sticky", v)} />
+        </div>
       </CardContent>
     </Card>
   );

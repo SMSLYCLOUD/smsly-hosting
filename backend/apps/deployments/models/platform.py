@@ -599,6 +599,48 @@ class PlatformConfig(models.Model):
     auto_promote_hours = models.PositiveIntegerField(
         default=12,
         help_text="Auto-promote deployments in STAGED status after this many hours (0 = disabled)")
+    # ── Promotion Readiness (STAGED → ACTIVE gate) ─────────────────────
+    # Global defaults; per-service overrides live in
+    # Service.promotion_policy (same keys, only set keys win). See
+    # apps/deployments/services/safedeploy/promotion_guard.py.
+    promote_require_green_healthy = models.BooleanField(
+        default=True,
+        help_text="Block promotion while the green container is missing, "
+                  "stopped, or unhealthy (local targets only — remote/lite "
+                  "targets cannot be inspected from here and warn instead).")
+    promote_min_staging_seconds = models.PositiveIntegerField(
+        default=0,
+        help_text="Minimum seconds a deployment must sit STAGED before it "
+                  "may promote (soak time for staging review; 0 = no soak).")
+    promote_require_migration_passed = models.BooleanField(
+        default=False,
+        help_text="Block promotion unless the deployment commit has a PASSED "
+                  "MigrationValidation. Off by default (warn-only) so "
+                  "non-Django services are unaffected.")
+    promote_require_approval_high_critical = models.BooleanField(
+        default=True,
+        help_text="Block promotion of HIGH/CRITICAL-risk migrations without "
+                  "an APPROVED DeploymentApproval.")
+    promote_block_when_canary_active = models.BooleanField(
+        default=False,
+        help_text="Block promotion while a shared-DB canary split is active "
+                  "(canary_percentage > 0). Forces an explicit ramp-to-100 "
+                  "or abort first.")
+    promote_block_contract_unsafe = models.BooleanField(
+        default=False,
+        help_text="Block promotion when the commit's migrations are "
+                  "contract-unsafe (post-promote rollback would be "
+                  "impossible). Off by default — warns instead.")
+    promote_canary_get_only = models.BooleanField(
+        default=False,
+        help_text="Restrict weighted canary splits to GET/HEAD requests "
+                  "(writes always stay on live). Safest for shared-DB "
+                  "splits, but the write path gets no canary signal.")
+    promote_canary_sticky = models.BooleanField(
+        default=False,
+        help_text="Pin canary clients to one variant with a sticky cookie "
+                  "(avoids bouncing stateful sessions between versions). "
+                  "Off by default — plain weighted round-robin.")
     fast_deploy_default = models.BooleanField(
         default=False,
         help_text="Platform-wide fast deploy default: skip AI analysis and review "

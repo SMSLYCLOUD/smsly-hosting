@@ -144,6 +144,7 @@ def auto_promote_staged_deployments():
     ).select_related('service')
 
     promoted = 0
+    skipped = 0
     for deployment in staged:
         try:
             from .provider import _resolve_provider_for_service
@@ -151,6 +152,23 @@ def auto_promote_staged_deployments():
             if not provider:
                 logger.warning("Auto-promote: no provider for %s, skipping", deployment.service.name)
                 continue
+            from apps.deployments.services.safedeploy.promotion_guard import (
+                check_promotion_readiness,
+                format_readiness,
+            )
+            readiness = check_promotion_readiness(deployment, provider=provider)
+            if not readiness['ready']:
+                # Not ready is not failure: the row stays STAGED for the
+                # next sweep (soak time, unhealthy green that may recover,
+                # pending approval). Log once per sweep, don't fail the row.
+                skipped += 1
+                append_log(
+                    deployment,
+                    f"[AUTO-PROMOTE] {format_readiness(readiness)}\n"
+                )
+                continue
+            for warning in readiness['warnings']:
+                append_log(deployment, f"[AUTO-PROMOTE] Warning: {warning}\n")
             _do_promote(deployment, provider)
             append_log(
                 deployment,
@@ -188,7 +206,7 @@ def auto_promote_staged_deployments():
                 continue
             logger.exception("Auto-promote failed for deployment %s: %s", deployment.id, exc)
 
-    return {'promoted': promoted}
+    return {'promoted': promoted, 'skipped': skipped}
 
 
 @shared_task(
@@ -223,6 +241,19 @@ def reap_unhealthy_staged_deployments():
 
     reaped = 0
     for deployment in staged:
+        # Canary-active HEALTHY greens are intentionally long-lived (they
+        # serve weighted production traffic) — exempt below. But a
+        # canary green that is verifiably dead (missing/exited/unhealthy)
+        # must still be reaped: otherwise a split to a dead backend 502s
+        # a share of traffic with no recovery path.
+        canary_active = False
+        try:
+            from apps.deployments.services.safedeploy.promotion_guard import (
+                is_canary_active,
+            )
+            canary_active = bool(is_canary_active(getattr(deployment, 'service', None)))
+        except Exception as exc:
+            logger.debug("Green reaper canary check failed: %s", exc)
         green_id = (deployment.green_container_id or "").strip()
         if not green_id:
             _fail_staged_green(
@@ -259,6 +290,13 @@ def reap_unhealthy_staged_deployments():
             status, health = '', ''
         if status == 'running' and health in ('healthy', ''):
             # Legitimately held for review (or no healthcheck configured).
+            # Canary-active healthy greens are additionally long-lived by
+            # design — the split governs them, not the reaper.
+            if canary_active:
+                logger.info(
+                    "Green reaper: skipping healthy canary-active deployment %s",
+                    getattr(deployment, 'id', '?'),
+                )
             continue
         reason = (
             f"Green container is {status or 'unknown'}"
@@ -277,6 +315,15 @@ def _fail_staged_green(
     deployment: Deployment, reason: str, remove_container: bool,
 ) -> None:
     """Mark a stuck STAGED row FAILED, drop its dead green, and log it."""
+    green_id = (deployment.green_container_id or "").strip()
+    # A reaped green must never keep receiving canary traffic.
+    try:
+        from apps.deployments.services.traefik_manager.canary_file import (
+            remove_canary_file,
+        )
+        remove_canary_file(getattr(deployment, "service", None))
+    except Exception as exc:
+        logger.debug("Canary file cleanup on green reap failed: %s", exc)
     green_id = (deployment.green_container_id or "").strip()
     if remove_container and green_id:
         try:

@@ -67,11 +67,24 @@ def _cancel_previous_staged(deployment: Deployment) -> None:
     Ensures only one staged version is live at a time — the staging URL is
     per-service, so multiple staged containers would collide on the same
     Traefik router and load-balance randomly.
+
+    Also removes any canary split file: splits are per-commit, and the new
+    green supersedes the old one. The operator re-enables the split for
+    the new build explicitly (metrics verdicts would otherwise mix
+    commits, and the expand/contract guard approved the old commit).
     """
     previous = Deployment.objects.filter(
         service=deployment.service,
         status__in=(Deployment.Status.STAGED, Deployment.Status.HEALTH_CHECK),
     ).exclude(id=deployment.id)
+
+    try:
+        from apps.deployments.services.traefik_manager.canary_file import (
+            remove_canary_file,
+        )
+        remove_canary_file(deployment.service)
+    except Exception as exc:
+        logger.debug("Canary file cleanup on supersede failed: %s", exc)
 
     if not previous.exists():
         return

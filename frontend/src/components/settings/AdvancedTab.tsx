@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
 const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false, loading: () => <Skeleton className="h-[400px] w-full" /> });
@@ -341,6 +341,9 @@ export function AdvancedTab({ service }: { service: Service }) {
                 </div>
             </Card>
 
+            {/* Promotion Policy (STAGED → ACTIVE overrides) */}
+            <PromotionPolicyCard service={service} />
+
             {/* Danger Zone */}
             <Card className="p-6 border-red-200/50 bg-red-50/10 dark:bg-red-900/10">
                 <h3 className="font-bold text-lg text-destructive mb-2 flex items-center gap-2">
@@ -368,5 +371,202 @@ export function AdvancedTab({ service }: { service: Service }) {
                 {pruned && <p className="mt-3 text-sm text-emerald-600">{pruned}</p>}
             </Card>
         </div>
+    );
+}
+
+const PROMOTION_BOOL_KEYS = [
+    { key: 'require_green_healthy', label: 'Require green healthy', desc: 'Block promotion while the green container is missing, stopped, or unhealthy.' },
+    { key: 'require_migration_passed', label: 'Require migration passed', desc: 'Block promotion unless this commit has a PASSED migration validation.' },
+    { key: 'require_approval_high_critical', label: 'Require approval (high/critical)', desc: 'Block promotion of HIGH/CRITICAL-risk migrations without an approval.' },
+    { key: 'block_when_canary_active', label: 'Block while canary active', desc: 'Block promotion while a canary split is serving traffic.' },
+    { key: 'block_contract_unsafe', label: 'Block contract-unsafe', desc: 'Block promotion when migrations are contract-unsafe (rollback would be impossible).' },
+    { key: 'canary_get_only', label: 'Canary GET-only', desc: 'Restrict canary splits to GET/HEAD requests; writes stay on live.' },
+    { key: 'canary_sticky', label: 'Canary sticky sessions', desc: 'Pin canary clients to one variant with a sticky cookie.' },
+] as const;
+
+function firstPromotionError(data: any, fallback: string): string {
+    if (!data) return fallback;
+    if (typeof data === 'string') return data;
+    if (typeof data.detail === 'string') return data.detail;
+    for (const key of Object.keys(data)) {
+        const v = (data as any)[key];
+        if (Array.isArray(v) && v.length) return `${key}: ${String(v[0])}`;
+        if (typeof v === 'string') return `${key}: ${v}`;
+    }
+    return fallback;
+}
+
+function PromotionPolicyCard({ service }: { service: Service }) {
+    // Only explicitly set keys are sent — missing keys inherit the
+    // platform default (Settings → Pipeline). Sending explicit false
+    // RELAXES a platform-true default, so "Inherit" omits the key.
+    const seedFrom = (svc: Service) => {
+        const policy = (svc.promotion_policy ?? {}) as Record<string, unknown>;
+        const bools: Record<string, boolean | null> = {};
+        for (const { key } of PROMOTION_BOOL_KEYS) {
+            const v = policy[key];
+            bools[key] = typeof v === 'boolean' ? v : null;
+        }
+        return {
+            bools,
+            minStaging: policy.min_staging_seconds === undefined || policy.min_staging_seconds === null
+                ? '' : String(policy.min_staging_seconds),
+            strategy: svc.deploy_strategy || 'ROLLING',
+            canaryPct: svc.canary_percentage === undefined || svc.canary_percentage === null
+                ? '' : String(svc.canary_percentage),
+        };
+    };
+    const seed = seedFrom(service);
+    const [bools, setBools] = useState<Record<string, boolean | null>>(seed.bools);
+    const [minStaging, setMinStaging] = useState<string>(seed.minStaging);
+    const [strategy, setStrategy] = useState<string>(seed.strategy);
+    const [canaryPct, setCanaryPct] = useState(seed.canaryPct);
+    const [saving, setSaving] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const [error, setError] = useState('');
+    const dirtyRef = useRef(false);
+    const serviceIdRef = useRef(service.id);
+
+    // Poll-safe: the detail page refreshes `service` in the background —
+    // never clobber in-progress edits, re-seed only on service switch.
+    useEffect(() => {
+        if (service.id !== serviceIdRef.current) {
+            serviceIdRef.current = service.id;
+            dirtyRef.current = false;
+            const s = seedFrom(service);
+            setBools(s.bools);
+            setMinStaging(s.minStaging);
+            setStrategy(s.strategy);
+            setCanaryPct(s.canaryPct);
+        }
+    }, [service]);
+
+    const markDirty = (fn: () => void) => { dirtyRef.current = true; setSaved(false); fn(); };
+
+    const handleSave = async () => {
+        setSaving(true);
+        setError('');
+        setSaved(false);
+        try {
+            const policy: Record<string, unknown> = {};
+            for (const { key } of PROMOTION_BOOL_KEYS) {
+                if (bools[key] !== null) policy[key] = bools[key];
+            }
+            if (minStaging.trim() !== '') {
+                const n = parseInt(minStaging.trim(), 10);
+                if (Number.isNaN(n) || n < 0 || n > 86400) {
+                    throw new Error('Soak seconds must be a number between 0 and 86400, or empty to inherit.');
+                }
+                policy.min_staging_seconds = n;
+            }
+            const payload: Record<string, unknown> = {};
+            if (strategy !== (service.deploy_strategy || 'ROLLING')) payload.deploy_strategy = strategy;
+            if (canaryPct.trim() !== '' && canaryPct.trim() !== String(service.canary_percentage ?? '')) {
+                const n = parseInt(canaryPct.trim(), 10);
+                if (Number.isNaN(n) || n < 0 || n > 100) {
+                    throw new Error('Canary weight must be a number between 0 and 100.');
+                }
+                payload.canary_percentage = n;
+            }
+            const hadOverrides = Object.keys((service.promotion_policy ?? {}) as object).length > 0;
+            if (Object.keys(policy).length > 0) {
+                payload.promotion_policy = policy;
+            } else if (hadOverrides) {
+                payload.promotion_policy = {}; // explicit clear → fully inherit
+            }
+            if (Object.keys(payload).length === 0) {
+                setSaved(true);
+                setTimeout(() => setSaved(false), 3000);
+                return;
+            }
+            await servicesApi.update(service.id, payload as any);
+            dirtyRef.current = false;
+            setSaved(true);
+            setTimeout(() => setSaved(false), 3000);
+        } catch (err: any) {
+            setError(err?.message || firstPromotionError(err?.response?.data, 'Failed to save promotion policy'));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const triValue = (v: boolean | null) => (v === null ? 'inherit' : v ? 'on' : 'off');
+
+    return (
+        <Card className="p-6 border-border shadow-md">
+            <div className="mb-4">
+                <h3 className="font-bold text-lg">Promotion Policy</h3>
+                <p className="text-sm text-muted-foreground">
+                    Per-service overrides for the STAGED → ACTIVE readiness gate.
+                    Platform defaults live in Settings → Pipeline → Promotion Readiness.
+                    Only explicitly set keys win — <span className="font-semibold">Inherit</span> follows the platform.
+                </p>
+            </div>
+            {error && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 mb-6 text-red-500 text-sm">
+                    {error}
+                </div>
+            )}
+            {saved && (
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-4 py-3 mb-6 text-emerald-500 text-sm flex items-center gap-2">
+                    <Check size={16} /> Promotion policy saved successfully
+                </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                    <label className="text-sm font-medium">Deploy strategy</label>
+                    <Select value={strategy} onValueChange={(v) => markDirty(() => setStrategy(v))}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="ROLLING">Rolling update</SelectItem>
+                            <SelectItem value="BLUE_GREEN">Blue/Green (staged → promote)</SelectItem>
+                            <SelectItem value="CANARY">Canary (weighted split)</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="space-y-2">
+                    <label className="text-sm font-medium">Canary weight % {strategy !== 'CANARY' && <span className="text-muted-foreground font-normal">(only used by CANARY)</span>}</label>
+                    <Input
+                        type="number" min={0} max={100} placeholder={String(service.canary_percentage ?? 10)}
+                        value={canaryPct} onChange={(e) => markDirty(() => setCanaryPct(e.target.value))}
+                    />
+                </div>
+            </div>
+            <div className="mt-6 space-y-4">
+                {PROMOTION_BOOL_KEYS.map(({ key, label, desc }) => (
+                    <div key={key} className="flex items-center justify-between gap-4 rounded-lg border p-4">
+                        <div className="space-y-0.5">
+                            <p className="text-sm font-medium">{label}</p>
+                            <p className="text-xs text-muted-foreground">{desc}</p>
+                        </div>
+                        <Select value={triValue(bools[key] ?? null)} onValueChange={(v) => markDirty(() => setBools((p) => ({ ...p, [key]: v === 'inherit' ? null : v === 'on' })))}>
+                            <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="inherit">Inherit platform</SelectItem>
+                                <SelectItem value="on">On — enforce</SelectItem>
+                                <SelectItem value="off">Off — relax</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                ))}
+                <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                        <p className="text-sm font-medium">Staging soak seconds</p>
+                        <p className="text-xs text-muted-foreground">Minimum seconds STAGED before promotion. Empty inherits the platform default.</p>
+                    </div>
+                    <Input
+                        type="number" min={0} max={86400} className="w-[180px]"
+                        placeholder="Inherit" value={minStaging}
+                        onChange={(e) => markDirty(() => setMinStaging(e.target.value))}
+                    />
+                </div>
+            </div>
+            <div className="mt-6 flex justify-end">
+                <Button onClick={handleSave} disabled={saving} className="gap-2">
+                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Promotion Policy'}
+                </Button>
+            </div>
+        </Card>
     );
 }

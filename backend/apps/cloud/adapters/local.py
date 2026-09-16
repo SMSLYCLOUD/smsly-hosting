@@ -1265,6 +1265,7 @@ class LocalAdapter(BaseCloudAdapter):
             # ecosystem-deploy check always saw an empty commit_hash.
             svc_id = getattr(self, '_service_id', None) or getattr(self, 'service_id', None)
             svc_obj = None
+            d = None
             if svc_id:
                 from apps.deployments.models import Service as _Svc
                 try:
@@ -1283,7 +1284,53 @@ class LocalAdapter(BaseCloudAdapter):
                     or commit_hash == 'ecosystem-deploy'
                 )
             )
+            gate_allows = False
             if auto_promote:
+                # Promotion readiness gate: the hold fast-path must honor
+                # the same policy as manual promote + the auto-promote
+                # sweep (approval / migration / canary conditions). The row
+                # isn't STAGED yet and doesn't carry the green id, so both
+                # are supplied explicitly. Not ready → fall through and hold
+                # the green for review instead of promoting.
+                if d is None:
+                    logger.warning(
+                        "Staged green %s: no deployment row found — "
+                        "preserving legacy auto-promote",
+                        container_name,
+                    )
+                    gate_allows = True
+                else:
+                    try:
+                        from apps.deployments.services.safedeploy.promotion_guard import (
+                            check_promotion_readiness,
+                        )
+                        _readiness = check_promotion_readiness(
+                            d,
+                            provider=None,
+                            require_staged_status=False,
+                            green_container_id=new_container.id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Staged green %s: readiness gate errored (%s) — "
+                            "holding for review",
+                            container_name, exc,
+                        )
+                        _readiness = None
+                    if _readiness is not None and _readiness.get('ready'):
+                        gate_allows = True
+                        for _w in _readiness.get('warnings', []) or []:
+                            logger.info(
+                                "Staged green %s auto-promote warning: %s",
+                                container_name, _w,
+                            )
+                    elif _readiness is not None:
+                        logger.warning(
+                            "Staged green %s held for review: %s",
+                            container_name,
+                            "; ".join(_readiness.get('blockers') or ['unknown reason']),
+                        )
+            if auto_promote and gate_allows:
                 logger.info(
                     "Staged green %s is healthy; auto-promoting after %ds "
                     "hold (commit_hash=%s, platform_auto_promote=%s)",
@@ -1793,6 +1840,18 @@ class LocalAdapter(BaseCloudAdapter):
                 name,
                 is_public,
             )
+            # The green service no longer exists after cutover — drop any
+            # canary split file so live traffic stops referencing it.
+            # Non-fatal by design (worst case: abort/reap cleans up later).
+            try:
+                from apps.deployments.services.traefik_manager.canary_file import (
+                    remove_canary_file,
+                )
+                _svc_id = getattr(self, "_service_id", None) or getattr(self, "service_id", None)
+                if _svc_id:
+                    remove_canary_file(str(_svc_id))
+            except Exception as exc:
+                logger.debug("Canary file cleanup on promote failed: %s", exc)
             return promoted.id
 
         except Exception as exc:

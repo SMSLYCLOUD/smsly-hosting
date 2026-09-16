@@ -296,6 +296,16 @@ def delete_service_task(self, service_id: str, force: bool = False):
     except Service.DoesNotExist:
         return
 
+    # A deleted service must not keep a canary split file (its router
+    # would reference vanished backends).
+    try:
+        from apps.deployments.services.traefik_manager.canary_file import (
+            remove_canary_file,
+        )
+        remove_canary_file(service)
+    except Exception as exc:
+        logger.debug("Canary file cleanup on service delete failed: %s", exc)
+
     success = False
 
     try:

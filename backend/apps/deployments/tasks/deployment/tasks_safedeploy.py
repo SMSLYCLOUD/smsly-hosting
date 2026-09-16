@@ -431,8 +431,15 @@ def run_migration_validation_job(preview_id: str):
         validation.risk_score = risk_report['risk_score']
         validation.summary = risk_report['summary']
         validation.reasons = risk_report['reasons']
+        validation.detected_operations = operations
         validation.auto_deploy_policy = risk_report['auto_deploy_policy']
         validation.requires_backup = risk_report['requires_backup']
+        if not risk_report.get('canary_allowed', True):
+            existing_recs = list(getattr(validation, 'recommendations', None) or [])
+            for reason in risk_report.get('canary_block_reasons') or []:
+                if reason not in existing_recs:
+                    existing_recs.append(reason)
+            validation.recommendations = existing_recs
 
         # Migrate against the cloned database
         rc, out, err = adapter.run_migrate(cloned_path, env)

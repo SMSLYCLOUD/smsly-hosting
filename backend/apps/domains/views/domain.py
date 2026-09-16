@@ -86,6 +86,15 @@ class DomainConfigView(GenericAPIView):
             'auto_review_hours': config.auto_review_hours,
             'auto_promote_hours': config.auto_promote_hours,
             'fast_deploy_default': config.fast_deploy_default,
+            # Promotion Readiness (STAGED → ACTIVE gate defaults)
+            'promote_require_green_healthy': config.promote_require_green_healthy,
+            'promote_min_staging_seconds': config.promote_min_staging_seconds,
+            'promote_require_migration_passed': config.promote_require_migration_passed,
+            'promote_require_approval_high_critical': config.promote_require_approval_high_critical,
+            'promote_block_when_canary_active': config.promote_block_when_canary_active,
+            'promote_block_contract_unsafe': config.promote_block_contract_unsafe,
+            'promote_canary_get_only': config.promote_canary_get_only,
+            'promote_canary_sticky': config.promote_canary_sticky,
             # Feature Flags
             'smsly_disable_tier_gates': config.smsly_disable_tier_gates,
             'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
@@ -353,6 +362,18 @@ class DomainConfigView(GenericAPIView):
                     pass
             if 'fast_deploy_default' in data:
                 config.fast_deploy_default = _parse_bool(data.get('fast_deploy_default'))
+            # Promotion Readiness defaults
+            for _field in ('promote_require_green_healthy', 'promote_require_migration_passed',
+                           'promote_require_approval_high_critical', 'promote_block_when_canary_active',
+                           'promote_block_contract_unsafe', 'promote_canary_get_only',
+                           'promote_canary_sticky'):
+                if _field in data:
+                    setattr(config, _field, _parse_bool(data.get(_field)))
+            if 'promote_min_staging_seconds' in data:
+                try:
+                    config.promote_min_staging_seconds = max(0, min(86400, int(data['promote_min_staging_seconds'])))
+                except (TypeError, ValueError):
+                    pass
             # Feature Flags
             for _field in ('smsly_disable_tier_gates', 'enable_legacy_tunnel_api', 'smsly_strict_ssh_host_key_check'):
                 if _field in data:

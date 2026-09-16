@@ -510,6 +510,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'migration_auto_approval_policy', 'production_requires_backup',
             'auto_rollback_enabled', 'auto_rollback_threshold',
             'deploy_strategy', 'canary_percentage',
+            'promotion_policy',
             'is_preview', 'parent_service', 'pr_number',
             'health_check_path', 'health_check_port',
             'health_check_interval', 'health_check_timeout',
@@ -612,6 +613,84 @@ class ServiceSerializer(serializers.ModelSerializer):
                 "weight": round(weight, 4),
             },
         }
+
+    def validate_canary_percentage(self, value):
+        if value is None:
+            return value
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError(
+                "canary_percentage must be an integer between 0 and 100."
+            )
+        if not 0 <= value <= 100:
+            raise serializers.ValidationError(
+                "canary_percentage must be between 0 and 100."
+            )
+        return value
+
+    def validate_promotion_policy(self, value):
+        if not value:
+            return value
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("promotion_policy must be an object.")
+        from ..services.safedeploy.promotion_guard import POLICY_KEYS
+        unknown = sorted(set(value) - set(POLICY_KEYS))
+        if unknown:
+            raise serializers.ValidationError(
+                f"Unknown promotion policy keys: {', '.join(unknown)}. "
+                f"Allowed: {', '.join(POLICY_KEYS)}."
+            )
+        if 'min_staging_seconds' in value:
+            try:
+                value['min_staging_seconds'] = max(0, min(86400, int(value['min_staging_seconds'])))
+            except (TypeError, ValueError):
+                raise serializers.ValidationError("min_staging_seconds must be an integer.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        # Canary-block rule (expand/contract): a shared-DB weighted split
+        # runs old + new code concurrently. Enabling CANARY with weight > 0
+        # while the latest migration validation holds contract-unsafe ops
+        # would break the old version mid-split — block with guidance.
+        # The kill switch (weight → 0, or leaving CANARY) is never blocked.
+        strategy = attrs.get('deploy_strategy', getattr(self.instance, 'deploy_strategy', 'ROLLING'))
+        percentage = attrs.get('canary_percentage', getattr(self.instance, 'canary_percentage', 0))
+        try:
+            percentage = int(percentage or 0)
+        except (TypeError, ValueError):
+            percentage = 0
+        wants_canary_traffic = str(strategy or '').upper() == 'CANARY' and percentage > 0
+        # Only gate requests that actually touch the split — unrelated
+        # edits (rename, resources, …) must not 400 while a split is
+        # active. The render-time Caddy gate covers rows that turn unsafe
+        # after enablement.
+        touches_canary = 'deploy_strategy' in attrs or 'canary_percentage' in attrs
+        if wants_canary_traffic and self.instance is not None and touches_canary:
+            try:
+                from ..services.safedeploy.canary_guard import (
+                    _staged_commit_for_service,
+                    validate_canary_enable,
+                )
+                allowed, block_reasons = validate_canary_enable(
+                    self.instance,
+                    commit_hash=_staged_commit_for_service(self.instance),
+                )
+            except Exception as exc:
+                logger.debug("Canary guard lookup failed, allowing: %s", exc)
+                allowed, block_reasons = True, []
+            if not allowed:
+                raise serializers.ValidationError({
+                    'canary_percentage': [
+                        "Shared-DB canary blocked: " + (block_reasons[0] if block_reasons else
+                         "latest migration is not expand-safe."),
+                        "Use expand/contract — ship additive changes first, "
+                        "then the contract migration after the canary is at 100%. "
+                        "Set canary_percentage to 0 to disable the split.",
+                    ],
+                })
+        return attrs
 
     def create(self, validated_data):
         env_vars_data = validated_data.pop('env_vars', [])

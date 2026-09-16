@@ -1,0 +1,140 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Requests/s by Backend (live vs staging)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service_addr) (rate({job=\"traefik-access\",router_name=~\"$service\"}[$__interval]))",
+          "legendFormat": "{{service_addr}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Error % (5xx) by Backend",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service_addr) (rate({job=\"traefik-access\",router_name=~\"$service\",status=~\"5..\"}[$__interval])) / sum by (service_addr) (rate({job=\"traefik-access\",router_name=~\"$service\"}[$__interval])) * 100",
+          "legendFormat": "{{service_addr}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "ms"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "p95 Latency by Backend",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "quantile_over_time(0.95, {job=\"traefik-access\",router_name=~\"$service\"} | json | unwrap Duration [$__interval]) by (service_addr) / 1e6",
+          "legendFormat": "{{service_addr}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Total Requests by Backend (selected range)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum by (service_addr) (count_over_time({job=\"traefik-access\",router_name=~\"$service\"}[$__range]))",
+          "legendFormat": "{{service_addr}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 4,
+      "options": {
+        "content": "One Caddy endpoint (`traefik:80`) serves every site; Traefik splits live vs staging with a file-provider weighted service. `service_addr` is the backend (container IP:port) that served the request — compare the two addresses before ramping the weight. The canary-metrics API maps addresses to live/staging automatically and returns a NEUTRAL/WARN/BLOCK verdict with p50/p95 latency.",
+        "mode": "markdown"
+      },
+      "title": "How to read this",
+      "type": "text"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["smsly", "canary"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": "All", "value": ".*" },
+        "hide": 2,
+        "includeAll": true,
+        "multi": false,
+        "name": "service",
+        "options": [{ "selected": true, "text": "All", "value": ".*" }],
+        "query": "label_values({job=\"traefik-access\"}, router_name)",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "SMSLY Canary",
+  "uid": "smsly-canary",
+  "version": 1
+}
