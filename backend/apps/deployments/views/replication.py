@@ -46,7 +46,60 @@ def _get_local_replica_health():
                 "lag_seconds": None,
                 "last_checked_at": None,
             })
-    return results
+    if results:
+        return results
+    # No registered rows: the installer-deployed HA replica
+    # (smsly-postgres-replica) has no DatabaseReplica row, so a
+    # row-only query reports "no replica" while a healthy replica is
+    # actually running (2026-09-16: page showed no replica, container
+    # Up 31h). Discover it from the daemon and probe it directly.
+    return _get_discovered_replica_health(svc)
+
+
+def _get_discovered_replica_health(svc):
+    """Probe the installer-deployed local replica without a DB row."""
+    import os
+
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        container = get_docker_client().containers.get("smsly-postgres-replica")
+        try:
+            container.reload()
+        except Exception:
+            pass
+        if getattr(container, "status", "") != "running":
+            return []
+    except Exception as exc:
+        logger.debug("Local replica discovery unavailable: %s", exc)
+        return []
+
+    class _ReplicaProbe:
+        host = "smsly-postgres-replica"
+        port = 5432
+        username = os.environ.get("POSTGRES_USER", "smsly_admin")
+        password = os.environ.get("POSTGRES_PASSWORD", "")
+        database = os.environ.get("POSTGRES_DB", "smsly_hosting")
+        ssl_mode = "disable"
+
+    try:
+        ok, err, lag = svc.test_connection(_ReplicaProbe())
+    except Exception as exc:
+        return [{
+            "name": "smsly-postgres-replica",
+            "host": "smsly-postgres-replica",
+            "port": 5432,
+            "status": f"ERROR: {exc}",
+            "lag_seconds": None,
+            "last_checked_at": None,
+        }]
+    return [{
+        "name": "smsly-postgres-replica",
+        "host": "smsly-postgres-replica",
+        "port": 5432,
+        "status": "OK" if ok else f"ERROR: {err}",
+        "lag_seconds": lag,
+        "last_checked_at": None,
+    }]
 
 
 # ─── Serializers ─────────────────────────────────────────────────────────────

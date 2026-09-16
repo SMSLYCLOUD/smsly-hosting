@@ -20,6 +20,35 @@ from .build_docker import _detect_exposed_port
 from .helpers import _env_bool, _env_int
 
 logger = logging.getLogger(__name__)
+
+
+def _max_build_slots(config) -> int:
+    """Concurrent build slots from PlatformConfig (default 1).
+
+    ``max_concurrent_builds`` is operator-tuned (Settings UI, 1-10)
+    for box size — the lock must honour it, not hard-code one slot.
+    Clamped defensively; any unreadable value falls back to serial.
+    """
+    try:
+        slots = int(getattr(config, "max_concurrent_builds", 1) or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(slots, 10))
+
+
+def _build_lock_keys(slots: int) -> list:
+    """Cache keys for the build slots.
+
+    Slot 0 keeps the historic ``smsly_fleet_build_lock`` name so
+    existing tooling and stale single-key rows keep working; extra
+    slots are suffixed. A poisoned base key therefore only costs one
+    slot, never the whole fleet.
+    """
+    keys = ["smsly_fleet_build_lock"]
+    keys.extend(f"smsly_fleet_build_lock:slot:{i}" for i in range(1, max(1, slots)))
+    return keys
+
+
 @contextmanager
 def fleet_build_lock(deployment):
     if not _env_bool("SMSLY_ENABLE_FLEET_BUILD_LOCK", True):
@@ -33,14 +62,14 @@ def fleet_build_lock(deployment):
         yield
         return
 
-    lock_key = "smsly_fleet_build_lock"
-    heartbeat_key = f"{lock_key}:heartbeat"
+    lock_keys = _build_lock_keys(_max_build_slots(config))
     lock_timeout = _env_int("SMSLY_FLEET_BUILD_LOCK_TIMEOUT_SECONDS", 3600, minimum=60)
     max_wait = _env_int("SMSLY_FLEET_BUILD_LOCK_WAIT_SECONDS", 1800, minimum=30)
     poll_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_POLL_SECONDS", 15, minimum=1)
     stale_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_STALE_SECONDS", 600, minimum=60)
 
     acquired = False
+    held_key = None
     start_time = time.monotonic()
     heartbeat_stop = threading.Event()
     heartbeat_thread = None
@@ -53,13 +82,13 @@ def fleet_build_lock(deployment):
     def _heartbeat_payload(owner_id: str) -> dict:
         return {"owner": owner_id, "timestamp": time.time()}
 
-    def _refresh_heartbeat(owner_id: str) -> None:
+    def _refresh_heartbeat(owner_id: str, key: str, hb_key: str) -> None:
         while not heartbeat_stop.wait(max(1, min(30, poll_seconds))):
-            if _normalize_cache_value(cache.get(lock_key)) != owner_id:
+            if _normalize_cache_value(cache.get(key)) != owner_id:
                 return
-            cache.set(heartbeat_key, _heartbeat_payload(owner_id), timeout=lock_timeout)
+            cache.set(hb_key, _heartbeat_payload(owner_id), timeout=lock_timeout)
 
-    def _owner_is_stale(owner_id: str) -> tuple[bool, str]:
+    def _owner_is_stale(owner_id: str, hb_key: str) -> tuple[bool, str]:
         try:
             owner = Deployment.objects.only("id", "status", "updated_at").get(id=owner_id)
         except Deployment.DoesNotExist:
@@ -77,7 +106,7 @@ def fleet_build_lock(deployment):
         if owner.status not in lock_owner_statuses:
             return True, f"owner status is {owner.status}"
 
-        heartbeat = cache.get(heartbeat_key)
+        heartbeat = cache.get(hb_key)
         if isinstance(heartbeat, dict) and str(heartbeat.get("owner")) == owner_id:
             try:
                 heartbeat_age = time.time() - float(heartbeat.get("timestamp") or 0)
@@ -96,29 +125,37 @@ def fleet_build_lock(deployment):
 
     while time.monotonic() - start_time < max_wait:
         deployment_id = str(deployment.id)
-        if cache.add(lock_key, deployment_id, timeout=lock_timeout):
-            acquired = True
-            cache.set(heartbeat_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
+        for key in lock_keys:
+            hb_key = f"{key}:heartbeat"
+            if cache.add(key, deployment_id, timeout=lock_timeout):
+                acquired = True
+                held_key = key
+                cache.set(hb_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
+                break
+            current_owner = _normalize_cache_value(cache.get(key))
+            if not current_owner:
+                continue
+            if current_owner == deployment_id:
+                acquired = True
+                held_key = key
+                cache.set(hb_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
+                break
+            is_stale, stale_reason = _owner_is_stale(current_owner, hb_key)
+            if is_stale:
+                append_log(
+                    deployment,
+                    f"[fleet] Recovered stale build lock from {current_owner[:8]}: {stale_reason}.\n",
+                )
+                cache.delete(key)
+                cache.delete(hb_key)
+                if cache.add(key, deployment_id, timeout=lock_timeout):
+                    acquired = True
+                    held_key = key
+                    cache.set(hb_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
+                    break
+                continue
+        if acquired:
             break
-
-        current_owner = _normalize_cache_value(cache.get(lock_key))
-        if not current_owner:
-            continue
-
-        if current_owner == deployment_id:
-            acquired = True
-            cache.set(heartbeat_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
-            break
-
-        is_stale, stale_reason = _owner_is_stale(current_owner)
-        if is_stale:
-            append_log(
-                deployment,
-                f"[fleet] Recovered stale build lock from {current_owner[:8]}: {stale_reason}.\n",
-            )
-            cache.delete(lock_key)
-            cache.delete(heartbeat_key)
-            continue
 
         if attempt_count := getattr(fleet_build_lock, "_attempt_count", 0):
             fleet_build_lock._attempt_count = attempt_count + 1
@@ -133,9 +170,10 @@ def fleet_build_lock(deployment):
         append_log(deployment, "❌ Timed out waiting for a free build slot in the node fleet.\n")
         raise RuntimeError("Fleet build concurrency limit reached. Please try again later.")
 
+    held_hb_key = f"{held_key}:heartbeat"
     heartbeat_thread = threading.Thread(
         target=_refresh_heartbeat,
-        args=(str(deployment.id),),
+        args=(str(deployment.id), held_key, held_hb_key),
         daemon=True,
     )
     heartbeat_thread.start()
@@ -147,9 +185,9 @@ def fleet_build_lock(deployment):
         heartbeat_stop.set()
         if heartbeat_thread and heartbeat_thread.is_alive():
             heartbeat_thread.join(timeout=1)
-        if _normalize_cache_value(cache.get(lock_key)) == str(deployment.id):
-            cache.delete(lock_key)
-            cache.delete(heartbeat_key)
+        if _normalize_cache_value(cache.get(held_key)) == str(deployment.id):
+            cache.delete(held_key)
+            cache.delete(held_hb_key)
             if hasattr(fleet_build_lock, "_attempt_count"):
                 delattr(fleet_build_lock, "_attempt_count")
 

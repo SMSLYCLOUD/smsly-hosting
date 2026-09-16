@@ -17,8 +17,6 @@ from apps.autoscaler import registry
 from apps.autoscaler.engine.container_metrics import (
     collect_container_stats,
     init_k8s,
-    k8s_available,
-    k8s_client,
 )
 from apps.autoscaler.models import AutoscalerConfig
 
@@ -92,7 +90,50 @@ def _build_services_map(stats: dict) -> dict:
             "last_action": "none",
             "last_action_at": timezone.now().isoformat(),
         }
+    _overlay_paas_state(services)
     return services
+
+
+def _overlay_paas_state(services: dict) -> None:
+    """Replace legacy container-view guesses with real PaaS state.
+
+    ``current_workers`` was hardcoded to 1 and ceilings came from the
+    legacy config defaults (1/4) while the PaaS engine manages
+    ServiceReplica rows with per-service min/max (1/8) — the dashboard
+    showed one worker forever and the service toggles had nothing to
+    match (2026-09-16: "autoscaler broken, data missing"). On exact
+    container-name == Service.name match, report 1 home instance +
+    RUNNING replicas with the service's own ceilings. Platform
+    containers (no Service row) keep legacy values. Never raises —
+    metrics must degrade to estimates, never 500.
+    """
+    try:
+        from django.db.models import Count
+
+        from apps.autoscaler.models.replica import ServiceReplica
+        from apps.deployments.models import Service
+
+        running = dict(
+            ServiceReplica.objects.filter(status="RUNNING")
+            .values("service_id")
+            .annotate(n=Count("id"))
+            .values_list("service_id", "n")
+        )
+        # All services, not just ones with replicas: ceilings must be
+        # real even at zero replicas (legacy defaults 1/4 vs actual
+        # 1/8 made every card's headroom wrong).
+        rows = Service.objects.only(
+            "id", "name", "min_replicas", "max_replicas")
+        by_name = {s.name: s for s in rows}
+        for name, entry in services.items():
+            svc = by_name.get(name)
+            if svc is None:
+                continue
+            entry["current_workers"] = 1 + int(running.get(svc.id, 0))
+            entry["min_workers"] = svc.min_replicas or 1
+            entry["max_workers"] = svc.max_replicas or entry["max_workers"]
+    except Exception as exc:
+        logger.debug("PaaS state overlay skipped: %s", exc)
 
 
 # ── Configuration handling (persisted in DB) ───────────────────────────────
@@ -310,60 +351,28 @@ def _decide_scaling(services: dict) -> list[dict]:
     return actions
 
 
-# ── Apply scaling via Docker SDK or K8s API ────────────────────────────────
-def _apply_scaling(decision: dict):
-    name = decision["container"]
-    target = decision["target_workers"]
-    action = decision["action"]
-    if k8s_available():
-        try:
-            apps_v1 = k8s_client.AppsV1Api()
-            autoscaling_v2 = k8s_client.AutoscalingV2Api()
-            namespace = "default"
-            try:
-                autoscaling_v2.read_namespaced_horizontal_pod_autoscaler(name, namespace)
-                logger.info(
-                    "Autoscaler: HPA exists for %s/%s — delegating to HPA",
-                    namespace, name,
-                )
-                return
-            except Exception as exc:
-                logger.debug("HPA check failed for %s/%s: %s", namespace, name, exc)
-            deployment = apps_v1.read_namespaced_deployment(name, namespace)
-            deployment.spec.replicas = target
-            apps_v1.patch_namespaced_deployment(name, namespace, deployment)
-            logger.info("Autoscaler: Scaled K8s deployment %s/%s to %d", namespace, name, target)
-        except Exception as exc:
-            logger.error("Autoscaler K8s scaling failed for %s: %s", name, exc)
-        return
-    try:
-        import docker
-        client = docker.from_env()
-        try:
-            service = client.services.get(name)
-            service.scale(target)
-            logger.info("Autoscaler: Scaled Swarm service %s to %d", name, target)
-        except Exception:
-            logger.debug("Autoscaler: Scaling for non-swarm container %s requested, but not fully implemented.", name)
-        logger.info(
-            "Autoscaler: %s %s -> %s (reason: %s)",
-            name, action, target, decision.get("reason", "no reason"),
-        )
-    except Exception as exc:
-        logger.error("Autoscaler scaling failed for %s: %s", name, exc)
-
-
 # ── Core health-check routine ──────────────────────────────────────────────
 def _run_autoscaler_check():
     config = _get_config()
-    stats = collect_container_stats()
+    # Stat only containers the dashboard renders: the daemon hosts
+    # ~100 addon/sidecar containers and statting all of them over a
+    # loaded socket-proxy trips the 20s cap with mostly timeouts
+    # (2026-09-16: 18s, zero results, dashboard 503 on every load).
+    stats = collect_container_stats(
+        include=lambda name: _classify_container(name) is not None)
     services = _build_services_map(stats)
     total_mem = config.get('total_system_mb', _get_system_memory())
     infra_reserve = config.get('infra_reserve_mb', 512)
     _record_history(services, total_mem, infra_reserve)
     decisions = _decide_scaling(services)
-    for action in decisions:
-        _apply_scaling(action)
+    # NOTE: legacy advice is recorded for the timeline but NOT applied
+    # here. Applying only ever drove Docker Swarm / K8s workloads; on
+    # this platform every service is a plain container, so each apply
+    # was a docker round-trip ending in a caught log line — and under
+    # load those round-trips hung long enough to push the writer past
+    # its time limit, so the STATUS cache was never written and the
+    # dashboard 503'd permanently. Real scaling lives in
+    # tasks_autoscale.analyze_all_services_task (see trigger below).
     total_used = sum(s["memory_mb"] for s in services.values())
     app_budget = total_mem - infra_reserve
     status_data = {
@@ -480,7 +489,19 @@ def autoscaler_config(request) -> Response:
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def autoscaler_trigger(request) -> Response:
-    """Force an immediate check. Runs in a thread with timeout."""
+    """Force an immediate check. Runs in a thread with timeout.
+
+    Also dispatches the real PaaS engine sweep — the dashboard check
+    above only records container-level advice, so without this a
+    "Force Check" click never scaled any Service.
+    """
+    try:
+        from apps.autoscaler.services.tasks_autoscale import (
+            analyze_all_services_task,
+        )
+        analyze_all_services_task.delay()
+    except Exception as exc:
+        logger.debug("PaaS engine dispatch skipped: %s", exc)
     result = [None]
     done = threading.Event()
 

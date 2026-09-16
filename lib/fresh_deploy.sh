@@ -193,6 +193,17 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                 echo -e "${YELLOW}  ⚠ Observability stack start failed (non-fatal)${NC}"
         fi
     fi
+    # ─── Build-cache services (apt-cacher-ng, verdaccio) ─────────────
+    # These are profile-gated in compose (full/build-cache) so a plain
+    # `up` never starts them — start explicitly by name (profile-proof,
+    # no --remove-orphans). They provide package caches on the platform
+    # network for builds configured to use a proxy; builds without
+    # proxy settings are unaffected. Non-fatal by design.
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        echo -e "${BLUE}  → Starting build-cache services (apt-cacher, verdaccio)...${NC}"
+        timeout -k 5 240 docker compose -f "$COMPOSE_FILE" up -d apt-cacher verdaccio 2>&1 | tail -3 || \
+            echo -e "${YELLOW}  ⚠ Build-cache services start failed (non-fatal)${NC}"
+    fi
     # Deploy docker-labels exporter to all remote nodes and regenerate target files
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)

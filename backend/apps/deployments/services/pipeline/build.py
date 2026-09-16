@@ -34,6 +34,28 @@ BUILD_FAIL_TAIL_LINES = 60
 BUILD_FAIL_TAIL_CHARS = 8000
 
 
+def _registry_cache_settings(image_name, build_args):
+    """Registry-backed BuildKit cache settings for an image build.
+
+    Returns ``(cache_from, build_args)``. ``cache_from`` points at the
+    previous image only when the name is registry-qualified (bare
+    names make BuildKit resolve docker.io and fail with
+    insufficient_scope). In that case ``BUILDKIT_INLINE_CACHE=1`` is
+    also defaulted in so the pushed image carries layer metadata to
+    rebuild from — without it ``cache_from`` is dead weight and every
+    redeploy recompiles all layers once the local BuildKit cache is
+    pruned. An explicit caller value always wins (setdefault).
+    """
+    name = image_name or ""
+    registry_host = name.split("/")[0] if "/" in name else ""
+    use_cache = bool(registry_host) and ("." in registry_host or ":" in registry_host)
+    if not use_cache:
+        return [], build_args
+    merged = dict(build_args or {})
+    merged.setdefault("BUILDKIT_INLINE_CACHE", "1")
+    return [name], merged
+
+
 class BuildMixin:
     def _build_image(self):
         """Step 2: Build Image (with cache check)."""
@@ -557,11 +579,8 @@ class BuildMixin:
         # resolve them to docker.io, triggering "insufficient_scope"
         # errors when the repo doesn't exist or requires auth.
         image_name = self.image_name or ""
-        registry_host = (
-            image_name.split("/")[0] if "/" in image_name else ""
-        )
-        use_cache = bool(registry_host) and ("." in registry_host or ":" in registry_host)
-        cache_from = [image_name] if use_cache else []
+        cache_from, build_args_dict = _registry_cache_settings(
+            image_name, build_args_dict)
 
         self._build_via_docker_py(
             context_dir=context_dir,

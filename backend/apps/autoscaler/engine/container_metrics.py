@@ -75,21 +75,33 @@ def k8s_available() -> bool:
     return init_k8s()
 
 
-def collect_container_stats() -> dict:
+def collect_container_stats(include=None) -> dict:
     """Collect container-level metrics. Returns ``{container_name: stats_dict}``.
 
     Priority: docker CLI bulk stats (one daemon round-trip, ~2s for
     60+ containers) -> K8s metrics API -> per-container SDK fallback.
+
+    ``include`` is an optional predicate over container names. The
+    dashboard only renders classified platform containers, but the
+    daemon hosts ~100 addon/sidecar containers — statting all of them
+    over a loaded socket-proxy trips the 20s overall cap with mostly
+    timeouts (2026-09-16: 18s, zero results, dashboard 503). With a
+    predicate the SDK fallback restricts stats calls to relevant
+    containers (the bulk CLI path filters after the single
+    round-trip); ``None`` keeps the legacy collect-everything
+    behavior for the per-service pipeline.
     """
     cli_stats = _docker_stats_cli()
     if cli_stats is not None:
-        return cli_stats
+        if include is None:
+            return cli_stats
+        return {n: s for n, s in cli_stats.items() if include(n)}
 
     if k8s_available():
         result = _k8s_container_stats()
         if result is not None:
             return result
-    return docker_stats_legacy()
+    return docker_stats_legacy(include=include)
 
 
 def _k8s_container_stats() -> dict | None:
@@ -198,17 +210,24 @@ def _docker_stats_cli() -> dict | None:
         return None
 
 
-def docker_stats_legacy() -> dict:
+def docker_stats_legacy(include=None) -> dict:
     """Collect container metrics via the Docker SDK (docker-py).
 
     Uses parallel stats collection with per-container and overall timeouts
-    to prevent the API from hanging when Docker is slow.
+    to prevent the API from hanging when Docker is slow. ``include`` is
+    an optional predicate over container names — when given, only
+    matching containers are statted (see ``collect_container_stats``).
     """
     try:
         from apps.cloud.docker_client import get_docker_client
 
         client = get_docker_client(timeout=5)
         container_list = client.containers.list()
+        if include is not None:
+            container_list = [
+                c for c in container_list
+                if include(getattr(c, "name", "") or "")
+            ]
 
         def _collect_one(container):
             result = [None]

@@ -135,3 +135,64 @@ def test_connect_replica_success(mock_cache_add, mock_cache_set, mock_cache_get,
     assert response.status_code == 200
     assert response.data["status"] == "Replica connected successfully"
     mock_deploy.assert_called_once()
+
+@pytest.mark.django_db
+@patch("apps.cloud.docker_client.get_docker_client")
+@patch("apps.deployments.services.database_replica_service.test_connection")
+def test_local_health_discovers_unregistered_replica(mock_test_conn, mock_get_client):
+    """No DatabaseReplica rows + running replica container = discovered OK."""
+    from apps.deployments.views.replication import _get_local_replica_health
+
+    container = MagicMock()
+    container.status = "running"
+    mock_get_client.return_value.containers.get.return_value = container
+    mock_test_conn.return_value = (True, "", 0.42)
+
+    results = _get_local_replica_health()
+
+    assert len(results) == 1
+    assert results[0]["name"] == "smsly-postgres-replica"
+    assert results[0]["host"] == "smsly-postgres-replica"
+    assert results[0]["status"] == "OK"
+    assert results[0]["lag_seconds"] == 0.42
+    mock_get_client.return_value.containers.get.assert_called_once_with(
+        "smsly-postgres-replica")
+
+
+@pytest.mark.django_db
+@patch("apps.cloud.docker_client.get_docker_client")
+@patch("apps.deployments.services.database_replica_service.test_connection")
+def test_local_health_empty_when_no_container(mock_test_conn, mock_get_client):
+    """No rows + no container = empty (page shows deploy prompt)."""
+    import docker.errors
+
+    from apps.deployments.views.replication import _get_local_replica_health
+
+    mock_get_client.return_value.containers.get.side_effect = docker.errors.NotFound(
+        "no such container")
+
+    assert _get_local_replica_health() == []
+    mock_test_conn.assert_not_called()
+
+
+@pytest.mark.django_db
+@patch("apps.cloud.docker_client.get_docker_client")
+@patch("apps.deployments.services.database_replica_service.test_connection")
+def test_local_health_prefers_registered_rows(mock_test_conn, mock_get_client):
+    """Explicit DB rows win; daemon is never consulted."""
+    from apps.deployments.models.database_replica import DatabaseReplica
+    from apps.deployments.views.replication import _get_local_replica_health
+
+    DatabaseReplica.objects.create(
+        name="reg-replica", host="10.0.0.9", port=5433,
+        username="u", password="p", database="db",
+        kind="local", is_active=True,
+    )
+    mock_test_conn.return_value = (True, "", 1.5)
+
+    results = _get_local_replica_health()
+
+    assert len(results) == 1
+    assert results[0]["name"] == "reg-replica"
+    assert results[0]["status"] == "OK"
+    mock_get_client.assert_not_called()
