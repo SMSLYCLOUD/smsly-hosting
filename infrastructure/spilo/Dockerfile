@@ -13,7 +13,7 @@ FROM postgres:16
 RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
  _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
  _smsly_apt_use_mirror() { case "$1" in \
-   leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://mirror.leaseweb.com/debian-security|g';; \
+   leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://debian.mirrors.ovh.net/debian-security|g';; \
    ovh) _smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g';; \
  esac; }; \
  for _m in official leaseweb ovh; do \
