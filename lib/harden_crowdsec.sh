@@ -117,8 +117,26 @@ _harden_crowdsec_cf_value() {
     fi
 }
 
+_harden_crowdsec_ensure_bouncer_file() {
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
+    # as a FILE. A missing source makes the daemon auto-create a
+    # DIRECTORY, and every later start fails identically until a human
+    # removes it. Guarantee a real file on every path through here:
+    # drop poison dirs (rmdir only — never delete real content) and
+    # touch an empty placeholder (the entrypoint idles on empty).
+    local _f="${INSTALL_DIR:-/opt/smsly-hosting}/crowdsec/cloudflare-bouncer.yaml"
+    if [ -d "$_f" ] && [ ! -L "$_f" ]; then
+        rmdir "$_f" 2>/dev/null || true
+    fi
+    if [ ! -e "$_f" ]; then
+        mkdir -p "$(dirname "$_f")" 2>/dev/null || true
+        : > "$_f" 2>/dev/null || true
+    fi
+}
+
 _harden_crowdsec_cloudflare_bouncer() {
     command -v docker >/dev/null 2>&1 || return 0
+    _harden_crowdsec_ensure_bouncer_file
     local enabled_raw=""
     local token=""
     local account=""

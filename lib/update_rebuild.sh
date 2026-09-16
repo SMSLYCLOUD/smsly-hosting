@@ -171,9 +171,20 @@
              fi
          fi
 
-         if $_already_migrated; then
-             # Data is already on postgres-primary — switch to prod compose
-             # immediately but ensure the HA stack is up first.
+          # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
+          # as a FILE by the bouncer service. Guarantee it (empty = the
+          # bouncer idles) before any compose up below; drop
+          # daemon-poisoned dirs so retries can succeed.
+          if [ -d "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ] && [ ! -L "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
+              rmdir "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
+          fi
+          mkdir -p "$INSTALL_DIR/crowdsec" 2>/dev/null || true
+          if [ ! -e "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
+              : > "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
+          fi
+          if $_already_migrated; then
+              # Data is already on postgres-primary — switch to prod compose
+              # immediately but ensure the HA stack is up first.
              echo -e "${BLUE}  → HA stack already has data — ensuring services are up...${NC}"
              docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                  up -d --wait --wait-timeout 120 \

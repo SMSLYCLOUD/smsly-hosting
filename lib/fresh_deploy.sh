@@ -180,6 +180,16 @@ mkdir -p "$INSTALL_DIR/caddy-config" "$INSTALL_DIR/caddy-logs"
 # Pre-create the Traefik dynamic-config dir (canary WRR files). The
 # traefik_dynamic volume bind-mounts it; a missing dir breaks the mount.
 mkdir -p "$INSTALL_DIR/traefik-dynamic"
+# AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted as a
+# FILE by the crowdsec-cloudflare-bouncer service. Guarantee it (empty =
+# the bouncer idles) before any compose up; drop daemon-poisoned dirs.
+if [ -d "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ] && [ ! -L "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
+    rmdir "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
+fi
+mkdir -p "$INSTALL_DIR/crowdsec" 2>/dev/null || true
+if [ ! -e "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
+    : > "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
+fi
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: disabling master-only Caddy services before Traefik bind.${NC}"
     true
