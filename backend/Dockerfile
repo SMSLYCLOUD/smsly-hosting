@@ -7,33 +7,54 @@ ENV PYTHONUNBUFFERED 1
 
 # Mirror resilience: some provider networks cannot reach Debian's official
 # CDN (persistent TCP timeouts while Hub/GitHub/PyPI work). Worse, apt
-# exits 0 with empty indexes when every fetch fails, so the fallback
-# cannot key off the update's exit code — it retries the INSTALL across
-# official, then independent vendor mirrors. Official first: zero
-# behavior change where it works. Hostname-only rewrite: codename
-# agnostic, safe for classic and DEB822 layouts.
+# exits 0 with empty indexes when every fetch fails — so neither the
+# exit code nor any fixed vendor order is a reliable signal. Instead
+# every candidate mirror must PROVE itself: its update has to fetch with
+# zero Err lines before it is used. Official first: zero behavior change
+# where it works. Candidates are plain "MAIN|SEC" pairs — vendor-neutral,
+# extend freely. Rewrites always regenerate from the pristine backup
+# (never chained), and are codename-agnostic for classic + DEB822 layouts.
+# (Keep in sync: Dockerfile, infrastructure/spilo/Dockerfile.)
 RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
-    _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
-    _smsly_apt_use_mirror() { case "$1" in \
-      leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://debian.mirrors.ovh.net/debian-security|g';; \
-      ovh) _smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g';; \
-    esac; }; \
-    for _m in official leaseweb ovh; do \
-      [ "$_m" != "official" ] && _smsly_apt_use_mirror "$_m"; \
-      apt-get update; \
-      if apt-get install -y --no-install-recommends \
-        gcc \
-        git \
-        libpq-dev \
-        postgresql-client \
-        curl \
-        wget \
-        iputils-ping \
-        dnsutils \
-        net-tools \
-        iptables; then break; fi; \
-      [ "$_m" = "ovh" ] && exit 1; \
-    done \
+    cp -a /etc/apt/sources.list.d /etc/apt/sources.list.d.smsly-official 2>/dev/null || true; \
+    _smsly_apt_restore_official() { \
+      cp /etc/apt/sources.list.official /etc/apt/sources.list 2>/dev/null || true; \
+      if [ -d /etc/apt/sources.list.d.smsly-official ]; then rm -rf /etc/apt/sources.list.d; cp -a /etc/apt/sources.list.d.smsly-official /etc/apt/sources.list.d; fi; \
+    }; \
+    _smsly_apt_rewrite() { \
+      for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$_f" ] || continue; \
+        sed -i "s|https\\?://deb\\.debian\\.org/debian-security|$2|g; s|https\\?://deb\\.debian\\.org|$1|g; s|https\\?://security\\.debian\\.org/debian-security|$2|g" "$_f"; \
+      done; \
+    }; \
+    _smsly_apt_updated_ok() { \
+      _out="$(apt-get update 2>&1)"; _rc=$?; printf '%s\n' "$_out"; \
+      [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err|E): "; \
+    }; \
+    _smsly_apt_mirror_ok=false; \
+    for _spec in \
+      "|" \
+      "http://debian.mirrors.ovh.net|http://debian.mirrors.ovh.net/debian-security" \
+      "http://mirrors.edge.kernel.org|http://mirrors.edge.kernel.org/debian-security" \
+      "http://mirror.netcologne.de|http://mirror.netcologne.de/debian-security" \
+    ; do \
+      _main="${_spec%%|*}"; _sec="${_spec#*|}"; \
+      if [ -n "$_main" ]; then _smsly_apt_restore_official; _smsly_apt_rewrite "$_main" "$_sec"; fi; \
+      if _smsly_apt_updated_ok; then _smsly_apt_mirror_ok=true; break; fi; \
+    done; \
+    if [ "$_smsly_apt_mirror_ok" != "true" ]; then echo "ERROR: no reachable Debian mirror (tried official + 3 fallbacks)" >&2; exit 1; fi; \
+    rm -rf /etc/apt/sources.list.official /etc/apt/sources.list.d.smsly-official; \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    git \
+    libpq-dev \
+    postgresql-client \
+    curl \
+    wget \
+    iputils-ping \
+    dnsutils \
+    net-tools \
+    iptables \
     # SECURITY: the docker CLI is installed so the celery worker can
     # provision addons (POSTGRES/REDIS/RABBITMQ) via the socket-proxy
     # (DOCKER_HOST=tcp://socket-proxy:2375). The CLI talks to the proxy

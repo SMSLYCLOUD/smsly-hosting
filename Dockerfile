@@ -13,21 +13,47 @@ WORKDIR /frontend
 ARG NEXT_PUBLIC_API_URL=/api/v1
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
+# Mirror resilience: some provider networks cannot reach Debian's official
+# CDN, and apt exits 0 with empty indexes when every fetch fails — so no
+# fixed vendor order is reliable either. Every candidate mirror must
+# PROVE itself (clean update, zero Err lines) before use; official first
+# so healthy hosts see zero behavior change. Candidates are plain
+# "MAIN|SEC" pairs — vendor-neutral, extend freely. Rewrites regenerate
+# from the pristine backup (never chained) and cover classic + DEB822.
+# (Keep in sync: backend/Dockerfile, infrastructure/spilo/Dockerfile.)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
-    _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
-    _smsly_apt_use_mirror() { case "$1" in \
-      leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://debian.mirrors.ovh.net/debian-security|g';; \
-      ovh) _smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g';; \
-    esac; }; \
-    for _m in official leaseweb ovh; do \
-      [ "$_m" != "official" ] && _smsly_apt_use_mirror "$_m"; \
-      apt-get update; \
-      if apt-get install -y --no-install-recommends \
-        git python3 make g++; then break; fi; \
-      [ "$_m" = "ovh" ] && exit 1; \
-    done
+    cp -a /etc/apt/sources.list.d /etc/apt/sources.list.d.smsly-official 2>/dev/null || true; \
+    _smsly_apt_restore_official() { \
+      cp /etc/apt/sources.list.official /etc/apt/sources.list 2>/dev/null || true; \
+      if [ -d /etc/apt/sources.list.d.smsly-official ]; then rm -rf /etc/apt/sources.list.d; cp -a /etc/apt/sources.list.d.smsly-official /etc/apt/sources.list.d; fi; \
+    }; \
+    _smsly_apt_rewrite() { \
+      for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$_f" ] || continue; \
+        sed -i "s|https\\?://deb\\.debian\\.org/debian-security|$2|g; s|https\\?://deb\\.debian\\.org|$1|g; s|https\\?://security\\.debian\\.org/debian-security|$2|g" "$_f"; \
+      done; \
+    }; \
+    _smsly_apt_updated_ok() { \
+      _out="$(apt-get update 2>&1)"; _rc=$?; printf '%s\n' "$_out"; \
+      [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err|E): "; \
+    }; \
+    _smsly_apt_mirror_ok=false; \
+    for _spec in \
+      "|" \
+      "http://debian.mirrors.ovh.net|http://debian.mirrors.ovh.net/debian-security" \
+      "http://mirrors.edge.kernel.org|http://mirrors.edge.kernel.org/debian-security" \
+      "http://mirror.netcologne.de|http://mirror.netcologne.de/debian-security" \
+    ; do \
+      _main="${_spec%%|*}"; _sec="${_spec#*|}"; \
+      if [ -n "$_main" ]; then _smsly_apt_restore_official; _smsly_apt_rewrite "$_main" "$_sec"; fi; \
+      if _smsly_apt_updated_ok; then _smsly_apt_mirror_ok=true; break; fi; \
+    done; \
+    if [ "$_smsly_apt_mirror_ok" != "true" ]; then echo "ERROR: no reachable Debian mirror" >&2; exit 1; fi; \
+    rm -rf /etc/apt/sources.list.official /etc/apt/sources.list.d.smsly-official; \
+    apt-get install -y --no-install-recommends \
+    git python3 make g++
 
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -46,25 +72,42 @@ ENV PORT=8080
 ARG INSTALL_BUILD_DEPS=true
 
 # --- System packages + supervisor + PostgreSQL client ---
-# (Mirror resilience: same fallback as the frontend stage above —
-# some provider networks cannot reach Debian's official CDN.)
+# (Mirror resilience: same live-probed selection as the frontend stage.)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true; \
-    _smsly_apt_fallback() { for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f "$_f" ] && sed -i "$1" "$_f"; done; }; \
-    _smsly_apt_use_mirror() { case "$1" in \
-      leaseweb) _smsly_apt_fallback 's|https\?://deb.debian.org|http://mirror.leaseweb.com|g; s|https\?://security.debian.org/debian-security|http://debian.mirrors.ovh.net/debian-security|g';; \
-      ovh) _smsly_apt_fallback 's|http://mirror.leaseweb.com|http://debian.mirrors.ovh.net|g';; \
-    esac; }; \
-    for _m in official leaseweb ovh; do \
-      [ "$_m" != "official" ] && _smsly_apt_use_mirror "$_m"; \
-      apt-get update; \
-      if apt-get install -y --no-install-recommends \
-        ca-certificates curl wget bash \
-        gcc git libpq-dev postgresql-client \
-        supervisor gettext-base gnupg libstdc++6; then break; fi; \
-      [ "$_m" = "ovh" ] && exit 1; \
-    done
+    cp -a /etc/apt/sources.list.d /etc/apt/sources.list.d.smsly-official 2>/dev/null || true; \
+    _smsly_apt_restore_official() { \
+      cp /etc/apt/sources.list.official /etc/apt/sources.list 2>/dev/null || true; \
+      if [ -d /etc/apt/sources.list.d.smsly-official ]; then rm -rf /etc/apt/sources.list.d; cp -a /etc/apt/sources.list.d.smsly-official /etc/apt/sources.list.d; fi; \
+    }; \
+    _smsly_apt_rewrite() { \
+      for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$_f" ] || continue; \
+        sed -i "s|https\\?://deb\\.debian\\.org/debian-security|$2|g; s|https\\?://deb\\.debian\\.org|$1|g; s|https\\?://security\\.debian\\.org/debian-security|$2|g" "$_f"; \
+      done; \
+    }; \
+    _smsly_apt_updated_ok() { \
+      _out="$(apt-get update 2>&1)"; _rc=$?; printf '%s\n' "$_out"; \
+      [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err|E): "; \
+    }; \
+    _smsly_apt_mirror_ok=false; \
+    for _spec in \
+      "|" \
+      "http://debian.mirrors.ovh.net|http://debian.mirrors.ovh.net/debian-security" \
+      "http://mirrors.edge.kernel.org|http://mirrors.edge.kernel.org/debian-security" \
+      "http://mirror.netcologne.de|http://mirror.netcologne.de/debian-security" \
+    ; do \
+      _main="${_spec%%|*}"; _sec="${_spec#*|}"; \
+      if [ -n "$_main" ]; then _smsly_apt_restore_official; _smsly_apt_rewrite "$_main" "$_sec"; fi; \
+      if _smsly_apt_updated_ok; then _smsly_apt_mirror_ok=true; break; fi; \
+    done; \
+    if [ "$_smsly_apt_mirror_ok" != "true" ]; then echo "ERROR: no reachable Debian mirror" >&2; exit 1; fi; \
+    rm -rf /etc/apt/sources.list.official /etc/apt/sources.list.d.smsly-official; \
+    apt-get install -y --no-install-recommends \
+    ca-certificates curl wget bash \
+    gcc git libpq-dev postgresql-client \
+    supervisor gettext-base gnupg libstdc++6
 
 # --- Optional: Docker CLI + buildx + nixpacks + trivy + cosign (for runtime container provisioning & security scanning) ---
 RUN if [ "$INSTALL_BUILD_DEPS" = "true" ]; then \
