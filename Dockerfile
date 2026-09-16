@@ -37,7 +37,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     }; \
     _smsly_apt_updated_ok() { \
       _out="$(apt-get update 2>&1)"; _rc=$?; printf '%s\n' "$_out"; \
-      [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err|E): "; \
+      [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err?:[^ ]*|E:|Err) "; \
     }; \
     _smsly_apt_mirror_ok=false; \
     for _spec in \
@@ -89,7 +89,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     }; \
     _smsly_apt_updated_ok() { \
       _out="$(apt-get update 2>&1)"; _rc=$?; printf '%s\n' "$_out"; \
-      [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err|E): "; \
+      [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err?:[^ ]*|E:|Err) "; \
     }; \
     _smsly_apt_mirror_ok=false; \
     for _spec in \

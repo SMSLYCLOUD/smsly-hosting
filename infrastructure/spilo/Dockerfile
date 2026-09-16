@@ -26,7 +26,7 @@ RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true;
  }; \
  _smsly_apt_updated_ok() { \
    _out="$(apt-get update 2>&1)"; _rc=$?; printf '%s\n' "$_out"; \
-   [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err|E): "; \
+   [ $_rc -eq 0 ] && ! printf '%s\n' "$_out" | grep -qE "^(Err?:[^ ]*|E:|Err) "; \
  }; \
  _smsly_apt_mirror_ok=false; \
  for _spec in \
