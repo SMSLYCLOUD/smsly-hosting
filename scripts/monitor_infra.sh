@@ -26,6 +26,16 @@ if [ -f "/tmp/smsly-install.lock" ]; then
     exit 0
 fi
 
+# ─── Guard: never overlap with a previous tick ──────────────────────────
+# Under a wedged daemon each docker call can hang for minutes; without
+# this, minute-ticks pile up and amplify the load storm they monitor
+# (2026-09-16: load 178 with overlapping monitor runs).
+exec 200>/tmp/smsly-infra-monitor.lock  || true
+if ! flock -n 200 2>/dev/null; then
+    log "Previous monitor run still active, skipping this tick."
+    exit 0
+fi
+
 # ─── Systemd services to keep alive ────────────────────────────────────
 SYSTEMD_SERVICES=(
     "smsly-autoscaler.service"
@@ -182,8 +192,12 @@ check_and_heal() {
     health=$(echo "$inspect_data" | awk '{print $2}')
 
     if [ "$status" != "running" ]; then
-        log "Alert: Container for service '$service' is not running (status: $status). Restarting..."
-        docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (not running)"
+        # NOTE: `up -d`, not `restart`. A container stuck in Created
+        # (recreated but never started — 2026-09-16 backend outage)
+        # cannot be restarted; `up -d` starts Created AND restarts
+        # Stopped/Exited uniformly.
+        log "Alert: Container for service '$service' is not running (status: $status). Starting..."
+        docker compose -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service (not running)"
     elif [ "$health" = "unhealthy" ]; then
         log "Alert: Container for service '$service' is running but UNHEALTHY. Restarting..."
         docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (unhealthy)"
