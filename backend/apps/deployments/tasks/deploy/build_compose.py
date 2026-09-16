@@ -36,6 +36,33 @@ def _max_build_slots(config) -> int:
     return max(1, min(slots, 10))
 
 
+def _host_pressure_slots(configured: int) -> int:
+    """Contract build slots under host pressure (never below 1).
+
+    Builds are the heaviest batch work on the box. Under a CPU cap
+    (2026-09-16: 75% steal, load 300) every extra parallel build
+    deepens the storm for zero throughput gain — and parallel gcc /
+    pip storms are exactly what gets a host throttled in the first
+    place. Contract to 1 slot past 2x CPUs, 2 slots past 1x CPUs.
+    ``/proc/loadavg`` is host-wide even inside containers, so this is
+    a true fleet-pressure signal. Any unreadable value keeps the
+    configured slots (fail open — pressure handling must never block
+    builds by itself).
+    """
+    try:
+        load1, _, _ = os.getloadavg()
+        cpus = os.cpu_count() or 1
+    except (OSError, AttributeError):
+        # No load average on this platform (e.g. Windows dev) — fail
+        # open. Pressure handling must never block builds by itself.
+        return configured
+    if load1 > cpus * 2:
+        return 1
+    if load1 > cpus:
+        return min(configured, 2)
+    return configured
+
+
 def _build_lock_keys(slots: int) -> list:
     """Cache keys for the build slots.
 
@@ -62,7 +89,21 @@ def fleet_build_lock(deployment):
         yield
         return
 
-    lock_keys = _build_lock_keys(_max_build_slots(config))
+    configured_slots = _max_build_slots(config)
+    lock_keys = _build_lock_keys(_host_pressure_slots(configured_slots))
+    if len(lock_keys) < configured_slots:
+        # Visible in the deployment log so contracted builds explain
+        # themselves instead of looking stuck behind a busy fleet.
+        try:
+            _pressure_load = os.getloadavg()[0]
+        except (OSError, AttributeError):
+            _pressure_load = -1.0
+        append_log(
+            deployment,
+            f"[fleet] Host pressure (load {_pressure_load:.1f}): "
+            f"contracting to {len(lock_keys)} build slot(s) "
+            f"(configured {configured_slots}).\n",
+        )
     lock_timeout = _env_int("SMSLY_FLEET_BUILD_LOCK_TIMEOUT_SECONDS", 3600, minimum=60)
     max_wait = _env_int("SMSLY_FLEET_BUILD_LOCK_WAIT_SECONDS", 1800, minimum=30)
     poll_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_POLL_SECONDS", 15, minimum=1)

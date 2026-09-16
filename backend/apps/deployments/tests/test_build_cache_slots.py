@@ -13,6 +13,7 @@
   keys; a stale slot-0 owner is stolen exactly like the legacy lock.
 """
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -22,6 +23,7 @@ from apps.deployments.models import Deployment, Service
 from apps.deployments.services.pipeline.build import _registry_cache_settings
 from apps.deployments.tasks.deploy.build_compose import (
     _build_lock_keys,
+    _host_pressure_slots,
     _max_build_slots,
     fleet_build_lock,
 )
@@ -73,6 +75,35 @@ class BuildSlotKeyTests(TestCase):
         self.assertEqual(_max_build_slots(SimpleNamespace()), 1)
 
 
+class HostPressureSlotsTests(TestCase):
+    """_host_pressure_slots: elongate when calm, contract under load.
+
+    This is the burn-out governor: parallel gcc/pip storms are what
+    get a host throttled, so slots follow live pressure, not just the
+    configured ceiling.
+    """
+
+    @patch("os.getloadavg", create=True, return_value=(4.0, 0, 0))
+    @patch("os.cpu_count", create=True, return_value=8)
+    def test_calm_keeps_configured(self, _mock_cpu, _mock_load):
+        self.assertEqual(_host_pressure_slots(5), 5)
+
+    @patch("os.getloadavg", create=True, return_value=(10.0, 0, 0))
+    @patch("os.cpu_count", create=True, return_value=8)
+    def test_moderate_contracts_to_two(self, _mock_cpu, _mock_load):
+        self.assertEqual(_host_pressure_slots(5), 2)
+        self.assertEqual(_host_pressure_slots(1), 1)
+
+    @patch("os.getloadavg", create=True, return_value=(90.0, 0, 0))
+    @patch("os.cpu_count", create=True, return_value=8)
+    def test_severe_contracts_to_one(self, _mock_cpu, _mock_load):
+        self.assertEqual(_host_pressure_slots(5), 1)
+
+    @patch("os.getloadavg", create=True, side_effect=OSError("no proc"))
+    def test_unreadable_fails_open(self, _mock_load):
+        self.assertEqual(_host_pressure_slots(4), 4)
+
+
 class FleetBuildSlotsTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
@@ -88,6 +119,16 @@ class FleetBuildSlotsTests(TestCase):
         config = PlatformConfig.load()
         config.max_concurrent_builds = 3
         config.save(update_fields=["max_concurrent_builds"])
+        # Pin calm host pressure: on a loaded Linux box the governor
+        # would (correctly) contract slots and the multi-holder tests
+        # below would block instead of proving parallelism.
+        _calm_load = patch("os.getloadavg", create=True,
+                           return_value=(1.0, 0, 0))
+        _calm_cpu = patch("os.cpu_count", create=True, return_value=8)
+        _calm_load.start()
+        _calm_cpu.start()
+        self.addCleanup(_calm_load.stop)
+        self.addCleanup(_calm_cpu.stop)
 
     def _deployment(self, status=Deployment.Status.BUILDING):
         return Deployment.objects.create(

@@ -213,3 +213,104 @@ if [ -f "$OBS_COMPOSE_FILE" ]; then
         check_and_heal "$OBS_COMPOSE_FILE" "$service"
     done
 fi
+
+# â”€â”€â”€ Host pressure tripwire (load + steal + restart storms) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# 2026-09-16: Vultr capped account CPU after sustained burn nobody
+# watched (load 40â†’300 over days while every dashboard stayed green).
+# This logs ALERT lines (journal) when pressure exceeds safe bounds so
+# the next storm pages attention BEFORE the provider does. Alert-only:
+# never stops services, never changes config. Probes are /proc plus
+# one bounded docker call; the tick flock above prevents overlap.
+check_host_pressure() {
+    local cpus
+    cpus=$(nproc 2>/dev/null || echo 8)
+    case "$cpus" in
+        ''|*[!0-9]*) cpus=8 ;;
+    esac
+    if [ "$cpus" -lt 1 ]; then
+        cpus=8
+    fi
+    # 1. Load: ALERT past 4x CPUs on the 1-minute average. Spikes from
+    # single builds are normal; sustained 4x is burn-out territory.
+    local load1
+    load1=$(awk '{print int($1)}' /proc/loadavg 2>/dev/null || echo 0)
+    case "$load1" in
+        ''|*[!0-9]*) load1=0 ;;
+    esac
+    if [ "$load1" -gt $((cpus * 4)) ]; then
+        log "ALERT: host load ${load1} > 4x CPUs (${cpus}) â€” burn-out risk, check Vultr CPU graphs and `ps` top burners"
+    fi
+    # 2. Steal: ALERT past 25% across the tick interval, measured via a
+    # statefile delta (no sleep inside the monitor). Sustained steal
+    # means the hypervisor is throttling us â€” provider ticket, not tuning.
+    local state_file="/tmp/smsly-pressure-cpu"
+    local cur_steal
+    local cur_total
+    cur_steal=$(awk '/^cpu /{print $8}' /proc/stat 2>/dev/null || echo "")
+    cur_total=$(awk '/^cpu /{print $2+$3+$4+$5+$6+$7+$8}' /proc/stat 2>/dev/null || echo "")
+    if [ -n "$cur_steal" ] && [ -n "$cur_total" ] && [ -f "$state_file" ]; then
+        local prev_steal
+        local prev_total
+        prev_steal=$(cut -d' ' -f1 "$state_file" 2>/dev/null || echo "")
+        prev_total=$(cut -d' ' -f2 "$state_file" 2>/dev/null || echo "")
+        case "${prev_steal}${prev_total}" in
+            ''|*[!0-9]*)
+                ;;
+            *)
+                if [ "$cur_total" -gt "$prev_total" ]; then
+                    local steal_pct
+                    steal_pct=$(( (cur_steal - prev_steal) * 100 / (cur_total - prev_total) ))
+                    if [ "$steal_pct" -gt 25 ]; then
+                        log "ALERT: CPU steal ${steal_pct}% over last tick â€” hypervisor throttling suspected, provider ticket territory"
+                    fi
+                fi
+                ;;
+        esac
+    fi
+    if [ -n "$cur_steal" ] && [ -n "$cur_total" ]; then
+        echo "$cur_steal $cur_total" > "$state_file"  || true
+    fi
+    # 3. Restart storms: any smsly container restarting in a tight loop
+    # (2026-09-15: falco hit 400+ restarts while reporting healthy) or
+    # sitting on a chronic high count. Compared against the previous
+    # tick via statefile; a fresh statefile (reboot) only surfaces
+    # chronic >= 20 counts, never jump-detections without a baseline.
+    local restart_state="/tmp/smsly-pressure-restarts"
+    local current
+    current=$(timeout 25 docker ps --format '{{.Names}} {{.RestartCount}}' 2>/dev/null | grep -E '^(smsly|envoy)-' || true)
+    if [ -n "$current" ]; then
+        local line
+        local name
+        local count
+        local prev_raw
+        while IFS= read -r line; do
+            name=$(echo "$line" | awk '{print $1}')
+            count=$(echo "$line" | awk '{print $2}')
+            case "$count" in
+                ''|*[!0-9]*) continue ;;
+            esac
+            prev_raw=""
+            if [ -f "$restart_state" ]; then
+                prev_raw=$(grep -E "^${name} " "$restart_state" 2>/dev/null | awk '{print $2}' || true)
+            fi
+            case "$prev_raw" in
+                ''|*[!0-9]*)
+                    # No baseline for this container: only a chronic
+                    # count is worth one alert; jumps need history.
+                    if [ "$count" -ge 20 ]; then
+                        log "ALERT: chronic restarter (no baseline): $name at ${count} restarts"
+                    fi
+                    continue
+                    ;;
+            esac
+            if [ "$count" -ge "$((prev_raw + 2))" ]; then
+                log "ALERT: restart storm: $name restarted ${count}x (was ${prev_raw} last tick)"
+            elif [ "$prev_raw" -lt 20 ] && [ "$count" -ge 20 ]; then
+                log "ALERT: chronic restarter: $name crossed ${count} restarts"
+            fi
+        done <<< "$current"
+        echo "$current" > "$restart_state"  || true
+    fi
+}
+
+check_host_pressure
