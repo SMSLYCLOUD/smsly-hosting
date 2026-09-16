@@ -10,12 +10,21 @@
 # nothing in-repo execs psql inside this container (entrypoint and the
 # healthcheck are pure python3 stdlib).
 FROM python:3.11-slim-buster AS py
+# Collect every shared library the interpreter and its C extension
+# modules link against (libssl/libcrypto/libexpat/libffi/...): the
+# pgcat base is a minimal buster rootfs that lacks several of them, and
+# COPYing the version-identical files from this same-distro image is
+# purely additive. ldd sees through to the real files; -L dereferences.
+RUN mkdir -p /pylibs && \
+    for so in $(ldd /usr/local/bin/python3 /usr/local/lib/python3.11/lib-dynload/*.so 2>/dev/null | awk '{print $3}' | grep '^/' | sort -u); do cp -L -n "$so" /pylibs/ 2>/dev/null || true; done && \
+    test "$(ls -A /pylibs | wc -l)" -gt 0 && echo "collected $(ls /pylibs | wc -l) shared libs" && ls /pylibs
 
 FROM levkk/pgcat@sha256:b22ad4dc71970dcfc6de027d6219c07d39c43a1a97c0a01dad6c7a1a600416a5
 
 USER root
 COPY --from=py /usr/local/bin/python3* /usr/local/bin/
 COPY --from=py /usr/local/lib/ /usr/local/lib/
+COPY --from=py /pylibs/ /usr/lib/x86_64-linux-gnu/
 RUN ln -sf /usr/local/bin/python3 /usr/local/bin/python && \
     python3 -c "import sys, ssl, hashlib, os; print('python ok', sys.version.split()[0])" && \
     pip3 install --no-cache-dir --upgrade pip && pip3 install --no-cache-dir psycopg2-binary && \
