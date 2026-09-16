@@ -182,6 +182,9 @@
           if [ ! -e "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
               : > "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
           fi
+          # Same class: traefik_dynamic is a bind-type named volume on
+          # this dir — a missing device fails container creation.
+          mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
           if $_already_migrated; then
               # Data is already on postgres-primary — switch to prod compose
               # immediately but ensure the HA stack is up first.

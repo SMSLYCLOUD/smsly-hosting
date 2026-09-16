@@ -161,6 +161,13 @@ reconcile_compose_stack_after_resume() {
         ensure_infrastructure_permissions || true
     fi
 
+    # Host bind sources must exist before any compose up: the
+    # traefik_dynamic named volume is a bind of this dir, and a missing
+    # device fails container creation with "no such file or directory"
+    # (fresh-install incident — the dir was absent while the volume
+    # existed). Same class as the bouncer-yaml file guard.
+    mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
 }
 
