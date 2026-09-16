@@ -23,6 +23,7 @@ FROM levkk/pgcat@sha256:b22ad4dc71970dcfc6de027d6219c07d39c43a1a97c0a01dad6c7a1a
 
 USER root
 COPY --from=py /usr/local/bin/python3* /usr/local/bin/
+COPY --from=py /usr/local/bin/pip3* /usr/local/bin/
 COPY --from=py /usr/local/lib/ /usr/local/lib/
 COPY --from=py /pylibs/ /usr/lib/x86_64-linux-gnu/
 RUN ln -sf /usr/local/bin/python3 /usr/local/bin/python && \
