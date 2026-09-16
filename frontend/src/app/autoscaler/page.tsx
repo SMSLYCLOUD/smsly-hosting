@@ -270,13 +270,20 @@ export default function AutoscalerPage() {
                {refreshing ? <RotateCw className="animate-spin h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                Force Check
              </Button>
-             <div className={cn(
-               "px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide flex items-center gap-1.5",
-               status ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
-             )}>
-               <div className={cn("w-1.5 h-1.5 rounded-full", status ? "bg-emerald-500 animate-pulse" : "bg-red-500")} />
-               {status ? "Running" : "Offline"}
-             </div>
+              <div className={cn(
+                "px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide flex items-center gap-1.5",
+                !status ? "bg-red-500/10 text-red-500"
+                  : status.status === "degraded" ? "bg-amber-500/10 text-amber-500"
+                  : "bg-emerald-500/10 text-emerald-500"
+              )}>
+                <div className={cn(
+                  "w-1.5 h-1.5 rounded-full",
+                  !status ? "bg-red-500"
+                    : status.status === "degraded" ? "bg-amber-500 animate-pulse"
+                    : "bg-emerald-500 animate-pulse"
+                )} />
+                {!status ? "Offline" : status.status === "degraded" ? "Degraded" : "Running"}
+              </div>
           </div>
         </div>
 

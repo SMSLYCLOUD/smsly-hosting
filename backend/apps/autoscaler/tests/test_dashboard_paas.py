@@ -164,3 +164,61 @@ class TriggerDispatchTests(TestCase):
             resp = dash.autoscaler_trigger(req)
         mock_task.delay.assert_called_once_with()
         self.assertEqual(resp.status_code, 200)
+
+class DegradedStatusTests(TestCase):
+    """Timeout with empty cache returns 200 degraded, never the timed-out 503."""
+
+    def test_degraded_shape_on_live_timeout(self):
+        import threading
+
+        admin = User.objects.create_superuser(
+            username="degraded-admin", email="d@test.com", password="p")
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        req = APIRequestFactory().get("/api/v1/autoscaler/status/")
+        force_authenticate(req, user=admin)
+
+        def _hang():
+            threading.Event().wait(30)
+
+        with patch.object(dash, "_run_autoscaler_check",
+                          side_effect=lambda: _hang()), \
+             patch.object(dash, "API_TIMEOUT", 2):
+            resp = dash.autoscaler_status(req)
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data
+        self.assertEqual(body["status"], "degraded")
+        self.assertEqual(body["services"], {})
+        self.assertTrue(body["_stale"])
+        self.assertIn("recent_decisions", body)
+        self.assertIn("budget", body)
+        self.assertIsNone(body["last_check_at"])
+
+    def test_stale_cache_still_wins_over_degraded(self):
+        import threading
+
+        from django.core.cache import cache
+        admin = User.objects.create_superuser(
+            username="stale-admin", email="s@test.com", password="p")
+        stale = {"status": "active", "services": {},
+                 "recent_decisions": [], "budget": {},
+                 "last_check_at": "2026-09-16T00:00:00+00:00"}
+        cache.set(dash.CACHE_KEY_STATUS, stale, timeout=300)
+        try:
+            from rest_framework.test import APIRequestFactory, force_authenticate
+            req = APIRequestFactory().get("/api/v1/autoscaler/status/")
+            force_authenticate(req, user=admin)
+
+            def _hang():
+                threading.Event().wait(30)
+
+            with patch.object(dash, "_run_autoscaler_check",
+                              side_effect=lambda: _hang()), \
+                 patch.object(dash, "API_TIMEOUT", 2):
+                resp = dash.autoscaler_status(req)
+        finally:
+            cache.delete(dash.CACHE_KEY_STATUS)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["status"], "active")
+        self.assertTrue(resp.data["_stale"])

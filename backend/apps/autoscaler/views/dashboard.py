@@ -442,11 +442,52 @@ def autoscaler_status(request) -> Response:
     if result[0] is not None:
         return Response(result[0])
 
-    # Timed out — return stale cache or error
+    # Timed out — return stale cache, a degraded snapshot, or error,
+    # in that order. The degraded snapshot is docker-free (config +
+    # DB decisions only) so the page renders with truth instead of
+    # the "Autoscaler check timed out" 503 whenever the daemon is too
+    # slow for a live sweep (2026-09-16: every sweep blew the 15s
+    # budget under host steal, page showed "Not Installed" for hours).
     if cached:
         cached["_stale"] = True
         return Response(cached)
+    try:
+        return Response(_degraded_status())
+    except Exception as exc:
+        logger.debug("Degraded autoscaler status unavailable: %s", exc)
     return Response({"error": "Autoscaler check timed out", "status": "error"}, status=503)
+
+
+def _degraded_status() -> dict:
+    """Best-effort status without touching Docker.
+
+    Budget skeleton from config plus the DB-backed decisions timeline
+    (replica lifecycle rows — exact, no sampling). Services list is
+    empty: gauges render "Unknown", never fabricated zeros. Never
+    raises — callers treat failure as "no degraded snapshot".
+    """
+    config = _get_config()
+    total_mem = config.get('total_system_mb', _get_system_memory())
+    infra_reserve = config.get('infra_reserve_mb', 512)
+    app_budget = total_mem - infra_reserve
+    return {
+        "status": "degraded",
+        "uptime_seconds": round(time.time() - START_TIME),
+        "check_interval": config.get('check_interval', DEFAULT_CHECK_INTERVAL),
+        "last_check_at": None,
+        "budget": {
+            "total_system_mb": total_mem,
+            "infra_reserve_mb": infra_reserve,
+            "app_budget_mb": app_budget,
+            "used_mb": 0,
+            "free_mb": round(app_budget, 1),
+        },
+        "services": {},
+        "recent_decisions": _get_recent_decisions(),
+        "_stale": True,
+        "message": ("Live container stats unavailable — Docker daemon too "
+                    "slow. Showing recorded scaling events; retrying."),
+    }
 
 
 @api_view(["GET"])

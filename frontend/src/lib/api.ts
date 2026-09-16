@@ -387,6 +387,19 @@ export interface Service {
   compose_main_service?: string;
   // Auto recovery
   auto_restart?: boolean;
+  // Deployment strategy + traffic split
+  deploy_strategy?: 'ROLLING' | 'BLUE_GREEN' | 'CANARY';
+  canary_percentage?: number;
+  promotion_policy?: {
+    require_green_healthy?: boolean;
+    min_staging_seconds?: number;
+    require_migration_passed?: boolean;
+    require_approval_high_critical?: boolean;
+    block_when_canary_active?: boolean;
+    block_contract_unsafe?: boolean;
+    canary_get_only?: boolean;
+    canary_sticky?: boolean;
+  };
   ha_mode?: 'none' | 'local' | 'remote';
   external_ha_endpoint?: string;
   external_ha_username?: string;
@@ -422,6 +435,49 @@ export interface Service {
     gateway?: string;
     aliases?: string[];
   }[];
+}
+
+export interface TrafficSplitStatus {
+  service_id: string;
+  deploy_strategy?: string;
+  canary_percentage?: number;
+  live_weight: number;
+  staging_weight: number;
+  split_configured: boolean;
+  split_active: boolean;
+  file_present?: boolean;
+  traefik_applied?: boolean;
+  router?: string;
+  get_only?: boolean;
+  sticky?: boolean;
+  green?: {
+    present: boolean;
+    healthy: boolean | null;
+    deployment_id: string | null;
+    commit_hash: string | null;
+  };
+}
+
+export interface CanaryVariantStats {
+  upstream: string | null;
+  count: number;
+  rps: number;
+  err_rate: number;
+  p50_ms?: number | null;
+  p95_ms?: number | null;
+}
+
+export interface CanaryMetrics {
+  service_id: string;
+  window: string;
+  live_weight: number;
+  staging_weight: number;
+  split_active: boolean;
+  live: CanaryVariantStats;
+  staging: CanaryVariantStats;
+  unattributed: CanaryVariantStats;
+  verdict: 'NEUTRAL' | 'WARN' | 'BLOCK';
+  reasons: string[];
 }
 
 export interface AiRouterDetectedModel {
@@ -725,6 +781,23 @@ export const servicesApi = {
   // Metrics
   getMetrics: async (serviceId: string, duration: string = '1h') => {
     const response = await api.get(`/services/${serviceId}/metrics/`, { params: { duration } });
+    return response.data;
+  },
+  // Traffic split (weighted canary: live vs staging green)
+  getTrafficSplit: async (serviceId: string): Promise<TrafficSplitStatus> => {
+    const response = await api.get(`/services/${serviceId}/traffic-split/`);
+    return response.data;
+  },
+  setTrafficSplit: async (serviceId: string, canary_percentage: number): Promise<TrafficSplitStatus> => {
+    const response = await api.post(`/services/${serviceId}/traffic-split/`, { canary_percentage });
+    return response.data;
+  },
+  abortTrafficSplit: async (serviceId: string): Promise<TrafficSplitStatus> => {
+    const response = await api.post(`/services/${serviceId}/traffic-split/abort/`, {});
+    return response.data;
+  },
+  getCanaryMetrics: async (serviceId: string, window: string = '30m'): Promise<CanaryMetrics> => {
+    const response = await api.get(`/services/${serviceId}/canary-metrics/`, { params: { window } });
     return response.data;
   },
   // Traffic Geo
@@ -2256,7 +2329,7 @@ export interface AutoscalerStatus {
   status: string;
   uptime_seconds: number;
   check_interval: number;
-  last_check_at: string;
+  last_check_at: string | null;
   budget: AutoscalerBudget;
   services: Record<string, AutoscalerService>;
   recent_decisions: {
