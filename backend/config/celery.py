@@ -674,17 +674,25 @@ app.conf.beat_schedule = {
         'schedule': 86400.0,
         'options': {'expires': 86400.0},
     },
-    # Collect Traefik access log entries every 15 seconds
+    # Collect Traefik access log entries every 60 seconds.
+    # Was 15s: under sustained scanner bombardment the log volume made
+    # every run exceed its cadence, so 3+ copies piled up concurrently
+    # (2026-09-16: load 178, steal 75% — expiries don't help once a run
+    # starts). Hourly/daily metering aggregates are unaffected by the
+    # coarser granularity. Revert to 15s when host steal clears.
+    # NOTE: key name intentionally unchanged — RedBeat persists entries
+    # by name in Redis and would keep firing an orphaned old key.
     'collect-traffic-logs-every-15s': {
         'task': 'apps.core.tasks.traffic.collect_traefik_logs',
-        'schedule': 15.0,
-        'options': {'expires': 15.0, 'queue': 'fast'},
+        'schedule': 60.0,
+        'options': {'expires': 60.0, 'queue': 'fast'},
     },
-    # Resolve IP geolocations every 30 seconds
+    # Resolve IP geolocations every 120 seconds (display-only enrichment;
+    # was 30s — same pileup class as the log collector above).
     'resolve-traffic-geolocations-every-30s': {
         'task': 'apps.core.tasks.traffic.resolve_traffic_geolocations',
-        'schedule': 30.0,
-        'options': {'expires': 30.0, 'queue': 'fast'},
+        'schedule': 120.0,
+        'options': {'expires': 120.0, 'queue': 'fast'},
     },
     # ── Addon Tasks ──────────────────────────────────────────────────────────
     # Health-check all active addons every 5 minutes and dispatch alerts
