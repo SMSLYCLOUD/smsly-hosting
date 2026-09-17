@@ -82,6 +82,9 @@ REGISTRY_TAG_RETENTION_DAYS = 7
 # never deleted by retention). The live PlatformConfig value
 # (rollback_retain_deployments) wins when set; this is the default.
 ROLLBACK_RETAIN_DEPLOYMENTS = 2
+# Safety bound: at most this many registry tags are deleted per retention
+# cycle, so a metadata glitch can never wipe the registry in one run.
+REGISTRY_TAG_DELETES_PER_CYCLE = 25
 
 # ── Blue-green rollback grace period ────────────────────────────────────────
 # Rollback containers younger than this are ignored by the stale scanner.

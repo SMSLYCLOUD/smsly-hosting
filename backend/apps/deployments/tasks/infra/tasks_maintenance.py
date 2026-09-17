@@ -9,6 +9,7 @@ from django.core.cache import cache
 from django.utils import timezone
 
 from apps.deployments.constants import (
+    REGISTRY_TAG_DELETES_PER_CYCLE,
     REGISTRY_TAG_RETENTION_DAYS,
     ROLLBACK_RETAIN_DEPLOYMENTS,
     TASK_TIME_LIMIT_MEDIUM,
@@ -219,12 +220,14 @@ def _rollback_retain_count() -> int:
     return ROLLBACK_RETAIN_DEPLOYMENTS
 
 
-def _rollback_protected_tags(retain: int) -> set:
+def _rollback_protected_tags(retain: int):
     """Tags pinned for rollback: the live ACTIVE deployment, the newest
     ``retain - 1`` superseded (INACTIVE) deployments per service — INACTIVE
     is exactly "previously ACTIVE", set by Deployment.save() demotion —
     plus every non-terminal/staged deployment. Returns
-    ``{(repo, tag)}`` with repo like ``smsly/my-svc`` and tag ``abc1234``.
+    ``{(repo, tag)}`` with repo like ``smsly/my-svc`` and tag ``abc1234``,
+    or None when the protection query itself fails (callers must abort
+    deletion then — an empty set would look like "nothing to protect").
     """
     from apps.deployments.models import Deployment
     from apps.deployments.services.registry_credentials import (
@@ -236,7 +239,7 @@ def _rollback_protected_tags(retain: int) -> set:
         deployments = list(Deployment.objects.select_related("service").order_by("-created_at")[:500])
     except Exception as exc:
         logger.warning("rollback retention: deployment query failed: %s", exc)
-        return protected
+        return None
     kept_inactive: dict = {}
     for dep in deployments:
         service = getattr(dep, "service", None)
@@ -269,12 +272,15 @@ def select_expired_registry_tags(repo_tags, now, retention_days, protected) -> l
     """Pure selection: which (repo, tag, digest) entries may be deleted.
 
     ``repo_tags`` maps repo -> list of dicts with tag/digest/created
-    (created datetime or None when unknown). Keeps protected tags and
-    anything of unknown age or within retention. Unit-tested.
+    (created datetime or None when unknown). Keeps protected tags,
+    anything of unknown age or within retention, and always keeps the
+    newest tag of a repo (never wipe a service's last remaining image
+    on a metadata glitch). Unit-tested.
     """
     cutoff = now - timedelta(days=retention_days)
     expired = []
     for repo, tags in (repo_tags or {}).items():
+        candidates = []
         for entry in tags or []:
             tag = entry.get("tag")
             digest = entry.get("digest")
@@ -286,7 +292,16 @@ def select_expired_registry_tags(repo_tags, now, retention_days, protected) -> l
             if created is None:
                 continue
             if created < cutoff:
-                expired.append((repo, tag, digest))
+                candidates.append((repo, tag, digest, created))
+        if not candidates:
+            continue
+        if len(candidates) >= len([e for e in (tags or []) if e.get("tag") and e.get("digest")]):
+            # Deleting everything listed for this repo — keep the newest
+            # as a backstop (a repo must never be left tagless by retention).
+            candidates.sort(key=lambda c: c[3], reverse=True)
+            skipped = candidates.pop(0)
+            logger.warning("registry retention: keeping last tag %s:%s as backstop", skipped[0], skipped[1])
+        expired.extend([(repo, tag, digest) for repo, tag, digest, _ in candidates])
     return expired
 
 
@@ -383,11 +398,20 @@ def _prune_expired_registry_tags() -> None:
             continue
 
     protected = _rollback_protected_tags(retain)
+    if protected is None:
+        # Fail closed: without the rollback pin set we cannot tell live
+        # images from garbage — skip deletions this cycle (GC still runs).
+        logger.warning("registry retention: protection query failed, skipping deletions (fail-closed)")
+        return
     expired = select_expired_registry_tags(repo_tags, _tz.now(), retention_days, protected)
     if not expired:
         logger.info("registry retention: nothing older than %dd outside rollback window (retain=%d)",
                     retention_days, retain)
         return
+    if len(expired) > REGISTRY_TAG_DELETES_PER_CYCLE:
+        logger.warning("registry retention: capping deletions at %d (had %d candidates)",
+                       REGISTRY_TAG_DELETES_PER_CYCLE, len(expired))
+        expired = expired[:REGISTRY_TAG_DELETES_PER_CYCLE]
     deleted = 0
     for repo, tag, digest in expired:
         try:

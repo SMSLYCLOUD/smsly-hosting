@@ -23,10 +23,21 @@ def _tag(repo, tag, age_days=None):
 class SelectExpiredRegistryTagsTests(SimpleTestCase):
     def test_old_unprotected_tag_expires(self):
         expired = select_expired_registry_tags(
-            {"smsly/svc": [_tag("smsly/svc", "abc1234", 10)]},
+            {"smsly/svc": [_tag("smsly/svc", "abc1234", 10), _tag("smsly/svc", "def5678", 1)]},
             timezone.now(), 7, set(),
         )
         self.assertEqual(expired, [("smsly/svc", "abc1234", "sha256:abc1234")])
+
+    def test_last_tag_never_deleted(self):
+        # A repo must never be left tagless by retention, even when its
+        # only tag is old and unprotected (metadata glitch backstop).
+        self.assertEqual(
+            select_expired_registry_tags(
+                {"smsly/svc": [_tag("smsly/svc", "abc1234", 30)]},
+                timezone.now(), 7, set(),
+            ),
+            [],
+        )
 
     def test_fresh_tag_kept(self):
         self.assertEqual(
@@ -102,6 +113,14 @@ class RollbackProtectedTagsTests(TestCase):
         self.assertNotIn((repo, "a" * 7), protected)
         self.assertNotIn((repo, "d" * 7), protected)
         self.assertIn((repo, "e" * 7), protected)
+
+    def test_db_failure_returns_none_fail_closed(self):
+        # Callers must abort deletion when protections are unknown —
+        # an empty set would look like "nothing to protect".
+        stub = MagicMock()
+        stub.objects.select_related.side_effect = RuntimeError("db down")
+        with patch("apps.deployments.models.Deployment", stub):
+            self.assertIsNone(_rollback_protected_tags(retain=2))
 
 
 class PruneStaleBuildCacheTests(SimpleTestCase):

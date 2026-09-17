@@ -525,6 +525,43 @@ ensure_weekly_image_prune() {
     log "weekly image prune complete ${reclaimed:+($reclaimed)}"
 }
 
+# ── 14. Celery beat must be dispatching (all hygiene depends on it) ──
+# 2026-09-17: after a worker recreate, the new beat couldn't acquire
+# redbeat::lock (dead predecessor held it, 25-min TTL) and dispatched
+# NOTHING for ~25 min — every periodic cleanup/health task silently
+# stopped, with zero errors in the log. Detection only (never restart
+# beat from here — a second dispatcher would double-fire schedules):
+# alert when no dispatches appear while the beat is old enough to have
+# sent several. The operator fix is deleting the stale lock
+# (DEL redbeat::lock on redis db 3) and restarting the beat container.
+ensure_beat_dispatching() {
+    command -v docker >/dev/null 2>&1 || return 0
+    docker inspect smsly-hosting-celery-beat-1 >/dev/null 2>&1 || { log "beat not running — skipping dispatch check"; return 0; }
+    local started
+    started=$(docker inspect smsly-hosting-celery-beat-1 --format '{{.State.StartedAt}}' 2>/dev/null) || started=""
+    if [ -n "$started" ]; then
+        local started_epoch
+        started_epoch=$(date -d "$started" +%s 2>/dev/null) || started_epoch=""
+        if [ -n "$started_epoch" ]; then
+            local age
+            age=$(( $(date +%s) - started_epoch ))
+            if [ "$age" -lt 600 ]; then
+                log "beat restarted ${age}s ago — skipping dispatch check (schedules still warming up)"
+                return 0
+            fi
+        fi
+    fi
+    local count
+    count=$(docker logs smsly-hosting-celery-beat-1 --since 15m 2>&1 | grep -a -c "Sending due task") || count=0
+    # grep -c prints 0 with exit 1 when nothing matches; normalize.
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    if [ "$count" -eq 0 ]; then
+        log "ALERT: celery beat dispatched nothing in 15m — periodic hygiene/health tasks are stalled (likely a stale redbeat::lock holder; DEL it on redis db 3 and restart the beat)"
+    else
+        log "beat dispatching ($count sends in 15m)"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -543,4 +580,5 @@ ensure_fail2ban_running
 ensure_openappsec_shadow_parity
 ensure_memory_tuning
 ensure_weekly_image_prune
+ensure_beat_dispatching
 log "integrity check complete"
