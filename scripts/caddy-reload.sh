@@ -134,6 +134,23 @@ candidate_has_explicit_443() {
     grep -Eq '^[[:space:]]*:443[[:space:]]*\{' "$1"
 }
 
+# Validate a candidate Caddyfile with the Caddy binary that will serve
+# it: the container's own (the watch dir is bind-mounted at /etc/caddy).
+# The host usually has NO caddy binary (2026-09-17: bare `caddy validate`
+# failed every cycle with "command not found", blocking ALL watcher
+# applies while the backend kept reloading directly). Falls back to a
+# host binary when the container is absent. Validator output goes to the
+# watcher log so real failures stay diagnosable.
+_validate_caddy_candidate() {
+    local candidate="$1"
+    local container="${CADDY_CONTAINER:-smsly-hosting-caddy-1}"
+    if docker inspect "$container" >/dev/null 2>&1; then
+        docker exec "$container" caddy validate --config "/etc/caddy/$(basename "$candidate")"
+        return $?
+    fi
+    caddy validate --config "$candidate"
+}
+
 normalize_caddy_candidate() {
     local source="$1"
     local target="$2"
@@ -215,13 +232,16 @@ while true; do
 
         WATCH_CADDY="$WATCH_DIR/Caddyfile"
             if [ -f "$WATCH_CADDY" ]; then
-                CANDIDATE_CADDY="$(mktemp /tmp/smsly-caddy-candidate.XXXXXX)"
+                # Candidate lives in WATCH_DIR (bind-mounted at /etc/caddy
+                # in the container) so it can be validated in-container.
+                CANDIDATE_CADDY="$(mktemp "$WATCH_DIR/.candidate.XXXXXX")"
+                chmod 644 "$CANDIDATE_CADDY" 2>/dev/null || true
                 normalize_caddy_candidate "$WATCH_CADDY" "$CANDIDATE_CADDY"
                 # Validate before applying with simple retry/backoff to avoid transient DNS/ACME race
                 attempts=0
                 delay=2
                 while [ $attempts -lt 4 ]; do
-                    if caddy validate --config "$CANDIDATE_CADDY" ; then
+                    if _validate_caddy_candidate "$CANDIDATE_CADDY" ; then
                         echo "$LOG_PREFIX Validation passed — applying"
                         if ! apply_validated_caddyfile "$CANDIDATE_CADDY"; then
                             break
