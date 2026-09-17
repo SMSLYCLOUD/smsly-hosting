@@ -1428,6 +1428,13 @@ services:
     # :8082 port mapping below remains for Prometheus metrics, not the API.
     - --metrics.prometheus=true
     - --metrics.prometheus.entrypoint=metrics
+    # SECURITY (2026-09-17): Traefik joins every scoped service bridge for
+    # routing, so any tenant container can curl traefik:8082/metrics.
+    # Per-service/router labels would leak other tenants' service names.
+    # Keep only entrypoint-level aggregates (no tenant identifiers).
+    - --metrics.prometheus.addEntryPointsLabels=true
+    - --metrics.prometheus.addRoutersLabels=false
+    - --metrics.prometheus.addServicesLabels=false
     - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@${DOMAIN:-localhost}}
     - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
     - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
