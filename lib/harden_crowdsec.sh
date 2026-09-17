@@ -2,6 +2,9 @@
 
 _harden_crowdsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
+    # Traefik plugin gate first: decides enforcement before anything
+    # attaches the middleware to user routers.
+    _harden_crowdsec_traefik_plugin_gate
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
@@ -23,6 +26,27 @@ _harden_crowdsec_bootstrap() {
         sleep 2
     done
     _harden_crowdsec_register_bouncer
+}
+
+# Traefik downloads the crowdsec-bouncer plugin from plugins.traefik.io
+# at boot. On networks where that hub is unreachable the plugin never
+# loads, the middleware doesn't exist, and EVERY user router that names
+# it 503s (2026-09-17: full user-traffic outage on a fresh box whose
+# provider blackholes the hub). The backend attaches the middleware only
+# when TRAEFIK_CROWDSEC_ENFORCE is true — when the hub is unreachable
+# and the operator hasn't chosen explicitly, default enforcement OFF so
+# routes stay up (LAPI + Cloudflare bouncer still protect the edge).
+# Sticky: once written, updates never flip it back — delete the line
+# from .env to re-enable after the network path is fixed (workers pick
+# it up on their next recreate).
+_harden_crowdsec_traefik_plugin_gate() {
+    [ -f "$INSTALL_DIR/.env" ] || return 0
+    grep -q '^TRAEFIK_CROWDSEC_ENFORCE=' "$INSTALL_DIR/.env" 2>/dev/null && return 0
+    if timeout 20 curl -s -o /dev/null https://plugins.traefik.io/ 2>/dev/null; then
+        return 0
+    fi
+    echo "TRAEFIK_CROWDSEC_ENFORCE=false" >> "$INSTALL_DIR/.env"
+    echo -e "${YELLOW}    ⚠ plugins.traefik.io unreachable — Traefik WAF plugin can't load here; user routers would 503. Set TRAEFIK_CROWDSEC_ENFORCE=false (delete the line to re-enable)${NC}"
 }
 
 _harden_crowdsec_register_bouncer() {

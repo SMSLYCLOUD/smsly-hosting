@@ -243,6 +243,34 @@ ensure_traefik_service_conflicts() {
     fi
 }
 
+# ── 6c. Edge proxies must join service scoped bridges (2026-09-17 root cause)
+# Per-service isolation bridges (smsly-net-<hex>) island apps from the
+# edge: the container is healthy but every domain 503s with "no available
+# server" because Traefik was never attached. The deploy pipeline attaches
+# at creation (network_scope.ensure_scoped_network), but proxy or network
+# recreation drops attachments — this self-heals hourly. Intra-bridge
+# traffic never traverses DOCKER-USER, so no firewall change is needed.
+ensure_edge_on_scoped_networks() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local edge
+    for edge in smsly-hosting-traefik-1 smsly-hosting-caddy-1 traefik caddy; do
+        docker inspect "$edge" >/dev/null 2>&1 || continue
+        local net
+        docker network ls --format '{{.Name}}' 2>/dev/null | grep -E '^smsly-net-[0-9a-f]{4,}$' | while IFS= read -r net; do
+            [ -n "$net" ] || continue
+            if docker network inspect "$net" 2>/dev/null | grep -q "\"Name\": *\"$edge\""; then
+                continue
+            fi
+            if docker network connect "$net" "$edge" >/dev/null 2>&1; then
+                log "attached $edge to scoped bridge $net (was islanded — its apps 503'd until now)"
+            else
+                log "ALERT: failed to attach $edge to $net — its apps will 503 with no available server"
+            fi
+        done
+    done
+    log "scoped-bridge edge attach sweep complete"
+}
+
 # ── 8. fail2ban must stay active with resolvable jail logpaths ──────
 # 2026-09-13: the caddy-auth/caddy-dos jails pointed at the host path
 # /var/log/caddy/access.log, which never exists (compose mounts the NAMED
@@ -469,6 +497,7 @@ ensure_edge_lockdown
 ensure_migrations
 ensure_traefik_middlewares
 ensure_traefik_service_conflicts
+ensure_edge_on_scoped_networks
 ensure_caddy_logs_writable
 ensure_traefik_dynamic_dir
 ensure_spire_volumes_not_shadowed
