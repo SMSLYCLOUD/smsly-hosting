@@ -62,7 +62,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          # Was 512M: the backend idles at ~500MB (Node heap) and sat at
+          # 98% of cap — one spike from OOMKill churn under load.
+          memory: ${INFISICAL_MEMORY_LIMIT:-1G}
         reservations:
           memory: 256M
 
