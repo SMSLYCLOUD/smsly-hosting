@@ -91,8 +91,9 @@ HEALTH_PER_REQUEST_TIMEOUT_SECONDS = _env_int(
     "HEALTH_PER_REQUEST_TIMEOUT_SECONDS", 8, minimum=1, maximum=30,
 )
 # Max probe targets evaluated per service. When the target list is longer,
-# keep the first half (public/internal) and the last half (container-local)
-# so both the external and the most reliable paths stay covered.
+# keep the first half (fast internal paths) and the last half
+# (container-local + public edge) so both the most reliable and the
+# end-to-end paths stay covered.
 HEALTH_MAX_TARGETS_PER_SERVICE = _env_int(
     "HEALTH_MAX_TARGETS_PER_SERVICE", 24, minimum=4, maximum=100,
 )
@@ -274,13 +275,15 @@ def _build_targets(service, active_deployment):
     public_domain = ""
     if not getattr(service, "public_domain_hidden", False):
         public_domain = (service.public_domain or "").strip()
+    # Probe order is load-bearing: the 20s per-service budget dies on the
+    # first hanging targets, so try the fast, high-signal paths before the
+    # slow public hairpin (backend -> Cloudflare -> back can stall for the
+    # full per-request timeout on some networks while the app itself
+    # answers in milliseconds). Order: internal edge, mesh/private,
+    # container-local, public last. Breadth is unchanged — every target
+    # is still evaluated when earlier ones fail.
     if public_domain:
-        scheme = "https" if _platform_ssl_enabled() else "http"
-        verify = _should_verify_tls() if scheme == "https" else True
-        for path in paths:
-            _add(f"{scheme}://{public_domain}{path}", verify=verify)
-
-        # Internal fallback path avoids DNS/TLS propagation noise.
+        # Internal fast path avoids DNS/TLS propagation noise.
         internal_urls = []
         configured = os.environ.get("TRAEFIK_INTERNAL_URL", "").strip()
         if configured:
@@ -353,6 +356,15 @@ def _build_targets(service, active_deployment):
                         headers=direct_headers,
                         verify=should_verify(_probe_url),
                     )
+
+    # Public edge end-to-end (DNS + TLS + CDN + proxies) goes last: it is
+    # the slowest and least discriminating signal — a stall here must not
+    # starve the fast paths above of the time budget.
+    if public_domain:
+        scheme = "https" if _platform_ssl_enabled() else "http"
+        verify = _should_verify_tls() if scheme == "https" else True
+        for path in paths:
+            _add(f"{scheme}://{public_domain}{path}", verify=verify)
     return targets
 
 

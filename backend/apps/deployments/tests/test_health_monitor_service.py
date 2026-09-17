@@ -59,6 +59,31 @@ class HealthMonitorServiceTests(TestCase):
 
         pass
 
+    def test_build_targets_tries_internal_before_public(self):
+        """Fast internal targets must precede the slow public hairpin.
+
+        The per-service time budget dies on the first hanging targets;
+        the public URL (backend -> CDN -> back) can stall for the full
+        per-request timeout while the internal edge answers instantly.
+        """
+        self.service.public_domain = "buyforfront-0398be.cloud.smsly.cloud"
+        self.service.save(update_fields=["public_domain"])
+
+        targets = hm._build_targets(self.service, self.active)
+        urls = [target["url"] for target in targets]
+        internal_idx = next(
+            i for i, u in enumerate(urls) if u.startswith("http://traefik:80")
+        )
+        public_idx = next(
+            i
+            for i, u in enumerate(urls)
+            if "buyforfront-0398be.cloud.smsly.cloud" in u
+            and not u.startswith("http://traefik:80")
+            and not u.startswith("http://127.0.0.1")
+            and not u.startswith("http://localhost")
+        )
+        self.assertLess(internal_idx, public_idx)
+
     def test_should_restart_respects_cooldown_and_cap(self):
         service_key = str(self.service.id)
         restart_key = hm._restart_key(service_key)
