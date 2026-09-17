@@ -272,6 +272,25 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         timeout -k 5 240 docker compose -f "$COMPOSE_FILE" up -d apt-cacher verdaccio 2>&1 | tail -3 || \
             echo -e "${YELLOW}  ⚠ Build-cache services start failed (non-fatal)${NC}"
     fi
+    # ─── Egress mirror (Alpine CDN rewrite for blocked networks) ───
+    # Nixpacks app builds run `apk add` against dl-cdn.alpinelinux.org
+    # with no mirror flag; on networks where that CDN is unreachable
+    # every Alpine-based app build fails. Best-effort + boot-persistent
+    # (own systemd unit installed below).
+    if [ -f "$INSTALL_DIR/lib/egress_mirror.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/egress_mirror.sh" || true
+        if command -v ensure_egress_mirror >/dev/null 2>&1; then
+            ensure_egress_mirror || true
+        fi
+    fi
+    if [ -f "$INSTALL_DIR/scripts/setup-egress-mirror.sh" ]; then
+        chmod +x "$INSTALL_DIR/scripts/setup-egress-mirror.sh" || true
+        cp "$INSTALL_DIR/scripts/smsly-egress-mirror.service" /etc/systemd/system/smsly-egress-mirror.service 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable smsly-egress-mirror.service 2>/dev/null || \
+            echo -e "${YELLOW}    ⚠ smsly-egress-mirror enable failed (non-fatal)${NC}"
+    fi
     # ─── WAF converge (open-appsec is full-gated AND env-gated) ────────
     # A plain `up` with the default full profiles starts the shadow WAF
     # even when OPENAPPSEC_ENABLED=0; converge it down so disabled stays

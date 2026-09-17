@@ -1,0 +1,17 @@
+[Unit]
+Description=SMSLY Hosting egress mirror (Alpine CDN rewrite for blocked networks)
+After=network-online.target docker.service
+Wants=network-online.target
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/smsly-hosting/scripts/setup-egress-mirror.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
