@@ -163,9 +163,24 @@ class GitHubWebhookHandler:
                 status=Deployment.Status.QUEUED
             )
 
-            # Use the service's assigned provider
+            # Use the service's assigned provider, resolving dynamically
+            # when unset — a null provider is normal (creation flows leave
+            # it empty; every other dispatch path resolves at send time).
+            # The old code skipped silently here, leaving a QUEUED row that
+            # never ran (2026-09-17: stuck webhook deploys on fresh boxes).
             provider_id = str(
                 service.provider.id) if service.provider else None
+            if not provider_id:
+                try:
+                    from apps.deployments.tasks.deploy.provider import (
+                        _resolve_provider_for_service,
+                    )
+                    resolved = _resolve_provider_for_service(
+                        service, prefer_local=True)
+                    provider_id = str(resolved.id) if resolved else None
+                except Exception:
+                    logger.debug("Webhook provider resolution failed", exc_info=True)
+                    provider_id = None
 
             if provider_id:
                 # Webhook pushes skip the REVIEW gate and go straight to
@@ -180,6 +195,16 @@ class GitHubWebhookHandler:
             else:
                 logger.warning(
                     f"Service {service.name} has no provider assigned, skipping webhook deploy")
+                try:
+                    from apps.deployments.utils import append_log
+                    append_log(
+                        deployment,
+                        "\n[webhook] No active provider available — leaving "
+                        "deployment queued. Attach a provider to the service "
+                        "and redeploy.\n",
+                    )
+                except Exception:
+                    logger.debug("Webhook skip-note append failed", exc_info=True)
 
         return triggered_count > 0
 
