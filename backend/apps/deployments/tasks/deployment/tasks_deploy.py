@@ -124,7 +124,16 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
             if not provider:
                 raise RuntimeError("Could not resolve cloud provider for deployment.")
         else:
-            provider = CloudProvider.objects.get(id=provider_id)
+            try:
+                provider = CloudProvider.objects.get(id=provider_id)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cloud provider {provider_id} not found; refusing to deploy to an unknown target."
+                ) from exc
+            if not provider.is_active:
+                raise RuntimeError(
+                    f"Cloud provider {provider_id} is not active; refusing to deploy to a dead target."
+                )
 
         if not getattr(deployment, 'is_rollback', False) and not fast_deploy and getattr(settings, "SENATE_ENABLED", True):
             try:
@@ -289,7 +298,16 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
             if not provider:
                 raise RuntimeError("Could not resolve cloud provider for deployment.")
         else:
-            provider = CloudProvider.objects.get(id=provider_id)
+            try:
+                provider = CloudProvider.objects.get(id=provider_id)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cloud provider {provider_id} not found; refusing to deploy to an unknown target."
+                ) from exc
+            if not provider.is_active:
+                raise RuntimeError(
+                    f"Cloud provider {provider_id} is not active; refusing to deploy to a dead target."
+                )
 
         from apps.deployments.models import PlatformConfig
         config = PlatformConfig.load()
