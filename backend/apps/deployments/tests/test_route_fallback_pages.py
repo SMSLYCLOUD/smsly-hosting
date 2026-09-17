@@ -76,11 +76,14 @@ class RouteFallbackPagesTests(SimpleTestCase):
     def test_pages_have_inline_favicon(self):
         # Browsers request /favicon.ico on every error page view; a
         # data-URI icon avoids an extra edge round-trip and keeps the
-        # tab branded while everything else is degraded.
+        # tab branded while everything else is degraded. The icon must
+        # be the platform logo mark (layered stack), not a placeholder.
         for page in ('index.html', 'disabled.html'):
             html = _read('infrastructure', 'route-fallback', page)
             self.assertIn('rel="icon"', html)
             self.assertIn('data:image/svg+xml', html)
+            self.assertIn('3EDB9C', html)
+            self.assertIn('M15 35 L30 27.5 L45 35', html)
 
     def test_compose_uses_directory_bind(self):
         # Single-file binds go stale on git pull (replaced inodes): the
