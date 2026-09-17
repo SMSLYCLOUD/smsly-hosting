@@ -184,9 +184,23 @@ class SigningMixin:
                     update_stage(self.deployment, 'Sign', 'failed')
                     return
             elif self._is_local_registry():
+                # Diagnostic reason: a bare "skipped" once hid a root-owned
+                # 600 key that workers (uid 1000) couldn't read for weeks
+                # (2026-09-17). Record exactly which gate failed so the
+                # next skip is self-explanatory in the build log.
+                if not key_path:
+                    skip_reason = "COSIGN_PRIVATE_KEY_PATH/COSIGN_KEY is not set in the worker environment"
+                elif not os.path.isfile(key_path):
+                    skip_reason = f"key file missing at {key_path} (mount absent?)"
+                else:
+                    skip_reason = (
+                        f"key file present at {key_path} but not readable "
+                        f"by uid {os.getuid()} (check ownership/permissions)"
+                    )
                 append_log(
                     self.deployment,
                     "Cosign signing SKIPPED — local registry with no readable private key. "
+                    f"Reason: {skip_reason}. "
                     "Keyless Sigstore requires internet access to Fulcio/Rekor. "
                     "To sign images, either: (1) mount COSIGN_PRIVATE_KEY_PATH into the "
                     "celery-deploy container, (2) configure COSIGN_OIDC_ISSUER, or "
