@@ -85,6 +85,16 @@ apply_lockdown() {
     cf_count=$((rule_no - 1))
     [ "$cf_count" -gt 0 ] || die "no Cloudflare ranges could be installed"
 
+    # 3b) Platform-internal traffic must keep reaching the edge. Health
+    # probes and automation dial the public domain, which resolves to the
+    # host itself — without an explicit accept the drop-direct rule below
+    # swallows container/host-local traffic (2026-09-17: backend health
+    # probes hung the full timeout, false "unhealthy" + restart churn).
+    # Honors this script's contract that Docker bridges are NOT touched.
+    for _iface in lo docker0 'br+'; do
+        iptables -I "$CHAIN" "$rule_no" -i "$_iface" -p tcp -m multiport --dports 80,443 -m comment --comment "$TAG allow-internal" -j ACCEPT 2>/dev/null && rule_no=$((rule_no+1))
+    done
+
     # 4) Drop other inbound 80/443 (direct-to-origin bypass).
     iptables -C "$CHAIN" -p tcp -m multiport --dports 80,443 -m comment --comment "$TAG drop-direct" -j DROP 2>/dev/null || \
         iptables -I "$CHAIN" "$rule_no" -p tcp -m multiport --dports 80,443 -m comment --comment "$TAG drop-direct" -j DROP
