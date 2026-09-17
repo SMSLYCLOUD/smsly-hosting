@@ -52,15 +52,31 @@ _SHIM_PREAMBLE = (
 )
 
 
-def _iptables_shim_available() -> bool:
-    """True when the pre-baked iptables shim image exists locally."""
-    try:
-        import docker as _docker
-        _client = _docker.from_env()
-        _client.images.get(IPTABLES_SHIM_IMAGE)
-        return True
-    except Exception:
-        return False
+def _is_missing_image(proc: subprocess.CompletedProcess) -> bool:
+    """True when a `docker run` failed because the image is absent.
+
+    Image *checks* (images.get / image inspect) do not survive filtered
+    Docker proxies — e.g. tecnativa/docker-socket-proxy with IMAGES=0
+    answers 404 for images that exist — so selection is attempt-first:
+    run the shim, and only treat create-time pull failures as "missing".
+    Real iptables failures come from INSIDE the container and must NOT
+    trigger the fallback (their stderr carries iptables/nft usage text,
+    never these daemon markers).
+    """
+    def _text(value):
+        return value if isinstance(value, str) else ""
+
+    text = _text(proc.stderr) + "\n" + _text(proc.stdout)
+    return any(
+        marker in text
+        for marker in (
+            "No such image",
+            "pull access denied",
+            "manifest unknown",
+            "unauthorized",
+            "repository does not exist",
+        )
+    )
 
 
 def _nft_fallback_command(args: list[str]) -> str:
@@ -144,8 +160,10 @@ def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
     invocations are executed through a one-shot container with
     --net=host --cap-add=NET_ADMIN (docker CLI is available in backend).
 
-    Order of preference:
-      1. 'smsly/iptables-shim' image (pre-baked with iptables + nft)
+    Order of preference (attempt-first — never check-first):
+      1. 'smsly/iptables-shim' image (pre-baked with iptables + nft).
+         A missing image fails at create-time with a recognizable daemon
+         error; anything else (even rc != 0) is a real result.
       2. stock alpine with an on-the-fly 'apk add iptables nftables'
       3. nftables translation (see _nft_fallback_command) when iptables
          itself is unavailable — modern hosts back DOCKER-USER with
@@ -155,11 +173,13 @@ def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
         if args and args[0] == "iptables":
             script = " ".join(args)
 
-            if _iptables_shim_available():
-                return subprocess.run(
-                    ["docker", "run", "--rm", "--net=host", "--cap-add=NET_ADMIN",
-                     IPTABLES_SHIM_IMAGE, "sh", "-c", script],
-                    capture_output=True, text=True, timeout=timeout, check=False)
+            proc = subprocess.run(
+                ["docker", "run", "--rm", "--net=host", "--cap-add=NET_ADMIN",
+                 IPTABLES_SHIM_IMAGE, "sh", "-c", script],
+                capture_output=True, text=True, timeout=timeout, check=False)
+            if proc.returncode == 0 or not _is_missing_image(proc):
+                return proc
+            logger.warning("iptables shim image missing; falling back to ad-hoc apk")
 
             # Fallback for fresh hosts: install both firewall tools inside
             # the one-shot container, try iptables first, then nft.

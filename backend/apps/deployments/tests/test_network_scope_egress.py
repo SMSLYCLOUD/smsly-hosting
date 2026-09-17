@@ -34,10 +34,11 @@ from apps.deployments.services.network_scope import (
 )
 
 
-def _fake_completed_process(returncode: int = 0, stderr: str = ""):
+def _fake_completed_process(returncode: int = 0, stderr: str = "", stdout: str = ""):
     cp = MagicMock()
     cp.returncode = returncode
     cp.stderr = stderr
+    cp.stdout = stdout
     return cp
 
 
@@ -285,19 +286,42 @@ class GetBridgeInterfaceNameTests(SimpleTestCase):
 
 
 class ShimFallbackLifetimeTests(SimpleTestCase):
-    """The apk fallback container must bound its OWN lifetime.
+    """Attempt-first shim selection with a self-bounding apk fallback.
 
-    Killing the docker client on timeout does not stop the container —
-    without an inner timeout a dead mirror leaves one ~4-minute zombie
-    process per call (observed live: 4 stuck `apk add` containers).
+    Image *checks* do not survive filtered Docker proxies (IMAGES=0
+    answers 404 for images that exist), so ``_sh`` runs the shim and
+    only treats create-time pull failures as "missing". And killing the
+    docker client on timeout does not stop the container — without an
+    inner timeout a dead mirror leaves one ~4-minute zombie process per
+    call (observed live: stuck `apk add` containers).
     """
 
-    @patch("apps.deployments.services.network_scope._iptables_shim_available", return_value=False)
     @patch("apps.deployments.services.network_scope.subprocess.run")
-    def test_apk_bootstrap_is_self_bounding(self, mock_run, _mock_shim):
+    def test_shim_result_returned_directly(self, mock_run):
         mock_run.return_value = _fake_completed_process(0)
-        _sh(["iptables", "-L", "DOCKER-USER", "-n"])
-        self.assertTrue(mock_run.called)
+        result = _sh(["iptables", "-L", "DOCKER-USER", "-n"])
+        self.assertEqual(mock_run.call_count, 1)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("smsly/iptables-shim:latest", " ".join(mock_run.call_args[0][0]))
+
+    @patch("apps.deployments.services.network_scope.subprocess.run")
+    def test_inner_iptables_failure_does_not_fall_back(self, mock_run):
+        # rc != 0 from INSIDE the container is a real result, not a
+        # missing image — a second run must not fire.
+        mock_run.return_value = _fake_completed_process(1, "iptables: Bad rule (does a matching rule exist?)")
+        result = _sh(["iptables", "-D", "DOCKER-USER", "1"])
+        self.assertEqual(mock_run.call_count, 1)
+        self.assertEqual(result.returncode, 1)
+
+    @patch("apps.deployments.services.network_scope.subprocess.run")
+    def test_apk_bootstrap_is_self_bounding(self, mock_run):
+        mock_run.side_effect = [
+            _fake_completed_process(125, "Error response from daemon: No such image: smsly/iptables-shim:latest"),
+            _fake_completed_process(0),
+        ]
+        result = _sh(["iptables", "-L", "DOCKER-USER", "-n"])
+        self.assertEqual(mock_run.call_count, 2)
+        self.assertEqual(result.returncode, 0)
         argv = mock_run.call_args[0][0]
         self.assertIn("sh", argv)
         script = argv[-1]
