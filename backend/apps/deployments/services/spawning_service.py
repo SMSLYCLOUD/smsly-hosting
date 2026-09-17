@@ -105,6 +105,86 @@ def _detect_remote_runtime(ssh) -> str | None:
     return ""
 
 
+def _replica_healthcheck_spec(service, ref_healthcheck, env_vars) -> dict | None:
+    """Platform Docker healthcheck spec for a replica.
+
+    Reference parity first: copy the live reference container's effective
+    ``Config.Healthcheck`` (the deploy path already resolved the real
+    port/path there). Fallback: build from the service's health config
+    with the same URL-list probe the deploy path uses.
+
+    Without this, Docker falls back to the IMAGE's baked-in check (e.g.
+    ``:3000`` from the Dockerfile) while the platform serves the app on
+    another port (e.g. ``:8000``) — every such replica reports unhealthy
+    forever (2026-09-18: smsly-frontend replica).
+
+    Returns docker-API-style ``{"test", "interval", "timeout", "retries",
+    "start_period"}`` (nanosecond timings) or ``None`` when nothing is
+    known (caller keeps the image default).
+    """
+    def _as_int(value, default):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    if isinstance(ref_healthcheck, dict) and ref_healthcheck.get("Test"):
+        return {
+            "test": [
+                str(part).replace("localhost", "127.0.0.1")
+                for part in ref_healthcheck["Test"]
+            ],
+            "interval": _as_int(ref_healthcheck.get("Interval"), 30_000_000_000),
+            "timeout": _as_int(ref_healthcheck.get("Timeout"), 10_000_000_000),
+            "retries": _as_int(ref_healthcheck.get("Retries"), 3),
+            "start_period": _as_int(ref_healthcheck.get("StartPeriod"), 0),
+        }
+    try:
+        from apps.cloud.adapters.local import (
+            _build_docker_healthcheck_cmd,
+            _health_paths,
+            _normalize_health_path,
+        )
+    except Exception as exc:
+        logger.debug("Replica healthcheck helpers unavailable: %s", exc)
+        return None
+    try:
+        path = (getattr(service, "health_check_path", "") or "").strip()
+        if not path:
+            return None
+        raw_port = (
+            getattr(service, "health_check_port", None)
+            or (env_vars or {}).get("PORT")
+            or getattr(service, "internal_port", None)
+            or 8000
+        )
+        try:
+            port = int(str(raw_port).strip())
+        except (TypeError, ValueError):
+            port = 8000
+        urls = [
+            f"http://127.0.0.1:{port}{p}"
+            for p in _health_paths(_normalize_health_path(path))
+        ]
+        try:
+            timeout = max(1, int(getattr(service, "health_check_timeout", None) or 10))
+        except (TypeError, ValueError):
+            timeout = 10
+        return {
+            "test": ["CMD-SHELL", _build_docker_healthcheck_cmd(urls, timeout)],
+            "interval": 30_000_000_000,
+            "timeout": timeout * 1_000_000_000,
+            "retries": 3,
+            "start_period": 120_000_000_000,
+        }
+    except Exception as exc:
+        logger.debug(
+            "Replica healthcheck build skipped for %s: %s",
+            getattr(service, "name", "?"), exc,
+        )
+        return None
+
+
 class SpawningService:
     """Creates and destroys service replicas on remote managed servers."""
 
@@ -200,6 +280,7 @@ class SpawningService:
         )
         follower_env: dict = {}
         follower_block: dict = {}
+        ref: dict = {}
         try:
             ref = self._inspect_remote_container(ssh, service.name)
             follower_env = parse_env_list(ref.get("Env", []))
@@ -318,6 +399,27 @@ class SpawningService:
         # Detect sandboxed runtime on the remote node
         runtime_flag = _detect_remote_runtime(ssh)
 
+        # --- Healthcheck parity (same contract as spawn_local): without
+        # explicit flags the remote `docker run` inherits the image-baked
+        # check (e.g. :3000) while the app serves another port.
+        # CLI flags only express shell checks — rebuild from service
+        # config when the reference isn't CMD-SHELL.
+        remote_hc = _replica_healthcheck_spec(
+            service, ref.get("Healthcheck"), remote_env)
+        if remote_hc is not None and (
+            not remote_hc.get("test") or remote_hc["test"][0] != "CMD-SHELL"
+        ):
+            remote_hc = _replica_healthcheck_spec(service, None, remote_env)
+        health_flags = ""
+        if remote_hc is not None and remote_hc.get("test", [None])[0] == "CMD-SHELL":
+            health_flags = (
+                f"--health-cmd {shlex.quote(remote_hc['test'][1])} "
+                f"--health-interval {max(1, remote_hc['interval'] // 1_000_000_000)}s "
+                f"--health-timeout {max(1, remote_hc['timeout'] // 1_000_000_000)}s "
+                f"--health-retries {int(remote_hc['retries'])} "
+                f"--health-start-period {max(1, remote_hc['start_period'] // 1_000_000_000)}s "
+            )
+
         mem_mb = getattr(service, 'memory_mb', 2048) or 2048
         cpus = getattr(service, 'cpu_cores', 1.0) or 1.0
         sec_flags = (
@@ -340,6 +442,7 @@ class SpawningService:
             f"docker run -d --name {shlex.quote(name)} "
             f"{sec_flags}"
             f"{runtime_flag} "
+            f"{health_flags}"
             f"--restart unless-stopped --network {shlex.quote(net)} "
             f"{mtls_volumes}"
             f"{label_args} {env_args} "
@@ -494,6 +597,7 @@ class SpawningService:
         # single unhealthy replica is containable, a dropped service is not.
         from .replica_parity import (
             assert_block_compatible,
+            find_reference_container,
             live_service_blocks,
             merge_replica_env,
             reference_config,
@@ -506,6 +610,32 @@ class SpawningService:
                 "(no parity source)", service.name,
             )
         env_vars = merge_replica_env(live_env, db_env)
+
+        # --- Healthcheck parity (see _replica_healthcheck_spec): inherit
+        # the reference's effective check so the replica probes the real
+        # port/path instead of the image-baked default.
+        ref_healthcheck = None
+        try:
+            ref_container = find_reference_container(client, service.name)
+            ref_healthcheck = (
+                ((getattr(ref_container, "attrs", None) or {}).get("Config", {}) or {})
+                .get("Healthcheck") or None
+            )
+        except Exception as exc:
+            logger.debug("Replica reference lookup skipped for %s: %s", service.name, exc)
+        replica_healthcheck = _replica_healthcheck_spec(service, ref_healthcheck, env_vars)
+        if replica_healthcheck is not None:
+            try:
+                replica_healthcheck = docker_lib.types.Healthcheck(
+                    test=replica_healthcheck["test"],
+                    interval=replica_healthcheck["interval"],
+                    timeout=replica_healthcheck["timeout"],
+                    retries=replica_healthcheck["retries"],
+                    start_period=replica_healthcheck["start_period"],
+                )
+            except Exception as exc:
+                logger.debug("Replica healthcheck wrap skipped for %s: %s", service.name, exc)
+                replica_healthcheck = None
 
         domain = service.public_domain or f"{name}.localhost"
         scoped_net = _scoped_network_for(service)
@@ -580,6 +710,7 @@ class SpawningService:
             labels=labels,
             environment=env_vars,
             volumes=mtls_volumes,
+            healthcheck=replica_healthcheck,
             security_opt=["no-new-privileges:true", "apparmor:docker-default"],
             cap_drop=["ALL"],
             cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
