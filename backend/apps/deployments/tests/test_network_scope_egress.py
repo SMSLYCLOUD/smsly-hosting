@@ -31,6 +31,7 @@ from apps.deployments.services.network_scope import (
     _get_bridge_interface_name,
     _sh,
     apply_egress_restrictions,
+    ensure_scoped_network,
 )
 
 
@@ -329,3 +330,85 @@ class ShimFallbackLifetimeTests(SimpleTestCase):
         # Newer alpine defaults to https repos; port 443 to dl-cdn is
         # blackholed on some networks while the port-80 shim works.
         self.assertIn("http://dl-cdn.alpinelinux.org", script)
+
+
+class EnsureScopedNetworkEdgeTests(SimpleTestCase):
+    """ensure_scoped_network must attach the edge proxy to the bridge.
+
+    Live incident 2026-09-17: a service on a fresh scoped bridge
+    (smsly-net-891dc691) was healthy but every domain 503'd because
+    neither Traefik nor Caddy had joined the bridge. Attachment is
+    best-effort (edge may not exist on agent nodes; filtered proxies
+    may deny connect) and must never fail the ensure.
+    """
+
+    def _mock_client(self, net=None, edge_names=(), connect_error=None):
+        import docker as _docker
+
+        mock_client = MagicMock()
+        if net is None:
+            mock_client.networks.get.side_effect = _docker.errors.NotFound("x")
+            net = MagicMock()
+            net.name = "smsly-net-abc123"
+            mock_client.networks.create.return_value = net
+        else:
+            mock_client.networks.get.return_value = net
+        if connect_error is not None:
+            net.connect.side_effect = connect_error
+
+        def _get_container(name):
+            if name in edge_names:
+                return MagicMock(name=f"container-{name}")
+            raise _docker.errors.NotFound(name)
+
+        mock_client.containers.get.side_effect = _get_container
+        return mock_client, net
+
+    @patch("apps.deployments.services.network_scope.docker.from_env")
+    def test_existing_network_attaches_edge(self, mock_docker):
+        net = MagicMock()
+        net.name = "smsly-net-abc123"
+        mock_client, _ = self._mock_client(net=net, edge_names={"smsly-hosting-traefik-1"})
+        mock_docker.return_value = mock_client
+
+        self.assertEqual(ensure_scoped_network({"name": "smsly-net-abc123"}), "smsly-net-abc123")
+        mock_client.networks.create.assert_not_called()
+        net.connect.assert_called_once()
+
+    @patch("apps.deployments.services.network_scope.docker.from_env")
+    def test_created_network_attaches_edge(self, mock_docker):
+        mock_client, net = self._mock_client(edge_names={"traefik"})
+        mock_docker.return_value = mock_client
+
+        self.assertEqual(ensure_scoped_network({"name": "smsly-net-abc123"}), "smsly-net-abc123")
+        mock_client.networks.create.assert_called_once()
+        net.connect.assert_called_once()
+
+    @patch("apps.deployments.services.network_scope.docker.from_env")
+    def test_already_attached_is_silent(self, mock_docker):
+        import docker as _docker
+
+        net = MagicMock()
+        net.name = "smsly-net-abc123"
+        mock_client, _ = self._mock_client(
+            net=net,
+            edge_names={"smsly-hosting-traefik-1"},
+            connect_error=_docker.errors.APIError("endpoint already exists in network"),
+        )
+        mock_docker.return_value = mock_client
+
+        self.assertEqual(ensure_scoped_network({"name": "smsly-net-abc123"}), "smsly-net-abc123")
+
+    @patch("apps.deployments.services.network_scope.docker.from_env")
+    def test_no_edge_present_still_returns_name(self, mock_docker):
+        import docker as _docker
+
+        net = MagicMock()
+        net.name = "smsly-net-abc123"
+        mock_client = MagicMock()
+        mock_client.networks.get.return_value = net
+        mock_client.containers.get.side_effect = _docker.errors.NotFound("nope")
+        mock_docker.return_value = mock_client
+
+        self.assertEqual(ensure_scoped_network({"name": "smsly-net-abc123"}), "smsly-net-abc123")
+        net.connect.assert_not_called()

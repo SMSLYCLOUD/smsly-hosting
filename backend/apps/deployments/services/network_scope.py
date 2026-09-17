@@ -211,6 +211,13 @@ def ensure_scoped_network(network_config: dict[str, Any]) -> str:
     """
     Ensure a Docker network exists matching the scoped config.
 
+    Also attaches the edge reverse proxy (Traefik/Caddy) to the bridge:
+    without an attachment the proxy has no route to the app and every
+    domain 503s with "no available server" even though the container is
+    healthy (live incident 2026-09-17: smsly-net-891dc691 islanded).
+    Intra-bridge traffic never traverses DOCKER-USER, so no firewall
+    change is needed. Best-effort only — never fail deploys over it.
+
     Returns the network name.
     """
     name = network_config.get("name", "smsly-net")
@@ -221,31 +228,67 @@ def ensure_scoped_network(network_config: dict[str, Any]) -> str:
 
     client = docker.from_env()
     try:
-        client.networks.get(name)
-        return name
+        net = client.networks.get(name)
     except docker.errors.NotFound:
-        pass
+        net = None
+    if net is None:
+        create_kwargs: dict[str, Any] = {
+            "name": name,
+            "driver": driver,
+            "internal": internal,
+            "enable_ipv6": enable_ipv6,
+        }
 
-    create_kwargs: dict[str, Any] = {
-        "name": name,
-        "driver": driver,
-        "internal": internal,
-        "enable_ipv6": enable_ipv6,
-    }
+        if subnet:
+            try:
+                ipaddress.IPv4Network(subnet)
+                create_kwargs["ipam"] = docker.types.IPAMConfig(
+                    driver="default",
+                    pool_configs=[docker.types.IPAMPool(subnet=subnet)],
+                )
+            except ValueError:
+                logger.warning("Invalid subnet %r for network %s, skipping IPAM", subnet, name)
 
-    if subnet:
-        try:
-            ipaddress.IPv4Network(subnet)
-            create_kwargs["ipam"] = docker.types.IPAMConfig(
-                driver="default",
-                pool_configs=[docker.types.IPAMPool(subnet=subnet)],
-            )
-        except ValueError:
-            logger.warning("Invalid subnet %r for network %s, skipping IPAM", subnet, name)
+        logger.info("Creating scoped Docker network: %s (driver=%s, isolated=%s)", name, driver, network_config.get("isolated"))
+        net = client.networks.create(**create_kwargs)
 
-    logger.info("Creating scoped Docker network: %s (driver=%s, isolated=%s)", name, driver, network_config.get("isolated"))
-    net = client.networks.create(**create_kwargs)
+    _attach_edge_proxies(net, client)
     return net.name
+
+
+# Containers that must reach every service scoped bridge. Traefik is the
+# in-path reverse proxy (Caddy forwards to it); Caddy is included so a
+# future direct-routing change keeps working. First hit wins per proxy
+# family — names are compose-conventional with bare fallbacks.
+_EDGE_ATTACH_CANDIDATES = (
+    "smsly-hosting-traefik-1",
+    "smsly-hosting-caddy-1",
+    "traefik",
+    "caddy",
+)
+
+
+def _attach_edge_proxies(net, client) -> None:
+    """Attach edge proxies to a scoped bridge (idempotent, best-effort).
+
+    Attachments do not survive proxy recreation or network recreation,
+    so this runs on every ensure (deploy path) — never only at install.
+    A filtered Docker proxy may deny the connect; an agent node may not
+    run an edge at all. Both are fine: log and continue, never raise.
+    """
+    for candidate in _EDGE_ATTACH_CANDIDATES:
+        try:
+            container = client.containers.get(candidate)
+        except Exception:
+            continue
+        try:
+            net.connect(container)
+            logger.info("Attached edge %s to scoped network %s", candidate, net.name)
+        except Exception as exc:
+            text = str(exc).lower()
+            if "already" in text and ("exists" in text or "connected" in text):
+                continue
+            logger.debug("Edge attach %s -> %s skipped: %s", candidate, net.name, exc)
 
 
 def _get_bridge_interface_name(network_name: str) -> str | None:
