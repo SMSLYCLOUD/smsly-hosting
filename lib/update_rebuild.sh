@@ -192,6 +192,16 @@
           else
               mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
           fi
+          # iptables-shim image for backend network scoping (see
+          # fresh_deploy.sh): pre-baked beats ad-hoc apk on dead-CDN
+          # networks. Idempotent, non-fatal.
+          if ! docker image inspect smsly/iptables-shim:latest >/dev/null 2>&1; then
+              if [ -d "$INSTALL_DIR/docker/iptables-shim" ]; then
+                  echo -e "${BLUE}  → Building iptables-shim image (network scoping)...${NC}"
+                  timeout -k 10 300 docker build -t smsly/iptables-shim:latest "$INSTALL_DIR/docker/iptables-shim" 2>&1 | tail -3 || \
+                      echo -e "${YELLOW}  ⚠ iptables-shim build failed (non-fatal)${NC}"
+              fi
+          fi
           if $_already_migrated; then
               # Data is already on postgres-primary — switch to prod compose
               # immediately but ensure the HA stack is up first.

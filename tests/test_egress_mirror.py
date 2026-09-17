@@ -72,7 +72,11 @@ class TestEgressMirrorNginxConf(unittest.TestCase):
 
     def test_worker_ceiling_raised(self):
         lib = _read(os.path.join(REPO, "lib", "egress_mirror.sh"))
-        self.assertIn("worker_connections 4096", lib)
+        self.assertIn("LimitNOFILE=32768", lib)
+        self.assertIn("smsly-egress-mirror.conf", lib)
+        # rlimits apply at start only: a changed drop-in must restart,
+        # not reload, nginx.
+        self.assertIn("_nofile_dirty", lib)
 
     def test_rate_limit_codes_fail_over(self):
         # Mirrors intermittently 403/429 single sources; those must chain

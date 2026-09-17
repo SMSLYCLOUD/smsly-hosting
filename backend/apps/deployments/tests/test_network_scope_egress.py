@@ -29,6 +29,7 @@ from django.test import SimpleTestCase
 
 from apps.deployments.services.network_scope import (
     _get_bridge_interface_name,
+    _sh,
     apply_egress_restrictions,
 )
 
@@ -281,3 +282,23 @@ class GetBridgeInterfaceNameTests(SimpleTestCase):
     def test_unexpected_exception_returns_none(self, mock_docker):
         mock_docker.return_value.networks.get.side_effect = RuntimeError("boom")
         self.assertIsNone(_get_bridge_interface_name("weird"))
+
+
+class ShimFallbackLifetimeTests(SimpleTestCase):
+    """The apk fallback container must bound its OWN lifetime.
+
+    Killing the docker client on timeout does not stop the container —
+    without an inner timeout a dead mirror leaves one ~4-minute zombie
+    process per call (observed live: 4 stuck `apk add` containers).
+    """
+
+    @patch("apps.deployments.services.network_scope._iptables_shim_available", return_value=False)
+    @patch("apps.deployments.services.network_scope.subprocess.run")
+    def test_apk_bootstrap_is_self_bounding(self, mock_run, _mock_shim):
+        mock_run.return_value = _fake_completed_process(0)
+        _sh(["iptables", "-L", "DOCKER-USER", "-n"])
+        self.assertTrue(mock_run.called)
+        argv = mock_run.call_args[0][0]
+        self.assertIn("sh", argv)
+        script = argv[-1]
+        self.assertIn("timeout 25 apk add", script)

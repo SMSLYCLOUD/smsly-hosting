@@ -163,9 +163,13 @@ def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
 
             # Fallback for fresh hosts: install both firewall tools inside
             # the one-shot container, try iptables first, then nft.
+            # The inner `timeout` bounds the CONTAINER's own lifetime —
+            # killing the docker client on our `timeout=` does NOT stop
+            # the container, and a hanging apk (dead mirror) otherwise
+            # piles up one ~4-minute zombie per call (observed live).
             nft_script = _nft_fallback_command(args)
             bootstrap = (
-                "apk add --no-cache iptables nftables >/dev/null 2>&1; "
+                "timeout 25 apk add --no-cache iptables nftables >/dev/null 2>&1; "
                 f"if command -v iptables >/dev/null 2>&1; then {script}; "
                 f"else {nft_script}; fi"
             )

@@ -75,11 +75,19 @@ ensure_egress_mirror() {
     # entirely — including our 8888 listeners. This box never serves
     # HTTP from host nginx; drop the default site.
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-    # Hung upstream connects (dead CDN IPs) pile up workers until nginx
-    # 500s everything: raise the stock 768 ceiling while we are here.
-    # Guarded by the config test below — a failed sed can only leave the
-    # stock value, never a broken file (single-line numeric replace).
-    sed -i -E 's/^[[:space:]]*worker_connections[[:space:]]+[0-9]+;/    worker_connections 4096;/' /etc/nginx/nginx.conf 2>/dev/null || true
+    # FD ceiling: hung upstream connects (dead CDN IPs) pile concurrent
+    # connections until the stock 1024 nofile turns EVERYTHING into 500s
+    # (observed live). Systemd drop-in + daemon-reload; takes effect on
+    # the (re)start below.
+    _nofile_override="/etc/systemd/system/nginx.service.d/smsly-egress-mirror.conf"
+    _nofile_want="$(printf '[Service]\nLimitNOFILE=32768\n')"
+    _nofile_dirty=""
+    mkdir -p "$(dirname "$_nofile_override")" 2>/dev/null || true
+    if [ ! -f "$_nofile_override" ] || [ "$(cat "$_nofile_override" 2>/dev/null)" != "$_nofile_want" ]; then
+        printf '%s\n' "$_nofile_want" > "$_nofile_override" 2>/dev/null || true
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        _nofile_dirty=1
+    fi
     if ! nginx -t >/dev/null 2>&1; then
         _egress_warn "nginx config test failed — leaving existing state"
         return 0
@@ -91,7 +99,9 @@ ensure_egress_mirror() {
     local gw=""
     gw="$(_docker0_gateway)"
     # Bind explicitly (never 0.0.0.0: no public exposure by accident).
-    if ! ss -ltn 2>/dev/null | grep -qE "127\.0\.0\.1:${SMSLY_EGRESS_MIRROR_PORT} |${gw//./\\.}:${SMSLY_EGRESS_MIRROR_PORT} "; then
+    # Restart (not reload) when the FD override changed — rlimits apply
+    # at process start only.
+    if [ -n "${_nofile_dirty:-}" ] || ! ss -ltn 2>/dev/null | grep -qE "127\.0\.0\.1:${SMSLY_EGRESS_MIRROR_PORT} |${gw//./\\.}:${SMSLY_EGRESS_MIRROR_PORT} "; then
         _egress_log "starting nginx..."
         systemctl enable nginx >/dev/null 2>&1 || true
         systemctl restart nginx >/dev/null 2>&1 || systemctl start nginx >/dev/null 2>&1 || true

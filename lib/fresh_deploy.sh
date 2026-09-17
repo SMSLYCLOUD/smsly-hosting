@@ -291,6 +291,19 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         systemctl enable smsly-egress-mirror.service 2>/dev/null || \
             echo -e "${YELLOW}    ⚠ smsly-egress-mirror enable failed (non-fatal)${NC}"
     fi
+    # ─── iptables-shim image (backend network scoping) ──────────────
+    # Backend network scoping prefers pre-baked smsly/iptables-shim over
+    # ad-hoc `apk add` inside plain alpine: on networks where
+    # dl-cdn.alpinelinux.org is dead each fallback call hangs ~4 min as
+    # a zombie container (observed live). The egress mirror above already
+    # unblocks dl-cdn for this build. Idempotent: skipped when present.
+    if ! docker image inspect smsly/iptables-shim:latest >/dev/null 2>&1; then
+        if [ -d "$INSTALL_DIR/docker/iptables-shim" ]; then
+            echo -e "${BLUE}  → Building iptables-shim image (network scoping)...${NC}"
+            timeout -k 10 300 docker build -t smsly/iptables-shim:latest "$INSTALL_DIR/docker/iptables-shim" 2>&1 | tail -3 || \
+                echo -e "${YELLOW}  ⚠ iptables-shim build failed (non-fatal; backend uses slower apk fallback)${NC}"
+        fi
+    fi
     # ─── WAF converge (open-appsec is full-gated AND env-gated) ────────
     # A plain `up` with the default full profiles starts the shadow WAF
     # even when OPENAPPSEC_ENABLED=0; converge it down so disabled stays
