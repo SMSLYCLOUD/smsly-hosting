@@ -407,13 +407,25 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                 fi
             fi
             if [ -n "$_infisical_ready" ]; then
+                # SITE_URL must be a valid absolute URL or the app crashes
+                # at boot ("Invalid URL"). The compose default assumes a
+                # domain (https://secrets.<domain>); in IP mode use the
+                # loopback-published port directly. Persisted so later
+                # manual `up` invocations resolve it without this export.
+                _site_domain="$(grep '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)"
+                if echo "${_site_domain:-}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                    export INFISICAL_SITE_URL="http://${_site_domain}:8085"
+                else
+                    export INFISICAL_SITE_URL="https://secrets.${_site_domain:-localhost}"
+                fi
+                env_set_value "$INSTALL_DIR/.env" "INFISICAL_SITE_URL" "$INFISICAL_SITE_URL"
                 # Explicit project name; never --remove-orphans on a shared
                 # directory (AGENTS.md #16).
                 docker compose -p smsly-infisical --env-file "$INSTALL_DIR/.env" \
                     -f "$_INFISICAL_COMPOSE" up -d  && \
                     echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
                     echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
-                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD INFISICAL_DB_HOST
+                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD INFISICAL_DB_HOST INFISICAL_SITE_URL
             fi
         fi
     fi
