@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useEffect } from 'react';
-import PlatformNotice from '@/components/public/PlatformNotice';
+import Link from "next/link";
+import { useEffect } from "react";
 
 export default function Error({
   error,
@@ -11,17 +11,144 @@ export default function Error({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error(error);
+    // eslint-disable-next-line no-console
+    console.error("Dashboard error boundary:", error);
   }, [error]);
 
   return (
-    <PlatformNotice
-      badge="Runtime Notice"
-      title="Request could not be completed"
-      message="An unexpected platform error occurred while loading this page."
-      secondaryMessage="No internal diagnostic details are exposed on this screen."
-      showRetry
-      onRetry={() => reset()}
-    />
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        padding: 22,
+        backgroundColor: "#080c18",
+        color: "#e5e7eb",
+        fontFamily:
+          '"Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif',
+      }}
+    >
+      <section
+        style={{
+          width: "min(560px, 100%)",
+          border: "1px solid #1a2438",
+          borderRadius: 14,
+          background: "#0d1322",
+          overflow: "hidden",
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            height: 2,
+            background:
+              "linear-gradient(90deg, transparent, #ef4444, transparent)",
+          }}
+        />
+        <div style={{ padding: "30px 32px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/images/logo.svg" alt="Grid" width={26} height={26} />
+            <span style={{ fontWeight: 800, fontSize: 17, color: "#fff" }}>
+              Grid
+            </span>
+          </div>
+          <div
+            style={{
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+              fontSize: 88,
+              fontWeight: 800,
+              lineHeight: 1.1,
+              color: "#f87171",
+              userSelect: "none",
+            }}
+          >
+            500
+          </div>
+          <h1
+            style={{
+              margin: "8px 0",
+              fontSize: 22,
+              color: "#fff",
+              fontWeight: 800,
+            }}
+          >
+            Something went wrong
+          </h1>
+          <p style={{ color: "#9ca3af", fontSize: 14, lineHeight: 1.55 }}>
+            The dashboard hit an unexpected error rendering this page. Your
+            services are unaffected.
+          </p>
+          {error?.digest ? (
+            <p
+              style={{
+                marginTop: 14,
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                fontSize: 12,
+                color: "#3b82f6",
+              }}
+            >
+              Error ID: {error.digest}
+            </p>
+          ) : null}
+          <div
+            style={{
+              marginTop: 20,
+              display: "flex",
+              gap: 10,
+              justifyContent: "center",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => reset()}
+              style={{
+                border: "1px solid #10b981",
+                borderRadius: 8,
+                padding: "11px 18px",
+                fontSize: 13,
+                fontWeight: 700,
+                color: "#fff",
+                background: "rgba(16, 185, 129, 0.15)",
+                cursor: "pointer",
+              }}
+            >
+              Try again
+            </button>
+            <Link
+              href="/"
+              style={{
+                display: "inline-block",
+                border: "1px solid #1a2438",
+                borderRadius: 8,
+                padding: "11px 18px",
+                fontSize: 13,
+                fontWeight: 700,
+                color: "#e5e7eb",
+                background: "#111827",
+                textDecoration: "none",
+              }}
+            >
+              Back to dashboard
+            </Link>
+          </div>
+          <p style={{ marginTop: 16, fontSize: 12, color: "#6b7280" }}>
+            Grid dashboard &middot; HTTP 500
+            {error?.digest
+              ? " · include the Error ID when contacting support"
+              : ""}
+          </p>
+        </div>
+      </section>
+    </main>
   );
 }

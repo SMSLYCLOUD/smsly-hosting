@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>503 | Service Waking Up</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <title>503 | Service Waking Up — Grid</title>
   <style>
     :root {
       color-scheme: dark;
@@ -53,7 +54,28 @@
       0% { background-position: -100% 0; }
       100% { background-position: 200% 0; }
     }
-    .content { padding: 36px 34px 30px; text-align: center; }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 20px 0;
+    }
+    .brand svg { flex: none; }
+    .brand .wordmark {
+      font-weight: 800;
+      font-size: 17px;
+      letter-spacing: -0.02em;
+      color: #fff;
+      line-height: 1;
+    }
+    .brand .byline {
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+    .content { padding: 26px 34px 30px; text-align: center; }
 
     .code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -97,16 +119,37 @@
       line-height: 1.55;
       font-size: 14px;
     }
-    .host {
+    .diag {
       margin-top: 20px;
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 9px 12px;
-      color: #3b82f6;
       background: #0b1120;
+      overflow: hidden;
+      text-align: left;
+    }
+    .diag .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 12px;
+      font-size: 12px;
+    }
+    .diag .row + .row { border-top: 1px solid var(--border); }
+    .diag .k {
+      flex: none;
+      color: var(--dim);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .diag .v {
+      color: #3b82f6;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       word-break: break-all;
-      font-size: 13px;
+      text-align: right;
+      font-size: 12px;
     }
     .spinner {
       width: 16px;
@@ -144,11 +187,28 @@
     button:hover:not(:disabled) { border-color: var(--border-hover); background: #162032; }
     button:disabled { opacity: 0.55; cursor: default; }
     .hint { margin-top: 16px; font-size: 12px; color: var(--dim); }
+    .foot {
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--dim);
+      text-align: center;
+    }
   </style>
 </head>
 <body>
   <main class="panel">
     <div class="bar"></div>
+    <div class="brand" aria-label="Grid by Trulay">
+      <svg width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <rect x="1" y="1" width="30" height="30" rx="8" fill="#10b981"/>
+        <path d="M17.5 6 9 18h6l-1.5 8L22 14h-6l1.5-8z" fill="#06281e"/>
+      </svg>
+      <div>
+        <div class="wordmark">Grid</div>
+        <div class="byline">by Trulay</div>
+      </div>
+    </div>
     <section class="content">
       <div class="code">503</div>
       <div class="badge">Service Waking Up</div>
@@ -157,7 +217,11 @@
         The container is booting or recovering. Traffic will be routed
         automatically as soon as health checks pass.
       </p>
-      <div class="host" id="host">loading...</div>
+      <div class="diag" aria-label="Request diagnostics">
+        <div class="row"><span class="k">Host</span><span class="v" id="host">loading...</span></div>
+        <div class="row"><span class="k">Request&nbsp;ID</span><span class="v" id="reqid">{{placeholder "http.request.uuid"}}</span></div>
+        <div class="row"><span class="k">Time&nbsp;(UTC)</span><span class="v" id="ts">loading...</span></div>
+      </div>
 
       <div class="spinner" aria-hidden="true"></div>
       <div class="status" id="status">Retrying automatically...</div>
@@ -165,17 +229,24 @@
       <div class="actions">
         <button id="recheck-btn" type="button">Recheck Now</button>
       </div>
-      <div class="hint">This page retries on its own until the service is healthy.</div>
+      <div class="hint">This page retries on its own until the service is healthy. If the problem persists, include the Request ID above when contacting support.</div>
     </section>
+    <div class="foot">Grid edge &mdash; HTTP 503 &middot; safe to retry</div>
   </main>
 
   <script>
     const host = window.location.host || "unknown-host";
-    const hostEl = document.getElementById("host");
+    document.getElementById("host").textContent = host;
+    document.getElementById("ts").textContent = new Date().toISOString();
+
+    // If edge templates are off, the placeholder renders literally.
+    const reqEl = document.getElementById("reqid");
+    if (!reqEl.textContent || reqEl.textContent.indexOf("{{") !== -1) {
+      reqEl.textContent = "unavailable";
+    }
+
     const statusEl = document.getElementById("status");
     const btnEl = document.getElementById("recheck-btn");
-
-    hostEl.textContent = host;
 
     function setStatus(message, tone) {
       statusEl.textContent = message;

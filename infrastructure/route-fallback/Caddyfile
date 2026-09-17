@@ -1,4 +1,11 @@
 :80 {
+	# JSON access log (stdout -> docker logs -> Loki): timestamp + host +
+	# URI let operators correlate a user-reported Request ID by time window.
+	log {
+		output stdout
+		format json
+	}
+
 	# Security headers on every response, including the 503 fallback page
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
@@ -31,6 +38,9 @@
 		header Expires "0"
 		header Retry-After "15"
 		header X-SMSLY-Route-Fallback "true"
+		# Per-request ID for support correlation (also rendered into the
+		# page via templates below). Caddy generates http.request.uuid.
+		header X-SMSLY-Request-ID "{http.request.uuid}"
 
 		# Master Caddy marks routing-disabled hosts with
 		# X-SMSLY-Fallback-Reason: disabled — serve the dedicated page.
@@ -38,6 +48,7 @@
 		handle @route_disabled {
 			root * /srv
 			rewrite * /disabled.html
+			templates
 			file_server
 		}
 
@@ -45,6 +56,7 @@
 		handle {
 			root * /srv
 			rewrite * /index.html
+			templates
 			file_server
 		}
 	}
