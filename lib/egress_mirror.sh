@@ -81,6 +81,8 @@ ensure_egress_mirror() {
     fi
 
     # 2. nginx must serve the gateway + loopback BEFORE traffic is steered.
+    # Always reload: the rendered config changes across runs (template
+    # placeholders, mirror list) while the daemon keeps old config.
     local gw=""
     gw="$(_docker0_gateway)"
     # Bind explicitly (never 0.0.0.0: no public exposure by accident).
@@ -89,9 +91,12 @@ ensure_egress_mirror() {
         systemctl enable nginx >/dev/null 2>&1 || true
         systemctl restart nginx >/dev/null 2>&1 || systemctl start nginx >/dev/null 2>&1 || true
         sleep 2
-        if ! ss -ltn 2>/dev/null | grep -q ":${SMSLY_EGRESS_MIRROR_PORT} "; then
-            _egress_warn "nginx not listening on ${SMSLY_EGRESS_MIRROR_PORT} after start (see nginx -t / journalctl -u nginx)"
-        fi
+    else
+        systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+        sleep 1
+    fi
+    if ! ss -ltn 2>/dev/null | grep -q ":${SMSLY_EGRESS_MIRROR_PORT} "; then
+        _egress_warn "nginx not listening on ${SMSLY_EGRESS_MIRROR_PORT} after start (see nginx -t / journalctl -u nginx)"
     fi
 
     # 3. Steer port-80 TCP to the shim (PREROUTING covers containers,
