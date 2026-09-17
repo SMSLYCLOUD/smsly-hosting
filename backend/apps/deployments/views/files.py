@@ -106,8 +106,12 @@ class ServiceFileActionsMixin:
             commit_message=f"Local Upload Deploy: {uploaded_file.name}"
         )
 
-        provider_id = getattr(service, 'provider_id', 'local')
-        smart_deploy_task.delay(str(deployment.id), str(provider_id), skip_review=True)
+        # Resolve provider at dispatch (never pass a literal like 'local':
+        # smart_deploy_task only accepts a UUID or empty for auto-resolve).
+        from ._helpers import _resolve_provider_for_service
+        _provider = _resolve_provider_for_service(service, prefer_local=True)
+        provider_id = str(_provider.id) if _provider else ""
+        smart_deploy_task.delay(str(deployment.id), provider_id, skip_review=True)
 
         logger.info("Service %s triggered local upload deployment %s from file %s", service.id, deployment.id, uploaded_file.name)
         return Response({

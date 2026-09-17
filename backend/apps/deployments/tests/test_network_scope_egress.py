@@ -11,6 +11,13 @@ Before the fix:
   * ``subprocess.run(..., capture_output=True)`` silently swallowed
     iptables errors; operators had no signal when rules failed to apply.
 
+Shim era (these tests): every firewall call runs through ``_sh`` as a
+``docker run --rm`` one-shot (``sh -c <script>`` is the last argv
+element — assertions target the scripts, not the docker argv), with an
+idempotency pre-read, attempt-first shim selection, and a self-bounding
+apk fallback. A missing docker CLI now raises after one clear log line
+(silently shipping an unisolated bridge is worse than the exception).
+
 After the fix:
   * Bridge interface is resolved from the Docker network's UUID via the
     Docker API, never from the user-supplied name.
@@ -43,6 +50,16 @@ def _fake_completed_process(returncode: int = 0, stderr: str = "", stdout: str =
     return cp
 
 
+def _scripts(mock_run):
+    """The iptables command strings of each docker-run shim invocation.
+
+    Since the shim refactor every firewall call is ``docker run ... sh
+    -c <script>`` — assertions target the trailing script element, not
+    the docker argv (which no longer carries -i/DROP itself).
+    """
+    return [c[0][0][-1] for c in mock_run.call_args_list]
+
+
 class ApplyEgressRestrictionsTests(SimpleTestCase):
     """Behavioural tests for ``apply_egress_restrictions`` with mocked I/O."""
 
@@ -67,10 +84,15 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         mock_run.return_value = _fake_completed_process()
 
         apply_egress_restrictions("any-net", ["0.0.0.0/0"])
-        calls = [c[0][0] for c in mock_run.call_args_list]
-        self.assertEqual(len(calls), 7)
-        self.assertIn("169.254.169.254/32", calls[5])
-        self.assertIn("DROP", calls[5])
+        scripts = _scripts(mock_run)
+        # 1 list + DROP + cross DROP + same RETURN + 5 NIC RETURNs
+        # + ESTABLISHED RETURN + metadata DROP + DNS RETURN = 12.
+        self.assertEqual(len(scripts), 12)
+        self.assertTrue(scripts[0].startswith("iptables -S"))
+        self.assertIn("DROP", scripts[-2])
+        self.assertIn("169.254.169.254/32", scripts[-2])
+        self.assertIn("RETURN", scripts[-1])
+        self.assertIn("--dport", scripts[-1])
 
     @patch("apps.deployments.services.network_scope.subprocess.run")
     @patch("apps.deployments.services.network_scope.docker.from_env")
@@ -86,8 +108,8 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         apply_egress_restrictions(
             "any-net", ["10.0.0.0/8", "0.0.0.0/0", "192.168.0.0/16"],
         )
-        calls = [c[0][0] for c in mock_run.call_args_list]
-        self.assertEqual(len(calls), 7)
+        scripts = _scripts(mock_run)
+        self.assertEqual(len(scripts), 12)
 
     # ── Bridge interface resolution ─────────────────────────────────────
 
@@ -115,17 +137,15 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         apply_egress_restrictions("smsly-svc-1234567890cd", ["10.0.0.0/8"])
 
         # The ``-i`` flag for each call must use the UUID-derived iface,
-        # NOT the network_name[:12].
-        call_1_args = mock_run.call_args_list[0][0][0]
-        call_2_args = mock_run.call_args_list[4][0][0]
-        self.assertEqual(call_1_args[call_1_args.index("-i") + 1], "br-aaaaaaaaaaaa")
-        self.assertEqual(call_2_args[call_2_args.index("-i") + 1], "br-bbbbbbbbbbbb")
+        # NOT the network_name[:12]. Scripts (not docker argv) carry it.
+        scripts = _scripts(mock_run)
+        joined = "\n".join(scripts)
+        self.assertIn("br-aaaaaaaaaaaa", joined)
+        self.assertIn("br-bbbbbbbbbbbb", joined)
         # And critically, neither call uses the truncated network name.
-        for call_args in (call_1_args, call_2_args):
-            iface = call_args[call_args.index("-i") + 1]
-            self.assertNotIn("smsly-svc", iface)
-            self.assertNotIn("1234567890ab", iface)
-            self.assertNotIn("1234567890cd", iface)
+        self.assertNotIn("smsly-svc", joined)
+        self.assertNotIn("1234567890ab", joined)
+        self.assertNotIn("1234567890cd", joined)
 
     @patch("apps.deployments.services.network_scope.subprocess.run")
     @patch("apps.deployments.services.network_scope.docker.from_env")
@@ -157,28 +177,29 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
             "test-net", ["10.0.0.0/8", "192.168.0.0/16"],
         )
 
-        calls = [c[0][0] for c in mock_run.call_args_list]
-        self.assertEqual(len(calls), 5)
+        scripts = _scripts(mock_run)
+        # 1 list + DROP + 2 CIDR RETURNs + metadata DROP + DNS RETURN.
+        self.assertEqual(len(scripts), 6)
 
         # 1. DROP first
-        self.assertIn("DROP", calls[0])
-        self.assertNotIn("--dport", calls[0])
+        self.assertIn("DROP", scripts[1])
+        self.assertNotIn("--dport", scripts[1])
         # 2 & 3. RETURN each CIDR
-        self.assertIn("RETURN", calls[1])
-        self.assertIn("10.0.0.0/8", calls[1])
-        self.assertIn("RETURN", calls[2])
-        self.assertIn("192.168.0.0/16", calls[2])
+        self.assertIn("RETURN", scripts[2])
+        self.assertIn("10.0.0.0/8", scripts[2])
+        self.assertIn("RETURN", scripts[3])
+        self.assertIn("192.168.0.0/16", scripts[3])
         # 4. DROP cloud metadata
-        self.assertIn("DROP", calls[3])
-        self.assertIn("169.254.169.254/32", calls[3])
+        self.assertIn("DROP", scripts[4])
+        self.assertIn("169.254.169.254/32", scripts[4])
         # 5. DNS RETURN last
-        self.assertIn("RETURN", calls[4])
-        self.assertIn("--dport", calls[4])
-        self.assertIn("53", calls[4])
+        self.assertIn("RETURN", scripts[5])
+        self.assertIn("--dport", scripts[5])
+        self.assertIn("53", scripts[5])
 
         # No DROP can appear AFTER a DNS RETURN (would shadow it).
-        drop_index = next(i for i, c in enumerate(calls) if "DROP" in c and "169.254" not in c)
-        dns_index = next(i for i, c in enumerate(calls) if "--dport" in c)
+        drop_index = next(i for i, s in enumerate(scripts) if "DROP" in s and "169.254" not in s)
+        dns_index = next(i for i, s in enumerate(scripts) if "--dport" in s)
         self.assertLess(drop_index, dns_index)
 
     # ── Input validation ────────────────────────────────────────────────
@@ -197,13 +218,14 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
             "test-net", ["not-a-cidr", "10.0.0.0/8", "also-not-a-cidr"],
         )
 
-        # Should issue DROP + RETURN 10.0.0.0/8 + DROP metadata + RETURN DNS — four calls.
-        calls = [c[0][0] for c in mock_run.call_args_list]
-        self.assertEqual(len(calls), 4)
+        # Should issue list + DROP + RETURN 10.0.0.0/8 + DROP metadata
+        # + RETURN DNS — five shim calls.
+        scripts = _scripts(mock_run)
+        self.assertEqual(len(scripts), 5)
         # No rule should target the invalid entries.
-        for c in calls:
-            self.assertNotIn("not-a-cidr", c)
-            self.assertNotIn("also-not-a-cidr", c)
+        for script in scripts:
+            self.assertNotIn("not-a-cidr", script)
+            self.assertNotIn("also-not-a-cidr", script)
 
     # ── Error handling ──────────────────────────────────────────────────
 
@@ -231,9 +253,13 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
     @patch("apps.deployments.services.network_scope.logger")
     @patch("apps.deployments.services.network_scope.subprocess.run")
     @patch("apps.deployments.services.network_scope.docker.from_env")
-    def test_iptables_binary_missing_is_logged_not_raised(
+    def test_iptables_binary_missing_raises_after_logging(
         self, mock_docker, mock_run, mock_logger,
     ):
+        # Contract change (shim era): a missing docker CLI means scoping
+        # is impossible — fail loudly after one clear log line. Silently
+        # shipping a bridge with NO egress isolation is worse than an
+        # exception the caller (reconcile) already handles.
         fake_net = MagicMock()
         fake_net.attrs = {"Id": "deadbeef-1234-1234-1234-123456789012"}
         mock_client = MagicMock()
@@ -241,8 +267,8 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         mock_docker.return_value = mock_client
         mock_run.side_effect = FileNotFoundError("iptables not found")
 
-        # Must not raise — operator gets a log instead of a stack trace.
-        apply_egress_restrictions("test-net", ["10.0.0.0/8"])
+        with self.assertRaises(FileNotFoundError):
+            apply_egress_restrictions("test-net", ["10.0.0.0/8"])
         self.assertTrue(mock_logger.error.called)
 
 
