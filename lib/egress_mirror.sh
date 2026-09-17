@@ -75,6 +75,11 @@ ensure_egress_mirror() {
     # entirely — including our 8888 listeners. This box never serves
     # HTTP from host nginx; drop the default site.
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    # Hung upstream connects (dead CDN IPs) pile up workers until nginx
+    # 500s everything: raise the stock 768 ceiling while we are here.
+    # Guarded by the config test below — a failed sed can only leave the
+    # stock value, never a broken file (single-line numeric replace).
+    sed -i -E 's/^[[:space:]]*worker_connections[[:space:]]+[0-9]+;/    worker_connections 4096;/' /etc/nginx/nginx.conf 2>/dev/null || true
     if ! nginx -t >/dev/null 2>&1; then
         _egress_warn "nginx config test failed — leaving existing state"
         return 0

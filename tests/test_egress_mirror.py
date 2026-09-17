@@ -56,11 +56,23 @@ class TestEgressMirrorNginxConf(unittest.TestCase):
 
     def test_fallback_chain_has_per_hop_host(self):
         # Every fallback hop must set the Host header matching the mirror
-        # it talks to (wrong-Host requests 404 on mirror farms).
+        # it talks to (wrong-Host requests 404 on mirror farms). Hosts
+        # are set per-location (a single upstream block cannot do
+        # per-peer Host headers).
         for mirror in ("mirror.leaseweb.com",
                        "mirrors.edge.kernel.org",
                        "mirror.netcologne.de"):
-            self.assertIn(f"proxy_set_header Host {mirror};", self.conf)
+            self.assertIn(f"proxy_set_header Host $apk_mirror;", self.conf)
+            self.assertIn(f"set $apk_mirror {mirror};", self.conf)
+
+    def test_no_ipv6_upstream(self):
+        # These hosts have no v6 route: resolving AAAA first stalls every
+        # fetch until the worker pool fills (observed 768 exhaustion).
+        self.assertIn("ipv6=off", self.conf)
+
+    def test_worker_ceiling_raised(self):
+        lib = _read(os.path.join(REPO, "lib", "egress_mirror.sh"))
+        self.assertIn("worker_connections 4096", lib)
 
     def test_rate_limit_codes_fail_over(self):
         # Mirrors intermittently 403/429 single sources; those must chain
