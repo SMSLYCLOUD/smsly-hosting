@@ -501,39 +501,17 @@ def _has_active_deployment(service):
 
 
 def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
+    """Re-export of the canonical resolver (single implementation).
+
+    The logic lives in apps.deployments.tasks.deploy.provider; this
+    wrapper keeps existing view imports working. Imported lazily because
+    the tasks.deploy package __init__ pulls heavy modules (build, caddy,
+    deletion) that must not load at views import time.
     """
-    Strict one-to-one provider resolution. No silent fallbacks.
-    - If service has a provider, it MUST be active and we return it.
-    - If no provider but prefer_local, return LOCAL if active.
-    - Fail explicitly if intended target unavailable.
-    """
-    if service.provider:
-        if service.provider.is_active:
-            return service.provider
-        return None # Explicitly fail
-
-    if prefer_local:
-        local = CloudProvider.objects.filter(
-            provider_type=CloudProvider.ProviderType.LOCAL,
-            is_active=True
-        ).first()
-        if local:
-            return local
-        return None
-
-    # Implicit default: if no explicit target, try to find one but don't fallback silently later.
-    # We will pick a default global remote or local, but once picked, it's fixed.
-    remote = CloudProvider.objects.filter(
-        provider_type=CloudProvider.ProviderType.REMOTE,
-        is_active=True
-    ).first()
-    if remote:
-        return remote
-
-    return CloudProvider.objects.filter(
-        provider_type=CloudProvider.ProviderType.LOCAL,
-        is_active=True
-    ).first()
+    from apps.deployments.tasks.deploy.provider import (
+        _resolve_provider_for_service as _canonical_resolve,
+    )
+    return _canonical_resolve(service, prefer_local=prefer_local)
 
 def _normalize_request_domain(raw_domain: str):
     """Normalize and validate user-provided domains."""
@@ -743,6 +721,19 @@ def _resolve_requested_deploy_target(request, service: Service):
     raw_target = request.data.get('target_server_id', _DEPLOY_TARGET_MISSING)
     if raw_target is _DEPLOY_TARGET_MISSING:
         effective_server = getattr(service, 'server', None)
+        # A stale assigned record pointing at the primary master must not
+        # drag the deploy into the remote path (nor persist onto the new
+        # row, where the dashboard would read it back next time).
+        # Primary always means local — same outcome as the explicit-id
+        # branch below, normalized early.
+        if effective_server is not None and getattr(effective_server, 'is_primary', False):
+            return {
+                "ok": True,
+                "specified": False,
+                "target_server": None,
+                "target_is_local": True,
+                "effective_server": None,
+            }
         # When no server is assigned to the service, fall back to local
         # deployment so the provider resolution picks LOCAL and Caddy
         # routing is set up correctly.

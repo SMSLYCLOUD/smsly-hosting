@@ -71,12 +71,12 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
     if (!await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) return;
     setActionLoading(serviceId);
     try {
-      const svc = services.find(s => s.id === serviceId);
-      const targetId = svc?.latest_deployment?.target_server
-        || svc?.node_metadata?.id
-        || svc?.server_id
-        || undefined;
-      await servicesApi.deploy(serviceId, 'HEAD', targetId);
+      // Never guess a target server here: the grid has no picker, and a
+      // stale id (last deployment's target, cached node metadata) pins
+      // the deploy to the wrong node with no UI indication. Omitting lets
+      // the backend resolve (primary/assigned/local rules). The service
+      // detail page has an explicit picker for non-local targets.
+      await servicesApi.deploy(serviceId, 'HEAD');
       // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Deploy failed:', err);
