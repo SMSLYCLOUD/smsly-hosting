@@ -52,6 +52,10 @@ _harden_envoy_registry_login() {
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
     printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
+    # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
+    # hostname, so both need a login or the push 401s (fresh-install gap).
+    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
