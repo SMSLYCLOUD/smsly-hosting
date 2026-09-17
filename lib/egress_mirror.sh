@@ -57,7 +57,7 @@ ensure_egress_mirror() {
     # REDIRECT preserves the original (public) source address on host-local
     # connections, which must pass the allow rules.
     _egress_gw="$(_docker0_gateway)"
-    _egress_pub="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == \"src\") print $(i+1)}' | head -n 1)"
+    _egress_pub="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") print $(i+1)}' | head -n 1)"
     [ -n "$_egress_pub" ] || _egress_pub="127.0.0.1"
     sed -e "s|__GATEWAY_IP__|${_egress_gw}|g" -e "s|__HOST_PUBLIC_IP__|${_egress_pub}|g" \
         "$conf_src" > /etc/nginx/smsly/egress-mirror.conf 2>/dev/null || {
