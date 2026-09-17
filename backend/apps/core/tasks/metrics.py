@@ -29,8 +29,15 @@ def _get_docker_client():
         return None
 
 
-def _collect_container_stats(container_id: str):
-    """Collect real stats from a Docker container."""
+def _collect_container_stats(container_id: str, cpu_limit_override=None):
+    """Collect real stats from a Docker container.
+
+    ``cpu_limit_override`` should be the service's allocated cores: the
+    daemon reports host-wide CPU counts, and dividing service usage by
+    host cores understates CPU% (e.g. 3-core service on an 8-core host
+    can never read above 37.5%, so CPU autoscaling never fires).
+    Falls back to the host count when unset.
+    """
     client = _get_docker_client()
     if not client or not container_id:
         return None
@@ -52,6 +59,10 @@ def _collect_container_stats(container_id: str):
         cpu_cores_used = 0
         if system_delta > 0:
             cpu_cores_used = (cpu_delta / system_delta) * num_cpus
+        try:
+            cpu_limit = float(cpu_limit_override or 0) or float(num_cpus)
+        except (TypeError, ValueError):
+            cpu_limit = float(num_cpus)
 
         # Parse Memory
         mem_usage_bytes = stats['memory_stats'].get('usage', 0)
@@ -71,7 +82,7 @@ def _collect_container_stats(container_id: str):
 
         return {
             'cpu_usage': round(cpu_cores_used, 4),
-            'cpu_limit': num_cpus,
+            'cpu_limit': cpu_limit,
             'memory_usage': mem_usage_mb,
             'memory_limit': mem_limit_mb if mem_limit_mb > 0 else 512,
             'network_rx_bytes': rx_bytes,
@@ -123,7 +134,7 @@ def collect_metrics_task() -> None:
         # The live Docker fallback in the metrics API handles the case
         # where Docker is available but Prometheus is not. Synthetic data
         # would mislead dashboards and alerting.
-        stats = _collect_container_stats(container_id)
+        stats = _collect_container_stats(container_id, service.cpu_cores)
         if stats is None:
             continue
 

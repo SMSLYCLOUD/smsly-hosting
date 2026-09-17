@@ -125,7 +125,7 @@ def _live_metrics_fallback(service: Service):
         _collect_container_stats,  # local import to avoid eager deps
     )
 
-    stats = _collect_container_stats(str(container_id))
+    stats = _collect_container_stats(str(container_id), service.cpu_cores)
     if not stats:
         return None
 
