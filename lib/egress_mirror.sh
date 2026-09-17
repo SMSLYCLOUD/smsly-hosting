@@ -63,6 +63,11 @@ ensure_egress_mirror() {
     if [ ! -e /etc/nginx/conf.d/smsly-egress-mirror.conf ]; then
         ln -sf /etc/nginx/smsly/egress-mirror.conf /etc/nginx/conf.d/smsly-egress-mirror.conf 2>/dev/null || true
     fi
+    # Ubuntu ships a default site on :80 that collides with the edge
+    # proxy (docker-proxy/Caddy own port 80) and takes nginx down
+    # entirely — including our 8888 listeners. This box never serves
+    # HTTP from host nginx; drop the default site.
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
     if ! nginx -t >/dev/null 2>&1; then
         _egress_warn "nginx config test failed — leaving existing state"
         return 0
@@ -77,6 +82,9 @@ ensure_egress_mirror() {
         systemctl enable nginx >/dev/null 2>&1 || true
         systemctl restart nginx >/dev/null 2>&1 || systemctl start nginx >/dev/null 2>&1 || true
         sleep 2
+        if ! ss -ltn 2>/dev/null | grep -q ":${SMSLY_EGRESS_MIRROR_PORT} "; then
+            _egress_warn "nginx not listening on ${SMSLY_EGRESS_MIRROR_PORT} after start (see nginx -t / journalctl -u nginx)"
+        fi
     fi
 
     # 3. Steer port-80 TCP to the shim (PREROUTING covers containers,

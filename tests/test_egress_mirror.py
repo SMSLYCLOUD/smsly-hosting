@@ -81,6 +81,12 @@ class TestEgressMirrorWiring(unittest.TestCase):
     def test_fresh_deploy_calls_setup(self):
         self.assertIn("setup-egress-mirror.sh", _read(FRESH_DEPLOY))
 
+    def test_default_site_removed(self):
+        # Ubuntu's stock :80 default site collides with the edge proxy
+        # and takes the whole nginx down (including our listeners).
+        lib = _read(os.path.join(REPO, "lib", "egress_mirror.sh"))
+        self.assertIn("sites-enabled/default", lib)
+
 
 if __name__ == "__main__":
     unittest.main()
