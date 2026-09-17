@@ -164,12 +164,17 @@ ensure_falco_capturing() {
 # The 80/443 Cloudflare-only firewall is the anti-bypass layer of the
 # BGP-hijack defense (deploy_edge_shield). If the rules vanish (reboot
 # without persistence, operator flush), re-apply them immediately.
+# Also re-applies when the platform-internal accepts are missing (hosts
+# locked down before the allow-internal fix would otherwise keep
+# blackholing backend health hairpins forever — presence of the tag
+# alone is not enough).
 ensure_edge_lockdown() {
     [ -x "$INSTALL_DIR/scripts/cf_origin_lockdown.sh" ] || { log "cf_origin_lockdown.sh missing — skipping"; return 0; }
-    if iptables -S INPUT 2>/dev/null | grep -q 'smsly-edge-shield'; then
-        log "edge lockdown rules present"
+    if iptables -S INPUT 2>/dev/null | grep -q 'smsly-edge-shield' \
+        && iptables -S INPUT 2>/dev/null | grep -q 'smsly-edge-shield allow-internal'; then
+        log "edge lockdown rules present (incl. platform-internal accepts)"
     else
-        log "ALERT: edge lockdown rules MISSING — re-applying"
+        log "ALERT: edge lockdown rules MISSING or pre-allow-internal — re-applying"
         bash "$INSTALL_DIR/scripts/cf_origin_lockdown.sh" --on >> /dev/null 2>&1 \
             && log "edge lockdown re-applied" \
             || log "ALERT: edge lockdown re-apply FAILED"
