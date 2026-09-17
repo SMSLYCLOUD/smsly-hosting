@@ -127,6 +127,10 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
                 mv cosign.key "$COSIGN_PRIVATE_KEY_PATH"
                 mv cosign.pub "$COSIGN_PUBLIC_KEY_PATH"
                 chmod 600 "$COSIGN_PRIVATE_KEY_PATH"
+                # Workers run as uid 1000 (backend/Dockerfile: useradd -u
+                # 1000 smsly); a root-owned 600 key is unreadable in the
+                # container and signing silently skips. Never fail over it.
+                chown 1000:1000 "$COSIGN_PRIVATE_KEY_PATH" 2>/dev/null || true
                 chmod 644 "$COSIGN_PUBLIC_KEY_PATH"
                 env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD"  || true
                 env_set_value "$INSTALL_DIR/.env" "COSIGN_PRIVATE_KEY_PATH" "$COSIGN_PRIVATE_KEY_PATH"  || true

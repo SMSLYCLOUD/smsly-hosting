@@ -636,6 +636,32 @@ _redbeat_lock_del() {
     return 1
 }
 
+# ── 15. Cosign key must stay readable by workers (2026-09-17 root cause)
+# The keypair is generated root-owned 600 at install; deploy workers run
+# as uid 1000 (backend/Dockerfile) and check readability before signing,
+# so a root-owned key silently disables ALL image signing on every fresh
+# install. Self-heals ownership hourly (chmod preserved).
+ensure_cosign_key_readable() {
+    local keydir="$INSTALL_DIR/cosign-keys"
+    local key="$keydir/cosign.key"
+    [ -d "$keydir" ] || return 0
+    if [ ! -f "$key" ]; then
+        log "cosign key missing — image signing falls back to keyless (installer regenerates on update)"
+        return 0
+    fi
+    local owner
+    owner=$(stat -c '%u:%g' "$key" 2>/dev/null) || owner="unknown"
+    if [ "$owner" = "1000:1000" ]; then
+        log "cosign key readable by workers (1000:1000)"
+        return 0
+    fi
+    if chown 1000:1000 "$key" 2>/dev/null; then
+        log "cosign key was $owner — chowned to 1000:1000 so workers can sign"
+    else
+        log "ALERT: cosign key owned by $owner and chown failed — image signing is silently skipped"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -655,4 +681,5 @@ ensure_openappsec_shadow_parity
 ensure_memory_tuning
 ensure_weekly_image_prune
 ensure_beat_dispatching
+ensure_cosign_key_readable
 log "integrity check complete"
