@@ -44,9 +44,11 @@
 
 		# Master Caddy marks routing-disabled hosts with
 		# X-SMSLY-Fallback-Reason: disabled — serve the dedicated page.
+		# Pages live under /etc/rb-fallback (directory bind — survives
+		# git-pull inode replacement, unlike single-file binds).
 		@route_disabled header X-SMSLY-Fallback-Reason disabled
 		handle @route_disabled {
-			root * /srv
+			root * /etc/rb-fallback
 			rewrite * /disabled.html
 			templates
 			file_server
@@ -54,7 +56,7 @@
 
 		# Default: service waking up page
 		handle {
-			root * /srv
+			root * /etc/rb-fallback
 			rewrite * /index.html
 			templates
 			file_server

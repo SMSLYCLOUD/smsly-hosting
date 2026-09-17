@@ -1304,10 +1304,14 @@ services:
       - apparmor:docker-default
     image: caddy:2-alpine
     restart: unless-stopped
+    # Directory (not file) bind: git pulls replace file inodes, which
+    # orphans single-file binds — the container keeps serving the deleted
+    # inode (stale/empty pages) until recreated (2026-09-18: fallback
+    # served pre-brand pages with 0-byte bodies after a pull). A directory
+    # bind follows replacements, and `caddy run` auto-reloads the config.
+    command: caddy run --config /etc/rb-fallback/Caddyfile --adapter caddyfile
     volumes:
-    - ./infrastructure/route-fallback/Caddyfile:/etc/caddy/Caddyfile:ro,z
-    - ./infrastructure/route-fallback/index.html:/srv/index.html:ro,z
-    - ./infrastructure/route-fallback/disabled.html:/srv/disabled.html:ro,z
+    - ./infrastructure/route-fallback:/etc/rb-fallback:ro,z
     - caddy_data:/data
     labels:
     - traefik.enable=true

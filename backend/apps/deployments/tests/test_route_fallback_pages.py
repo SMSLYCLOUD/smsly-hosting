@@ -72,3 +72,25 @@ class RouteFallbackPagesTests(SimpleTestCase):
             self.assertNotIn('src="http', html)
             self.assertNotIn('href="http', html)
             self.assertNotIn('@import', html)
+
+    def test_pages_have_inline_favicon(self):
+        # Browsers request /favicon.ico on every error page view; a
+        # data-URI icon avoids an extra edge round-trip and keeps the
+        # tab branded while everything else is degraded.
+        for page in ('index.html', 'disabled.html'):
+            html = _read('infrastructure', 'route-fallback', page)
+            self.assertIn('rel="icon"', html)
+            self.assertIn('data:image/svg+xml', html)
+
+    def test_compose_uses_directory_bind(self):
+        # Single-file binds go stale on git pull (replaced inodes): the
+        # container keeps serving the deleted inode until recreated.
+        # A directory bind follows replacements (2026-09-18 incident).
+        with open(os.path.join(REPO_ROOT, 'docker-compose.prod.yml')) as fh:
+            compose = fh.read()
+        idx = compose.find('route-fallback:')
+        self.assertNotEqual(idx, -1)
+        block = compose[idx:idx + 2000]
+        self.assertIn('./infrastructure/route-fallback:/etc/rb-fallback', block)
+        self.assertNotIn('/srv/index.html', block)
+        self.assertIn('--config /etc/rb-fallback/Caddyfile', block)
