@@ -193,6 +193,13 @@ class BuildMixin:
                 (timezone.now() - start_time).total_seconds()
             )
             append_log(self.deployment, f"✓ Build successful: {self.image_name}\n")
+            # Cache refresh: drop previous stale cache so the next build
+            # starts from current layers (bounded + fresh). Best-effort.
+            try:
+                from apps.deployments.services.builders import prune_stale_build_cache
+                prune_stale_build_cache()
+            except Exception:
+                logger.debug("Post-build cache refresh skipped", exc_info=True)
 
         except Exception as e:
             update_stage(self.deployment, 'Build', 'failed')

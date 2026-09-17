@@ -2,12 +2,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 import subprocess
+from datetime import timedelta
 
 from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
 
-from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_STANDARD
+from apps.deployments.constants import (
+    REGISTRY_TAG_RETENTION_DAYS,
+    ROLLBACK_RETAIN_DEPLOYMENTS,
+    TASK_TIME_LIMIT_MEDIUM,
+    TASK_TIME_LIMIT_QUICK,
+    TASK_TIME_LIMIT_STANDARD,
+)
 
 from ..deploy.deletion import (  # noqa: F401
     _clear_orphaned_runtime_resources,
@@ -132,6 +139,7 @@ def registry_garbage_collection_task():
     Removes blobs that are no longer referenced by any manifest.
     Safe to run while the registry is serving reads.
     """
+    _prune_expired_registry_tags()
     registry_container = "smsly-hosting-registry-1"
 
     try:
@@ -164,6 +172,215 @@ def registry_garbage_collection_task():
         logger.error("registry_gc: timed out")
     except Exception as e:
         logger.error("registry_gc: error: %s", e)
+
+
+# ── Registry tag retention ──────────────────────────────────────────
+# GC alone never reclaims space while old manifests stay tagged, so each
+# redeploy permanently grows the registry. This pass deletes manifests
+# older than REGISTRY_TAG_RETENTION_DAYS (default 7d, tunable via env of
+# the same name), except tags pinned for rollback (newest N successful
+# deployments per service, N from PlatformConfig.rollback_retain_deployments
+# defaulting to ROLLBACK_RETAIN_DEPLOYMENTS). The GC pass above then
+# reclaims the orphaned blobs. Best-effort: any failure only skips the
+# retention pass, never the GC.
+
+# Deployment states whose images must never be deleted (in-flight or staged).
+# ACTIVE is handled separately by the retain count below.
+_PINNED_DEPLOYMENT_STATUSES = frozenset({
+    "QUEUED", "REVIEW", "BUILDING", "BACKUP_RUNNING", "MIGRATION_PLANNING",
+    "MIGRATION_RUNNING", "DEPLOYING", "HEALTH_CHECK", "ROLLING_BACK",
+    "STAGED",
+})
+
+_MANIFEST_ACCEPT = (
+    "application/vnd.docker.distribution.manifest.v2+json,"
+    "application/vnd.oci.image.manifest.v1+json"
+)
+
+
+def _retention_days() -> int:
+    import os
+
+    try:
+        return max(1, int(os.environ.get(
+            "REGISTRY_TAG_RETENTION_DAYS", REGISTRY_TAG_RETENTION_DAYS)))
+    except (TypeError, ValueError):
+        return REGISTRY_TAG_RETENTION_DAYS
+
+
+def _rollback_retain_count() -> int:
+    try:
+        from apps.deployments.models import PlatformConfig
+        value = int(getattr(PlatformConfig.load(), "rollback_retain_deployments", 0) or 0)
+        if value > 0:
+            return min(value, 10)
+    except Exception:
+        pass
+    return ROLLBACK_RETAIN_DEPLOYMENTS
+
+
+def _rollback_protected_tags(retain: int) -> set:
+    """Tags pinned for rollback: the live ACTIVE deployment, the newest
+    ``retain - 1`` superseded (INACTIVE) deployments per service — INACTIVE
+    is exactly "previously ACTIVE", set by Deployment.save() demotion —
+    plus every non-terminal/staged deployment. Returns
+    ``{(repo, tag)}`` with repo like ``smsly/my-svc`` and tag ``abc1234``.
+    """
+    from apps.deployments.models import Deployment
+    from apps.deployments.services.registry_credentials import (
+        project_image_namespace,
+    )
+
+    protected = set()
+    try:
+        deployments = list(Deployment.objects.select_related("service").order_by("-created_at")[:500])
+    except Exception as exc:
+        logger.warning("rollback retention: deployment query failed: %s", exc)
+        return protected
+    kept_inactive: dict = {}
+    for dep in deployments:
+        service = getattr(dep, "service", None)
+        commit = (getattr(dep, "commit_hash", "") or "").strip()
+        if service is None or len(commit) < 7:
+            continue
+        try:
+            repo = f"{project_image_namespace(service)}/{str(service.name).lower()}"
+        except Exception:
+            continue
+        tag = commit[:7]
+        raw_status = getattr(dep, "status", "")
+        status = getattr(raw_status, "value", raw_status)
+        if status in _PINNED_DEPLOYMENT_STATUSES:
+            protected.add((repo, tag))
+            continue
+        if status == Deployment.Status.ACTIVE or status == "ACTIVE":
+            protected.add((repo, tag))
+            continue
+        if status == Deployment.Status.INACTIVE or status == "INACTIVE":
+            key = str(service.id)
+            kept = kept_inactive.get(key, 0)
+            if kept < max(0, retain - 1):
+                protected.add((repo, tag))
+                kept_inactive[key] = kept + 1
+    return protected
+
+
+def select_expired_registry_tags(repo_tags, now, retention_days, protected) -> list:
+    """Pure selection: which (repo, tag, digest) entries may be deleted.
+
+    ``repo_tags`` maps repo -> list of dicts with tag/digest/created
+    (created datetime or None when unknown). Keeps protected tags and
+    anything of unknown age or within retention. Unit-tested.
+    """
+    cutoff = now - timedelta(days=retention_days)
+    expired = []
+    for repo, tags in (repo_tags or {}).items():
+        for entry in tags or []:
+            tag = entry.get("tag")
+            digest = entry.get("digest")
+            if not tag or not digest:
+                continue
+            if (repo, tag) in protected:
+                continue
+            created = entry.get("created")
+            if created is None:
+                continue
+            if created < cutoff:
+                expired.append((repo, tag, digest))
+    return expired
+
+
+def _registry_session():
+    import requests
+    from django.conf import settings
+
+    base = str(getattr(settings, "CONTAINER_REGISTRY_URL", "") or "").strip()
+    if not base:
+        return None, ""
+    if "://" not in base:
+        base = "http://" + base
+    session = requests.Session()
+    user = str(getattr(settings, "REGISTRY_USER", "") or "")
+    password = str(getattr(settings, "REGISTRY_PASSWORD", "") or "")
+    if user:
+        session.auth = (user, password)
+    return session, base.rstrip("/")
+
+
+def _prune_expired_registry_tags() -> None:
+    """Delete expired registry tags, then let the GC pass reclaim blobs."""
+    import requests
+
+    retention_days = _retention_days()
+    retain = _rollback_retain_count()
+    try:
+        session, base = _registry_session()
+        if session is None:
+            logger.debug("registry retention: no registry configured, skipping")
+            return
+        catalog = session.get(base + "/v2/_catalog", timeout=15)
+        if catalog.status_code == 401:
+            logger.warning("registry retention: registry requires auth we don't have, skipping")
+            return
+        catalog.raise_for_status()
+        repos = (catalog.json() or {}).get("repositories", []) or []
+    except Exception as exc:
+        logger.warning("registry retention: catalog unreachable, skipping: %s", exc)
+        return
+
+    from django.utils import timezone as _tz
+
+    repo_tags: dict = {}
+    for repo in repos:
+        try:
+            tags_resp = session.get(base + f"/v2/{repo}/tags/list", timeout=15)
+            if tags_resp.status_code != 200:
+                continue
+            for tag in (tags_resp.json() or {}).get("tags", []) or []:
+                manifest = session.get(
+                    base + f"/v2/{repo}/manifests/{tag}",
+                    headers={"Accept": _MANIFEST_ACCEPT}, timeout=15,
+                )
+                if manifest.status_code != 200:
+                    continue
+                digest = manifest.headers.get("Docker-Content-Digest", "")
+                created = None
+                try:
+                    config_digest = (manifest.json() or {}).get("config", {}).get("digest", "")
+                    if config_digest:
+                        blob = session.get(
+                            base + f"/v2/{repo}/blobs/{config_digest}", timeout=15)
+                        if blob.status_code == 200:
+                            created_raw = (blob.json() or {}).get("created", "")
+                            if created_raw:
+                                created = _tz.datetime.fromisoformat(
+                                    created_raw.replace("Z", "+00:00"))
+                except Exception:
+                    created = None
+                repo_tags.setdefault(repo, []).append(
+                    {"tag": tag, "digest": digest, "created": created})
+        except requests.RequestException as exc:
+            logger.debug("registry retention: repo %s skipped: %s", repo, exc)
+            continue
+
+    protected = _rollback_protected_tags(retain)
+    expired = select_expired_registry_tags(repo_tags, _tz.now(), retention_days, protected)
+    if not expired:
+        logger.info("registry retention: nothing older than %dd outside rollback window (retain=%d)",
+                    retention_days, retain)
+        return
+    deleted = 0
+    for repo, tag, digest in expired:
+        try:
+            resp = session.delete(base + f"/v2/{repo}/manifests/{digest}", timeout=15)
+            if resp.status_code in (200, 202):
+                deleted += 1
+            else:
+                logger.debug("registry retention: delete %s:%s -> %s", repo, tag, resp.status_code)
+        except requests.RequestException as exc:
+            logger.debug("registry retention: delete %s:%s failed: %s", repo, tag, exc)
+    logger.info("registry retention: deleted %d expired tag(s) older than %dd (retain=%d rollback each)",
+                deleted, retention_days, retain)
 
 
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.reconcile_network_isolation_task")

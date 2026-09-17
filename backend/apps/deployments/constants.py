@@ -70,6 +70,19 @@ DEPLOYMENT_LOG_RETENTION_DAYS = 30  # terminal deployments older than this get l
 DEPLOYMENT_LOG_KEEP_BYTES = 204800  # tail kept in DB per log field (200 KiB)
 DEPLOYMENT_LOG_ARCHIVE_BATCH = 50  # max deployments processed per cycle
 
+# ── Retention (disk hygiene) ────────────────────────────────────────────
+# BuildKit cache older than this is pruned (daily task + after each build).
+# Tunable at runtime: BUILD_CACHE_MAX_AGE_HOURS.
+BUILD_CACHE_MAX_AGE_HOURS = 24
+# Registry image tags older than this are deleted (then blobs GC'd),
+# except tags pinned by rollback retention below. Tunable at runtime:
+# REGISTRY_TAG_RETENTION_DAYS.
+REGISTRY_TAG_RETENTION_DAYS = 7
+# Successful deployments kept per service for rollback (their images are
+# never deleted by retention). The live PlatformConfig value
+# (rollback_retain_deployments) wins when set; this is the default.
+ROLLBACK_RETAIN_DEPLOYMENTS = 2
+
 # ── Blue-green rollback grace period ────────────────────────────────────────
 # Rollback containers younger than this are ignored by the stale scanner.
 DEFAULT_ROLLBACK_GRACE_MINUTES = 10

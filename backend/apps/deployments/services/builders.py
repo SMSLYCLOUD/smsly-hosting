@@ -15,6 +15,8 @@ from django.conf import settings
 from django.utils import timezone
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from apps.deployments.constants import BUILD_CACHE_MAX_AGE_HOURS
+
 logger = logging.getLogger(__name__)
 
 # BuildKit corruption error signatures — if any of these appear in the
@@ -55,6 +57,34 @@ def prune_buildkit_cache():
         logger.info("BuildKit cache pruned successfully.")
     except Exception as e:
         logger.error("Failed to prune BuildKit cache: %s", e)
+
+
+def prune_stale_build_cache() -> None:
+    """Drop build cache older than the retention cap after a build.
+
+    Every successful build refreshes the cache: entries older than
+    BUILD_CACHE_MAX_AGE_HOURS (default 24h, tunable via env of the same
+    name) are removed so the cache stays current and bounded, while
+    recent layers survive for fast incremental rebuilds. Best-effort —
+    a prune failure must never fail the deploy that just succeeded.
+    Only the ``until`` filter is used (never a full prune), so the
+    just-built image's fresh layers are always kept.
+    """
+    try:
+        max_age_hours = max(
+            1, int(os.environ.get(
+                "BUILD_CACHE_MAX_AGE_HOURS", BUILD_CACHE_MAX_AGE_HOURS)))
+    except (TypeError, ValueError):
+        max_age_hours = BUILD_CACHE_MAX_AGE_HOURS
+    try:
+        subprocess.run(
+            ["docker", "builder", "prune", "-f",
+             "--filter", f"until={max_age_hours}h"],
+            capture_output=True, text=True, timeout=120,
+        )
+        logger.info("Build cache refreshed (entries older than %dh pruned).", max_age_hours)
+    except Exception as e:
+        logger.warning("Post-build cache prune failed (non-fatal): %s", e)
 
 
 def cleanup_stuck_buildkit():
@@ -211,6 +241,9 @@ class BuildManager:
             self._run_security_scan(image_tag)
 
             self._log("Build and Push successful.")
+            # 5. Cache refresh: drop previous stale cache so the next
+            # build starts from current layers (bounded + fresh).
+            prune_stale_build_cache()
             return image_tag
 
         except subprocess.CalledProcessError as e:

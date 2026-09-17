@@ -97,6 +97,7 @@ class DomainConfigView(GenericAPIView):
             'promote_canary_sticky': config.promote_canary_sticky,
             # Feature Flags
             'smsly_disable_tier_gates': config.smsly_disable_tier_gates,
+            'rollback_retain_deployments': config.rollback_retain_deployments,
             'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
             'smsly_strict_ssh_host_key_check': config.smsly_strict_ssh_host_key_check,
             'enable_crowdsec_waf': config.enable_crowdsec_waf,
@@ -265,6 +266,11 @@ class DomainConfigView(GenericAPIView):
             if 'max_concurrent_builds' in data:
                 try:
                     config.max_concurrent_builds = max(1, min(10, int(data['max_concurrent_builds'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'rollback_retain_deployments' in data:
+                try:
+                    config.rollback_retain_deployments = max(1, min(10, int(data['rollback_retain_deployments'])))
                 except (TypeError, ValueError):
                     pass
             if 'ecosystem_max_concurrent_builds' in data:

@@ -343,6 +343,9 @@ class PlatformConfig(models.Model):
     max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")
+    rollback_retain_deployments = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=2,
+        help_text="Successful deployments kept per service for rollback (their images are never deleted by retention)")
     ecosystem_max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=2,
         help_text="Maximum concurrent ecosystem builds")

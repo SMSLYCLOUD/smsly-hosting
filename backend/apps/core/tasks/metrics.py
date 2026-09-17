@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 import logging
@@ -8,7 +9,7 @@ import random
 
 from celery import shared_task
 
-from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
+from apps.deployments.constants import BUILD_CACHE_MAX_AGE_HOURS, TASK_TIME_LIMIT_STANDARD
 from django.utils import timezone
 
 from apps.deployments.models import (
@@ -146,14 +147,25 @@ def collect_metrics_task() -> None:
 
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
 def cleanup_build_cache_task() -> None:
-    """Clean up Docker build cache to free disk space."""
+    """Clean up Docker build cache to free disk space.
+
+    Drops cache older than BUILD_CACHE_MAX_AGE_HOURS (default 24h,
+    tunable via env of the same name). Per-build pruning in
+    builders.prune_stale_build_cache enforces the same cap, so this
+    daily pass only catches what builds missed.
+    """
     client = _get_docker_client()
     if not client:
         logger.info("Docker unavailable, skipping build cache cleanup")
         return
 
     try:
-        result = client.api.prune_builds(filters={'until': '72h'})
+        max_age_hours = max(1, int(os.environ.get(
+            "BUILD_CACHE_MAX_AGE_HOURS", BUILD_CACHE_MAX_AGE_HOURS)))
+    except (TypeError, ValueError):
+        max_age_hours = BUILD_CACHE_MAX_AGE_HOURS
+    try:
+        result = client.api.prune_builds(filters={'until': f'{max_age_hours}h'})
         reclaimed = result.get('SpaceReclaimed', 0) // (1024 * 1024)
         logger.info("Build cache cleanup: reclaimed %d MB", reclaimed)
     except Exception as e:
