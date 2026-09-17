@@ -40,6 +40,7 @@ _harden_crowdsec_bootstrap() {
 # from .env to re-enable after the network path is fixed (workers pick
 # it up on their next recreate).
 _harden_crowdsec_traefik_plugin_gate() {
+    [ -n "${INSTALL_DIR:-}" ] || return 0
     [ -f "$INSTALL_DIR/.env" ] || return 0
     grep -q '^TRAEFIK_CROWDSEC_ENFORCE=' "$INSTALL_DIR/.env" 2>/dev/null && return 0
     if timeout 20 curl -s -o /dev/null https://plugins.traefik.io/ 2>/dev/null; then

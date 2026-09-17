@@ -137,6 +137,15 @@ if _existing_env_is_complete "$INSTALL_DIR/.env"; then
     set -a
     source "$INSTALL_DIR/.env"  || true
     set +a
+    # Same gate as after fresh generation (resume path never generated,
+    # so the deps-time run skipped for lack of .env — see below).
+    if [ -f "$INSTALL_DIR/lib/harden_crowdsec.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/harden_crowdsec.sh" 2>/dev/null || true
+        if command -v _harden_crowdsec_traefik_plugin_gate >/dev/null 2>&1; then
+            _harden_crowdsec_traefik_plugin_gate || true
+        fi
+    fi
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
     WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
@@ -685,6 +694,19 @@ EOF
         rm -f "$_compose_env_link"  || true
         ln -sf ../../.env "$_compose_env_link"  || true
         echo -e "${GREEN}  ✓ Configuration saved to .env${NC}"
+        # Traefik WAF gate must run HERE (not just in fresh_deps): at deps
+        # time .env doesn't exist yet so the gate skips, and workers boot
+        # at deploy with the default (enforce=true). On networks where the
+        # plugin hub is unreachable the first user deploy would then 503
+        # until an update re-ran the gate + recreated workers (2026-09-18
+        # fresh-install audit). Runs before any container starts.
+        if [ -f "$INSTALL_DIR/lib/harden_crowdsec.sh" ]; then
+            # shellcheck disable=SC1090
+            source "$INSTALL_DIR/lib/harden_crowdsec.sh" 2>/dev/null || true
+            if command -v _harden_crowdsec_traefik_plugin_gate >/dev/null 2>&1; then
+                _harden_crowdsec_traefik_plugin_gate || true
+            fi
+        fi
     else
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
         rm -f "$ENV_TMP"
