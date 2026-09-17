@@ -28,6 +28,12 @@ OFFSET_FILE = Path('/tmp/.traefik_log_offset')
 SKIP_PATHS = frozenset({'/ping', '/health', '/health/live', '/health/ready', '/metrics'})
 
 IP_API_URL = 'http://ip-api.com/json/{ip}?fields=status,countryCode,country,city,lat,lon'
+# Primary geo provider (HTTPS). ip-api.com is plain-HTTP-only on the free
+# tier and some provider networks blackhole it at TCP level (2026-09-17:
+# every lookup from workers timed out, so the traffic map stayed empty
+# forever while rows piled up unresolved). ipwho.is serves the same data
+# over TLS with no key, which survives those networks.
+IPWHO_URL = 'https://ipwho.is/{ip}'
 IP_API_DELAY = 1.4  # 45 req/min -> ~1.33s; use 1.4s for safety margin
 
 # Cached toggle state to avoid hitting DB every 15s/30s
@@ -264,10 +270,66 @@ def collect_traefik_logs(self) -> None:
 # ---------------------------------------------------------------------------
 # Task 2: Resolve IP geolocations asynchronously
 # ---------------------------------------------------------------------------
-@shared_task(bind=True, ignore_result=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
+def _resolve_via_ipwho(session_get, ip: str) -> tuple[str, dict | None]:
+    """Resolve one IP via ipwho.is (HTTPS). Returns (outcome, geo-dict).
+
+    outcome is 'ok' (geo-dict filled), 'dead' (invalid/private IP — mark
+    resolved so we stop retrying), 'limited' (rate-limited — back off and
+    retry the batch later), or 'error' (transport failure — retry later).
+    """
+    try:
+        resp = session_get(
+            IPWHO_URL.format(ip=ip),
+            timeout=8,
+            headers={'User-Agent': 'smsly-hosting/1.0'},
+        )
+        data = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Geo lookup failed for %s: %s", ip, exc)
+        return 'error', None
+    if data.get('success'):
+        return 'ok', {
+            'country_code': data.get('country_code', '') or '',
+            'country_name': data.get('country', '') or '',
+            'city': data.get('city', '') or '',
+            'latitude': data.get('latitude'),
+            'longitude': data.get('longitude'),
+        }
+    message = str(data.get('message', '')).lower()
+    if 'rate' in message or 'limit' in message or 'quota' in message:
+        logger.warning("Geo provider rate-limited; backing off batch")
+        return 'limited', None
+    return 'dead', None
+
+
+def _resolve_via_ipapi(session_get, ip: str) -> tuple[str, dict | None]:
+    """Legacy fallback resolver (plain HTTP ip-api.com). Same contract."""
+    try:
+        resp = session_get(
+            IP_API_URL.format(ip=ip),
+            timeout=5,
+            headers={'User-Agent': 'smsly-hosting/1.0'},
+        )
+        data = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Geo lookup failed for %s: %s", ip, exc)
+        return 'error', None
+    if data.get('status') == 'success':
+        return 'ok', {
+            'country_code': data.get('countryCode', '') or '',
+            'country_name': data.get('country', '') or '',
+            'city': data.get('city', '') or '',
+            'latitude': data.get('lat'),
+            'longitude': data.get('lon'),
+        }
+    return 'dead', None
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
 def resolve_traffic_geolocations(self) -> None:
-    """Batch-resolve unresolved IPs via ip-api.com. Rate-limited to 45 req/min.
-    Runs every ~30 seconds, processes up to 20 IPs per batch."""
+    """Batch-resolve unresolved IPs via ipwho.is (HTTPS), falling back to
+    ip-api.com (HTTP). Rate-limited (~1.4s between lookups).
+    Runs every ~2 minutes, processes up to 20 IPs per batch."""
     if not _is_traffic_geo_enabled():
         return
     from apps.deployments.models.traffic import ServiceTrafficLog
@@ -282,32 +344,28 @@ def resolve_traffic_geolocations(self) -> None:
     resolved_count = 0
     for i, log_entry in enumerate(unresolved):
         ip = log_entry.ip_address
-        try:
-            resp = requests.get(
-                IP_API_URL.format(ip=ip),
-                timeout=5,
-                headers={'User-Agent': 'smsly-hosting/1.0'},
-            )
-            data = resp.json()
-
-            if data.get('status') == 'success':
-                log_entry.country_code = data.get('countryCode', '')
-                log_entry.country_name = data.get('country', '')
-                log_entry.city = data.get('city', '')
-                log_entry.latitude = data.get('lat')
-                log_entry.longitude = data.get('lon')
-                log_entry.geo_resolved = True
-                log_entry.save(update_fields=[
-                    'country_code', 'country_name', 'city',
-                    'latitude', 'longitude', 'geo_resolved',
-                ])
-                resolved_count += 1
-            else:
-                log_entry.geo_resolved = True
-                log_entry.save(update_fields=['geo_resolved'])
-
-        except (requests.RequestException, ValueError) as exc:
-            logger.warning("Geo lookup failed for %s: %s", ip, exc)
+        outcome, geo = _resolve_via_ipwho(requests.get, ip)
+        if outcome == 'error':
+            # Transport failure on the primary — one legacy attempt
+            # before giving up on this IP for this cycle.
+            outcome, geo = _resolve_via_ipapi(requests.get, ip)
+        if outcome == 'ok' and geo is not None:
+            log_entry.country_code = geo['country_code']
+            log_entry.country_name = geo['country_name']
+            log_entry.city = geo['city']
+            log_entry.latitude = geo['latitude']
+            log_entry.longitude = geo['longitude']
+            log_entry.geo_resolved = True
+            log_entry.save(update_fields=[
+                'country_code', 'country_name', 'city',
+                'latitude', 'longitude', 'geo_resolved',
+            ])
+            resolved_count += 1
+        elif outcome == 'dead':
+            log_entry.geo_resolved = True
+            log_entry.save(update_fields=['geo_resolved'])
+        elif outcome == 'limited':
+            break
 
         if i < len(unresolved) - 1:
             time.sleep(IP_API_DELAY)

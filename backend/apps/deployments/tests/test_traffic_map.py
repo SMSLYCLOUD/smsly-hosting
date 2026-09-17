@@ -1,11 +1,18 @@
 """Unit tests for Traffic Map geolocation API and log upserts."""
+from unittest.mock import MagicMock
+
+import requests
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Project, Service
 from apps.deployments.models.traffic import ServiceTrafficLog
-from apps.core.tasks.traffic import _upsert_traffic_row
+from apps.core.tasks.traffic import (
+    _resolve_via_ipapi,
+    _resolve_via_ipwho,
+    _upsert_traffic_row,
+)
 
 User = get_user_model()
 
@@ -86,3 +93,61 @@ class TrafficMapTest(TestCase):
         _upsert_traffic_row("9.9.9.9", "app.smsly.cloud")
         log_entry.refresh_from_db()
         self.assertEqual(log_entry.request_count, 2)
+
+
+def _resp(payload):
+    response = MagicMock()
+    response.json.return_value = payload
+    return response
+
+
+class GeoResolverTests(SimpleTestCase):
+    """ipwho.is (HTTPS primary) + ip-api.com (HTTP fallback) mapping."""
+
+    def test_ipwho_success_maps_fields(self):
+        session_get = MagicMock(return_value=_resp({
+            "success": True, "country_code": "NG", "country": "Nigeria",
+            "city": "Lagos", "latitude": 6.5244, "longitude": 3.3792,
+        }))
+        outcome, geo = _resolve_via_ipwho(session_get, "102.91.77.12")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(geo["country_code"], "NG")
+        self.assertEqual(geo["city"], "Lagos")
+        self.assertAlmostEqual(geo["latitude"], 6.5244)
+        session_get.assert_called_once()
+        self.assertIn("https://", session_get.call_args[0][0])
+
+    def test_ipwho_rate_limit_backs_off(self):
+        session_get = MagicMock(return_value=_resp(
+            {"success": False, "message": "Rate limit exceeded, try again later"}))
+        outcome, geo = _resolve_via_ipwho(session_get, "1.2.3.4")
+        self.assertEqual(outcome, "limited")
+        self.assertIsNone(geo)
+
+    def test_ipwho_invalid_ip_is_dead(self):
+        session_get = MagicMock(return_value=_resp(
+            {"success": False, "message": "Invalid IP address"}))
+        outcome, _ = _resolve_via_ipwho(session_get, "999.1.1.1")
+        self.assertEqual(outcome, "dead")
+
+    def test_ipwho_transport_error(self):
+        session_get = MagicMock(side_effect=requests.ConnectionError("down"))
+        outcome, geo = _resolve_via_ipwho(session_get, "1.2.3.4")
+        self.assertEqual(outcome, "error")
+        self.assertIsNone(geo)
+
+    def test_ipapi_success_maps_fields(self):
+        session_get = MagicMock(return_value=_resp({
+            "status": "success", "countryCode": "US", "country": "United States",
+            "city": "Ashburn", "lat": 39.03, "lon": -77.5,
+        }))
+        outcome, geo = _resolve_via_ipapi(session_get, "54.1.2.3")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(geo["country_code"], "US")
+        self.assertAlmostEqual(geo["longitude"], -77.5)
+
+    def test_ipapi_fail_is_dead(self):
+        session_get = MagicMock(return_value=_resp(
+            {"status": "fail", "message": "private range"}))
+        outcome, _ = _resolve_via_ipapi(session_get, "10.0.0.1")
+        self.assertEqual(outcome, "dead")
