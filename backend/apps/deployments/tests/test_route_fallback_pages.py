@@ -41,6 +41,20 @@ class RouteFallbackPagesTests(SimpleTestCase):
             self.assertIn('id="reqid"', html)
             self.assertIn('unavailable', html)
 
+    def test_no_stray_template_actions(self):
+        # Go template parsing fails the ENTIRE page on any malformed
+        # action — including one inside a JS comment (2026-09-18: our own
+        # fallback check contained a literal "{{" and every 503 served a
+        # truncated empty body). Exactly one action per page: the
+        # request-ID placeholder.
+        for page in ('index.html', 'disabled.html'):
+            html = _read('infrastructure', 'route-fallback', page)
+            self.assertEqual(
+                html.count('{{'), 1,
+                f"{page}: want exactly one template action (request ID)",
+            )
+            self.assertIn('{{placeholder "http.request.uuid"}}', html)
+
     def test_pages_stay_out_of_search_indexes(self):
         for page in ('index.html', 'disabled.html'):
             html = _read('infrastructure', 'route-fallback', page)

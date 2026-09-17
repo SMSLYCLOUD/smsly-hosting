@@ -198,8 +198,10 @@
     document.getElementById("ts").textContent = new Date().toISOString();
 
     // If edge templates are off, the placeholder renders literally.
+    // (Single-brace check: a literal double-brace here would break Go
+    // template parsing, even inside this JS comment.)
     const reqEl = document.getElementById("reqid");
-    if (!reqEl.textContent || reqEl.textContent.indexOf("{{") !== -1) {
+    if (!reqEl.textContent || reqEl.textContent.indexOf("{") !== -1) {
       reqEl.textContent = "unavailable";
     }
   </script>
