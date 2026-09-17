@@ -167,8 +167,12 @@ def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
             # killing the docker client on our `timeout=` does NOT stop
             # the container, and a hanging apk (dead mirror) otherwise
             # piles up one ~4-minute zombie per call (observed live).
+            # The repo sed pins dl-cdn to plain http (newer alpine images
+            # default to https, whose 443 is blackholed on some networks
+            # while the port-80 egress shim serves the same bytes fine).
             nft_script = _nft_fallback_command(args)
             bootstrap = (
+                "sed -i 's|https://dl-cdn.alpinelinux.org|http://dl-cdn.alpinelinux.org|' /etc/apk/repositories 2>/dev/null; "
                 "timeout 25 apk add --no-cache iptables nftables >/dev/null 2>&1; "
                 f"if command -v iptables >/dev/null 2>&1; then {script}; "
                 f"else {nft_script}; fi"

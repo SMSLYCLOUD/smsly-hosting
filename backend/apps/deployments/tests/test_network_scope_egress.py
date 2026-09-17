@@ -302,3 +302,6 @@ class ShimFallbackLifetimeTests(SimpleTestCase):
         self.assertIn("sh", argv)
         script = argv[-1]
         self.assertIn("timeout 25 apk add", script)
+        # Newer alpine defaults to https repos; port 443 to dl-cdn is
+        # blackholed on some networks while the port-80 shim works.
+        self.assertIn("http://dl-cdn.alpinelinux.org", script)

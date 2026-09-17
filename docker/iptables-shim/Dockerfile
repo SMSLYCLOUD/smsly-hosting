@@ -13,7 +13,8 @@ FROM alpine:3.20
 # This image carries both tools so the shim works on hosts regardless of
 # whether their Docker firewall is backed by iptables-legacy or nftables.
 
-RUN apk add --no-cache iptables nftables
+RUN sed -i 's|https://dl-cdn\.alpinelinux\.org|http://dl-cdn.alpinelinux.org|' /etc/apk/repositories 2>/dev/null; \
+    apk add --no-cache iptables nftables
 
 # Idempotent listing entrypoint used by reconciles to inspect DOCKER-USER.
 CMD ["iptables", "-S", "DOCKER-USER"]

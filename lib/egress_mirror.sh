@@ -116,6 +116,19 @@ ensure_egress_mirror() {
 
     # 3. Steer port-80 TCP to the shim (PREROUTING covers containers,
     # OUTPUT covers host-local processes). REDIRECT keeps it local.
+    #
+    # LOOP-BREAKER (observed live, full platform outage class): the OUTPUT
+    # rule also catches nginx's OWN upstream connections (it proxies TO
+    # port 80). Without an exemption each shimmed request re-enters the
+    # shim recursively until worker_connections/FDs exhaust and EVERYTHING
+    # 500s. nginx workers run as the `user` from nginx.conf (www-data on
+    # Ubuntu) — their port-80 traffic must leave the host directly.
+    _nginx_user="$(grep -E '^[[:space:]]*user[[:space:]]' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';' | head -n 1)"
+    [ -n "$_nginx_user" ] || _nginx_user="www-data"
+    if ! iptables -t nat -C OUTPUT -p tcp --dport 80 -m owner --uid-owner "$_nginx_user" -j RETURN >/dev/null 2>&1; then
+        iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -m owner --uid-owner "$_nginx_user" -j RETURN 2>/dev/null || \
+            _egress_warn "nginx OUTPUT exemption failed — shim will loop on itself"
+    fi
     if ! iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
         iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
             _egress_warn "PREROUTING rule install failed"

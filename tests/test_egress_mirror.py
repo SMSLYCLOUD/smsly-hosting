@@ -127,6 +127,15 @@ class TestEgressMirrorWiring(unittest.TestCase):
         lib = _read(os.path.join(REPO, "lib", "egress_mirror.sh"))
         self.assertIn("sites-enabled/default", lib)
 
+    def test_nginx_self_traffic_exempted(self):
+        # The OUTPUT REDIRECT also catches nginx's OWN upstream fetches
+        # (it proxies TO port 80) — without an owner-uid exemption each
+        # shimmed request re-enters the shim recursively until
+        # worker_connections/FDs exhaust and everything 500s (live incident).
+        lib = _read(os.path.join(REPO, "lib", "egress_mirror.sh"))
+        self.assertIn("--uid-owner", lib)
+        self.assertIn("-j RETURN", lib)
+
 
 if __name__ == "__main__":
     unittest.main()
