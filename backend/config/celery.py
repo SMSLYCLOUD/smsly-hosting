@@ -34,6 +34,24 @@ app = Celery('smsly_hosting')
 #   should have a `CELERY_` prefix.
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
+# RedBeat distributed-beat lock timeout (seconds).
+#
+# Source-verified against the installed celery-redbeat (schedulers.py):
+# the holder EXTENDS the lock on every tick (tick gap <= max_interval,
+# 300s here), startup BLOCKS silently until acquisition, and close()
+# releases only if owned (SIGKILL/OOM never releases). So a counting-down
+# TTL proves a dead holder, and the TTL is exactly the worst-case dead
+# air after a beat death. Upstream default is max_interval * 5 (1500s =
+# 25 min of silently dead schedules — observed live 2026-09-17 after a
+# routine worker recreate). 600s keeps a 2x margin over the tick gap
+# (a live holder extends long before expiry; never set this <= 300)
+# while bounding the outage. Tunable: REDBEAT_LOCK_TIMEOUT.
+try:
+    _redbeat_lock_timeout = int(os.environ.get('REDBEAT_LOCK_TIMEOUT', 600))
+except (TypeError, ValueError):
+    _redbeat_lock_timeout = 600
+app.conf.redbeat_lock_timeout = max(300, min(_redbeat_lock_timeout, 3600))
+
 # Load task modules from all registered Django apps.
 app.autodiscover_tasks()
 

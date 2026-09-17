@@ -978,6 +978,13 @@ services:
     image: smsly-hosting-backend:latest
     command: celery -A config beat -l info -S redbeat.RedBeatScheduler --pidfile=/app/celerybeat.pid
     restart: unless-stopped
+    # Give SIGTERM shutdown room: redbeat releases its distributed lock in
+    # close() only when the process exits cleanly. SIGKILL (grace expiry)
+    # or OOM leaves redbeat::lock held for the full lock TTL with zero
+    # dispatches and zero errors (2026-09-17: ~25 min of dead schedules
+    # after a routine recreate). 60s costs nothing; OOM still bypasses it
+    # (the verify-script beat guard covers that path).
+    stop_grace_period: 60s
     env_file: .env
     environment:
       REDIS_HOST: ${REDIS_HOST:-redis-primary}

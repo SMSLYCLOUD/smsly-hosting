@@ -529,11 +529,21 @@ ensure_weekly_image_prune() {
 # 2026-09-17: after a worker recreate, the new beat couldn't acquire
 # redbeat::lock (dead predecessor held it, 25-min TTL) and dispatched
 # NOTHING for ~25 min — every periodic cleanup/health task silently
-# stopped, with zero errors in the log. Detection only (never restart
-# beat from here — a second dispatcher would double-fire schedules):
-# alert when no dispatches appear while the beat is old enough to have
-# sent several. The operator fix is deleting the stale lock
-# (DEL redbeat::lock on redis db 3) and restarting the beat container.
+# stopped, with zero errors in the log.
+#
+# Auto-heal (not just alert) when ALL of these hold, each load-bearing:
+#   1. exactly one beat container runs locally — a second local beat
+#      means an operator is debugging; never touch the lock then;
+#   2. it started >15 min ago — a fresh beat may legitimately wait on a
+#      live holder elsewhere (fleet) while converging;
+#   3. zero dispatches in 15 min — the symptom;
+#   4. the lock TTL proves staleness — a live holder EXTENDS every tick
+#      (tick gap <= maxinterval 300s, verified in redbeat source), so a
+#      TTL below 1200s means no refresh for 5+ minutes, i.e. the holder
+#      is dead by redbeat's own cadence. Missing lock (-2) with silence
+#      means a wedged process instead — restart still the fix.
+# Recovery is DEL + container restart (fresh boot acquires immediately);
+# never delete the lock while another beat container runs.
 ensure_beat_dispatching() {
     command -v docker >/dev/null 2>&1 || return 0
     docker inspect smsly-hosting-celery-beat-1 >/dev/null 2>&1 || { log "beat not running — skipping dispatch check"; return 0; }
@@ -545,7 +555,7 @@ ensure_beat_dispatching() {
         if [ -n "$started_epoch" ]; then
             local age
             age=$(( $(date +%s) - started_epoch ))
-            if [ "$age" -lt 600 ]; then
+            if [ "$age" -lt 900 ]; then
                 log "beat restarted ${age}s ago — skipping dispatch check (schedules still warming up)"
                 return 0
             fi
@@ -555,11 +565,75 @@ ensure_beat_dispatching() {
     count=$(docker logs smsly-hosting-celery-beat-1 --since 15m 2>&1 | grep -a -c "Sending due task") || count=0
     # grep -c prints 0 with exit 1 when nothing matches; normalize.
     case "$count" in ''|*[!0-9]*) count=0 ;; esac
-    if [ "$count" -eq 0 ]; then
-        log "ALERT: celery beat dispatched nothing in 15m — periodic hygiene/health tasks are stalled (likely a stale redbeat::lock holder; DEL it on redis db 3 and restart the beat)"
-    else
+    if [ "$count" -ne 0 ]; then
         log "beat dispatching ($count sends in 15m)"
+        return 0
     fi
+    local peers
+    peers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c -E 'celery-beat') || peers=0
+    case "$peers" in ''|*[!0-9]*) peers=0 ;; esac
+    if [ "$peers" -ne 1 ]; then
+        log "ALERT: beat silent 15m but $peers beat containers run locally — refusing auto-heal (possible live peer); inspect redbeat::lock manually"
+        return 0
+    fi
+    local ttl
+    ttl=$(_redbeat_lock_ttl)
+    case "$ttl" in ''|unknown) ttl="unknown" ;; esac
+    if [ "$ttl" = "unknown" ]; then
+        log "ALERT: beat silent 15m and lock state unreadable — manual check needed (DEL redbeat::lock on redis db 3, restart beat if stale)"
+        return 0
+    fi
+    # TTL -2 = no lock (beat should hold one — wedged); -1 = persistent
+    # (abnormal); 0..1199 = unrefreshed past a full tick gap (dead holder).
+    # >= 1200 may be a live fleet peer converging — hands off.
+    if [ "$ttl" = "-2" ] || [ "$ttl" = "-1" ] || { [ "$ttl" -ge 0 ] 2>/dev/null && [ "$ttl" -lt 1200 ]; }; then
+        log "ALERT: beat silent 15m, stale lock (ttl=$ttl) — releasing lock and restarting beat"
+        _redbeat_lock_del
+        if docker restart smsly-hosting-celery-beat-1 >/dev/null 2>&1; then
+            log "beat restarted after stale-lock release"
+        else
+            log "ALERT: beat restart FAILED after stale-lock release — manual intervention needed"
+        fi
+    else
+        log "ALERT: beat silent 15m but lock looks live (ttl=$ttl) — possible fleet peer; manual check needed"
+    fi
+}
+
+# Read redbeat::lock TTL from any redis container (replicas serve the
+# replicated key). Prints seconds, -2 (missing), -1 (persistent), or
+# "unknown". Never fails the caller.
+_redbeat_lock_ttl() {
+    local pass
+    pass=$(grep -E '^REDIS_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    local container
+    for container in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -i -E 'redis' | grep -v -i 'sentinel'); do
+        local ttl
+        if [ -n "$pass" ]; then
+            ttl=$(timeout 10 docker exec "$container" redis-cli -a "$pass" -n 3 TTL redbeat::lock 2>/dev/null | tail -n 1)
+        else
+            ttl=$(timeout 10 docker exec "$container" redis-cli -n 3 TTL redbeat::lock 2>/dev/null | tail -n 1)
+        fi
+        case "$ttl" in ''|*[!0-9-]*) continue ;; esac
+        printf '%s' "$ttl"
+        return 0
+    done
+    printf 'unknown'
+    return 1
+}
+
+# Delete redbeat::lock (call only after the staleness gates above pass).
+_redbeat_lock_del() {
+    local pass
+    pass=$(grep -E '^REDIS_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    local container
+    for container in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -i -E 'redis' | grep -v -i 'sentinel'); do
+        if [ -n "$pass" ]; then
+            timeout 10 docker exec "$container" redis-cli -a "$pass" -n 3 DEL redbeat::lock >/dev/null 2>&1 && return 0
+        else
+            timeout 10 docker exec "$container" redis-cli -n 3 DEL redbeat::lock >/dev/null 2>&1 && return 0
+        fi
+    done
+    return 1
 }
 
 ensure_registry_pair
