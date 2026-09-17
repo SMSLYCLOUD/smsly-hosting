@@ -131,6 +131,16 @@ class BuildMixin:
                     )
                     return
                 except docker_lib.errors.ImageNotFound:
+                    # Pull-on-miss: the tag may live in the local registry
+                    # (retention keeps rollback images there) even when the
+                    # daemon pruned it. A pull is seconds; a rebuild is
+                    # minutes. Falls through to a full build on any failure.
+                    if self._pull_cached_image():
+                        update_stage(
+                            self.deployment, 'Build', 'success',
+                            (timezone.now() - start_time).total_seconds()
+                        )
+                        return
                     append_log(
                         self.deployment,
                         f"  Cache miss — image {self.image_name} not found locally, building...\n"
@@ -425,6 +435,41 @@ class BuildMixin:
         return None
 
 
+
+    def _pull_cached_image(self) -> bool:
+        """Pull a previously built tag from the local registry on cache miss.
+
+        Retention prunes old tags from the daemon but keeps the rollback
+        window in the registry; a pull restores the exact image in seconds
+        instead of rebuilding for minutes. The daemon may lack registry
+        creds at this point (login happens later in the build flow), so any
+        auth/network failure simply returns False and the normal build
+        proceeds. Never raises.
+        """
+        try:
+            from django.conf import settings as _settings
+            registry = (getattr(_settings, "CONTAINER_REGISTRY_URL", "") or "").strip()
+            registry = registry.split("://")[-1].rstrip("/")
+            if not registry or not self.image_name:
+                return False
+            remote = f"{registry}/{self.image_name}"
+            try:
+                from apps.cloud.docker_client import get_docker_client
+                client = get_docker_client()
+            except Exception:
+                import docker as docker_lib
+                client = docker_lib.from_env()
+            pulled = client.images.pull(remote)
+            repo, _, tag = self.image_name.rpartition(":")
+            pulled.tag(repo or self.image_name, tag or "latest")
+            append_log(
+                self.deployment,
+                f"✓ Pulled previously built image {remote} — skipping build.\n",
+            )
+            return True
+        except Exception as exc:
+            logger.debug("Pull-on-miss failed for %s: %s", self.image_name, exc)
+            return False
 
     def _build_with_docker(self, context_dir: str, dockerfile_path: str):
         """Execute Docker build via the docker-py SDK (no docker CLI required).

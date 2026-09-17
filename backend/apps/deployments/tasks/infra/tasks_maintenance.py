@@ -297,14 +297,33 @@ def _registry_session():
     base = str(getattr(settings, "CONTAINER_REGISTRY_URL", "") or "").strip()
     if not base:
         return None, ""
-    if "://" not in base:
-        base = "http://" + base
+    host = base.split("://")[-1]
     session = requests.Session()
     user = str(getattr(settings, "REGISTRY_USER", "") or "")
     password = str(getattr(settings, "REGISTRY_PASSWORD", "") or "")
     if user:
         session.auth = (user, password)
-    return session, base.rstrip("/")
+    # The private registry speaks TLS on some installs (live: plain http
+    # to :5000 answers "Client sent an HTTP request to an HTTPS server").
+    # Prefer https (verified), then https unverified for host-local
+    # self-signed certs, then plain http. Traffic never leaves the host.
+    candidate = f"https://{host}"
+    try:
+        probe = session.get(candidate + "/v2/", timeout=10)
+        if probe.status_code in (200, 401):
+            return session, candidate
+    except requests.exceptions.SSLError:
+        try:
+            probe = session.get(candidate + "/v2/", timeout=10, verify=False)
+            if probe.status_code in (200, 401):
+                logger.warning("registry retention: registry TLS cert unverified (host-local, continuing)")
+                session.verify = False
+                return session, candidate
+        except requests.RequestException:
+            pass
+    except requests.RequestException:
+        pass
+    return session, f"http://{host}"
 
 
 def _prune_expired_registry_tags() -> None:

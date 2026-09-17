@@ -172,3 +172,85 @@ class BuildImageRefreshHookTests(SimpleTestCase):
 
         self.assertTrue(tag.endswith(":abc1234"))
         mock_prune.assert_called_once()
+
+
+class PullOnMissTests(SimpleTestCase):
+    def _step(self, image_name="smsly/hook-svc:abc1234"):
+        from apps.deployments.services.pipeline.build import BuildMixin
+
+        step = BuildMixin.__new__(BuildMixin)
+        step.image_name = image_name
+        step.deployment = MagicMock()
+        return step
+
+    def test_pull_success_retags_and_returns_true(self):
+        step = self._step()
+        pulled = MagicMock()
+        client = MagicMock()
+        client.images.pull.return_value = pulled
+        with patch("apps.cloud.docker_client.get_docker_client", return_value=client), patch(
+            "django.conf.settings.CONTAINER_REGISTRY_URL", "registry:5000", create=True
+        ):
+            self.assertTrue(step._pull_cached_image())
+        client.images.pull.assert_called_once_with("registry:5000/smsly/hook-svc:abc1234")
+        pulled.tag.assert_called_once_with("smsly/hook-svc", "abc1234")
+
+    def test_pull_failure_returns_false(self):
+        step = self._step()
+        client = MagicMock()
+        client.images.pull.side_effect = RuntimeError("denied")
+        with patch("apps.cloud.docker_client.get_docker_client", return_value=client):
+            self.assertFalse(step._pull_cached_image())
+
+    def test_missing_registry_config_returns_false(self):
+        step = self._step()
+        with patch("django.conf.settings.CONTAINER_REGISTRY_URL", "", create=True):
+            self.assertFalse(step._pull_cached_image())
+
+
+class RegistrySessionTests(SimpleTestCase):
+    def _session(self, outcomes):
+        session = MagicMock()
+        calls = {"n": 0}
+
+        def _get(url, **kwargs):
+            idx = min(calls["n"], len(outcomes) - 1)
+            calls["n"] += 1
+            code, exc = outcomes[idx]
+            if exc is not None:
+                raise exc
+            resp = MagicMock()
+            resp.status_code = code
+            return resp
+
+        session.get.side_effect = _get
+        return session
+
+    def test_prefers_verified_https(self):
+        from apps.deployments.tasks.infra import tasks_maintenance as tm
+
+        session = self._session([(200, None)])
+        with patch("requests.Session", return_value=session), patch(
+            "django.conf.settings.CONTAINER_REGISTRY_URL", "registry:5000", create=True
+        ), patch("django.conf.settings.REGISTRY_USER", "", create=True), patch(
+            "django.conf.settings.REGISTRY_PASSWORD", "", create=True
+        ):
+            _, base = tm._registry_session()
+        self.assertEqual(base, "https://registry:5000")
+
+    def test_falls_back_to_http_when_https_unreachable(self):
+        import requests
+
+        from apps.deployments.tasks.infra import tasks_maintenance as tm
+
+        session = self._session([
+            (0, requests.ConnectionError("down")),
+            (0, requests.ConnectionError("down")),
+        ])
+        with patch("requests.Session", return_value=session), patch(
+            "django.conf.settings.CONTAINER_REGISTRY_URL", "registry:5000", create=True
+        ), patch("django.conf.settings.REGISTRY_USER", "", create=True), patch(
+            "django.conf.settings.REGISTRY_PASSWORD", "", create=True
+        ):
+            _, base = tm._registry_session()
+        self.assertEqual(base, "http://registry:5000")

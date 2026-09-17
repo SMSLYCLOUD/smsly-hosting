@@ -489,6 +489,42 @@ ensure_memory_tuning() {
     fi
 }
 
+# ── 13. Weekly unused-image prune (disk hygiene) ─────────────────────
+# `docker image prune -a` removes only images no container references,
+# so running services are safe by construction. The 7d `until` filter
+# keeps a week of rollback/rebuild cache locally; anything older
+# re-pulls on demand from registry:5000 (rollback and the build-skip
+# check both pull on miss). Daemon images can't be managed from backend
+# tasks (socket-proxy IMAGES=0 denies image endpoints), so this
+# host-side sweep is the only automatic path — the manual
+# `deployments/prune/` API stays for on-demand deep cleans.
+# Marker-gated: the hourly script prunes at most weekly. Override the
+# cadence with SMSLY_IMAGE_PRUNE_DAYS (0 disables).
+ensure_weekly_image_prune() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local days="${SMSLY_IMAGE_PRUNE_DAYS:-7}"
+    case "$days" in ''|*[!0-9]*) days=7 ;; esac
+    if [ "$days" -eq 0 ]; then
+        log "image prune disabled (SMSLY_IMAGE_PRUNE_DAYS=0) — skipping"
+        return 0
+    fi
+    local state_dir="$INSTALL_DIR/.state"
+    local marker="$state_dir/last-image-prune"
+    mkdir -p "$state_dir" 2>/dev/null || true
+    if [ -f "$marker" ] && [ -z "$(find "$marker" -mtime "+$((days - 1))" 2>/dev/null)" ]; then
+        return 0
+    fi
+    local out
+    out=$(timeout 600 docker image prune -a -f --filter "until=$((days * 24))h" 2>&1) || {
+        log "ALERT: weekly image prune failed (exit $?)"
+        return 0
+    }
+    touch "$marker" 2>/dev/null || true
+    local reclaimed
+    reclaimed=$(printf '%s' "$out" | grep -a -i "reclaimed" | tail -n 1)
+    log "weekly image prune complete ${reclaimed:+($reclaimed)}"
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -506,4 +542,5 @@ ensure_cf_bouncer_running
 ensure_fail2ban_running
 ensure_openappsec_shadow_parity
 ensure_memory_tuning
+ensure_weekly_image_prune
 log "integrity check complete"
