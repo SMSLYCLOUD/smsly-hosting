@@ -62,12 +62,36 @@ class TestEgressMirrorNginxConf(unittest.TestCase):
                        "mirror.netcologne.de"):
             self.assertIn(f"proxy_set_header Host {mirror};", self.conf)
 
+    def test_rate_limit_codes_fail_over(self):
+        # Mirrors intermittently 403/429 single sources; those must chain
+        # to the next mirror, not fail the fetch.
+        for code in ("403", "429"):
+            self.assertIn(code, self.conf)
+
+    def test_listen_targets_are_placeholders(self):
+        # Gateway and public IP differ per host — rendered at install,
+        # never hardcoded (except loopback).
+        self.assertIn("__GATEWAY_IP__", self.conf)
+        self.assertIn("__HOST_PUBLIC_IP__", self.conf)
+        for line in self.conf.splitlines():
+            s = line.strip()
+            if s.startswith("listen") and "8888" in s and "127.0.0.1" not in s:
+                self.assertIn("__GATEWAY_IP__", s)
+
 
 class TestEgressMirrorWiring(unittest.TestCase):
     def test_lib_defines_ensure(self):
-        lib = _read(LIB)
+        lib = _read(os.path.join(REPO, "lib", "egress_mirror.sh"))
         self.assertIn("ensure_egress_mirror()", lib)
         self.assertIn("dl-cdn.alpinelinux.org", lib)
+
+    def test_lib_renders_template(self):
+        # Gateway differs per host (custom --bip) and REDIRECT preserves
+        # the public source IP — both rendered live, never hardcoded.
+        lib = _read(os.path.join(REPO, "lib", "egress_mirror.sh"))
+        self.assertIn("__GATEWAY_IP__", lib)
+        self.assertIn("__HOST_PUBLIC_IP__", lib)
+        self.assertIn("ip -4 route get 1.1.1.1", lib)
 
     def test_setup_calls_ensure(self):
         setup = _read(SETUP)
