@@ -1741,6 +1741,19 @@ reconcile_compose_stack_after_resume() {
         ensure_infrastructure_permissions || true
     fi
 
+    # Host bind sources must exist before any compose up: the
+    # traefik_dynamic named volume is a bind of this dir, and a missing
+    # device fails container creation with "no such file or directory"
+    # (fresh-install incident — the dir was absent while the volume
+    # existed). Same class as the bouncer-yaml file guard. A volume
+    # created while the dir was missing stays broken — drop it then.
+    if [ ! -d "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" ]; then
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+        docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+    else
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+    fi
+
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
 }
 
@@ -4028,8 +4041,26 @@ _harden_crowdsec_cf_value() {
     fi
 }
 
+_harden_crowdsec_ensure_bouncer_file() {
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
+    # as a FILE. A missing source makes the daemon auto-create a
+    # DIRECTORY, and every later start fails identically until a human
+    # removes it. Guarantee a real file on every path through here:
+    # drop poison dirs (rmdir only — never delete real content) and
+    # touch an empty placeholder (the entrypoint idles on empty).
+    local _f="${INSTALL_DIR:-/opt/smsly-hosting}/crowdsec/cloudflare-bouncer.yaml"
+    if [ -d "$_f" ] && [ ! -L "$_f" ]; then
+        rmdir "$_f" 2>/dev/null || true
+    fi
+    if [ ! -e "$_f" ]; then
+        mkdir -p "$(dirname "$_f")" 2>/dev/null || true
+        : > "$_f" 2>/dev/null || true
+    fi
+}
+
 _harden_crowdsec_cloudflare_bouncer() {
     command -v docker >/dev/null 2>&1 || return 0
+    _harden_crowdsec_ensure_bouncer_file
     local enabled_raw=""
     local token=""
     local account=""
@@ -4555,6 +4586,10 @@ _harden_envoy_registry_login() {
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
     printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
+    # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
+    # hostname, so both need a login or the push 401s (fresh-install gap).
+    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -4598,7 +4633,10 @@ _harden_spire_start_agent() {
     # $1 agent container, $2 server container, $3 agent.conf host path,
     # $4 data volume, $5 socket volume, $6 svids volume.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
-    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+    # A crash-looping agent reports Running=true while Restarting — only a
+    # truly stable container may keep its (single-use, now consumed) token.
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
+       [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
     local token
@@ -6089,6 +6127,20 @@ fix_domain_sync() {
     else
         _FRONTEND_URL_CHANGED="false"
     fi
+    # Same staleness trap for an ABSOLUTE NEXT_PUBLIC_API_URL bake: WS URLs
+    # derive from it while REST follows window.location.origin, so after a
+    # domain change the two disagree until rebuild. Relative (the default)
+    # is immune. The value itself is left alone (an absolute bake may be a
+    # deliberate split-host setup) — it just joins the rebuild decision.
+    _prev_api_url="$(grep -m1 '^NEXT_PUBLIC_API_URL=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+    case "$_prev_api_url" in
+        http://*|https://*)
+            _prev_api_host="$(printf '%s' "$_prev_api_url" | sed -E 's|^https?://([^/:]+).*|\1|')"
+            if [ "$_prev_api_host" != "$target_domain" ] && [ "$_prev_api_host" != "localhost" ]; then
+                _FRONTEND_URL_CHANGED="true"
+            fi
+            ;;
+    esac
 
     # Sync allowlists
     sync_env_domain_allowlists "$env_file" "$target_domain" "$(detect_public_ip)"
@@ -6619,6 +6671,20 @@ fix_domain_sync() {
     else
         _FRONTEND_URL_CHANGED="false"
     fi
+    # Same staleness trap for an ABSOLUTE NEXT_PUBLIC_API_URL bake: WS URLs
+    # derive from it while REST follows window.location.origin, so after a
+    # domain change the two disagree until rebuild. Relative (the default)
+    # is immune. The value itself is left alone (an absolute bake may be a
+    # deliberate split-host setup) — it just joins the rebuild decision.
+    _prev_api_url="$(grep -m1 '^NEXT_PUBLIC_API_URL=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+    case "$_prev_api_url" in
+        http://*|https://*)
+            _prev_api_host="$(printf '%s' "$_prev_api_url" | sed -E 's|^https?://([^/:]+).*|\1|')"
+            if [ "$_prev_api_host" != "$target_domain" ] && [ "$_prev_api_host" != "localhost" ]; then
+                _FRONTEND_URL_CHANGED="true"
+            fi
+            ;;
+    esac
 
     # Sync allowlists
     sync_env_domain_allowlists "$env_file" "$target_domain" "$(detect_public_ip)"
@@ -9531,6 +9597,19 @@ reconcile_compose_stack_after_resume() {
         ensure_infrastructure_permissions || true
     fi
 
+    # Host bind sources must exist before any compose up: the
+    # traefik_dynamic named volume is a bind of this dir, and a missing
+    # device fails container creation with "no such file or directory"
+    # (fresh-install incident — the dir was absent while the volume
+    # existed). Same class as the bouncer-yaml file guard. A volume
+    # created while the dir was missing stays broken — drop it then.
+    if [ ! -d "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" ]; then
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+        docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+    else
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+    fi
+
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
 }
 
@@ -10402,8 +10481,26 @@ _harden_crowdsec_cf_value() {
     fi
 }
 
+_harden_crowdsec_ensure_bouncer_file() {
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
+    # as a FILE. A missing source makes the daemon auto-create a
+    # DIRECTORY, and every later start fails identically until a human
+    # removes it. Guarantee a real file on every path through here:
+    # drop poison dirs (rmdir only — never delete real content) and
+    # touch an empty placeholder (the entrypoint idles on empty).
+    local _f="${INSTALL_DIR:-/opt/smsly-hosting}/crowdsec/cloudflare-bouncer.yaml"
+    if [ -d "$_f" ] && [ ! -L "$_f" ]; then
+        rmdir "$_f" 2>/dev/null || true
+    fi
+    if [ ! -e "$_f" ]; then
+        mkdir -p "$(dirname "$_f")" 2>/dev/null || true
+        : > "$_f" 2>/dev/null || true
+    fi
+}
+
 _harden_crowdsec_cloudflare_bouncer() {
     command -v docker >/dev/null 2>&1 || return 0
+    _harden_crowdsec_ensure_bouncer_file
     local enabled_raw=""
     local token=""
     local account=""
@@ -10929,6 +11026,10 @@ _harden_envoy_registry_login() {
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
     printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
+    # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
+    # hostname, so both need a login or the push 401s (fresh-install gap).
+    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -10972,7 +11073,10 @@ _harden_spire_start_agent() {
     # $1 agent container, $2 server container, $3 agent.conf host path,
     # $4 data volume, $5 socket volume, $6 svids volume.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
-    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+    # A crash-looping agent reports Running=true while Restarting — only a
+    # truly stable container may keep its (single-use, now consumed) token.
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
+       [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
     local token
@@ -11934,8 +12038,26 @@ _harden_crowdsec_cf_value() {
     fi
 }
 
+_harden_crowdsec_ensure_bouncer_file() {
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
+    # as a FILE. A missing source makes the daemon auto-create a
+    # DIRECTORY, and every later start fails identically until a human
+    # removes it. Guarantee a real file on every path through here:
+    # drop poison dirs (rmdir only — never delete real content) and
+    # touch an empty placeholder (the entrypoint idles on empty).
+    local _f="${INSTALL_DIR:-/opt/smsly-hosting}/crowdsec/cloudflare-bouncer.yaml"
+    if [ -d "$_f" ] && [ ! -L "$_f" ]; then
+        rmdir "$_f" 2>/dev/null || true
+    fi
+    if [ ! -e "$_f" ]; then
+        mkdir -p "$(dirname "$_f")" 2>/dev/null || true
+        : > "$_f" 2>/dev/null || true
+    fi
+}
+
 _harden_crowdsec_cloudflare_bouncer() {
     command -v docker >/dev/null 2>&1 || return 0
+    _harden_crowdsec_ensure_bouncer_file
     local enabled_raw=""
     local token=""
     local account=""
@@ -12461,6 +12583,10 @@ _harden_envoy_registry_login() {
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
     printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
+    # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
+    # hostname, so both need a login or the push 401s (fresh-install gap).
+    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -12504,7 +12630,10 @@ _harden_spire_start_agent() {
     # $1 agent container, $2 server container, $3 agent.conf host path,
     # $4 data volume, $5 socket volume, $6 svids volume.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
-    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+    # A crash-looping agent reports Running=true while Restarting — only a
+    # truly stable container may keep its (single-use, now consumed) token.
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
+       [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
     local token
@@ -13094,9 +13223,40 @@ fi
              fi
          fi
 
-         if $_already_migrated; then
-             # Data is already on postgres-primary — switch to prod compose
-             # immediately but ensure the HA stack is up first.
+          # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
+          # as a FILE by the bouncer service. Guarantee it (empty = the
+          # bouncer idles) before any compose up below; drop
+          # daemon-poisoned dirs so retries can succeed.
+          if [ -d "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ] && [ ! -L "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
+              rmdir "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
+          fi
+          mkdir -p "$INSTALL_DIR/crowdsec" 2>/dev/null || true
+          if [ ! -e "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
+              : > "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
+          fi
+          # Same class: traefik_dynamic is a bind-type named volume on
+          # this dir — a missing device fails container creation.
+          # A volume created while the dir was missing stays broken, so
+          # drop it in exactly that case for recreation.
+          if [ ! -d "$INSTALL_DIR/traefik-dynamic" ]; then
+              mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+              docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+          else
+              mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+          fi
+          # iptables-shim image for backend network scoping (see
+          # fresh_deploy.sh): pre-baked beats ad-hoc apk on dead-CDN
+          # networks. Idempotent, non-fatal.
+          if ! docker image inspect smsly/iptables-shim:latest >/dev/null 2>&1; then
+              if [ -d "$INSTALL_DIR/docker/iptables-shim" ]; then
+                  echo -e "${BLUE}  → Building iptables-shim image (network scoping)...${NC}"
+                  timeout -k 10 300 docker build -t smsly/iptables-shim:latest "$INSTALL_DIR/docker/iptables-shim" 2>&1 | tail -3 || \
+                      echo -e "${YELLOW}  ⚠ iptables-shim build failed (non-fatal)${NC}"
+              fi
+          fi
+          if $_already_migrated; then
+              # Data is already on postgres-primary — switch to prod compose
+              # immediately but ensure the HA stack is up first.
              echo -e "${BLUE}  → HA stack already has data — ensuring services are up...${NC}"
              docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                  up -d --wait --wait-timeout 120 \
@@ -15267,6 +15427,19 @@ reconcile_compose_stack_after_resume() {
     # (AGENTS.md #23). Re-apply ownership after any resume reconcile.
     if command -v ensure_infrastructure_permissions >/dev/null 2>&1; then
         ensure_infrastructure_permissions || true
+    fi
+
+    # Host bind sources must exist before any compose up: the
+    # traefik_dynamic named volume is a bind of this dir, and a missing
+    # device fails container creation with "no such file or directory"
+    # (fresh-install incident — the dir was absent while the volume
+    # existed). Same class as the bouncer-yaml file guard. A volume
+    # created while the dir was missing stays broken — drop it then.
+    if [ ! -d "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" ]; then
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+        docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+    else
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
     fi
 
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
@@ -18329,6 +18502,19 @@ reconcile_compose_stack_after_resume() {
         ensure_infrastructure_permissions || true
     fi
 
+    # Host bind sources must exist before any compose up: the
+    # traefik_dynamic named volume is a bind of this dir, and a missing
+    # device fails container creation with "no such file or directory"
+    # (fresh-install incident — the dir was absent while the volume
+    # existed). Same class as the bouncer-yaml file guard. A volume
+    # created while the dir was missing stays broken — drop it then.
+    if [ ! -d "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" ]; then
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+        docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+    else
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+    fi
+
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
 }
 
@@ -20126,6 +20312,19 @@ reconcile_compose_stack_after_resume() {
     # (AGENTS.md #23). Re-apply ownership after any resume reconcile.
     if command -v ensure_infrastructure_permissions >/dev/null 2>&1; then
         ensure_infrastructure_permissions || true
+    fi
+
+    # Host bind sources must exist before any compose up: the
+    # traefik_dynamic named volume is a bind of this dir, and a missing
+    # device fails container creation with "no such file or directory"
+    # (fresh-install incident — the dir was absent while the volume
+    # existed). Same class as the bouncer-yaml file guard. A volume
+    # created while the dir was missing stays broken — drop it then.
+    if [ ! -d "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" ]; then
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+        docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+    else
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
     fi
 
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
@@ -22223,8 +22422,26 @@ _harden_crowdsec_cf_value() {
     fi
 }
 
+_harden_crowdsec_ensure_bouncer_file() {
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
+    # as a FILE. A missing source makes the daemon auto-create a
+    # DIRECTORY, and every later start fails identically until a human
+    # removes it. Guarantee a real file on every path through here:
+    # drop poison dirs (rmdir only — never delete real content) and
+    # touch an empty placeholder (the entrypoint idles on empty).
+    local _f="${INSTALL_DIR:-/opt/smsly-hosting}/crowdsec/cloudflare-bouncer.yaml"
+    if [ -d "$_f" ] && [ ! -L "$_f" ]; then
+        rmdir "$_f" 2>/dev/null || true
+    fi
+    if [ ! -e "$_f" ]; then
+        mkdir -p "$(dirname "$_f")" 2>/dev/null || true
+        : > "$_f" 2>/dev/null || true
+    fi
+}
+
 _harden_crowdsec_cloudflare_bouncer() {
     command -v docker >/dev/null 2>&1 || return 0
+    _harden_crowdsec_ensure_bouncer_file
     local enabled_raw=""
     local token=""
     local account=""
@@ -22750,6 +22967,10 @@ _harden_envoy_registry_login() {
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
     printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
+    # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
+    # hostname, so both need a login or the push 401s (fresh-install gap).
+    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -22793,7 +23014,10 @@ _harden_spire_start_agent() {
     # $1 agent container, $2 server container, $3 agent.conf host path,
     # $4 data volume, $5 socket volume, $6 svids volume.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
-    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+    # A crash-looping agent reports Running=true while Restarting — only a
+    # truly stable container may keep its (single-use, now consumed) token.
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
+       [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
     local token
@@ -23977,7 +24201,26 @@ ensure_infrastructure_permissions
 mkdir -p "$INSTALL_DIR/caddy-config" "$INSTALL_DIR/caddy-logs"
 # Pre-create the Traefik dynamic-config dir (canary WRR files). The
 # traefik_dynamic volume bind-mounts it; a missing dir breaks the mount.
-mkdir -p "$INSTALL_DIR/traefik-dynamic"
+# If the dir was missing when the volume was first created, the volume
+# object is stuck broken (mounts keep failing after the dir appears) —
+# drop it so compose recreates it. Safe: bind volumes store nothing
+# themselves; the files live in this dir (empty on fresh installs).
+if [ ! -d "$INSTALL_DIR/traefik-dynamic" ]; then
+    mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+    docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+else
+    mkdir -p "$INSTALL_DIR/traefik-dynamic" 2>/dev/null || true
+fi
+# AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted as a
+# FILE by the crowdsec-cloudflare-bouncer service. Guarantee it (empty =
+# the bouncer idles) before any compose up; drop daemon-poisoned dirs.
+if [ -d "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ] && [ ! -L "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
+    rmdir "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
+fi
+mkdir -p "$INSTALL_DIR/crowdsec" 2>/dev/null || true
+if [ ! -e "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" ]; then
+    : > "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml" 2>/dev/null || true
+fi
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: disabling master-only Caddy services before Traefik bind.${NC}"
     true
@@ -24050,6 +24293,189 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         echo -e "${BLUE}  → Starting build-cache services (apt-cacher, verdaccio)...${NC}"
         timeout -k 5 240 docker compose -f "$COMPOSE_FILE" up -d apt-cacher verdaccio 2>&1 | tail -3 || \
             echo -e "${YELLOW}  ⚠ Build-cache services start failed (non-fatal)${NC}"
+    fi
+    # ─── Egress mirror (Alpine CDN rewrite for blocked networks) ───
+    # Nixpacks app builds run `apk add` against dl-cdn.alpinelinux.org
+    # with no mirror flag; on networks where that CDN is unreachable
+    # every Alpine-based app build fails. Best-effort + boot-persistent
+    # (own systemd unit installed below).
+    if [ -f "$INSTALL_DIR/lib/egress_mirror.sh" ]; then
+        # shellcheck disable=SC1090
+# --- lib/egress_mirror.sh ---
+#!/usr/bin/env bash
+# Egress mirror for CDN-blocked networks (dl-cdn.alpinelinux.org).
+#
+# Installs a host-local nginx that rewrites dl-cdn requests to working
+# vendor mirrors, and steers port-80 TCP to it via REDIRECT.
+#
+# Why REDIRECT-all instead of matching dl-cdn only: netfilter NAT
+# decisions happen on the SYN (no HTTP payload yet), so Host-based
+# matching cannot steer — only the proxy itself can route by Host.
+# Consequently ALL plain-HTTP egress takes a local hop; the default
+# server passes non-dl-cdn traffic through byte-identical, HTTPS is
+# untouched, and nginx is monitored like any platform service. This is
+# the standard transparent-proxy pattern, not a hack.
+#
+# Idempotent: safe to run on every install/update/resume and at boot.
+# Best-effort: never aborts the caller (returns 0); build failures still
+# surface at the real `apk` step with the vendor error intact.
+
+SMSLY_EGRESS_MIRROR_PORT="${SMSLY_EGRESS_MIRROR_PORT:-8888}"
+
+_egress_log() {
+    echo -e "${BLUE:-}  → [egress-mirror] $*${NC:-}" 2>/dev/null || echo "  → [egress-mirror] $*"
+}
+
+_egress_warn() {
+    echo -e "${YELLOW:-}  ⚠ [egress-mirror] $*${NC:-}" 2>/dev/null || echo "  ⚠ [egress-mirror] $*"
+}
+
+_docker0_gateway() {
+    # Gateway of the default docker bridge (build containers reach the
+    # host through it). Falls back to the conventional default.
+    local gw=""
+    gw="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+    if [ -z "$gw" ]; then
+        gw="172.17.0.1"
+    fi
+    printf '%s' "$gw"
+}
+
+ensure_egress_mirror() {
+    command -v docker >/dev/null 2>&1 || return 0
+    command -v iptables >/dev/null 2>&1 || { _egress_warn "iptables missing — skipping"; return 0; }
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local conf_src="$install_dir/infrastructure/egress-mirror/nginx.conf"
+    [ -f "$conf_src" ] || { _egress_warn "config missing at $conf_src — skipping"; return 0; }
+
+    # 1. nginx on the host (Ubuntu archive; unrelated to the blocked CDNs).
+    if ! command -v nginx >/dev/null 2>&1; then
+        _egress_log "installing nginx for the egress mirror..."
+        if ! timeout 300 apt-get update -qq >/dev/null 2>&1 || ! timeout 600 apt-get install -y -qq nginx >/dev/null 2>&1; then
+            _egress_warn "nginx install failed — app builds needing dl-cdn may fail"
+            return 0
+        fi
+    fi
+    mkdir -p /etc/nginx/smsly 2>/dev/null || true
+    # Render the template: gateway for container builds, public IP because
+    # REDIRECT preserves the original (public) source address on host-local
+    # connections, which must pass the allow rules.
+    _egress_gw="$(_docker0_gateway)"
+    _egress_pub="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") print $(i+1)}' | head -n 1)"
+    [ -n "$_egress_pub" ] || _egress_pub="127.0.0.1"
+    sed -e "s|__GATEWAY_IP__|${_egress_gw}|g" -e "s|__HOST_PUBLIC_IP__|${_egress_pub}|g" \
+        "$conf_src" > /etc/nginx/smsly/egress-mirror.conf 2>/dev/null || {
+        _egress_warn "cannot write nginx config — skipping"
+        return 0
+    }
+    # Include from the main context (once): nginx.conf ends with
+    # `include /etc/nginx/conf.d/*.conf;` on stock Ubuntu — our file
+    # must be reachable from there.
+    if [ ! -e /etc/nginx/conf.d/smsly-egress-mirror.conf ]; then
+        ln -sf /etc/nginx/smsly/egress-mirror.conf /etc/nginx/conf.d/smsly-egress-mirror.conf 2>/dev/null || true
+    fi
+    # Ubuntu ships a default site on :80 that collides with the edge
+    # proxy (docker-proxy/Caddy own port 80) and takes nginx down
+    # entirely — including our 8888 listeners. This box never serves
+    # HTTP from host nginx; drop the default site.
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    # FD ceiling: hung upstream connects (dead CDN IPs) pile concurrent
+    # connections until the stock 1024 nofile turns EVERYTHING into 500s
+    # (observed live). Systemd drop-in + daemon-reload; takes effect on
+    # the (re)start below.
+    _nofile_override="/etc/systemd/system/nginx.service.d/smsly-egress-mirror.conf"
+    _nofile_want="$(printf '[Service]\nLimitNOFILE=32768\n')"
+    _nofile_dirty=""
+    mkdir -p "$(dirname "$_nofile_override")" 2>/dev/null || true
+    if [ ! -f "$_nofile_override" ] || [ "$(cat "$_nofile_override" 2>/dev/null)" != "$_nofile_want" ]; then
+        printf '%s\n' "$_nofile_want" > "$_nofile_override" 2>/dev/null || true
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        _nofile_dirty=1
+    fi
+    if ! nginx -t >/dev/null 2>&1; then
+        _egress_warn "nginx config test failed — leaving existing state"
+        return 0
+    fi
+
+    # 2. nginx must serve the gateway + loopback BEFORE traffic is steered.
+    # Always reload: the rendered config changes across runs (template
+    # placeholders, mirror list) while the daemon keeps old config.
+    local gw=""
+    gw="$(_docker0_gateway)"
+    # Bind explicitly (never 0.0.0.0: no public exposure by accident).
+    # Restart (not reload) when the FD override changed — rlimits apply
+    # at process start only.
+    if [ -n "${_nofile_dirty:-}" ] || ! ss -ltn 2>/dev/null | grep -qE "127\.0\.0\.1:${SMSLY_EGRESS_MIRROR_PORT} |${gw//./\\.}:${SMSLY_EGRESS_MIRROR_PORT} "; then
+        _egress_log "starting nginx..."
+        systemctl enable nginx >/dev/null 2>&1 || true
+        systemctl restart nginx >/dev/null 2>&1 || systemctl start nginx >/dev/null 2>&1 || true
+        sleep 2
+    else
+        systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+        sleep 1
+    fi
+    if ! ss -ltn 2>/dev/null | grep -q ":${SMSLY_EGRESS_MIRROR_PORT} "; then
+        _egress_warn "nginx not listening on ${SMSLY_EGRESS_MIRROR_PORT} after start (see nginx -t / journalctl -u nginx)"
+    fi
+
+    # 3. Steer port-80 TCP to the shim (PREROUTING covers containers,
+    # OUTPUT covers host-local processes). REDIRECT keeps it local.
+    #
+    # LOOP-BREAKER (observed live, full platform outage class): the OUTPUT
+    # rule also catches nginx's OWN upstream connections (it proxies TO
+    # port 80). Without an exemption each shimmed request re-enters the
+    # shim recursively until worker_connections/FDs exhaust and EVERYTHING
+    # 500s. nginx workers run as the `user` from nginx.conf (www-data on
+    # Ubuntu) — their port-80 traffic must leave the host directly.
+    _nginx_user="$(grep -E '^[[:space:]]*user[[:space:]]' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';' | head -n 1)"
+    [ -n "$_nginx_user" ] || _nginx_user="www-data"
+    if ! iptables -t nat -C OUTPUT -p tcp --dport 80 -m owner --uid-owner "$_nginx_user" -j RETURN >/dev/null 2>&1; then
+        iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -m owner --uid-owner "$_nginx_user" -j RETURN 2>/dev/null || \
+            _egress_warn "nginx OUTPUT exemption failed — shim will loop on itself"
+    fi
+    if ! iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
+            _egress_warn "PREROUTING rule install failed"
+    fi
+    if ! iptables -t nat -C OUTPUT -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
+            _egress_warn "OUTPUT rule install failed"
+    fi
+
+    # 4. End-to-end proof through the shim (host path). A container-path
+    # proof runs separately before unblocking app builds.
+    if timeout 25 curl -s -o /dev/null -w '%{http_code}' \
+            http://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/APKINDEX.tar.gz 2>/dev/null | grep -q "^200$"; then
+        _egress_log "egress mirror serving dl-cdn (200 OK)"
+    else
+        _egress_warn "shim probe failed — app builds may still fail on dl-cdn"
+    fi
+    return 0
+}
+# --- end lib/egress_mirror.sh ---
+        if command -v ensure_egress_mirror >/dev/null 2>&1; then
+            ensure_egress_mirror || true
+        fi
+    fi
+    if [ -f "$INSTALL_DIR/scripts/setup-egress-mirror.sh" ]; then
+        chmod +x "$INSTALL_DIR/scripts/setup-egress-mirror.sh" || true
+        cp "$INSTALL_DIR/scripts/smsly-egress-mirror.service" /etc/systemd/system/smsly-egress-mirror.service 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable smsly-egress-mirror.service 2>/dev/null || \
+            echo -e "${YELLOW}    ⚠ smsly-egress-mirror enable failed (non-fatal)${NC}"
+    fi
+    # ─── iptables-shim image (backend network scoping) ──────────────
+    # Backend network scoping prefers pre-baked smsly/iptables-shim over
+    # ad-hoc `apk add` inside plain alpine: on networks where
+    # dl-cdn.alpinelinux.org is dead each fallback call hangs ~4 min as
+    # a zombie container (observed live). The egress mirror above already
+    # unblocks dl-cdn for this build. Idempotent: skipped when present.
+    if ! docker image inspect smsly/iptables-shim:latest >/dev/null 2>&1; then
+        if [ -d "$INSTALL_DIR/docker/iptables-shim" ]; then
+            echo -e "${BLUE}  → Building iptables-shim image (network scoping)...${NC}"
+            timeout -k 10 300 docker build -t smsly/iptables-shim:latest "$INSTALL_DIR/docker/iptables-shim" 2>&1 | tail -3 || \
+                echo -e "${YELLOW}  ⚠ iptables-shim build failed (non-fatal; backend uses slower apk fallback)${NC}"
+        fi
     fi
     # ─── WAF converge (open-appsec is full-gated AND env-gated) ────────
     # A plain `up` with the default full profiles starts the shadow WAF
@@ -24186,13 +24612,25 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                 fi
             fi
             if [ -n "$_infisical_ready" ]; then
+                # SITE_URL must be a valid absolute URL or the app crashes
+                # at boot ("Invalid URL"). The compose default assumes a
+                # domain (https://secrets.<domain>); in IP mode use the
+                # loopback-published port directly. Persisted so later
+                # manual `up` invocations resolve it without this export.
+                _site_domain="$(grep '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)"
+                if echo "${_site_domain:-}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                    export INFISICAL_SITE_URL="http://${_site_domain}:8085"
+                else
+                    export INFISICAL_SITE_URL="https://secrets.${_site_domain:-localhost}"
+                fi
+                env_set_value "$INSTALL_DIR/.env" "INFISICAL_SITE_URL" "$INFISICAL_SITE_URL"
                 # Explicit project name; never --remove-orphans on a shared
                 # directory (AGENTS.md #16).
                 docker compose -p smsly-infisical --env-file "$INSTALL_DIR/.env" \
                     -f "$_INFISICAL_COMPOSE" up -d  && \
                     echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
                     echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
-                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD INFISICAL_DB_HOST
+                unset POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD INFISICAL_DB_HOST INFISICAL_SITE_URL
             fi
         fi
     fi
@@ -25871,6 +26309,19 @@ reconcile_compose_stack_after_resume() {
     # (AGENTS.md #23). Re-apply ownership after any resume reconcile.
     if command -v ensure_infrastructure_permissions >/dev/null 2>&1; then
         ensure_infrastructure_permissions || true
+    fi
+
+    # Host bind sources must exist before any compose up: the
+    # traefik_dynamic named volume is a bind of this dir, and a missing
+    # device fails container creation with "no such file or directory"
+    # (fresh-install incident — the dir was absent while the volume
+    # existed). Same class as the bouncer-yaml file guard. A volume
+    # created while the dir was missing stays broken — drop it then.
+    if [ ! -d "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" ]; then
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
+        docker volume rm smsly-hosting_traefik_dynamic >/dev/null 2>&1 || true
+    else
+        mkdir -p "${INSTALL_DIR:-/opt/smsly-hosting}/traefik-dynamic" 2>/dev/null || true
     fi
 
     echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
