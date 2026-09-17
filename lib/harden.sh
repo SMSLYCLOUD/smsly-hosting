@@ -95,7 +95,10 @@ _harden_spire_start_agent() {
     # $1 agent container, $2 server container, $3 agent.conf host path,
     # $4 data volume, $5 socket volume, $6 svids volume.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
-    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ]; then
+    # A crash-looping agent reports Running=true while Restarting — only a
+    # truly stable container may keep its (single-use, now consumed) token.
+    if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
+       [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
     local token
