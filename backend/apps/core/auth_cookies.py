@@ -1,21 +1,23 @@
 """
 HttpOnly auth cookie helpers.
 
-The auth token is delivered to the browser as an HttpOnly+Secure+SameSite=Strict
-cookie. The cookie is set by the login view and cleared by the logout view.
+The auth token is delivered to the browser as an HttpOnly cookie
+(+Secure+SameSite=Lax on real domain TLS; plain HttpOnly+Lax otherwise
+so IP-mode installs over plain HTTP keep working). The cookie is set
+by the login view and cleared by the logout view.
 
-Cookie name selection:
-- In production (non-DEBUG, USE_SSL=true, served over HTTPS) we use the ``__Host-auth_token``
+ Cookie name selection:
+- In production (non-DEBUG, real domain TLS) we use the ``__Host-auth_token``
   prefix. The ``__Host-`` prefix instructs the browser to (a) reject the cookie
   unless the request is secure, (b) reject it unless ``Secure`` is set,
   (c) reject it unless ``Path=/`` and no ``Domain`` attribute is present.
   These constraints protect against subdomain cookie injection attacks
   (e.g. an attacker-controlled ``*.example.com`` cannot clobber the auth
   cookie by setting a same-name cookie on a less-trusted subdomain).
-- In development (DEBUG=True) the page may be served over plain HTTP, so the
-  ``__Host-`` prefix would be rejected by the browser. We fall back to a
-  plain ``auth_token`` name (still HttpOnly, still SameSite=Strict, but no
-  ``Secure`` flag).
+- Otherwise (DEBUG, or IP-mode installs served over plain HTTP) we use the
+  plain ``auth_token`` name. A self-signed IP cert must NOT flip this:
+  browsers reaching the site over http:// would drop the Secure cookie
+  and login would silently fail despite correct credentials.
 
 This module is also consumed by DRF's auth class
 (``apps.core.auth.CookieAwareTokenAuthentication``) and the security
@@ -53,7 +55,7 @@ def cookie_name() -> str:
     ``Domain`` attribute. If the connection is not encrypted the cookie
     cannot be Secure, so we must use the plain ``auth_token`` name.
     """
-    if getattr(settings, "EFFECTIVE_SSL", False):
+    if getattr(settings, "AUTH_COOKIE_SECURE", False):
         return PROD_COOKIE_NAME
     return DEV_COOKIE_NAME
 
@@ -69,7 +71,7 @@ def set_auth_cookie(response: HttpResponse, token: str) -> None:
             The ``Set-Cookie`` header is added in-place.
         token: The opaque auth token to embed in the cookie.
     """
-    secure = getattr(settings, "EFFECTIVE_SSL", False)
+    secure = getattr(settings, "AUTH_COOKIE_SECURE", False)
     name = cookie_name()
     # When the site is served over HTTPS, set Secure so the browser refuses
     # to send the cookie over a plaintext connection. SameSite=Lax allows

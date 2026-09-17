@@ -195,8 +195,15 @@ if not DEBUG and not IS_TESTING:
         r'^health',
         r'^metrics',
     ]
-    SESSION_COOKIE_SECURE = _effective_ssl
-    CSRF_COOKIE_SECURE = _effective_ssl
+    SESSION_COOKIE_SECURE = _ssl_enabled
+    CSRF_COOKIE_SECURE = _ssl_enabled
+    # Auth-cookie Secure flag follows REAL (domain) TLS only — never the
+    # self-signed IP cert. Browsers drop Secure cookies on plain HTTP, and
+    # IP-mode installs are documented + served over http://<ip>: marking
+    # cookies Secure there makes login silently impossible (the POST
+    # succeeds but no cookie is stored). Non-Secure cookies still work
+    # over https, so domain-TLS behavior is unchanged.
+    AUTH_COOKIE_SECURE = _ssl_enabled
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if _effective_ssl else None
     EFFECTIVE_SSL = _effective_ssl
 else:
@@ -207,6 +214,7 @@ else:
     SECURE_SSL_REDIRECT = False
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
+    AUTH_COOKIE_SECURE = False
     EFFECTIVE_SSL = False
     SECURE_PROXY_SSL_HEADER = None
 
