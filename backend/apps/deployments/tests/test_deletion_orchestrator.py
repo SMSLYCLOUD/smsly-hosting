@@ -87,7 +87,10 @@ class TestDeletionOrchestrator(TestCase):
         mock_container.remove.assert_called_once_with(force=True)
         mock_volume.remove.assert_called_once_with(force=True)
 
-    @patch('apps.deployments.services.remote_orchestrator.RemoteOrchestrator')
+    # NOTE: patch where it is looked up (deletion.py binds the class at
+    # module import), not where it is defined — patching the defining
+    # module leaves the real class wired in and the mock is never called.
+    @patch('apps.deployments.tasks.deploy.deletion.RemoteOrchestrator')
     def test_delete_service_task_uses_remote_identity_cleanup(self, mock_remote_cls):
         server = ManagedServer.objects.create(
             name="remote-node",
