@@ -227,6 +227,15 @@ def ensure_logical_db(db_user: str, db_name: str, password: str) -> None:
         _psql("postgres", f"CREATE DATABASE {db_q} OWNER {user_q};")
         _psql("postgres", f"REVOKE CONNECT ON DATABASE {db_q} FROM PUBLIC;")
         _psql("postgres", f"GRANT CONNECT ON DATABASE {db_q} TO {user_q};")
+    # System databases grant CONNECT to PUBLIC by default — close that
+    # for every tenant role on every ensure (idempotent). Otherwise a
+    # tenant can open the postgres/template catalogs (2026-09-18
+    # prove-out: tenant got `SELECT 1` from the postgres db).
+    for sysdb in ("postgres", "template1"):
+        try:
+            _psql("postgres", f"REVOKE CONNECT ON DATABASE {_quote_ident(sysdb)} FROM {user_q};")
+        except Exception:
+            pass
     _psql(db_name, "CREATE EXTENSION IF NOT EXISTS vector;")
 
 
@@ -292,14 +301,29 @@ def attach_alias(network: str, alias: str) -> None:
 
     Preserves the app-facing URL shape (``postgres-myapp``) so services
     need no changes when moving container → logical.
+
+    Subtlety: ``docker network connect`` refuses an already-attached
+    container, so when the endpoint exists but lacks the alias we
+    disconnect and reconnect carrying the FULL alias set (otherwise the
+    new alias is silently dropped and DNS never resolves — observed
+    live). Brief blip on that endpoint; callers run this at provision /
+    spawn time, and clients retry.
     """
     ensure_shared_server()
-    if alias in _endpoint_aliases(SHARED_CONTAINER, network):
+    current = _endpoint_aliases(SHARED_CONTAINER, network)
+    if alias in current:
         return
-    proc = _run(
-        ["docker", "network", "connect", "--alias", alias, network, SHARED_CONTAINER],
-        timeout=60,
-    )
-    if proc.returncode != 0 and "already exists" not in (proc.stderr or ""):
+    # Reconnect carrying the FULL alias set: `connect` refuses an
+    # already-attached container, so a plain connect would silently drop
+    # the new alias (DNS never resolves). The disconnect is a no-op when
+    # absent, so one path covers both cases.
+    wanted = list(dict.fromkeys([*current, alias]))
+    _run(["docker", "network", "disconnect", network, SHARED_CONTAINER], timeout=60)
+    cmd = ["docker", "network", "connect"]
+    for entry in wanted:
+        cmd += ["--alias", entry]
+    cmd += [network, SHARED_CONTAINER]
+    proc = _run(cmd, timeout=60)
+    if proc.returncode != 0:
         raise RuntimeError(
             f"shared postgres attach to {network} failed: {(proc.stderr or '').strip()[:200]}")

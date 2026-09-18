@@ -53,7 +53,10 @@ class EnsureLogicalDbTests(SimpleTestCase):
         # PUBLIC locked out, owner granted — the tenant-isolation core.
         self.assertIn('REVOKE CONNECT ON DATABASE "tenant_a" FROM PUBLIC', joined)
         self.assertIn('GRANT CONNECT ON DATABASE "tenant_a" TO "tenant_a"', joined)
+        # System catalogs closed too (PUBLIC connects to them by default).
+        self.assertIn('REVOKE CONNECT ON DATABASE "postgres" FROM "tenant_a"', joined)
         self.assertIn('CREATE EXTENSION IF NOT EXISTS vector', joined)
+        self.assertIn('CREATE ROLE "tenant_a"', joined)
 
     @patch("apps.addons.services.shared_postgres._psql")
     def test_existing_role_and_db_skips_creates(self, mock_psql):
@@ -91,9 +94,25 @@ class AttachAliasTests(SimpleTestCase):
     def test_missing_alias_connects(self, mock_run, _aliases, _ensure):
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         attach_alias("smsly-net-x", "postgres-a")
-        argv = mock_run.call_args[0][0]
-        self.assertIn("connect", argv)
-        self.assertIn("postgres-a", argv)
+        verbs = [c[0][0][2] for c in mock_run.call_args_list]
+        self.assertIn("disconnect", verbs)
+        self.assertIn("connect", verbs)
+        connect_argv = mock_run.call_args[0][0]
+        self.assertIn("postgres-a", connect_argv)
+
+    @patch("apps.addons.services.shared_postgres.ensure_shared_server")
+    @patch("apps.addons.services.shared_postgres._endpoint_aliases",
+           return_value=["postgres-old"])
+    @patch("apps.addons.services.shared_postgres._run")
+    def test_reconnect_preserves_existing_aliases(self, mock_run, _aliases, _ensure):
+        # `connect` on an attached endpoint silently drops the new alias,
+        # so the code reconnects carrying the full set (2026-09-18: alias
+        # never resolved until this was fixed).
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        attach_alias("smsly-net-x", "postgres-a")
+        connect_argv = mock_run.call_args[0][0]
+        self.assertIn("postgres-a", connect_argv)
+        self.assertIn("postgres-old", connect_argv)
 
 
 class ResolvePostgresModeTests(TestCase):
