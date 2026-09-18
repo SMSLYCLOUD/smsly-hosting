@@ -72,6 +72,23 @@ class DeletionOrchestrator:
         """
         Deletes all runtime resources associated with an Addon.
         """
+        if (getattr(addon, 'addon_type', '') == 'POSTGRES'
+                and getattr(addon, 'provision_mode', '') == 'shared'):
+            # Logical database on the shared server: DROP role+db. There
+            # are no per-addon containers or volumes (and the shared
+            # server itself must never be touched here).
+            try:
+                from urllib.parse import urlparse as _urlparse
+                from apps.addons.services.shared_postgres import drop_logical_db
+                parsed = _urlparse(addon.connection_url or '')
+                drop_logical_db(
+                    parsed.username or '',
+                    (parsed.path or '/').lstrip('/'),
+                )
+                return True
+            except Exception as e:
+                logger.error("Error dropping shared postgres database for addon %s: %s", addon.id, e)
+                return False
         if not self.docker_client:
             return False
 

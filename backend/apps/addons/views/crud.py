@@ -238,6 +238,13 @@ class AddonViewSet(viewsets.ModelViewSet):
         warning = None
         try:
             if instance.addon_type == Addon.Type.POSTGRES:
+                if getattr(instance, 'provision_mode', '') == 'shared':
+                    return Response(
+                        {'error': 'Per-addon standby does not apply to shared '
+                                  'logical databases: durability comes from '
+                                  'the shared instance (backups; add a shared '
+                                  'standby to cover all tenants at once).'},
+                        status=status.HTTP_400_BAD_REQUEST)
                 topology = manager.enable_postgres_ha(
                     instance, password,
                     placement=placement, remote_server=remote_server)

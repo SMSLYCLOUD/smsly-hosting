@@ -108,6 +108,18 @@ class Addon(TimeStampedModel):
         max_length=20,
         choices=Status.choices,
         default=Status.PROVISIONING)
+
+    class ProvisionMode(models.TextChoices):
+        CONTAINER = 'container', 'Dedicated container'
+        SHARED = 'shared', 'Logical DB on shared server'
+
+    provision_mode = models.CharField(  # type: ignore[var-annotated]
+        max_length=20,
+        choices=ProvisionMode.choices,
+        default=ProvisionMode.CONTAINER,
+        help_text="How this addon is hosted: a dedicated container, or a "
+                  "logical database on the shared Postgres server (new "
+                  "POSTGRES addons default to shared).")
     deletion_error = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     connection_url = EncryptedCharField(
         max_length=512, blank=True)  # H-1 fix: encrypted at rest

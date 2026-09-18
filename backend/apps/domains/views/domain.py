@@ -98,6 +98,7 @@ class DomainConfigView(GenericAPIView):
             # Feature Flags
             'smsly_disable_tier_gates': config.smsly_disable_tier_gates,
             'rollback_retain_deployments': config.rollback_retain_deployments,
+            'postgres_shared_addons_default': config.postgres_shared_addons_default,
             'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
             'smsly_strict_ssh_host_key_check': config.smsly_strict_ssh_host_key_check,
             'enable_crowdsec_waf': config.enable_crowdsec_waf,
@@ -273,6 +274,8 @@ class DomainConfigView(GenericAPIView):
                     config.rollback_retain_deployments = max(1, min(10, int(data['rollback_retain_deployments'])))
                 except (TypeError, ValueError):
                     pass
+            if 'postgres_shared_addons_default' in data:
+                config.postgres_shared_addons_default = _parse_bool(data.get('postgres_shared_addons_default'))
             if 'ecosystem_max_concurrent_builds' in data:
                 try:
                     config.ecosystem_max_concurrent_builds = max(1, min(10, int(data['ecosystem_max_concurrent_builds'])))

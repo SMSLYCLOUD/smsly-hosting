@@ -346,6 +346,16 @@ class PlatformConfig(models.Model):
     rollback_retain_deployments = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=2,
         help_text="Successful deployments kept per service for rollback (their images are never deleted by retention)")
+    postgres_shared_addons_default = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text="New POSTGRES addons provision as logical databases on the "
+                  "shared server instead of dedicated containers (one server "
+                  "for N addons; Platform HA covers them when the shared "
+                  "instance is replicated). Uncheck to keep per-addon containers.")
+    shared_postgres_password = EncryptedCharField(  # type: ignore[var-annotated]
+        max_length=255, blank=True, default='',
+        help_text="Superuser password for the shared Postgres addon server "
+                  "(auto-generated on first use).")
     ecosystem_max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=2,
         help_text="Maximum concurrent ecosystem builds")

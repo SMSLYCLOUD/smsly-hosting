@@ -352,6 +352,29 @@ class AddonProvisioner:
         for addon in service.addons.exclude(status='DELETED'):
             if str(getattr(addon, 'status', '')) != 'ACTIVE':
                 continue
+            if (getattr(addon, 'addon_type', '') == 'POSTGRES'
+                    and getattr(addon, 'provision_mode', '') == 'shared'):
+                # No per-addon container: attach the shared server with
+                # this addon's hostname alias instead.
+                try:
+                    from .shared_postgres import attach_alias as _shared_attach
+                    from urllib.parse import urlparse as _urlparse
+                    _host = (_urlparse(str(getattr(addon, 'connection_url', '') or '')).hostname
+                             or getattr(addon, 'name', None)
+                             or f"postgres-{service.name}")
+                    from apps.deployments.models.network_scope import ScopedNetwork as _Net2
+                    _project = getattr(service, 'project', None)
+                    if _project:
+                        _net = _Net2.resolve_network_name(_project)
+                        if _net:
+                            _shared_attach(_net, _host)
+                            attached += 1
+                except Exception as exc:
+                    logger.warning(
+                        "Scoped attach failed for shared postgres %s: %s",
+                        addon.name, exc,
+                    )
+                continue
             cname = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
             try:
                 self._connect_to_service_scoped_network(cname, addon)
@@ -576,6 +599,15 @@ class AddonProvisioner:
 
         if not image:
             raise ValueError(f"Unknown addon type: {addon_type}")
+
+        # Shared logical Postgres (default for new local addons): one
+        # server, N databases — instead of one container per addon.
+        # Remote-node services stay on containers (the shared server is
+        # local-only); addons already running in containers are never
+        # migrated implicitly (see _resolve_postgres_mode).
+        if addon_type == 'POSTGRES' and self._resolve_postgres_mode(
+                addon, container_name) == 'shared':
+            return self._provision_postgres_shared(addon, alias_name)
 
 
         # Duplicate-alias guard: two ACTIVE addons sharing one network alias
@@ -1605,6 +1637,118 @@ class AddonProvisioner:
             time.sleep(1)
         raise RuntimeError(f"{container_name} readiness command timed out after {timeout}s")
 
+    def _resolve_postgres_mode(self, addon, container_name: str) -> str:
+        """Return ``'shared'`` or ``'container'`` for this provision call.
+
+        * Already-shared addons stay shared (never strand a logical DB
+          when the operator flips the default off).
+        * Addons with an existing URL or container stay containers (their
+          data lives in the container volume — no implicit migration).
+        * Fresh local addons follow
+          ``PlatformConfig.postgres_shared_addons_default`` (default on).
+        * Remote-node services stay on containers (shared server is local).
+        """
+        if str(getattr(addon, 'provision_mode', '') or '') == 'shared':
+            return 'shared'
+        if str(getattr(addon, 'connection_url', '') or '').strip():
+            return 'container'
+        try:
+            cid, _ = self._container_status(container_name)
+        except Exception:
+            cid = None
+        if cid:
+            return 'container'
+        try:
+            from apps.deployments.models.platform import PlatformConfig
+            if not bool(getattr(
+                    PlatformConfig.load(),
+                    'postgres_shared_addons_default', True)):
+                return 'container'
+        except Exception:
+            pass
+        server = getattr(getattr(addon, 'service', None), 'server', None)
+        if server is not None and not getattr(server, 'is_primary', False):
+            return 'container'
+        return 'shared'
+
+    def _provision_postgres_shared(self, addon, alias_name: str) -> tuple[str, str]:
+        """Provision a logical database on the shared Postgres server.
+
+        Returns ``(shared_container_id, connection_url)`` with the same
+        URL shape as container addons (alias hostname preserved), so apps
+        need no changes. Fully idempotent: retries and re-provisions
+        converge (password re-set, role/db ensured, alias attached).
+        """
+        import secrets as _secrets
+
+        from .shared_postgres import (
+            attach_alias,
+            ensure_logical_db,
+            ensure_shared_server,
+        )
+
+        service = addon.service
+        service_name = service.name
+        safe_suffix = (
+            (alias_name or f"postgres-{service_name}")
+            .replace('-', '_')
+            .replace('.', '_')
+            .replace(' ', '_')
+        )
+        db_user = str(safe_suffix)[:63]
+        db_name = str(safe_suffix)[:63]
+
+        existing_url = str(getattr(addon, 'connection_url', '') or '').strip()
+        if existing_url:
+            parsed = self._parse_connection_url(existing_url)
+            password = str(parsed.get('password') or '').strip()
+            if parsed.get('username'):
+                db_user = str(parsed['username'])[:63]
+            if parsed.get('database'):
+                db_name = str(parsed['database'])[:63]
+            hostname = str(parsed.get('hostname') or alias_name).strip()
+        else:
+            password = _secrets.token_urlsafe(48)
+            hostname = alias_name
+        if not password:
+            raise ValueError("Shared Postgres needs a password; refusing to provision without one.")
+
+        ensure_shared_server()
+        ensure_logical_db(db_user, db_name, password)
+
+        # Attach the shared server wherever this app can dial the alias:
+        # the service's scoped bridge (app traffic) and smsly-net (backend
+        # maintenance proxy, backups, health checks). Best-effort here —
+        # connect_service_addons_to_scoped_network completes the scoped
+        # attach at app-spawn time when the bridge exists.
+        try:
+            attach_alias(self.network_name, hostname)
+        except Exception as exc:
+            logger.warning("Shared postgres smsly-net attach skipped for %s: %s", hostname, exc)
+        try:
+            from apps.deployments.models.network_scope import ScopedNetwork as _Net
+            project = getattr(service, 'project', None)
+            if project:
+                scoped = _Net.resolve_network_name(project)
+                if scoped and scoped != self.network_name:
+                    try:
+                        attach_alias(scoped, hostname)
+                    except Exception as exc:
+                        logger.warning(
+                            "Shared postgres scoped attach deferred for %s (net %s not ready?): %s",
+                            hostname, scoped, exc,
+                        )
+        except Exception as exc:
+            logger.debug("Shared postgres scoped attach lookup skipped: %s", exc)
+
+        addon.provision_mode = 'shared'
+        addon.save(update_fields=['provision_mode', 'updated_at'])
+        connection_url = f"postgresql://{db_user}:{password}@{hostname}:5432/{db_name}"
+        logger.info("Postgres addon (shared) ready: %s -> %s", addon.name, hostname)
+        # No per-addon container: return empty id so deprovision paths
+        # never mistake the shared server for this addon's container.
+        return "", connection_url
+
     def _provision_postgres(
         self,
         container_name: str,
@@ -2295,28 +2439,52 @@ class AddonProvisioner:
 
         try:
             if addon.addon_type == 'POSTGRES':
-                postgres_user = self._get_container_env(
-                    container_name, 'POSTGRES_USER'
-                )
-                postgres_db = self._get_container_env(
-                    container_name, 'POSTGRES_DB'
-                )
-                # Stream pg_dump output directly to file without shell redirection.
-                with open(backup_path, 'wb') as backup_file:
-                    subprocess.run(
-                        [
-                            'docker',
-                            'exec',
-                            container_name,
-                            'pg_dump',
-                            '-U',
-                            postgres_user,
-                            postgres_db,
-                        ],
-                        check=True,
-                        stdout=backup_file,
-                        timeout=300,
+                if getattr(addon, 'provision_mode', '') == 'shared':
+                    # Logical database on the shared server: dump it
+                    # there (password via env-file, never on cmdline).
+                    from urllib.parse import urlparse as _urlparse
+                    from .shared_postgres import SHARED_CONTAINER
+                    parsed = _urlparse(addon.connection_url or '')
+                    env_file = self._write_env_file(
+                        {'PGPASSWORD': parsed.password or ''})
+                    try:
+                        with open(backup_path, 'wb') as backup_file:
+                            subprocess.run(
+                                ['docker', 'exec', '--env-file', env_file,
+                                 SHARED_CONTAINER,
+                                 'pg_dump', '-U', parsed.username or 'postgres',
+                                 '-h', '127.0.0.1',
+                                 (parsed.path or '/').lstrip('/') or 'postgres'],
+                                check=True,
+                                stdout=backup_file,
+                                timeout=300,
+                            )
+                    finally:
+                        with contextlib.suppress(Exception):
+                            os.remove(env_file)
+                else:
+                    postgres_user = self._get_container_env(
+                        container_name, 'POSTGRES_USER'
                     )
+                    postgres_db = self._get_container_env(
+                        container_name, 'POSTGRES_DB'
+                    )
+                    # Stream pg_dump output directly to file without shell redirection.
+                    with open(backup_path, 'wb') as backup_file:
+                        subprocess.run(
+                            [
+                                'docker',
+                                'exec',
+                                container_name,
+                                'pg_dump',
+                                '-U',
+                                postgres_user,
+                                postgres_db,
+                            ],
+                            check=True,
+                            stdout=backup_file,
+                            timeout=300,
+                        )
 
             elif addon.addon_type == 'REDIS':
                 # Redis save and copy using argument lists only. Auth with the
@@ -2375,29 +2543,52 @@ class AddonProvisioner:
 
         try:
             if addon.addon_type == 'POSTGRES':
-                postgres_user = self._get_container_env(
-                    container_name, 'POSTGRES_USER'
-                )
-                postgres_db = self._get_container_env(
-                    container_name, 'POSTGRES_DB'
-                )
-                # Stream backup content as stdin to psql without shell piping.
-                with open(validated_backup_path, 'rb') as backup_file:
-                    subprocess.run(
-                        [
-                            'docker',
-                            'exec',
-                            '-i',
-                            container_name,
-                            'psql',
-                            '-U',
-                            postgres_user,
-                            postgres_db,
-                        ],
-                        stdin=backup_file,
-                        check=True,
-                        timeout=300,
+                if getattr(addon, 'provision_mode', '') == 'shared':
+                    # Restore into the logical database on the shared server.
+                    from urllib.parse import urlparse as _urlparse
+                    from .shared_postgres import SHARED_CONTAINER
+                    parsed = _urlparse(addon.connection_url or '')
+                    env_file = self._write_env_file(
+                        {'PGPASSWORD': parsed.password or ''})
+                    try:
+                        with open(validated_backup_path, 'rb') as backup_file:
+                            subprocess.run(
+                                ['docker', 'exec', '-i', '--env-file', env_file,
+                                 SHARED_CONTAINER,
+                                 'psql', '-U', parsed.username or 'postgres',
+                                 '-h', '127.0.0.1',
+                                 (parsed.path or '/').lstrip('/') or 'postgres'],
+                                stdin=backup_file,
+                                check=True,
+                                timeout=300,
+                            )
+                    finally:
+                        with contextlib.suppress(Exception):
+                            os.remove(env_file)
+                else:
+                    postgres_user = self._get_container_env(
+                        container_name, 'POSTGRES_USER'
                     )
+                    postgres_db = self._get_container_env(
+                        container_name, 'POSTGRES_DB'
+                    )
+                    # Stream backup content as stdin to psql without shell piping.
+                    with open(validated_backup_path, 'rb') as backup_file:
+                        subprocess.run(
+                            [
+                                'docker',
+                                'exec',
+                                '-i',
+                                container_name,
+                                'psql',
+                                '-U',
+                                postgres_user,
+                                postgres_db,
+                            ],
+                            stdin=backup_file,
+                            check=True,
+                            timeout=300,
+                        )
 
             elif addon.addon_type == 'REDIS':
                 # Copy file back, restart

@@ -93,10 +93,19 @@ def provision_addon_task(self, addon_id: str) -> None:
 
 @shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.deprovision_addon_task")
 def deprovision_addon_task(self, addon_id: str) -> None:
-    """Delete addon container."""
+    """Delete addon container (or logical database for shared addons)."""
     try:
         addon = Addon.objects.get(id=addon_id)
-        if addon.coolify_uuid:
+        if getattr(addon, 'provision_mode', '') == 'shared' and addon.addon_type == 'POSTGRES':
+            # Logical database: DROP role+db, never touch containers.
+            from urllib.parse import urlparse as _urlparse
+            from apps.addons.services.shared_postgres import drop_logical_db
+            parsed = _urlparse(addon.connection_url or '')
+            drop_logical_db(
+                parsed.username or '',
+                (parsed.path or '/').lstrip('/'),
+            )
+        elif addon.coolify_uuid:
             container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
             addon_provisioner.deprovision_dispatch(addon.coolify_uuid, addon, container_name)
         addon.status = Addon.Status.DELETED
