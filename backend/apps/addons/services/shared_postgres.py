@@ -160,7 +160,24 @@ def ensure_shared_server() -> str:
     # pgvector in template1 so every future database inherits it
     # (matches per-addon behavior of CREATE EXTENSION per database).
     _psql("template1", "CREATE EXTENSION IF NOT EXISTS vector;")
+    _harden_system_catalogs()
     return cid
+
+
+def _harden_system_catalogs() -> None:
+    """Revoke PUBLIC connect on system databases (instance-wide, once).
+
+    Per-role REVOKEs are not enough: Postgres evaluates the PUBLIC
+    grant for every role, so a tenant keeps connecting until PUBLIC
+    itself loses CONNECT. Superusers (our admin ops) and passwordless
+    ``pg_isready`` bypass privilege checks, so nothing legitimate
+    breaks. Idempotent.
+    """
+    for sysdb in ("postgres", "template1"):
+        try:
+            _psql("postgres", f"REVOKE CONNECT ON DATABASE {_quote_ident(sysdb)} FROM PUBLIC;")
+        except Exception:
+            pass
 
 
 def _psql(database: str, sql: str, timeout: int = 60) -> str:

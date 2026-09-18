@@ -80,6 +80,16 @@ class EnsureLogicalDbTests(SimpleTestCase):
         self.assertLess(drop_idx, role_idx)
 
 
+class HardenSystemCatalogsTests(SimpleTestCase):
+    @patch("apps.addons.services.shared_postgres._psql")
+    def test_public_loses_connect_on_system_dbs(self, mock_psql):
+        from apps.addons.services.shared_postgres import _harden_system_catalogs
+        _harden_system_catalogs()
+        joined = "\n".join(_sqls(mock_psql))
+        self.assertIn('REVOKE CONNECT ON DATABASE "postgres" FROM PUBLIC', joined)
+        self.assertIn('REVOKE CONNECT ON DATABASE "template1" FROM PUBLIC', joined)
+
+
 class AttachAliasTests(SimpleTestCase):
     @patch("apps.addons.services.shared_postgres.ensure_shared_server")
     @patch("apps.addons.services.shared_postgres._endpoint_aliases", return_value=["postgres-a"])
