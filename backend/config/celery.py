@@ -231,6 +231,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks_bundles.reprovision_bundle_task': {'queue': 'deploy'},
     'apps.deployments.tasks.deploy.caddy.sync_caddy_task': {'queue': 'deploy'},
     'apps.addons.tasks.ha_watchdog.reseed_postgres_standby_task': {'queue': 'deploy'},
+    'apps.addons.tasks.ha_watchdog.check_shared_postgres_ha_task': {'queue': 'deploy'},
     'apps.deployments.tasks.one_click_deploy_template_task': {'queue': 'deploy'},
     'apps.deployments.tasks.node_watchdog_task': {'queue': 'deploy'},
     'apps.deployments.services.heartbeat_bus.persist_heartbeats_task': {'queue': 'fast'},
@@ -436,6 +437,15 @@ app.conf.beat_schedule = {
         'task': 'apps.addons.tasks.ha_watchdog.check_addon_ha_task',
         'schedule': 30.0,
         'options': {'expires': 30.0},
+    },
+    # Shared Postgres HA watchdog: heartbeat, standby self-heal, and
+    # automatic failover on sustained primary death (manual path stays
+    # available via `shared_postgres_ha promote`). 60s cadence × 3
+    # probes ≈ 3-minute detection; never touches a live primary.
+    'shared-postgres-ha-watchdog-every-60s': {
+        'task': 'apps.addons.tasks.ha_watchdog.check_shared_postgres_ha_task',
+        'schedule': 60.0,
+        'options': {'expires': 60.0},
     },
     # Auto-promote deployments stuck in STAGED for > configured hours
     'auto-promote-staged-every-15m': {

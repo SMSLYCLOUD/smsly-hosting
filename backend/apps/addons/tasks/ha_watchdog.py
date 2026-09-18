@@ -9,6 +9,11 @@ Runs every 60s via Celery beat and keeps ``Addon.ha_status`` truthful:
   three consecutive checks, promotes the streaming standby and moves
   the friendly network alias onto it — automatic failover with no app
   reconfiguration.
+- SHARED Postgres (``check_shared_postgres_ha_task``, same cadence):
+  same contract for the one shared instance backing all logical
+  tenants — sustained primary death with a recently-healthy standby
+  auto-promotes, then rebuilds redundancy. Manual path stays available
+  (``shared_postgres_ha`` management command / ``promote_shared_standby``).
 """
 import logging
 import os
@@ -436,3 +441,191 @@ def _set_status(addon, new_status) -> None:
     if addon.ha_status != new_status:
         type(addon).objects.filter(pk=addon.pk).update(ha_status=new_status)
         addon.ha_status = new_status
+
+
+# ── Shared Postgres HA (one instance, N logical tenants) ────────────
+# Consecutive DOWN observations before auto-failover (beat runs every
+# 60s, so 3 ≈ 3 minutes — rides out restart loops and deploy churn).
+try:
+    _SHARED_PG_PROBES = max(1, int(os.environ.get('SHARED_PG_FAILOVER_PROBES', '3')))
+except (TypeError, ValueError):
+    _SHARED_PG_PROBES = 3
+# A standby last seen HEALTHY longer ago than this is too stale to
+# trust with automatic promotion (unbounded data loss) — alert instead.
+_SHARED_PG_HEALTHY_WINDOW_S = 900
+try:
+    _SHARED_PG_HEALTHY_WINDOW_S = max(
+        60, int(os.environ.get('SHARED_PG_HEALTHY_WINDOW_S', '900')))
+except (TypeError, ValueError):
+    _SHARED_PG_HEALTHY_WINDOW_S = 900
+# Minimum gap between automatic failovers (flap guard).
+_SHARED_PG_FAILOVER_COOLDOWN_S = 3600
+try:
+    _SHARED_PG_FAILOVER_COOLDOWN_S = max(
+        300, int(os.environ.get('SHARED_PG_FAILOVER_COOLDOWN_S', '3600')))
+except (TypeError, ValueError):
+    _SHARED_PG_FAILOVER_COOLDOWN_S = 3600
+
+_SHARED_PG_DOWN_KEY = "shared_pg_ha:down_count"
+_SHARED_PG_HEALTHY_KEY = "shared_pg_ha:last_healthy_ts"
+_SHARED_PG_FAILOVER_KEY = "shared_pg_ha:last_failover_ts"
+_SHARED_PG_ALERT_KEY = "shared_pg_ha:last_alert_ts"
+
+
+def _shared_pg_notify(title: str, message: str) -> None:
+    """Best-effort platform alert (never fail the watchdog over it)."""
+    try:
+        from apps.notifications.tasks import dispatch_notification
+        dispatch_notification.delay(
+            event_type='addon_alert',
+            user_id=None,
+            title=title,
+            message=message,
+        )
+    except Exception:
+        pass
+
+
+def _shared_pg_throttled_alert(cache, now: float, title: str, message: str) -> None:
+    """Alert at most hourly (DOWN states persist across cycles)."""
+    try:
+        last_alert = float(cache.get(_SHARED_PG_ALERT_KEY) or 0)
+    except (TypeError, ValueError):
+        last_alert = 0.0
+    if now - last_alert < 3600:
+        return
+    cache.set(_SHARED_PG_ALERT_KEY, now, timeout=7200)
+    _shared_pg_notify(title, message)
+
+
+@shared_task(
+    bind=True,
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
+    name="apps.addons.tasks.ha_watchdog.check_shared_postgres_ha_task",
+)
+def check_shared_postgres_ha_task(self) -> dict:
+    """Watchdog for the shared Postgres instance (manual + automatic HA).
+
+    Every run records HEALTHY heartbeats. On sustained primary death
+    (container down for ``_SHARED_PG_PROBES`` consecutive runs) with a
+    recently-healthy standby and a cool head (no recent failover), it
+    promotes automatically and rebuilds redundancy — then alerts either
+    way. Anything ambiguous (wedged-but-running primary, stale
+    standby, recent failover) alerts WITHOUT touching topology: the
+    manual path (``shared_postgres_ha promote``) owns those cases.
+    """
+    import time as _time
+
+    from django.core.cache import cache
+
+    from apps.addons.services.shared_postgres import (
+        ensure_shared_standby,
+        promote_shared_standby,
+        shared_ha_status,
+    )
+
+    now = _time.time()
+    try:
+        status = shared_ha_status()
+    except Exception as exc:
+        logger.warning("shared pg watchdog: status check failed: %s", exc)
+        return {'action': 'none', 'reason': 'status-error'}
+
+    state = status.get('state')
+    if state == 'HEALTHY':
+        cache.set(_SHARED_PG_DOWN_KEY, 0, timeout=3600)
+        cache.set(_SHARED_PG_HEALTHY_KEY, now, timeout=_SHARED_PG_HEALTHY_WINDOW_S * 2)
+        return {'action': 'none', 'state': state}
+
+    if state == 'STANDALONE':
+        # Primary serves; redundancy missing — rebuild it (idempotent).
+        # Not a failover: reset the down counter so a later outage
+        # needs the full sustained window.
+        cache.set(_SHARED_PG_DOWN_KEY, 0, timeout=3600)
+        try:
+            ensure_shared_standby()
+            logger.info("shared pg watchdog: standby restored (was STANDALONE)")
+            return {'action': 'standby-restored', 'state': state}
+        except Exception as exc:
+            logger.warning("shared pg watchdog: standby restore failed: %s", exc)
+            return {'action': 'none', 'state': state, 'reason': 'standby-restore-failed'}
+
+    if state == 'DOWN':
+        down = 0
+        try:
+            down = int(cache.get(_SHARED_PG_DOWN_KEY) or 0)
+        except (TypeError, ValueError):
+            down = 0
+        down += 1
+        cache.set(_SHARED_PG_DOWN_KEY, down, timeout=3600)
+        if down < _SHARED_PG_PROBES:
+            return {'action': 'none', 'state': state, 'down_count': down}
+        try:
+            last_healthy = float(cache.get(_SHARED_PG_HEALTHY_KEY) or 0)
+        except (TypeError, ValueError):
+            last_healthy = 0.0
+        try:
+            last_failover = float(cache.get(_SHARED_PG_FAILOVER_KEY) or 0)
+        except (TypeError, ValueError):
+            last_failover = 0.0
+        if now - last_failover < _SHARED_PG_FAILOVER_COOLDOWN_S:
+            logger.warning("shared pg watchdog: failover on cooldown; alerting only")
+            _shared_pg_throttled_alert(
+                cache, now,
+                "Shared Postgres primary down (failover on cooldown)",
+                "Primary has been down; automatic failover is cooling down "
+                "after a recent event. Manual: shared_postgres_ha promote.",
+            )
+            return {'action': 'alerted', 'state': state, 'reason': 'cooldown'}
+        if not status.get('standby'):
+            _shared_pg_throttled_alert(
+                cache, now,
+                "Shared Postgres primary down (no standby)",
+                "Primary is down and no standby exists to promote. "
+                "Manual recovery required.",
+            )
+            return {'action': 'alerted', 'state': state, 'reason': 'no-standby'}
+        if now - last_healthy > _SHARED_PG_HEALTHY_WINDOW_S:
+            _shared_pg_throttled_alert(
+                cache, now,
+                "Shared Postgres primary down (standby too stale)",
+                "Primary is down but the standby has no recent healthy "
+                "heartbeat — refusing automatic promotion (unbounded data "
+                "loss). Manual: shared_postgres_ha promote --force.",
+            )
+            return {'action': 'alerted', 'state': state, 'reason': 'stale-standby'}
+        try:
+            new_primary = promote_shared_standby()
+            try:
+                ensure_shared_standby(reseed=True)
+            except Exception as exc:
+                logger.warning("shared pg watchdog: post-failover reseed failed: %s", exc)
+            cache.set(_SHARED_PG_FAILOVER_KEY, now, timeout=_SHARED_PG_FAILOVER_COOLDOWN_S * 2)
+            cache.set(_SHARED_PG_DOWN_KEY, 0, timeout=3600)
+            _shared_pg_notify(
+                "Shared Postgres automatic failover completed",
+                f"Promoted standby; new primary is {new_primary}. "
+                "Tenant URLs unchanged (aliases moved).",
+            )
+            logger.warning("shared pg watchdog: automatic failover to %s", new_primary)
+            return {'action': 'failed-over', 'state': state, 'new_primary': new_primary}
+        except Exception as exc:
+            logger.warning("shared pg watchdog: automatic failover failed: %s", exc)
+            _shared_pg_notify(
+                "Shared Postgres automatic failover FAILED",
+                f"Primary is down and promotion raised: {exc}. Manual: "
+                "shared_postgres_ha promote --force.",
+            )
+            return {'action': 'alerted', 'state': state, 'reason': 'promote-failed'}
+
+    # DEGRADED / UNKNOWN / anything else: primary may still serve; alert
+    # (throttled) and never touch topology.
+    _shared_pg_throttled_alert(
+        cache, now,
+        f"Shared Postgres {state or 'unknown'}",
+        "Shared Postgres needs attention; automatic action withheld. "
+        "Manual: shared_postgres_ha status.",
+    )
+    logger.debug("shared pg watchdog: state=%s, no action", state)
+    return {'action': 'none', 'state': state}
