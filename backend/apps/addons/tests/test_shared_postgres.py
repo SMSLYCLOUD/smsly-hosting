@@ -265,15 +265,18 @@ class SharedStandbyTests(SimpleTestCase):
 
     @patch("apps.addons.services.shared_postgres.ensure_shared_server")
     @patch("apps.addons.services.shared_postgres._run")
-    def test_ensure_skips_create_when_present(self, mock_run, _ensure):
+    def test_ensure_skips_create_when_present(self, mock_run,
+                                              _ensure):
         from apps.addons.services import shared_postgres as sp
 
         def _route(cmd, timeout=60):
+            joined = " ".join(cmd)
+            if cmd[:3] == ["docker", "ps", "-a"] and "volume=" in joined:
+                return self._run_ok("")
             if cmd[:3] == ["docker", "ps", "-a"]:
                 return self._run_ok("abc123\n")
             return self._run_ok("")
         mock_run.side_effect = _route
-
         with patch.object(sp, "_wait_container_ready"), \
                 patch.object(sp, "_primary_conninfo_ok", return_value=True), \
                 patch.object(sp, "_ensure_replication_access"):
@@ -361,7 +364,7 @@ class SharedStandbyTests(SimpleTestCase):
     @patch("apps.addons.services.shared_postgres._ensure_replication_access")
     @patch("apps.addons.services.shared_postgres.ensure_shared_server")
     @patch("apps.addons.services.shared_postgres._run")
-    def test_reseed_wipes_before_create(
+    def test_reseed_uses_fresh_timestamped_volume(
             self, mock_run, _ensure, _repl, _streaming, _wait):
         from apps.addons.services import shared_postgres as sp
 
@@ -373,11 +376,28 @@ class SharedStandbyTests(SimpleTestCase):
 
         sp.ensure_shared_standby(reseed=True)
         flat = [" ".join(c[0][0]) for c in mock_run.call_args_list]
-        rm_c = next(i for i, c in enumerate(flat) if "docker rm -f" in c)
-        rm_v = next(i for i, c in enumerate(flat) if "docker volume rm" in c)
-        run_i = next(i for i, c in enumerate(flat) if c.startswith("docker run"))
-        self.assertLess(rm_c, run_i)
-        self.assertLess(rm_v, run_i)
+        run_cmd = next(c for c in flat if c.startswith("docker run"))
+        self.assertRegex(run_cmd, r"smsly-shared-postgres-replica-data-\d+:")
+
+    @patch("apps.addons.services.shared_postgres._wait_container_ready")
+    @patch("apps.addons.services.shared_postgres._primary_conninfo_ok", return_value=True)
+    @patch("apps.addons.services.shared_postgres._ensure_replication_access")
+    @patch("apps.addons.services.shared_postgres.ensure_shared_server")
+    @patch("apps.addons.services.shared_postgres._run")
+    def test_plain_ensure_aborts_when_volume_claimed(
+            self, mock_run, _ensure, _repl, _streaming, _wait):
+        from apps.addons.services import shared_postgres as sp
+
+        def _route(cmd, timeout=60):
+            joined = " ".join(cmd)
+            if cmd[:3] == ["docker", "ps", "-a"] and "volume=" in joined:
+                return self._run_ok("smsly-shared-postgres\n")
+            return self._run_ok("")
+        mock_run.side_effect = _route
+
+        with self.assertRaises(RuntimeError) as ctx:
+            sp.ensure_shared_standby()
+        self.assertIn("refusing to seed", str(ctx.exception))
 
     @patch("apps.addons.services.shared_postgres._wait_container_ready")
     @patch("apps.addons.services.shared_postgres._primary_conninfo_ok", return_value=True)

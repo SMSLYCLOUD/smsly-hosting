@@ -260,6 +260,35 @@ def _primary_conninfo_ok(container: str) -> bool:
         return False
 
 
+def _volume_users(volume: str) -> list[str]:
+    """Names of containers (any state) currently using ``volume``."""
+    proc = _run(
+        ["docker", "ps", "-a", "--filter", f"volume={volume}",
+         "--format", "{{.Names}}"],
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        return []
+    return [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+
+
+def _gc_old_standby_volumes(current: str) -> None:
+    """Remove unreferenced previous reseed volumes (best effort)."""
+    proc = _run(
+        ["docker", "volume", "ls", "--filter", "name=smsly-shared-postgres-replica-data",
+         "--format", "{{.Name}}"],
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        return
+    for name in [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]:
+        if name == current:
+            continue
+        if _volume_users(name):
+            continue
+        _run(["docker", "volume", "rm", name], timeout=60)
+
+
 def ensure_shared_standby(reseed: bool = False) -> str:
     """Create (once) and start the streaming standby. Idempotent.
 
@@ -267,16 +296,31 @@ def ensure_shared_standby(reseed: bool = False) -> str:
     and safe to re-run (an existing standby is left alone — never
     re-seeded implicitly, since reseeding wipes data).
 
-    ``reseed=True`` wipes the standby container + volume first: required
-    after a failover, when the old standby data sits on a forked timeline
-    and can never resume streaming from the new primary.
+    ``reseed=True`` (post-failover): the old standby data sits on a
+    forked timeline and can never resume, so the standby gets a FRESH
+    timestamped volume. Reusing the canonical volume name is forbidden
+    here: after a promote+rename that volume belongs to the live
+    primary, and seeding into it wipes the primary's data directory
+    (2026-09-18 drill: full primary wipe, recovered from the fenced
+    copy). Previous reseed volumes are garbage-collected once the new
+    standby streams.
     """
+    import time as _time
+
     ensure_shared_server()
     _ensure_replication_access()
+    volume = SHARED_STANDBY_VOLUME
     if reseed:
         _run(["docker", "rm", "-f", SHARED_STANDBY], timeout=120)
-        _run(["docker", "volume", "rm", SHARED_STANDBY_VOLUME], timeout=60)
-        logger.info("shared postgres: wiped standby for reseed")
+        volume = f"{SHARED_STANDBY_VOLUME}-{int(_time.time())}"
+        logger.info("shared postgres: reseeding standby on fresh volume %s", volume)
+    else:
+        # Fail closed: never seed into a volume a live container needs.
+        users = [u for u in _volume_users(volume) if u != SHARED_STANDBY]
+        if users:
+            raise RuntimeError(
+                f"standby volume {volume} in use by {users}; refusing to seed "
+                "(re-run with reseed=True after failover, or stop the holder).")
     proc = _run(
         ["docker", "ps", "-a", "--filter", f"name=^{SHARED_STANDBY}$",
          "--format", "{{.ID}}"],
@@ -291,7 +335,7 @@ def ensure_shared_standby(reseed: bool = False) -> str:
                  "--network", "smsly-net",
                  "--restart", "unless-stopped",
                  "--env-file", env_file,
-                 "-v", f"{SHARED_STANDBY_VOLUME}:/var/lib/postgresql/data",
+                 "-v", f"{volume}:/var/lib/postgresql/data",
                  SHARED_IMAGE,
                 "sh", "-c",
                 f"until pg_isready -h {SHARED_CONTAINER} -p {SHARED_PORT} -q; "
@@ -325,6 +369,8 @@ def ensure_shared_standby(reseed: bool = False) -> str:
     if not _primary_conninfo_ok(SHARED_CONTAINER):
         raise RuntimeError("shared standby did not reach streaming state")
     logger.info("Shared Postgres standby streaming")
+    if reseed:
+        _gc_old_standby_volumes(volume)
     return SHARED_STANDBY
 
 
