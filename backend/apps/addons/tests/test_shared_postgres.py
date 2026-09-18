@@ -347,3 +347,45 @@ class SharedStandbyTests(SimpleTestCase):
         with patch.object(sp, "_container_running", side_effect=FileNotFoundError("x")):
             status = sp.shared_ha_status()
         self.assertEqual(status["state"], "UNKNOWN")
+
+    @patch("apps.addons.services.shared_postgres._wait_container_ready")
+    @patch("apps.addons.services.shared_postgres._primary_conninfo_ok", return_value=True)
+    @patch("apps.addons.services.shared_postgres._ensure_replication_access")
+    @patch("apps.addons.services.shared_postgres.ensure_shared_server")
+    @patch("apps.addons.services.shared_postgres._run")
+    def test_reseed_wipes_before_create(
+            self, mock_run, _ensure, _repl, _streaming, _wait):
+        from apps.addons.services import shared_postgres as sp
+
+        def _route(cmd, timeout=60):
+            if cmd[:3] == ["docker", "ps", "-a"]:
+                return self._run_ok("")
+            return self._run_ok("")
+        mock_run.side_effect = _route
+
+        sp.ensure_shared_standby(reseed=True)
+        flat = [" ".join(c[0][0]) for c in mock_run.call_args_list]
+        rm_c = next(i for i, c in enumerate(flat) if "docker rm -f" in c)
+        rm_v = next(i for i, c in enumerate(flat) if "docker volume rm" in c)
+        run_i = next(i for i, c in enumerate(flat) if c.startswith("docker run"))
+        self.assertLess(rm_c, run_i)
+        self.assertLess(rm_v, run_i)
+
+    @patch("apps.addons.services.shared_postgres._wait_container_ready")
+    @patch("apps.addons.services.shared_postgres._primary_conninfo_ok", return_value=True)
+    @patch("apps.addons.services.shared_postgres._ensure_replication_access")
+    @patch("apps.addons.services.shared_postgres.ensure_shared_server")
+    @patch("apps.addons.services.shared_postgres._run")
+    def test_no_reseed_leaves_volumes_alone(
+            self, mock_run, _ensure, _repl, _streaming, _wait):
+        from apps.addons.services import shared_postgres as sp
+
+        def _route(cmd, timeout=60):
+            if cmd[:3] == ["docker", "ps", "-a"]:
+                return self._run_ok("")
+            return self._run_ok("")
+        mock_run.side_effect = _route
+
+        sp.ensure_shared_standby()
+        flat = [" ".join(c[0][0]) for c in mock_run.call_args_list]
+        self.assertFalse(any("volume rm" in c for c in flat))

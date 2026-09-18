@@ -246,15 +246,23 @@ def _primary_conninfo_ok(container: str) -> bool:
         return False
 
 
-def ensure_shared_standby() -> str:
+def ensure_shared_standby(reseed: bool = False) -> str:
     """Create (once) and start the streaming standby. Idempotent.
 
     Safe under concurrency (lost create-race resolves to the winner)
     and safe to re-run (an existing standby is left alone — never
     re-seeded implicitly, since reseeding wipes data).
+
+    ``reseed=True`` wipes the standby container + volume first: required
+    after a failover, when the old standby data sits on a forked timeline
+    and can never resume streaming from the new primary.
     """
     ensure_shared_server()
     _ensure_replication_access()
+    if reseed:
+        _run(["docker", "rm", "-f", SHARED_STANDBY], timeout=120)
+        _run(["docker", "volume", "rm", SHARED_STANDBY_VOLUME], timeout=60)
+        logger.info("shared postgres: wiped standby for reseed")
     proc = _run(
         ["docker", "ps", "-a", "--filter", f"name=^{SHARED_STANDBY}$",
          "--format", "{{.ID}}"],
