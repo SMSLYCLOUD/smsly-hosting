@@ -253,9 +253,11 @@ class SharedStandbyTests(SimpleTestCase):
         flat = " ".join(run_cmds[0])
         self.assertIn("pg_basebackup", flat)
         self.assertIn("-R", flat)
-        # Fresh named volumes are root-owned; the seed bypasses the image
-        # entrypoint, so it must chown or postgres refuses to start.
+        # Fresh named volumes are root-owned 0755; the seed bypasses the image
+        # entrypoint, so it must chown AND chmod (0700) or postgres refuses
+        # to start.
         self.assertIn("chown postgres:postgres /var/lib/postgresql/data", flat)
+        self.assertIn("chmod 0700 /var/lib/postgresql/data", flat)
         self.assertIn(sp.SHARED_STANDBY, run_cmds[0])
 
     @patch("apps.addons.services.shared_postgres.ensure_shared_server")

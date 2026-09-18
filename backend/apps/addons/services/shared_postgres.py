@@ -268,12 +268,13 @@ def ensure_shared_standby() -> str:
                 "sh", "-c",
                 f"until pg_isready -h {SHARED_CONTAINER} -p {SHARED_PORT} -q; "
                 "do sleep 2; done; "
-                # Fresh named volumes are root-owned and this seed
-                # bypasses the image entrypoint (which would chown).
-                # Without this, postgres refuses to start: data directory
-                # has invalid permissions (observed live).
+                # Fresh named volumes are root-owned 0755 and this seed
+                # bypasses the image entrypoint (which would fix ownership).
+                # Postgres refuses anything but 0700/0750 — chown alone
+                # keeps 0755 and still fails (observed live, twice).
                 "find /var/lib/postgresql/data -mindepth 1 -delete; "
                 "chown postgres:postgres /var/lib/postgresql/data; "
+                "chmod 0700 /var/lib/postgresql/data; "
                 f"gosu postgres pg_basebackup -h {SHARED_CONTAINER} -p {SHARED_PORT} "
                 f"-U {REPLICATOR_ROLE} -D /var/lib/postgresql/data -Fp -Xs -P -R; "
                 "exec gosu postgres postgres"],
