@@ -34,6 +34,17 @@ _FAILOVER_TIMEOUT_MS = 15000
 
 _PG_STANDBY_LAG_OK = 10  # seconds of replication delay tolerated before DEGRADED
 
+# Seed-time ownership repair for standby containers: fresh named volumes
+# are root-owned 0755 and these seeds bypass the image entrypoint (which
+# would fix ownership). Postgres refuses anything but 0700/0750, so
+# without this every standby seeded onto a fresh volume crash-loops
+# (2026-09-18: shared standby proved it live).
+SEED_OWNERSHIP_FIX = (
+    "find /var/lib/postgresql/data -mindepth 1 -delete ; "
+    "chown postgres:postgres /var/lib/postgresql/data ; "
+    "chmod 0700 /var/lib/postgresql/data ; "
+)
+
 
 def _sync_replication_enabled() -> bool:
     """Opt-in synchronous replication for HA Postgres addons.
@@ -516,7 +527,7 @@ class AddonHaManager:
                 'sh', '-c',
                 'until pg_isready -h ' + source_container + ' -p ' + str(port) +
                 ' -q; do sleep 2; done; '
-                'find /var/lib/postgresql/data -mindepth 1 -delete ; '
+                + SEED_OWNERSHIP_FIX +
                 'gosu postgres pg_basebackup -h ' + source_container + ' -p ' + str(port) +
                 ' -U ' + replicator + ' -D /var/lib/postgresql/data '
                 '-Fp -Xs -P -R ; '
@@ -649,7 +660,7 @@ class AddonHaManager:
             seed_cmd = (
                 'until pg_isready -h ' + wg_ip + ' -p ' + str(wg_port) +
                 ' -q; do sleep 2; done; '
-                'find /var/lib/postgresql/data -mindepth 1 -delete ; '
+                + SEED_OWNERSHIP_FIX +
                 'gosu postgres pg_basebackup -h ' + wg_ip + ' -p ' + str(wg_port) +
                 ' -U ' + replicator + ' -D /var/lib/postgresql/data '
                 '-Fp -Xs -P -R ; '
@@ -805,22 +816,24 @@ class AddonHaManager:
         )
 
     def _run_postgres_standby(self, name: str, primary: str, port: int,
-                              replicator: str, replicator_password: str) -> None:
+                               replicator: str, replicator_password: str) -> None:
         """Seed a hot standby from the primary via pg_basebackup -R."""
+        from apps.addons.services.addon_provisioner import addon_provisioner
+
         env_file = self._env_file({'PGPASSWORD': replicator_password})
         try:
             cmd = [
                 'docker', 'run', '-d', '--name', name,
                 '--network', self.network_name,
                 '--restart', 'unless-stopped',
-                *self.SECURITY_OPTS,
+                *addon_provisioner.SECURITY_OPTS,
                 '--env-file', env_file,
                 '-v', f'{name}-data:/var/lib/postgresql/data',
                 'pgvector/pgvector:pg16',
                 'sh', '-c',
                 'until pg_isready -h ' + primary + ' -p ' + str(port) +
                 ' -q; do sleep 2; done; '
-                'find /var/lib/postgresql/data -mindepth 1 -delete ; '
+                + SEED_OWNERSHIP_FIX +
                 'gosu postgres pg_basebackup -h ' + primary + ' -p ' + str(port) +
                 ' -U ' + replicator + ' -D /var/lib/postgresql/data '
                 '-Fp -Xs -P -R ; '
