@@ -211,3 +211,131 @@ class SharedDeletionTests(TestCase):
         joined = "\n".join(_sqls(mock_psql))
         self.assertIn("DROP DATABASE", joined)
         self.assertIn("DROP ROLE", joined)
+
+
+class SharedStandbyTests(SimpleTestCase):
+    def setUp(self):
+        patcher = patch(
+            "apps.addons.services.shared_postgres._superuser_password",
+            return_value="test-super-pw",
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _run_ok(self, stdout=""):
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stdout = stdout
+        proc.stderr = ""
+        return proc
+
+    @patch("apps.addons.services.shared_postgres._wait_container_ready")
+    @patch("apps.addons.services.shared_postgres._primary_conninfo_ok", return_value=True)
+    @patch("apps.addons.services.shared_postgres._ensure_replication_access")
+    @patch("apps.addons.services.shared_postgres.ensure_shared_server")
+    @patch("apps.addons.services.shared_postgres._run")
+    def test_ensure_creates_and_seeds_standby(
+            self, mock_run, _ensure, _repl, _streaming, _wait):
+        from apps.addons.services import shared_postgres as sp
+
+        # `docker ps` (list) vs `docker run` share argv[:2]; distinguish
+        # by full command instead.
+        def _route(cmd, timeout=60):
+            if cmd[:3] == ["docker", "ps", "-a"]:
+                return self._run_ok("")
+            return self._run_ok("")
+        mock_run.side_effect = _route
+
+        self.assertEqual(sp.ensure_shared_standby(), sp.SHARED_STANDBY)
+        run_cmds = [c[0][0] for c in mock_run.call_args_list
+                    if c[0][0][:2] == ["docker", "run"]]
+        self.assertEqual(len(run_cmds), 1)
+        flat = " ".join(run_cmds[0])
+        self.assertIn("pg_basebackup", flat)
+        self.assertIn("-R", flat)
+        self.assertIn(sp.SHARED_STANDBY, run_cmds[0])
+
+    @patch("apps.addons.services.shared_postgres.ensure_shared_server")
+    @patch("apps.addons.services.shared_postgres._run")
+    def test_ensure_skips_create_when_present(self, mock_run, _ensure):
+        from apps.addons.services import shared_postgres as sp
+
+        def _route(cmd, timeout=60):
+            if cmd[:3] == ["docker", "ps", "-a"]:
+                return self._run_ok("abc123\n")
+            return self._run_ok("")
+        mock_run.side_effect = _route
+
+        with patch.object(sp, "_wait_container_ready"), \
+                patch.object(sp, "_primary_conninfo_ok", return_value=True), \
+                patch.object(sp, "_ensure_replication_access"):
+            self.assertEqual(sp.ensure_shared_standby(), sp.SHARED_STANDBY)
+        run_cmds = [c[0][0] for c in mock_run.call_args_list
+                    if c[0][0][:2] == ["docker", "run"]]
+        self.assertEqual(run_cmds, [])
+
+    def test_lag_none_when_not_streaming(self):
+        from apps.addons.services import shared_postgres as sp
+
+        with patch.object(sp, "_psql", return_value=""):
+            self.assertIsNone(sp.shared_standby_lag_seconds())
+
+    def test_lag_parses_seconds(self):
+        from apps.addons.services import shared_postgres as sp
+
+        with patch.object(sp, "_psql", return_value="0.42\n"):
+            self.assertAlmostEqual(sp.shared_standby_lag_seconds(), 0.42)
+
+    def test_promote_refuses_live_primary_without_force(self):
+        from apps.addons.services import shared_postgres as sp
+
+        with patch.object(sp, "_standby_running", return_value=True), \
+                patch.object(sp, "_psql", return_value="f\n"):
+            with self.assertRaises(RuntimeError) as ctx:
+                sp.promote_shared_standby()
+            self.assertIn("split-brain", str(ctx.exception))
+
+    def test_promote_moves_aliases_and_renames(self):
+        from apps.addons.services import shared_postgres as sp
+
+        calls = []
+
+        def _route(cmd, timeout=60):
+            calls.append(cmd)
+            return self._run_ok("")
+
+        with patch.object(sp, "_standby_running", return_value=True), \
+                patch.object(sp, "_psql", return_value="f\n"), \
+                patch.object(sp, "_psql_on", return_value="f\n"), \
+                patch.object(sp, "_container_networks",
+                             return_value={"smsly-net": ["postgres-a"]}), \
+                patch.object(sp, "_wait_container_ready"), \
+                patch.object(sp, "_ensure_replication_access_on"), \
+                patch("apps.addons.services.shared_postgres._run",
+                      side_effect=_route):
+            # force=True skips the liveness gate and goes straight to
+            # fencing (the plain _psql mock above is then unused).
+            self.assertEqual(sp.promote_shared_standby(force=True), sp.SHARED_CONTAINER)
+        flat = [" ".join(c) for c in calls]
+        self.assertTrue(any("pg_ctl" in c and "promote" in c for c in flat))
+        self.assertTrue(any("disconnect" in c for c in flat))
+        connect = next(c for c in flat if "connect" in c.split())
+        self.assertIn("postgres-a", connect)
+        self.assertTrue(any("rename" in c for c in flat))
+
+    def test_status_healthy_when_streaming(self):
+        from apps.addons.services import shared_postgres as sp
+
+        with patch.object(sp, "_container_running", return_value=True), \
+                patch.object(sp, "_standby_running", return_value=True), \
+                patch.object(sp, "shared_standby_lag_seconds", return_value=0.1):
+            status = sp.shared_ha_status()
+        self.assertEqual(status["state"], "HEALTHY")
+        self.assertEqual(status["lag_seconds"], 0.1)
+
+    def test_status_unknown_on_docker_failure(self):
+        from apps.addons.services import shared_postgres as sp
+
+        with patch.object(sp, "_container_running", side_effect=FileNotFoundError("x")):
+            status = sp.shared_ha_status()
+        self.assertEqual(status["state"], "UNKNOWN")

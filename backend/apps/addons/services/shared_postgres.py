@@ -49,6 +49,12 @@ SHARED_RESERVED_CONNECTIONS = 10
 ROLE_CONNECTION_LIMIT = 10
 ROLE_STATEMENT_TIMEOUT = "30s"
 
+# Streaming standby for the shared instance (one replica covers all
+# logical tenants — the N-standby equivalent of per-addon HA).
+SHARED_STANDBY = "smsly-shared-postgres-replica"
+SHARED_STANDBY_VOLUME = "smsly-shared-postgres-replica-data"
+REPLICATOR_ROLE = "shared_replicator"
+
 
 def _quote_ident(name: str) -> str:
     """Quote an SQL identifier (role / database name)."""
@@ -178,6 +184,288 @@ def _harden_system_catalogs() -> None:
             _psql("postgres", f"REVOKE CONNECT ON DATABASE {_quote_ident(sysdb)} FROM PUBLIC;")
         except Exception:
             pass
+
+
+# ── Streaming standby (shared HA) ───────────────────────────────────
+# One replica covers all logical tenants. Mirrors the per-addon HA
+# seeding pattern (pg_basebackup -R), minus per-addon topology: the
+# replicator credential derives deterministically from the stored
+# superuser password, so reseeds never need new persisted secrets.
+
+
+def _replicator_password() -> str:
+    import hashlib
+
+    return hashlib.sha256(
+        ("shared-replicator:" + _superuser_password()).encode()
+    ).hexdigest()[:32]
+
+
+def _ensure_replication_access() -> None:
+    """Create the replicator role + pg_hba rule on the primary (idempotent)."""
+    _ensure_replication_access_on(SHARED_CONTAINER)
+
+
+def _standby_running() -> bool:
+    proc = _run(
+        ["docker", "ps", "--filter", f"name=^{SHARED_STANDBY}$",
+         "--format", "{{.ID}}"],
+        timeout=30,
+    )
+    return bool((proc.stdout or "").strip())
+
+
+def _wait_container_ready(container: str, timeout: int = 300) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        proc = _run(
+            ["docker", "exec", container,
+             "pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
+            timeout=15,
+        )
+        if proc.returncode == 0:
+            return
+        time.sleep(3)
+    raise RuntimeError(f"{container} never became ready")
+
+
+def _primary_conninfo_ok(container: str) -> bool:
+    """True when ``container`` streams from the shared primary."""
+    try:
+        out = _psql("postgres", "SELECT count(*) FROM pg_stat_replication WHERE state = 'streaming';")
+        return int((out.splitlines() or ["0"])[0].strip() or 0) >= 1
+    except Exception:
+        return False
+
+
+def ensure_shared_standby() -> str:
+    """Create (once) and start the streaming standby. Idempotent.
+
+    Safe under concurrency (lost create-race resolves to the winner)
+    and safe to re-run (an existing standby is left alone — never
+    re-seeded implicitly, since reseeding wipes data).
+    """
+    ensure_shared_server()
+    _ensure_replication_access()
+    proc = _run(
+        ["docker", "ps", "-a", "--filter", f"name=^{SHARED_STANDBY}$",
+         "--format", "{{.ID}}"],
+        timeout=30,
+    )
+    if not (proc.stdout or "").strip():
+        password = _replicator_password()
+        env_file = _write_env_file({"PGPASSWORD": password})
+        try:
+            seed = _run(
+                ["docker", "run", "-d", "--name", SHARED_STANDBY,
+                 "--network", "smsly-net",
+                 "--restart", "unless-stopped",
+                 "--env-file", env_file,
+                 "-v", f"{SHARED_STANDBY_VOLUME}:/var/lib/postgresql/data",
+                 SHARED_IMAGE,
+                 "sh", "-c",
+                 f"until pg_isready -h {SHARED_CONTAINER} -p {SHARED_PORT} -q; "
+                 "do sleep 2; done; "
+                 "find /var/lib/postgresql/data -mindepth 1 -delete; "
+                 f"gosu postgres pg_basebackup -h {SHARED_CONTAINER} -p {SHARED_PORT} "
+                 f"-U {REPLICATOR_ROLE} -D /var/lib/postgresql/data -Fp -Xs -P -R; "
+                 "exec gosu postgres postgres"],
+                timeout=600,
+            )
+            if seed.returncode != 0 and "already in use" not in (seed.stderr or ""):
+                raise RuntimeError(
+                    f"shared standby create failed: {(seed.stderr or '').strip()[:200]}")
+        finally:
+            try:
+                os.remove(env_file)
+            except OSError:
+                pass
+    if not _standby_running():
+        _run(["docker", "start", SHARED_STANDBY], timeout=60)
+    _wait_container_ready(SHARED_STANDBY)
+    if not _primary_conninfo_ok(SHARED_CONTAINER):
+        raise RuntimeError("shared standby did not reach streaming state")
+    logger.info("Shared Postgres standby streaming")
+    return SHARED_STANDBY
+
+
+def shared_standby_lag_seconds() -> float | None:
+    """Replication lag of the shared standby in seconds.
+
+    ``None`` when the standby is absent, unreachable, or not streaming
+    (callers treat unknown as unhealthy, never as zero).
+    """
+    try:
+        out = _psql(
+            "postgres",
+            "SELECT coalesce(extract(epoch from replay_lag), -1) "
+            "FROM pg_stat_replication WHERE state = 'streaming' "
+            "ORDER BY replay_lag DESC NULLS LAST LIMIT 1;",
+        )
+        lag = float((out.splitlines() or ["-1"])[0].strip() or -1)
+        return lag if lag >= 0 else None
+    except Exception:
+        return None
+
+
+def shared_ha_status() -> dict:
+    """Machine-readable shared-HA state for views/health checks."""
+    try:
+        primary_up = _container_running()
+        standby_up = _standby_running()
+        lag = shared_standby_lag_seconds() if primary_up else None
+    except Exception:
+        return {"state": "UNKNOWN", "primary": None, "standby": None,
+                "lag_seconds": None}
+    if primary_up and standby_up and lag is not None:
+        state = "HEALTHY"
+    elif primary_up and standby_up:
+        state = "DEGRADED"
+    elif primary_up:
+        state = "STANDALONE"
+    else:
+        state = "DOWN"
+    return {
+        "state": state,
+        "primary": SHARED_CONTAINER if primary_up else None,
+        "standby": SHARED_STANDBY if standby_up else None,
+        "lag_seconds": lag,
+    }
+
+
+def _container_networks(container: str) -> dict[str, list[str]]:
+    """Map network name -> aliases for a container (best effort)."""
+    proc = _run(
+        ["docker", "inspect", "-f", "{{json .NetworkSettings.Networks}}", container],
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        return {}
+    import json
+
+    try:
+        nets = json.loads((proc.stdout or "").strip() or "{}")
+    except Exception:
+        return {}
+    return {
+        name: list((info or {}).get("Aliases") or [])
+        for name, info in (nets or {}).items()
+    }
+
+
+def promote_shared_standby(force: bool = False) -> str:
+    """Fail over to the shared standby. Returns the new primary's name.
+
+    Order (split-brain safe, mirrors per-addon HA): refuse while the
+    primary answers unless ``force`` (DR drills) → fence (stop) the old
+    primary → promote → verify writable → move every DNS alias to the
+    promoted container so app URLs keep working → prepare replication
+    access on the new primary for the next reseed.
+
+    The fenced old primary is left stopped for the operator to re-seed
+    (remove it and re-run ensure) — never deleted automatically.
+    """
+    if not _standby_running():
+        raise RuntimeError("no shared standby running to promote")
+    if not force:
+        try:
+            alive = _psql("postgres", "SELECT pg_is_in_recovery();", timeout=15)
+            if (alive.splitlines() or [""])[0].strip().lower() == "f":
+                raise RuntimeError(
+                    "shared primary is alive; refusing promote without force "
+                    "(would split-brain). Pass force=True for a DR drill.")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+    _run(["docker", "stop", "-t", "30", SHARED_CONTAINER], timeout=120)
+    logger.info("shared postgres: fenced old primary %s", SHARED_CONTAINER)
+    proc = _run(
+        ["docker", "exec", SHARED_STANDBY,
+         "gosu", "postgres", "pg_ctl", "promote", "-D", "/var/lib/postgresql/data",
+         "-t", "60"],
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"shared standby promote failed: {(proc.stderr or '').strip()[:200]}")
+    _wait_container_ready(SHARED_STANDBY)
+    try:
+        writable = _psql_on(SHARED_STANDBY, "postgres", "SELECT pg_is_in_recovery();", timeout=15)
+        if (writable.splitlines() or [""])[0].strip().lower() != "f":
+            raise RuntimeError("promoted standby still in recovery")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"promote verification failed: {exc}") from exc
+    # Move every alias (tenant hostnames) to the promoted container.
+    for network, aliases in _container_networks(SHARED_CONTAINER).items():
+        if not aliases:
+            continue
+        _run(["docker", "network", "disconnect", network, SHARED_CONTAINER], timeout=60)
+        cmd = ["docker", "network", "connect"]
+        for entry in dict.fromkeys(aliases):
+            cmd += ["--alias", entry]
+        cmd += [network, SHARED_STANDBY]
+        moved = _run(cmd, timeout=60)
+        if moved.returncode != 0:
+            logger.warning("alias move to promoted standby failed on %s", network)
+    # Rename so SHARED_CONTAINER always names the live primary: every
+    # future ensure/provision/reseed keeps working unchanged.
+    import time as _time
+
+    fenced = f"{SHARED_CONTAINER}-fenced-{int(_time.time())}"
+    _run(["docker", "rename", SHARED_CONTAINER, fenced], timeout=60)
+    _run(["docker", "rename", SHARED_STANDBY, SHARED_CONTAINER], timeout=60)
+    logger.info("shared postgres: fenced %s, primary is now %s", fenced, SHARED_CONTAINER)
+    _ensure_replication_access_on(SHARED_CONTAINER)
+    logger.info("shared postgres: promoted %s", SHARED_CONTAINER)
+    return SHARED_CONTAINER
+
+
+def _psql_on(container: str, database: str, sql: str, timeout: int = 60) -> str:
+    """Run SQL as superuser inside ``container``; return stdout."""
+    password = _superuser_password()
+    env_file = _write_env_file({"PGPASSWORD": password})
+    try:
+        proc = _run(
+            ["docker", "exec", "--env-file", env_file, container,
+             "psql", "-U", "postgres", "-d", database, "-tAc", sql],
+            timeout=timeout,
+        )
+    finally:
+        try:
+            os.remove(env_file)
+        except OSError:
+            pass
+    if proc.returncode != 0:
+        raise RuntimeError(f"shared postgres SQL failed: {(proc.stderr or '').strip()[:200]}")
+    return (proc.stdout or "").strip()
+
+
+def _ensure_replication_access_on(container: str) -> None:
+    """Create the replicator role + pg_hba rule on ``container`` (idempotent)."""
+    password = _replicator_password()
+    _psql_on(
+        container, "postgres",
+        "DO $$ BEGIN "
+        f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{REPLICATOR_ROLE}') THEN "
+        f"CREATE ROLE {REPLICATOR_ROLE} WITH REPLICATION LOGIN PASSWORD '{password}'; "
+        "END IF; END $$;",
+    )
+    proc = _run(
+        ["docker", "exec", container, "sh", "-c",
+         f"grep -q 'host replication {REPLICATOR_ROLE}' "
+         "$PGDATA/pg_hba.conf || echo "
+         f"'host replication {REPLICATOR_ROLE} 0.0.0.0/0 scram-sha-256' "
+         ">> $PGDATA/pg_hba.conf"],
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("shared postgres pg_hba update failed")
+    _psql_on(container, "postgres", "SELECT pg_reload_conf();")
 
 
 def _psql(database: str, sql: str, timeout: int = 60) -> str:

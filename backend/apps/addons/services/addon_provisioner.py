@@ -1745,6 +1745,15 @@ class AddonProvisioner:
         addon.save(update_fields=['provision_mode', 'updated_at'])
         connection_url = f"postgresql://{db_user}:{password}@{hostname}:5432/{db_name}"
         logger.info("Postgres addon (shared) ready: %s -> %s", addon.name, hostname)
+        # Shared HA: one streaming standby covers all logical tenants.
+        # Best-effort — a replica hiccup must never fail a tenant
+        # provision (the primary serves regardless; next provision or
+        # health cycle retries the standby).
+        try:
+            from .shared_postgres import ensure_shared_standby
+            ensure_shared_standby()
+        except Exception as exc:
+            logger.warning("Shared standby ensure skipped for %s: %s", addon.name, exc)
         # No per-addon container: return empty id so deprovision paths
         # never mistake the shared server for this addon's container.
         return "", connection_url
