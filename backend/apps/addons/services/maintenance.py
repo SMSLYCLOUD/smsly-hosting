@@ -65,10 +65,18 @@ class AddonMaintenanceService:
             if addon_type == 'POSTGRES':
                 conn = self.proxy.get_connection()
                 try:
+                    # Identifiers must be composed, not parameterized:
+                    # %s renders a quoted string literal, and
+                    # ALTER USER 'name' is a syntax error (2026-09-18:
+                    # every Postgres rotation failed this way).
+                    from psycopg2 import sql as _sql
                     with conn.cursor() as cur:
                         cur.execute(
-                            'ALTER USER %s WITH PASSWORD %s',
-                            (self._pg_user_from_url(addon.connection_url), new_password),
+                            _sql.SQL("ALTER USER {} WITH PASSWORD {}").format(
+                                _sql.Identifier(self._pg_user_from_url(
+                                    addon.connection_url)),
+                                _sql.Literal(new_password),
+                            ),
                         )
                         conn.commit()
                 finally:

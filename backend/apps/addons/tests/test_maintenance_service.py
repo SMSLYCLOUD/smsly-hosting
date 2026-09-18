@@ -47,3 +47,23 @@ class AddonMaintenanceServiceTests(TestCase):
             result = maintenance.rotate_credentials()
         self.assertEqual(result.get("status"), "failed")
         self.assertIn("connection refused", result.get("error", "").lower())
+
+    def test_rotate_composes_role_as_identifier(self):
+        # Regression (2026-09-18): %s parameterizes a STRING literal and
+        # ALTER USER 'name' is a syntax error — every Postgres rotation
+        # failed. The role must be composed as an identifier.
+        import psycopg2.sql as pg_sql
+        from unittest.mock import MagicMock, patch
+
+        maintenance = AddonMaintenanceService(self.addon)
+        conn, cur = MagicMock(), MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cur
+        with patch.object(
+            maintenance.proxy, "get_connection", return_value=conn,
+        ):
+            result = maintenance.rotate_credentials()
+        self.assertEqual(result.get("status"), "success")
+        query = cur.execute.call_args[0][0]
+        self.assertIsInstance(query, pg_sql.Composed)
+        self.addon.refresh_from_db()
+        self.assertNotIn("pass@localhost", self.addon.connection_url)
