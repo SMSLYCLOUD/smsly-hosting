@@ -291,8 +291,16 @@ class SharedStandbyTests(SimpleTestCase):
     def test_lag_parses_seconds(self):
         from apps.addons.services import shared_postgres as sp
 
-        with patch.object(sp, "_psql", return_value="0.42\n"):
+        with patch.object(sp, "_psql", return_value="streaming|0.42\n"):
             self.assertAlmostEqual(sp.shared_standby_lag_seconds(), 0.42)
+
+    def test_idle_streaming_reports_zero_not_unknown(self):
+        # NULL replay_lag on an idle system is healthy-idle, not broken
+        # (2026-09-18: every idle standby read DEGRADED forever).
+        from apps.addons.services import shared_postgres as sp
+
+        with patch.object(sp, "_psql", return_value="streaming|\n"):
+            self.assertEqual(sp.shared_standby_lag_seconds(), 0.0)
 
     def test_promote_refuses_live_primary_without_force(self):
         from apps.addons.services import shared_postgres as sp

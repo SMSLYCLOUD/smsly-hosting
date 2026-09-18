@@ -172,6 +172,20 @@ def ensure_shared_server() -> str:
     # pgvector in template1 so every future database inherits it
     # (matches per-addon behavior of CREATE EXTENSION per database).
     _psql("template1", "CREATE EXTENSION IF NOT EXISTS vector;")
+    # Persist tuning into the config file as well: the -c flags win at
+    # boot, but a bare file default (max_connections=100) makes every
+    # SIGHUP log scary "cannot be changed without restart" warnings, and
+    # basebackup copies the file to standbys (2026-09-18 drill).
+    # Idempotent; reload failure is non-fatal (boot flags govern).
+    try:
+        _psql("postgres",
+              f"ALTER SYSTEM SET max_connections = '{SHARED_MAX_CONNECTIONS}';")
+        _psql("postgres",
+              "ALTER SYSTEM SET superuser_reserved_connections = "
+              f"'{SHARED_RESERVED_CONNECTIONS}';")
+        _psql("postgres", "SELECT pg_reload_conf();")
+    except Exception:
+        pass
     _harden_system_catalogs()
     return cid
 
@@ -318,17 +332,21 @@ def shared_standby_lag_seconds() -> float | None:
     """Replication lag of the shared standby in seconds.
 
     ``None`` when the standby is absent, unreachable, or not streaming
-    (callers treat unknown as unhealthy, never as zero).
+    (callers treat unknown as unhealthy, never as zero). A streaming
+    standby with NULL replay_lag is idle, not broken — report 0.0
+    (reporting None here kept every idle system DEGRADED forever).
     """
     try:
         out = _psql(
             "postgres",
-            "SELECT coalesce(extract(epoch from replay_lag), -1) "
-            "FROM pg_stat_replication WHERE state = 'streaming' "
+            "SELECT state, coalesce(extract(epoch from replay_lag), 0) "
+            "FROM pg_stat_replication "
             "ORDER BY replay_lag DESC NULLS LAST LIMIT 1;",
         )
-        lag = float((out.splitlines() or ["-1"])[0].strip() or -1)
-        return lag if lag >= 0 else None
+        parts = (out.splitlines() or ["|"])[0].split("|")
+        if len(parts) >= 2 and parts[0].strip() == "streaming":
+            return max(0.0, float(parts[1].strip() or 0))
+        return None
     except Exception:
         return None
 
