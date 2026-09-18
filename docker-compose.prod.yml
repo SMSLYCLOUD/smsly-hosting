@@ -145,6 +145,43 @@ services:
         limits:
           memory: ${PGCAT_MEMORY_LIMIT:-256M}
           cpus: "0.50"
+  # ── Tenant pooler (per-shared-DB pools, backend-rendered config) ──────────
+  # Serves shared logical databases behind their stable app aliases when
+  # tenant pooling is enabled (PlatformConfig.tenant_pooling_enabled,
+  # default off). The backend pushes /etc/pgcat/pgcat.toml into the
+  # pgcat_tenants_config volume on every shared provision/delete/rotate;
+  # the entrypoint waits for the first push. No host ports: reachable only
+  # on container networks via per-tenant aliases attached by the backend.
+  pgcat-tenants:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    build:
+      context: ./infrastructure/pgcat
+      dockerfile: Dockerfile
+    entrypoint: ["/entrypoint-tenants.sh"]
+    restart: unless-stopped
+    volumes:
+      - pgcat_tenants_config:/etc/pgcat
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    healthcheck:
+      # Honest idle state: no backend push yet means "waiting for config"
+      # (healthy), not failure. Unhealthy only when configured but down.
+      test:
+      - CMD-SHELL
+      - python3 -c "import os,socket,sys; sys.exit(0) if not os.path.exists('/etc/pgcat/pgcat.toml') else (socket.create_connection(('127.0.0.1',6432),5).close())"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${PGCAT_TENANTS_MEMORY_LIMIT:-256M}
+          cpus: "0.50"
   # ── Patroni HA (auto-failover via etcd DCS) ──────────────────────────────
   # Profile: "patroni" — only started with --profile patroni
   # Replaces db + postgres-replica for automatic failover.
@@ -2349,6 +2386,8 @@ volumes:
   traefik_logs: null
   caddy_logs: null
   node_logs: null
+  # Tenant pooler config (backend-rendered pgcat.toml for shared logical DBs)
+  pgcat_tenants_config: null
   crowdsec_data: null
   crowdsec_config: null
   

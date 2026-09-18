@@ -60,6 +60,10 @@ export const ROLE_ROUTE_MAP: Record<
     permissions: ["admin.access"],
     redirect: "/dashboard",
   },
+  "/clusters": {
+    permissions: ["admin.access"],
+    redirect: "/dashboard",
+  },
   "/replication": {
     permissions: ["admin.access"],
     redirect: "/dashboard",

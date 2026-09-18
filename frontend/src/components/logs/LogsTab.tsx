@@ -418,6 +418,26 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                         deployment.status === 'BUILDING' ? 'text-yellow-400 animate-pulse' :
                         'text-zinc-300'
                     }>{deployment.status}</span></span>
+                    {(() => {
+                        const sign = pipelineStages.find((s) => s.name === 'Sign');
+                        const verify = pipelineStages.find((s) => s.name === 'Verify');
+                        const stage = verify || sign;
+                        if (!stage) return null;
+                        const label = stage.name === 'Verify' ? 'Verified' : 'Signed';
+                        const color = stage.status === 'success'
+                            ? 'text-emerald-400'
+                            : stage.status === 'failed'
+                            ? 'text-red-400'
+                            : stage.status === 'skipped'
+                            ? 'text-zinc-400'
+                            : 'text-yellow-400';
+                        const suffix = stage.status === 'skipped' ? 'skipped' : stage.status === 'success' ? label.toLowerCase() : stage.status;
+                        return (
+                            <span title={`Cosign ${stage.name}: ${stage.status}`}>
+                                Image: <span className={color}>{stage.status === 'success' ? label : `unsigned (${suffix})`}</span>
+                            </span>
+                        );
+                    })()}
                     {deployment.duration_seconds && <span>Duration: <span className="text-zinc-300">{deployment.duration_seconds.toFixed(1)}s</span></span>}
                 </div>
             )}

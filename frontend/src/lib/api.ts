@@ -702,6 +702,13 @@ export const servicesApi = {
     );
     return response.data;
   },
+  instantRollback: async (serviceId: string): Promise<{ status: string; message?: string }> => {
+    const response = await api.post(
+      `/services/${serviceId}/instant-rollback/`,
+      { confirm: true },
+    );
+    return response.data;
+  },
   cancelDeployment: async (deploymentId: string): Promise<{ status: string; message?: string }> => {
     const response = await api.post(`/deployments/${deploymentId}/cancel/`);
     return response.data;
@@ -1168,6 +1175,18 @@ export const systemApi = {
   },
   toggleDbHa: async (enabled: boolean) => {
     const response = await api.post('/system/db-ha-toggle/', { enabled });
+    return response.data;
+  },
+  beatHeal: async (): Promise<{ status: string; actions?: string[]; message?: string; error?: string }> => {
+    const response = await api.post('/system/beat-heal/');
+    return response.data;
+  },
+  routeFallback: async (): Promise<{ container: string; pages: Record<string, string> }> => {
+    const response = await api.get('/system/route-fallback/');
+    return response.data;
+  },
+  updateRouteFallback: async (pages: Record<string, string>): Promise<{ status: string; saved?: string[]; error?: string }> => {
+    const response = await api.put('/system/route-fallback/', { pages });
     return response.data;
   },
 };
@@ -2060,6 +2079,7 @@ export interface Addon {
     config: Record<string, any>;
     ha_enabled?: boolean;
     ha_status?: string;
+    provision_mode?: string;
     replica_container_name?: string;
     ha_topology?: Record<string, any>;
 }
@@ -2106,6 +2126,70 @@ export interface AddonHaEnableResponse {
     topology: Record<string, any>;
     warning?: string;
 }
+
+export interface SharedPostgresHa {
+    state: 'HEALTHY' | 'DEGRADED' | 'STANDALONE' | 'DOWN' | 'UNKNOWN';
+    primary: string | null;
+    standby: string | null;
+    lag_seconds?: number | null;
+    error?: string;
+}
+
+export interface ClusterState {
+    id: string;
+    mesh: string | null;
+    leader: string | null;
+    leader_name: string;
+    leader_wg_address?: string | null;
+    term: number;
+    state: string;
+    last_heartbeat?: string | null;
+    heartbeat_interval_ms?: number;
+    election_timeout_ms?: number;
+    min_quorum?: number;
+    peer_count: number;
+    created_at: string;
+}
+
+export interface ClusterHeartbeat {
+    id: string;
+    source_name: string;
+    target_name: string;
+    term: number;
+    latency_ms?: number | null;
+    success: boolean;
+    error_message?: string;
+    timestamp: string;
+}
+
+export const clustersApi = {
+    list: async (): Promise<ClusterState[]> => {
+        const res = await api.get('/clusters/');
+        const data = res.data;
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray(data.results)) return data.results;
+        return [];
+    },
+    get: async (id: string): Promise<ClusterState> => {
+        const res = await api.get(`/clusters/${id}/`);
+        return res.data;
+    },
+    status: async (id: string): Promise<Record<string, any>> => {
+        const res = await api.get(`/clusters/${id}/status/`);
+        return res.data;
+    },
+    heartbeats: async (id: string): Promise<ClusterHeartbeat[]> => {
+        const res = await api.get(`/clusters/${id}/heartbeats/`);
+        const data = res.data;
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray(data.results)) return data.results;
+        return [];
+    },
+    forceElection: async (id: string): Promise<{ status: string; message?: string; term?: number }> => {
+        const res = await api.post(`/clusters/${id}/force-election/`);
+        return res.data;
+    },
+};
 
 export const addonsApi = {
   togglePublicBucket: async (id: string) => { const response = await api.post(`/addons/${id}/toggle_bucket_public/`); return response.data; },
@@ -2154,6 +2238,27 @@ export const addonsApi = {
     },
     haStatus: async (id: string): Promise<AddonHaStatus> => {
         const res = await api.get(`/addons/${id}/ha-status/`);
+        return res.data;
+    },
+    migrateMode: async (id: string, mode: 'shared' | 'container'): Promise<{ status: string; task_id?: string; target_mode?: string }> => {
+        const res = await api.post(`/addons/${id}/migrate-mode/`, { mode });
+        return res.data;
+    },
+    sharedPostgresHa: async (): Promise<SharedPostgresHa> => {
+        const res = await api.get('/addons/shared-postgres-ha/');
+        return res.data;
+    },
+    sharedPoolerStatus: async (): Promise<{
+        enabled: boolean;
+        container: { name: string; running: boolean; status: string } | null;
+        pools: { alias: string; user: string; db: string }[];
+        error?: string;
+    }> => {
+        const res = await api.get('/addons/shared-pooler-status/');
+        return res.data;
+    },
+    sharedPoolerPush: async (): Promise<{ ok: boolean; pools?: number; changed?: boolean; restarted?: boolean; error?: string }> => {
+        const res = await api.post('/addons/shared-pooler-push/');
         return res.data;
     },
     retryDelete: async (id: string): Promise<{ status: string; message?: string }> => {
@@ -2396,9 +2501,20 @@ export const autoscalerApi = {
 export interface Replica {
   id: string;
   service: string;
-  status: 'RUNNING' | 'SPAWNING' | 'DESTROYED';
+  node?: string | null;
   node_name: string;
+  node_host?: string | null;
+  container_name?: string | null;
+  status: 'SPAWNING' | 'RUNNING' | 'DRAINING' | 'DESTROYING' | 'DESTROYED';
+  metrics_snapshot?: {
+    cpu_percent?: number;
+    memory_usage_mb?: number;
+    memory_limit_mb?: number;
+    checked_at?: string;
+  } | null;
+  spawn_reason?: string | null;
   created_at: string;
+  destroyed_at?: string | null;
 }
 
 export const scalingApi = {

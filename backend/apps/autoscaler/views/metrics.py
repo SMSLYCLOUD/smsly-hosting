@@ -67,6 +67,7 @@ def _db_metrics_fallback(service: Service, duration: str):
         'disk': disk,
         'current': {
             'cpu_percent': round(float(latest.cpu_percent), 2),
+            'cpu_limit': round(float(service.cpu_cores or 0), 2),
             'memory_usage': round(float(latest.memory_usage), 2),
             'memory_limit': round(float(latest.memory_limit), 2),
             'memory_percent': round(float(latest.memory_percent), 2),
@@ -152,6 +153,7 @@ def _live_metrics_fallback(service: Service):
         'disk': [{'timestamp': now, 'value': round(disk_kb, 2)}],
         'current': {
             'cpu_percent': round(cpu_percent, 2),
+            'cpu_limit': round(float(service.cpu_cores or 0), 2),
             'memory_usage': round(mem_usage, 2),
             'memory_limit': round(mem_limit, 2),
             'memory_percent': round(mem_percent, 2),
@@ -211,6 +213,8 @@ class MetricsViewSet(viewsets.GenericViewSet):
             network = metrics_adapter.get_network_history(service, duration)
             disk = metrics_adapter.get_disk_history(service, duration)
             current = metrics_adapter.get_current(service)
+            if isinstance(current, dict):
+                current['cpu_limit'] = round(float(service.cpu_cores or 0), 2)
 
             has_activity = any(
                 _series_has_activity(series)
@@ -249,6 +253,7 @@ class MetricsViewSet(viewsets.GenericViewSet):
                     'disk': [],
                     'current': {
                         'cpu_percent': 0,
+                        'cpu_limit': round(float(service.cpu_cores or 0), 2),
                         'memory_usage': 0,
                         'memory_limit': 0,
                         'memory_percent': 0,

@@ -354,20 +354,26 @@ class AddonProvisioner:
                 continue
             if (getattr(addon, 'addon_type', '') == 'POSTGRES'
                     and getattr(addon, 'provision_mode', '') == 'shared'):
-                # No per-addon container: attach the shared server with
-                # this addon's hostname alias instead.
+                # No per-addon container: attach the app-facing alias to the
+                # shared server — or to the pooler for addons provisioned
+                # pooled (sticky flag; falls back to direct when the pooler
+                # container is absent, e.g. compose predates pgcat-tenants).
                 try:
                     from .shared_postgres import attach_alias as _shared_attach
+                    from .tenant_pooler import tenants_container_name
                     from urllib.parse import urlparse as _urlparse
                     _host = (_urlparse(str(getattr(addon, 'connection_url', '') or '')).hostname
                              or getattr(addon, 'name', None)
                              or f"postgres-{service.name}")
+                    _pooler = None
+                    if bool(getattr(addon, 'pooler_routed', False)):
+                        _pooler = tenants_container_name()
                     from apps.deployments.models.network_scope import ScopedNetwork as _Net2
                     _project = getattr(service, 'project', None)
                     if _project:
                         _net = _Net2.resolve_network_name(_project)
                         if _net:
-                            _shared_attach(_net, _host)
+                            _shared_attach(_net, _host, container=_pooler)
                             attached += 1
                 except Exception as exc:
                     logger.warning(
@@ -1640,15 +1646,18 @@ class AddonProvisioner:
     def _resolve_postgres_mode(self, addon, container_name: str) -> str:
         """Return ``'shared'`` or ``'container'`` for this provision call.
 
-        * Already-shared addons stay shared (never strand a logical DB
-          when the operator flips the default off).
+        * ``provision_mode='shared'`` forces shared (never strand a logical
+          DB when the operator flips the default off).
         * Addons with an existing URL or container stay containers (their
           data lives in the container volume — no implicit migration).
-        * Fresh local addons follow
+        * ``provision_mode='container'`` forces a dedicated container for
+          fresh addons (the dashboard "Individual" choice).
+        * ``provision_mode=''`` defers to
           ``PlatformConfig.postgres_shared_addons_default`` (default on).
         * Remote-node services stay on containers (shared server is local).
         """
-        if str(getattr(addon, 'provision_mode', '') or '') == 'shared':
+        mode = str(getattr(addon, 'provision_mode', '') or '')
+        if mode == 'shared':
             return 'shared'
         if str(getattr(addon, 'connection_url', '') or '').strip():
             return 'container'
@@ -1657,6 +1666,8 @@ class AddonProvisioner:
         except Exception:
             cid = None
         if cid:
+            return 'container'
+        if mode == 'container':
             return 'container'
         try:
             from apps.deployments.models.platform import PlatformConfig
@@ -1716,13 +1727,32 @@ class AddonProvisioner:
         ensure_shared_server()
         ensure_logical_db(db_user, db_name, password)
 
+        # Tenant pooling (default off): new shared addons dial the pooler
+        # alias instead of the server directly. Push first so the pool
+        # exists before anything resolves the alias; the pooler entrypoint
+        # waits for the first push on fresh installs.
+        _pooler = None
+        try:
+            from .tenant_pooler import (
+                push_tenants_config,
+                tenant_pooling_enabled,
+                tenants_container_name,
+            )
+            if tenant_pooling_enabled():
+                _pooler = tenants_container_name()
+                if _pooler:
+                    push_tenants_config()
+        except Exception as exc:
+            logger.warning("Tenant pooler push skipped for %s: %s", hostname, exc)
+            _pooler = None
+
         # Attach the shared server wherever this app can dial the alias:
         # the service's scoped bridge (app traffic) and smsly-net (backend
         # maintenance proxy, backups, health checks). Best-effort here —
         # connect_service_addons_to_scoped_network completes the scoped
         # attach at app-spawn time when the bridge exists.
         try:
-            attach_alias(self.network_name, hostname)
+            attach_alias(self.network_name, hostname, container=_pooler)
         except Exception as exc:
             logger.warning("Shared postgres smsly-net attach skipped for %s: %s", hostname, exc)
         try:
@@ -1732,7 +1762,7 @@ class AddonProvisioner:
                 scoped = _Net.resolve_network_name(project)
                 if scoped and scoped != self.network_name:
                     try:
-                        attach_alias(scoped, hostname)
+                        attach_alias(scoped, hostname, container=_pooler)
                     except Exception as exc:
                         logger.warning(
                             "Shared postgres scoped attach deferred for %s (net %s not ready?): %s",
@@ -1742,7 +1772,8 @@ class AddonProvisioner:
             logger.debug("Shared postgres scoped attach lookup skipped: %s", exc)
 
         addon.provision_mode = 'shared'
-        addon.save(update_fields=['provision_mode', 'updated_at'])
+        addon.pooler_routed = bool(_pooler)
+        addon.save(update_fields=['provision_mode', 'pooler_routed', 'updated_at'])
         connection_url = f"postgresql://{db_user}:{password}@{hostname}:5432/{db_name}"
         logger.info("Postgres addon (shared) ready: %s -> %s", addon.name, hostname)
         # Shared HA: one streaming standby covers all logical tenants.

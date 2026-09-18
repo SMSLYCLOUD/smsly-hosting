@@ -126,9 +126,38 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
     switch (status) {
       case 'RUNNING': return <Badge variant="success">Running</Badge>;
       case 'SPAWNING': return <Badge variant="warning">Spawning</Badge>;
+      case 'DRAINING': return <Badge variant="warning">Draining</Badge>;
+      case 'DESTROYING': return <Badge variant="warning">Destroying</Badge>;
       case 'DESTROYED': return <Badge variant="gray">Destroyed</Badge>;
       default: return <Badge variant="outline">{status}</Badge>;
     }
+  };
+
+  const getReplicaHealth = (replica: Replica) => {
+    if (replica.status !== 'RUNNING') return <span className="text-muted-foreground text-xs">—</span>;
+    const snap = replica.metrics_snapshot;
+    if (!snap || (snap.cpu_percent === undefined && snap.memory_usage_mb === undefined)) {
+      return <Badge variant="outline">No data yet</Badge>;
+    }
+    const cpu = snap.cpu_percent ?? 0;
+    const memLimit = snap.memory_limit_mb ?? 0;
+    const memUsed = snap.memory_usage_mb ?? 0;
+    const memPct = memLimit > 0 ? (memUsed / memLimit) * 100 : 0;
+    const hot = cpu >= 90 || memPct >= 90;
+    const warm = cpu >= 70 || memPct >= 70;
+    return (
+      <div className="flex flex-col gap-0.5 text-xs">
+        <span className={hot ? 'text-red-500 font-semibold' : warm ? 'text-yellow-500 font-semibold' : 'text-emerald-500 font-semibold'}>
+          {hot ? 'Hot' : warm ? 'Warm' : 'Healthy'} · CPU {cpu.toFixed(0)}%
+          {memLimit > 0 ? ` · MEM ${memPct.toFixed(0)}%` : ''}
+        </span>
+        {snap.checked_at && (
+          <span className="text-[10px] text-muted-foreground">
+            checked {new Date(snap.checked_at).toLocaleTimeString()}
+          </span>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -169,20 +198,33 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Replica ID</TableHead>
+                  <TableHead>Replica</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Health</TableHead>
                   <TableHead>Node</TableHead>
+                  <TableHead>Reason</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {replicas.map((replica) => (
                   <TableRow key={replica.id}>
-                    <TableCell className="font-mono text-xs">{replica.id}</TableCell>
+                    <TableCell>
+                      <div className="font-mono text-xs">{replica.id.slice(0, 8)}</div>
+                      <div className="font-mono text-[10px] text-muted-foreground truncate max-w-[180px]" title={replica.container_name || undefined}>
+                        {replica.container_name || '—'}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       {getStatusBadge(replica.status)}
                     </TableCell>
+                    <TableCell>
+                      {getReplicaHealth(replica)}
+                    </TableCell>
                     <TableCell className="font-mono text-xs">{replica.node_name || '\u2014'}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={replica.spawn_reason || undefined}>
+                      {replica.spawn_reason || '—'}
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button
                         variant="ghost"

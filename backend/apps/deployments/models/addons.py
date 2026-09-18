@@ -116,10 +116,14 @@ class Addon(TimeStampedModel):
     provision_mode = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=ProvisionMode.choices,
-        default=ProvisionMode.CONTAINER,
-        help_text="How this addon is hosted: a dedicated container, or a "
-                  "logical database on the shared Postgres server (new "
-                  "POSTGRES addons default to shared).")
+        blank=True,
+        default='',
+        help_text="How this addon is hosted: 'shared' forces a logical "
+                  "database on the shared Postgres server, 'container' "
+                  "forces a dedicated container, '' defers to the platform "
+                  "default (PlatformConfig.postgres_shared_addons_default). "
+                  "Only POSTGRES honours this; other types always use "
+                  "dedicated containers.")
     deletion_error = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     connection_url = EncryptedCharField(
         max_length=512, blank=True)  # H-1 fix: encrypted at rest
@@ -161,6 +165,11 @@ class Addon(TimeStampedModel):
     # Coolify Integration
     coolify_uuid = models.CharField(max_length=64, blank=True, null=True,  # type: ignore[var-annotated]
                                     help_text="UUID of the database in Coolify")
+    pooler_routed = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Shared POSTGRES addon dials through the pgcat-tenants "
+                  "pooler (set at provision/migration time; sticky — "
+                  "toggling tenant_pooling_enabled never moves it back).")
 
     # Public Routing
     public_domain = models.CharField(max_length=255, blank=True, null=True, unique=True,  # type: ignore[var-annotated]

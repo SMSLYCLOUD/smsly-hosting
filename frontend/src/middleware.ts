@@ -239,6 +239,7 @@ export const config = {
     "/logs/:path*",
     "/monitoring/:path*",
     "/network/:path*",
+    "/clusters/:path*",
     "/replication/:path*",
     "/restore/:path*",
     "/addons/:path*",

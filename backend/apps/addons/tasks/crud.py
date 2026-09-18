@@ -26,6 +26,14 @@ def provision_addon_task(self, addon_id: str) -> None:
         addon.status = Addon.Status.ACTIVE
         addon.coolify_uuid = cid
         addon.save()
+        # Tenant pooler: a new shared pool must appear in pgcat-tenants
+        # before the app spawns (best-effort; no-op without the container).
+        try:
+            if addon.addon_type == 'POSTGRES' and getattr(addon, 'provision_mode', '') == 'shared':
+                from apps.addons.services.tenant_pooler import push_tenants_config
+                push_tenants_config()
+        except Exception as _pool_exc:
+            logger.debug("tenant pooler push skipped for addon %s: %s", addon_id, _pool_exc)
         try:
             from config.metrics import ADDON_PROVISION_DURATION
             ADDON_PROVISION_DURATION.labels(addon_type=addon.addon_type).observe(
@@ -105,6 +113,11 @@ def deprovision_addon_task(self, addon_id: str) -> None:
                 parsed.username or '',
                 (parsed.path or '/').lstrip('/'),
             )
+            try:
+                from apps.addons.services.tenant_pooler import push_tenants_config
+                push_tenants_config()
+            except Exception as _pool_exc:
+                logger.debug("tenant pooler push skipped for addon %s: %s", addon_id, _pool_exc)
         elif addon.coolify_uuid:
             container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
             addon_provisioner.deprovision_dispatch(addon.coolify_uuid, addon, container_name)
@@ -239,3 +252,39 @@ def delete_addon_task(self, addon_id: str) -> None:
         addon.status = Addon.Status.DELETION_FAILED
         addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."
         addon.save(update_fields=['status', 'deletion_error'])
+
+
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1], name="apps.deployments.tasks.migrate_addon_mode_task")
+def migrate_addon_mode_task(self, addon_id: str, target_mode: str) -> None:
+    """Move a POSTGRES addon between shared pool and dedicated container.
+
+    No automatic retries: the service module rolls back to the original row
+    on failure, and a retry could double-provision. Failures land in
+    ``deletion_error`` (repurposed as last-operation error) for the UI.
+    """
+    from apps.addons.services.addon_migrate import migrate_addon_mode
+    from apps.deployments.models.addons import Addon
+    try:
+        addon = Addon.objects.get(id=addon_id)
+    except Addon.DoesNotExist:
+        logger.warning("migrate_addon_mode_task: addon %s not found", addon_id)
+        return
+    try:
+        result = migrate_addon_mode(addon_id, target_mode)
+        logger.info("migrate_addon_mode_task succeeded for addon %s: %s", addon_id, result.get('message'))
+    except Exception as exc:
+        logger.error("migrate_addon_mode_task failed for addon %s: %s", addon_id, exc)
+        try:
+            addon = Addon.objects.get(id=addon_id)
+            addon.deletion_error = f"Migration to {target_mode} failed: {exc}"[:500]
+            addon.save(update_fields=['deletion_error'])
+        except Exception:
+            pass
+    finally:
+        # Pools are derived from live rows — re-push so a failure that
+        # restored the row cannot leave a stale pool behind.
+        try:
+            from apps.addons.services.tenant_pooler import push_tenants_config
+            push_tenants_config()
+        except Exception as _pool_exc:
+            logger.debug("tenant pooler push skipped for addon %s: %s", addon_id, _pool_exc)

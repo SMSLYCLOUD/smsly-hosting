@@ -5,7 +5,13 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 import { systemApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Server, Loader2, CheckCircle2, AlertTriangle, RefreshCw, Shield } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { Server, Loader2, CheckCircle2, AlertTriangle, RefreshCw, Shield, Wrench, Pencil } from "lucide-react";
+import {
+    Dialog, DialogContent, DialogDescription, DialogFooter,
+    DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { useState, useEffect, useCallback, useRef } from "react";
 
 const SERVICE_GROUPS = [
@@ -61,9 +67,67 @@ function MetricCard({ label, value, subtext, color }: { label: string; value: st
 }
 
 export default function StatusPage() {
+  const { toast } = useToast();
+  const confirm = useConfirm();
   const [systemConfig, setSystemConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [healing, setHealing] = useState(false);
+  const [fbOpen, setFbOpen] = useState(false);
+  const [fbTab, setFbTab] = useState<'index.html' | 'disabled.html'>('index.html');
+  const [fbPages, setFbPages] = useState<Record<string, string>>({});
+  const [fbLoading, setFbLoading] = useState(false);
+  const [fbSaving, setFbSaving] = useState(false);
+
+  const openFbEditor = async () => {
+    setFbOpen(true);
+    setFbLoading(true);
+    try {
+      const res = await systemApi.routeFallback();
+      setFbPages(res.pages || {});
+    } catch (err: any) {
+      toast({
+        title: 'Failed to load fallback pages',
+        description: err?.response?.status === 403 ? 'Admin access required.' : err?.response?.data?.error || err?.message,
+        variant: 'destructive',
+      });
+      setFbOpen(false);
+    } finally {
+      setFbLoading(false);
+    }
+  };
+
+  const saveFbEditor = async () => {
+    setFbSaving(true);
+    try {
+      const res = await systemApi.updateRouteFallback({ [fbTab]: fbPages[fbTab] || '' });
+      toast({ title: 'Fallback page saved', description: `Live on the edge now: ${(res.saved || []).join(', ')}.` });
+      setFbOpen(false);
+    } catch (err: any) {
+      toast({ title: 'Save failed', description: err?.response?.data?.error || err?.message, variant: 'destructive' });
+    } finally {
+      setFbSaving(false);
+    }
+  };
+
+  const handleBeatHeal = async () => {
+    if (!await confirm({
+      title: 'Heal beat scheduler?',
+      message: 'Releases a stale redbeat lock and restarts the beat container. The backend refuses if the lock looks live. Continue?',
+      confirmText: 'Heal Beat',
+      variant: 'destructive',
+    })) return;
+    setHealing(true);
+    try {
+      const res = await systemApi.beatHeal();
+      toast({ title: 'Beat healed', description: (res.actions || []).join('; ') || res.message });
+      fetchConfig(true);
+    } catch (err: any) {
+      toast({ title: 'Heal refused or failed', description: err?.response?.data?.error || err?.message, variant: 'destructive' });
+    } finally {
+      setHealing(false);
+    }
+  };
 
   const fetchConfig = useCallback(async (silent = false) => {
     try {
@@ -123,6 +187,14 @@ export default function StatusPage() {
   const uptime = systemConfig.uptime_seconds || 0;
   const services = systemConfig.services as Record<string, { running: boolean; status: string }> | undefined;
   const hostSecurity = systemConfig.host_security as Record<string, { installed: boolean; active: boolean }> | undefined;
+  // Beat scheduler lock (redbeat::lock on Redis db 3). A live beat holder
+  // extends the lock every tick — a missing lock with a silent beat means
+  // hygiene tasks (retention, watchdog, recovery) are not dispatching.
+  const beat = (systemConfig as any)?.beat as
+    | { scheduler?: string; lock_timeout?: number; lock_ttl?: number | null; healthy?: boolean | null }
+    | undefined;
+  const beatService = services?.["celery-beat"];
+  const fallbackService = services?.["route-fallback"];
 
   const coreOffline = services
     // A required service missing from the response entirely is also
@@ -210,6 +282,128 @@ export default function StatusPage() {
             </div>
           </div>
         ))}
+
+        {/* Scheduler & Edge Fallback */}
+        {(beat !== undefined || beatService || fallbackService) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card className="border-border/60">
+              <CardContent className="p-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Beat Scheduler</p>
+                  <p className="text-sm font-semibold mt-1">
+                    {beatService && !beatService.running ? (
+                      <span className="text-red-500">Beat container offline</span>
+                    ) : beat?.lock_ttl === undefined || beat?.lock_ttl === null ? (
+                      <span className="text-muted-foreground">Lock state unknown</span>
+                    ) : beat.lock_ttl === -2 ? (
+                      <span className="text-yellow-500">No lock held — starting or wedged</span>
+                    ) : beat.lock_ttl === -1 ? (
+                      <span className="text-yellow-500">Persistent lock (unexpected)</span>
+                    ) : (
+                      <span className={beat.healthy ? "text-emerald-500" : "text-yellow-500"}>
+                        Lock TTL {beat.lock_ttl}s / {beat.lock_timeout ?? 600}s
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    redbeat scheduler — retention, watchdog and recovery tasks dispatch through this lock.
+                  </p>
+                  {(!beat?.healthy || (beatService && !beatService.running)) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      disabled={healing}
+                      onClick={handleBeatHeal}
+                    >
+                      {healing
+                        ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                        : <Wrench className="w-3.5 h-3.5 mr-1.5" />}
+                      {healing ? 'Healing…' : 'Heal Beat'}
+                    </Button>
+                  )}
+                </div>
+                <Badge
+                  variant={
+                    beatService && !beatService.running ? "destructive" : beat?.healthy ? "default" : "secondary"
+                  }
+                  className="text-[10px] shrink-0"
+                >
+                  {beatService && !beatService.running ? "Offline" : beat?.healthy ? "Dispatching" : "Check"}
+                </Badge>
+              </CardContent>
+            </Card>
+            {fallbackService && (
+              <Card className="border-border/60">
+                <CardContent className="p-4 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Edge Fallback Page</p>
+                    <p className="text-sm font-semibold mt-1 truncate" title={fallbackService.status}>
+                      {fallbackService.running ? (
+                        <span className="text-emerald-500">Serving 503 fallback</span>
+                      ) : (
+                        <span className="text-red-500">Fallback container offline</span>
+                      )}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 truncate" title={fallbackService.status}>
+                      {fallbackService.status || "route-fallback"}
+                    </p>
+                    <Button variant="ghost" size="sm" className="mt-1 h-7 px-2 text-[11px]" onClick={openFbEditor}>
+                      <Pencil className="w-3 h-3 mr-1" /> Edit pages
+                    </Button>
+                  </div>
+                  <Badge variant={fallbackService.running ? "default" : "destructive"} className="text-[10px] shrink-0">
+                    {fallbackService.running ? "Ready" : "Offline"}
+                  </Badge>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        <Dialog open={fbOpen} onOpenChange={setFbOpen}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Edge Fallback Pages</DialogTitle>
+              <DialogDescription>
+                Live 503 pages served by the edge. Edits apply instantly — no reload needed.
+                Pages must keep the request-ID marker (http.request.uuid).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit">
+              {(['index.html', 'disabled.html'] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setFbTab(t)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-mono transition-all ${
+                    fbTab === t ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {t === 'index.html' ? 'Waking up' : 'Disabled'}
+                </button>
+              ))}
+            </div>
+            {fbLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <textarea
+                value={fbPages[fbTab] || ''}
+                onChange={(e) => setFbPages((prev) => ({ ...prev, [fbTab]: e.target.value }))}
+                spellCheck={false}
+                className="w-full h-[50vh] font-mono text-xs p-3 rounded-lg bg-background border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setFbOpen(false)}>Cancel</Button>
+              <Button disabled={fbLoading || fbSaving} onClick={saveFbEditor}>
+                {fbSaving ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : null}
+                Save live
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Live Host Metrics */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

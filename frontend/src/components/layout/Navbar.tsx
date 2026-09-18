@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { featureFlags } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
 import { usePathname, useRouter } from 'next/navigation';
-import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare, Plug, Search } from 'lucide-react';
+import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare, Plug, Search, Crown } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -104,6 +104,7 @@ export function Navbar() {
     { href: '/replication', label: 'Replication', icon: GitCompare, tier: 'secondary' },
     { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
     { href: '/network', label: 'VPN Mesh', icon: Shield, tier: 'secondary' },
+    { href: '/clusters', label: 'Clusters', icon: Crown, tier: 'secondary' },
     { href: '/activity', label: 'Activity', icon: Activity, tier: 'tertiary' },
     { href: '/functions', label: 'Functions', icon: Zap, tier: 'tertiary' },
     { href: '/templates', label: 'Templates', icon: FileCode, tier: 'tertiary' },
@@ -122,7 +123,7 @@ export function Navbar() {
     ...(featureFlags.autoscaler ? [] : ['/autoscaler']),
     ...(featureFlags.replication ? [] : ['/replication']),
     ...(featureFlags.tunnels ? [] : ['/tunnels']),
-    ...(featureFlags.vpnMesh ? [] : ['/network']),
+    ...(featureFlags.vpnMesh ? [] : ['/network', '/clusters']),
     ...(featureFlags.functions ? [] : ['/functions']),
     ...(featureFlags.transfers ? [] : ['/transfers']),
   ]);

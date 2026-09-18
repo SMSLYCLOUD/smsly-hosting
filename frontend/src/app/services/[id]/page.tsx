@@ -7,7 +7,7 @@ import { getWsUrl } from '@/lib/websocket';
 import ScalingTab from '@/components/settings/ScalingTab';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
-import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug, History } from 'lucide-react';
 import { InternalNetworkCard } from '@/components/settings/InternalNetworkCard';
 import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -248,6 +248,31 @@ export default function ServiceDetailPage() {
         } catch (err) {
             console.error(err);
             toast({ title: 'Restart failed', description: 'Could not trigger restart.', variant: 'destructive' });
+            setRedeploying(false);
+        }
+    };
+
+    const handleRollback = async () => {
+        if (!service) return;
+        if (!await confirm({ title: 'Rollback to last good version?', message: 'This redeploys the last successful release for this service. Continue?', confirmText: 'Yes, Rollback', variant: 'destructive' })) return;
+        try {
+            setRedeploying(true);
+            await servicesApi.instantRollback(service.id);
+            toast({ title: 'Rollback initiated', description: 'Rolling back to the last good release.' });
+            setTimeout(async () => {
+                try {
+                    const s = await servicesApi.get(service.id);
+                    setService(s);
+                    if (s.latest_deployment) {
+                        const d = await servicesApi.getDeployment(s.latest_deployment.id);
+                        setDeployment(d);
+                    }
+                } catch (e) { console.error(e); }
+                setRedeploying(false);
+            }, 2000);
+        } catch (err: any) {
+            console.error(err);
+            toast({ title: 'Rollback failed', description: err?.response?.data?.error || 'Could not trigger rollback.', variant: 'destructive' });
             setRedeploying(false);
         }
     };
@@ -888,6 +913,15 @@ export default function ServiceDetailPage() {
                                     >
                                         {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
                                         Restart
+                                    </button>
+                                    <button
+                                        className="bg-red-500/20 border border-red-500/30 text-red-400 hover:bg-red-500/30 font-bold py-2 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                                        onClick={handleRollback}
+                                        disabled={redeploying}
+                                        title="Redeploy the last successful release"
+                                    >
+                                        {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <History className="w-4 h-4" />}
+                                        Rollback
                                     </button>
                                     {service?.repository_url && (
                                         <button

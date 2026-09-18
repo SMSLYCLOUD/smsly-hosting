@@ -141,6 +141,15 @@ class AddonMaintenanceService:
             addon.connection_url = new_url
             addon.save(update_fields=['connection_url', 'updated_at'])
 
+            # Tenant pooler holds the old password — push the new one
+            # (best-effort; no-op without the container).
+            try:
+                if addon_type == 'POSTGRES' and getattr(addon, 'provision_mode', '') == 'shared':
+                    from apps.addons.services.tenant_pooler import push_tenants_config
+                    push_tenants_config()
+            except Exception:
+                logger.debug("tenant pooler push skipped for addon %s", addon.id, exc_info=True)
+
             # Re-inject credentials as env vars (mirrors provision_addon_task)
             from apps.deployments.models import EnvironmentVariable
             creds = addon.parsed_credentials

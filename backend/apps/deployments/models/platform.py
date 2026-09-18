@@ -356,6 +356,11 @@ class PlatformConfig(models.Model):
         max_length=255, blank=True, default='',
         help_text="Superuser password for the shared Postgres addon server "
                   "(auto-generated on first use).")
+    tenant_pooling_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Route NEW shared Postgres addons through the pgcat-tenants "
+                  "pooler instead of direct connections. Existing shared "
+                  "addons keep dialling the server directly (sticky).")
     ecosystem_max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=2,
         help_text="Maximum concurrent ecosystem builds")

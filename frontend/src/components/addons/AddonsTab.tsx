@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { Database, RotateCcw, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { addonsApi, Addon } from '@/lib/api';
+import { addonsApi, Addon, systemApi } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
 import { AddonLogsViewer } from '@/components/addons/AddonLogsViewer';
 
@@ -29,6 +29,8 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const [newType, setNewType] = useState('POSTGRES');
     const [newName, setNewName] = useState('');
     const [newServiceId, setNewServiceId] = useState(serviceId || '');
+    const [newMode, setNewMode] = useState('');
+    const [platformSharedDefault, setPlatformSharedDefault] = useState<boolean | null>(null);
     const [backups, setBackups] = useState<Record<string, Backup[]>>({});
     const [expandedAddon, setExpandedAddon] = useState<string | null>(null);
     const [credentials, setCredentials] = useState<Record<string, Record<string, string>>>({});
@@ -53,15 +55,29 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         return () => clearInterval(interval);
     }, [fetchAddons]);
 
+    // Platform default for new Postgres addons (shared pool vs individual).
+    // Loaded lazily when the create form opens.
+    useEffect(() => {
+        if (!showCreate || platformSharedDefault !== null) return;
+        systemApi.getDomainConfig()
+            .then((cfg: any) => setPlatformSharedDefault(cfg?.postgres_shared_addons_default ?? true))
+            .catch(() => setPlatformSharedDefault(true));
+    }, [showCreate, platformSharedDefault]);
+
     const handleCreate = async () => {
         setCreating(true);
         try {
             const svcId = serviceId || newServiceId;
             if (!svcId) { alert('Select a service first'); setCreating(false); return; }
             const name = newName || `${newType.toLowerCase()}-${Date.now().toString(36)}`;
-            await addonsApi.create({ service: svcId, addon_type: newType, name } as any);
+            const payload: any = { service: svcId, addon_type: newType, name };
+            // Hosting choice only affects POSTGRES; other types always use
+            // dedicated containers. '' defers to the platform default.
+            if (newType === 'POSTGRES') payload.provision_mode = newMode;
+            await addonsApi.create(payload);
             setShowCreate(false);
             setNewName('');
+            setNewMode('');
             fetchAddons();
         } catch (e) {
             console.error('Failed to create addon:', e);
@@ -77,6 +93,23 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
             fetchAddons();
         } catch (e) {
             console.error('Failed to deprovision:', e);
+        }
+    };
+
+    const handleMigrate = async (addon: Addon) => {
+        const target = addon.provision_mode === 'shared' ? 'container' : 'shared';
+        const targetLabel = target === 'shared' ? 'shared pool' : 'individual container';
+        if (!await confirm({
+            title: `Migrate to ${targetLabel}?`,
+            message: 'Data is dumped, re-provisioned, restored and verified before the old backend is dropped. The addon stays online, but restart/redeploy the owning service afterwards to pick up the new URL. Continue?',
+            confirmText: 'Migrate',
+        })) return;
+        try {
+            await addonsApi.migrateMode(addon.id, target);
+            fetchAddons();
+        } catch (e: any) {
+            console.error('Failed to queue migration:', e);
+            alert(e?.response?.data?.error || 'Failed to queue migration');
         }
     };
 
@@ -240,6 +273,34 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                             </button>
                         ))}
                     </div>
+                    {newType === 'POSTGRES' && (
+                        <div className="space-y-2">
+                            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Hosting</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                {[
+                                    { value: '', label: 'Platform default', hint: platformSharedDefault === null ? 'loading…' : platformSharedDefault ? '→ shared pool' : '→ individual' },
+                                    { value: 'shared', label: 'Shared pool', hint: 'logical DB, HA-covered' },
+                                    { value: 'container', label: 'Individual', hint: 'dedicated container' },
+                                ].map(opt => (
+                                    <button
+                                        key={opt.value || 'default'}
+                                        onClick={() => setNewMode(opt.value)}
+                                        className={`p-3 rounded-lg border-2 text-left transition-all ${
+                                            newMode === opt.value
+                                                ? 'border-primary bg-primary/5'
+                                                : 'border-border hover:border-muted-foreground/30'
+                                        }`}
+                                    >
+                                        <p className="font-semibold text-sm text-foreground">{opt.label}</p>
+                                        <p className="text-[11px] text-muted-foreground mt-0.5">{opt.hint}</p>
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                                Hosting is fixed at creation — changing it later requires delete + recreate.
+                            </p>
+                        </div>
+                    )}
                     <div className="flex gap-3">
                         <input
                             type="text"
@@ -311,6 +372,20 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                         <span className={`px-2.5 py-1 rounded text-xs font-bold uppercase ${statusColor(addon.status)}`}>
                                             {addon.status}
                                         </span>
+                                        {addon.addon_type === 'POSTGRES' && (
+                                            <span
+                                                title={addon.provision_mode === 'shared' ? 'Logical database on the shared Postgres server' : addon.provision_mode === 'container' ? 'Dedicated Postgres container' : 'Follows the platform default'}
+                                                className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${
+                                                    addon.provision_mode === 'shared'
+                                                        ? 'bg-emerald-500/10 text-emerald-500'
+                                                        : addon.provision_mode === 'container'
+                                                        ? 'bg-zinc-500/10 text-zinc-400'
+                                                        : 'bg-blue-500/10 text-blue-400'
+                                                }`}
+                                            >
+                                                {addon.provision_mode === 'shared' ? 'Shared' : addon.provision_mode === 'container' ? 'Individual' : 'Default'}
+                                            </span>
+                                        )}
                                         <span className="text-xs text-muted-foreground">
                                             {new Date(addon.created_at).toLocaleDateString()}
                                         </span>
@@ -349,6 +424,15 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                             >
                                                 <RefreshCw size={12} /> Refresh
                                             </button>
+                                            {addon.addon_type === 'POSTGRES' && addon.status === 'ACTIVE' && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleMigrate(addon); }}
+                                                    title={addon.provision_mode === 'shared' ? 'Move to a dedicated container' : 'Move to the shared pool'}
+                                                    className="flex items-center gap-2 px-3 py-2 bg-teal-500/10 text-teal-400 rounded-lg text-xs font-medium hover:bg-teal-500/20 transition-colors"
+                                                >
+                                                    <Layers size={12} /> Migrate to {addon.provision_mode === 'shared' ? 'Individual' : 'Shared'}
+                                                </button>
+                                            )}
                                             {addon.public_domain ? (
                                                 <div className="flex items-center gap-2">
                                                     <div className="flex items-center rounded-lg overflow-hidden border border-emerald-500/20">

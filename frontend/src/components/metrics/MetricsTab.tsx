@@ -23,6 +23,7 @@ interface MetricPoint {
 
 interface CurrentSnapshot {
     cpu_percent: number;
+    cpu_limit?: number;
     memory_usage: number;
     memory_limit: number;
     memory_percent: number;
@@ -177,6 +178,10 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">CPU</p>
                             <p className={`text-2xl font-bold mt-1 ${getThresholdColor(cpuVal)}`}>
                                 {cpuVal.toFixed(1)}%
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                                {current.cpu_limit ? `of ${current.cpu_limit} cores` : 'limit unknown'}
+                                {cpuVal >= 90 ? ' · throttled' : ''}
                             </p>
                         </div>
                         <div className="relative">

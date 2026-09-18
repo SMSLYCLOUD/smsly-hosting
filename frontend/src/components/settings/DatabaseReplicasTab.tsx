@@ -17,11 +17,13 @@ import {
 } from 'lucide-react';
 import {
     default as api,
+    addonsApi,
     databaseReplicasApi,
     DatabaseReplica,
     DatabaseReplicaKind,
     DatabaseReplicaSslMode,
     DatabaseReplicaStatus,
+    SharedPostgresHa,
     systemApi,
 } from '@/lib/api';
 
@@ -394,6 +396,274 @@ export function ReplicaRow({
     );
 }
 
+// ─── Shared Postgres pool HA ───────────────────────────────────────────────
+// The shared logical pool (all shared-provision addons) has no addon row of
+// its own — its standby/lag state comes from the platform collection action.
+
+export function SharedPoolHaCard() {
+    const { toast } = useToast();
+    const [ha, setHa] = useState<SharedPostgresHa | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [forbidden, setForbidden] = useState(false);
+    const [platformDefault, setPlatformDefault] = useState<boolean | null>(null);
+    const [savingDefault, setSavingDefault] = useState(false);
+
+    const fetchHa = useCallback(async (silent = false) => {
+        if (!silent) setLoading(true);
+        try {
+            const [data, cfg] = await Promise.all([
+                addonsApi.sharedPostgresHa(),
+                systemApi.getDomainConfig().catch(() => null),
+            ]);
+            setHa(data);
+            if (cfg && typeof cfg.postgres_shared_addons_default === 'boolean') {
+                setPlatformDefault(cfg.postgres_shared_addons_default);
+            }
+        } catch (err: any) {
+            if (err?.response?.status === 403) setForbidden(true);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchHa();
+        const t = setInterval(() => fetchHa(true), 60000);
+        return () => clearInterval(t);
+    }, [fetchHa]);
+
+    if (forbidden) return null;
+
+    const stateColor: Record<string, string> = {
+        HEALTHY: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+        DEGRADED: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+        STANDALONE: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+        DOWN: 'bg-red-500/15 text-red-400 border-red-500/30',
+        UNKNOWN: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                    <Database className="h-5 w-5 text-teal-500" />
+                    Shared Postgres Pool HA
+                    {!loading && ha && (
+                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${stateColor[ha.state] || stateColor.UNKNOWN}`}>
+                            {ha.state}
+                        </span>
+                    )}
+                </CardTitle>
+                <CardDescription>
+                    Streaming standby for the shared logical pool. Watched every 60s — automatic failover on primary loss.
+                </CardDescription>
+            </CardHeader>
+            <CardContent>
+                <div className="flex items-center justify-between gap-4 pb-4 mb-4 border-b border-border/60">
+                    <div>
+                        <p className="text-sm font-medium">New Postgres addons use the shared pool</p>
+                        <p className="text-xs text-muted-foreground">
+                            Platform default. Per-addon choice at creation overrides this. Applies from the next provision.
+                        </p>
+                    </div>
+                    <Switch
+                        checked={platformDefault ?? true}
+                        disabled={platformDefault === null || savingDefault}
+                        onCheckedChange={async (v) => {
+                            setSavingDefault(true);
+                            try {
+                                await systemApi.updateDomainConfig({ postgres_shared_addons_default: v });
+                                setPlatformDefault(v);
+                                toast({ title: 'Platform default updated', description: v ? 'New Postgres addons will use the shared pool.' : 'New Postgres addons will get individual containers.' });
+                            } catch {
+                                toast({ title: 'Failed to update default', variant: 'destructive' });
+                            } finally {
+                                setSavingDefault(false);
+                            }
+                        }}
+                    />
+                </div>
+                {loading && !ha ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" /> Checking standby…
+                    </div>
+                ) : ha ? (
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                            <div>
+                                <p className="text-xs text-muted-foreground">Primary</p>
+                                <p className="font-mono text-xs">{ha.primary || '—'}</p>
+                            </div>
+                            <div>
+                                <p className="text-xs text-muted-foreground">Standby</p>
+                                <p className="font-mono text-xs">{ha.standby || 'none'}</p>
+                            </div>
+                            <div>
+                                <p className="text-xs text-muted-foreground">Lag</p>
+                                <p className="font-mono text-xs">{ha.lag_seconds === null || ha.lag_seconds === undefined ? '—' : `${ha.lag_seconds}s`}</p>
+                            </div>
+                        </div>
+                        <Button size="sm" variant="outline" onClick={() => fetchHa()}>
+                            <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+                        </Button>
+                    </div>
+                ) : (
+                    <p className="text-sm text-muted-foreground">Standby state unavailable.</p>
+                )}
+                {ha?.error && (
+                    <p className="mt-2 text-xs text-amber-500 font-mono">{ha.error}</p>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
+// ─── Tenant pooler (pgcat-tenants) ─────────────────────────────────────────
+// Optional per-tenant pooling for shared logical DBs. Default off; enabling
+// only affects NEW shared provisions (existing addons stay direct — sticky).
+
+export function TenantPoolerCard() {
+    const { toast } = useToast();
+    const [status, setStatus] = useState<{
+        enabled: boolean;
+        container: { name: string; running: boolean; status: string } | null;
+        pools: { alias: string; user: string; db: string }[];
+        error?: string;
+    } | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [forbidden, setForbidden] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [pushing, setPushing] = useState(false);
+
+    const fetchStatus = useCallback(async (silent = false) => {
+        if (!silent) setLoading(true);
+        try {
+            const data = await addonsApi.sharedPoolerStatus();
+            setStatus(data);
+        } catch (err: any) {
+            if (err?.response?.status === 403) setForbidden(true);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchStatus();
+        const t = setInterval(() => fetchStatus(true), 60000);
+        return () => clearInterval(t);
+    }, [fetchStatus]);
+
+    if (forbidden) return null;
+
+    const toggleEnabled = async (v: boolean) => {
+        setSaving(true);
+        try {
+            await systemApi.updateConfig({ TENANT_POOLING_ENABLED: v });
+            setStatus((prev) => (prev ? { ...prev, enabled: v } : prev));
+            toast({
+                title: v ? 'Tenant pooling enabled' : 'Tenant pooling disabled',
+                description: v
+                    ? 'New shared provisions will route through pgcat-tenants. Existing addons stay direct.'
+                    : 'New shared provisions will connect directly. Pooled addons keep working.',
+            });
+            fetchStatus(true);
+        } catch {
+            toast({ title: 'Failed to update toggle', variant: 'destructive' });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const pushNow = async () => {
+        setPushing(true);
+        try {
+            const res = await addonsApi.sharedPoolerPush();
+            toast({
+                title: res.ok ? 'Pools pushed' : 'Push failed',
+                description: res.ok
+                    ? `${res.pools ?? 0} pool(s)${res.changed ? ', pooler restarted' : ', no changes'}`
+                    : res.error,
+                variant: res.ok ? undefined : 'destructive',
+            });
+            fetchStatus(true);
+        } catch (err: any) {
+            toast({ title: 'Push failed', description: err?.response?.data?.error || err?.message, variant: 'destructive' });
+        } finally {
+            setPushing(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                    <Network className="h-5 w-5 text-cyan-500" />
+                    Tenant Pooler (pgcat-tenants)
+                    {status && (
+                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${
+                            status.container?.running
+                                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                : 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30'
+                        }`}>
+                            {status.container?.running ? 'Running' : status.container ? 'Not running' : 'No container'}
+                        </span>
+                    )}
+                </CardTitle>
+                <CardDescription>
+                    Per-tenant connection pooling for shared logical databases. Off by default; sticky per addon.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                    <div>
+                        <p className="text-sm font-medium">Route new shared addons through the pooler</p>
+                        <p className="text-xs text-muted-foreground">Existing shared addons are never moved by this toggle.</p>
+                    </div>
+                    <Switch
+                        checked={status?.enabled ?? false}
+                        disabled={loading || saving || status === null}
+                        onCheckedChange={toggleEnabled}
+                    />
+                </div>
+                {loading && !status ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" /> Checking pooler…
+                    </div>
+                ) : (
+                    <>
+                        {(status?.pools?.length ?? 0) > 0 ? (
+                            <div className="space-y-1.5">
+                                {status!.pools.map((pool) => (
+                                    <div key={pool.alias} className="flex items-center justify-between gap-3 text-xs font-mono p-2 rounded-lg border border-border/40 bg-card">
+                                        <span className="truncate">{pool.alias}</span>
+                                        <span className="text-muted-foreground shrink-0">{pool.user} / {pool.db}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-sm text-muted-foreground">No tenant pools rendered yet.</p>
+                        )}
+                        <div className="flex items-center gap-2">
+                            <Button size="sm" variant="outline" onClick={pushNow} disabled={pushing}>
+                                {pushing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                                Push now
+                            </Button>
+                            {status?.container && (
+                                <span className="text-xs text-muted-foreground font-mono">
+                                    {status.container.name} · {status.container.status}
+                                </span>
+                            )}
+                        </div>
+                        {status?.error && (
+                            <p className="text-xs text-amber-500 font-mono">{status.error}</p>
+                        )}
+                    </>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
 // ─── Tab component ───────────────────────────────────────────────────────────
 
 export function DatabaseReplicasTab() {
@@ -536,6 +806,11 @@ export function DatabaseReplicasTab() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <SharedPoolHaCard />
+
+            <TenantPoolerCard />
+
             <Card>
                 <CardHeader>
                     <CardTitle className="text-lg">Current pgcat endpoints</CardTitle>

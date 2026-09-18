@@ -85,8 +85,26 @@ class AddonSerializer(serializers.ModelSerializer):
             'server',
             'public_domain',
             'is_bucket_public',
+            'provision_mode',
             'created_at']
         read_only_fields = ['status', 'connection_url', 'created_at']
+        extra_kwargs = {'provision_mode': {'allow_blank': True}}
+
+    def validate_provision_mode(self, value):
+        allowed = {'', 'shared', 'container'}
+        if value not in allowed:
+            raise serializers.ValidationError(
+                "Must be '', 'shared' or 'container'.")
+        inst = getattr(self, 'instance', None)
+        if inst is not None and str(getattr(inst, 'provision_mode', '') or '') != value:
+            # Changing the mode after provisioning would strand the data
+            # (logical DB vs container volume) — recreate instead.
+            if str(getattr(inst, 'connection_url', '') or '').strip() \
+                    or inst.status == Addon.Status.ACTIVE:
+                raise serializers.ValidationError(
+                    "Cannot change hosting mode after provisioning — "
+                    "delete and recreate the addon.")
+        return value
 
 
 class BackupSerializer(serializers.ModelSerializer):
@@ -425,6 +443,93 @@ class AddonViewSet(viewsets.ModelViewSet):
                     exc_info=True,
                 )
         return Response(payload)
+
+    @action(detail=False, methods=['get'], url_path='shared-postgres-ha')
+    def shared_postgres_ha(self, request):
+        """Platform-wide shared Postgres HA state (standby, lag). Superuser only.
+
+        Per-addon ``ha-status`` covers container addons; the shared logical
+        pool has no addon row of its own, so it gets a collection action.
+        """
+        if not request.user.is_superuser:
+            return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
+        from ..services.shared_postgres import shared_ha_status
+        try:
+            return Response(shared_ha_status())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("shared-postgres-ha probe failed: %s", exc, exc_info=True)
+            return Response({'state': 'UNKNOWN', 'error': str(exc)[:200]})
+
+    @action(detail=False, methods=['get'], url_path='shared-pooler-status')
+    def shared_pooler_status(self, request):
+        """pgcat-tenants pooler state + rendered pools (no passwords). Superuser only."""
+        if not request.user.is_superuser:
+            return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
+        from ..services.tenant_pooler import pooler_status
+        try:
+            return Response(pooler_status())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("shared-pooler-status probe failed: %s", exc, exc_info=True)
+            return Response({'enabled': False, 'container': None, 'pools': [],
+                             'error': str(exc)[:200]})
+
+    @action(detail=False, methods=['post'], url_path='shared-pooler-push')
+    def shared_pooler_push(self, request):
+        """Re-render + push tenant pools now (e.g. after a failed auto-push). Superuser only."""
+        if not request.user.is_superuser:
+            return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
+        from ..services.tenant_pooler import push_tenants_config
+        try:
+            result = push_tenants_config()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("shared-pooler-push failed: %s", exc, exc_info=True)
+            return Response({'ok': False, 'error': str(exc)[:300]},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        if not result.get('ok'):
+            return Response(result, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(result)
+
+    @action(detail=True, methods=['post'], url_path='migrate-mode')
+    def migrate_mode(self, request, pk=None):
+        """Queue a shared <-> container migration. Body: {"mode": "shared"|"container"}.
+
+        Only POSTGRES, ACTIVE, local addons. Runs async (dump + provision +
+        restore + verify); the source is dropped only after verification.
+        Restart/redeploy the owning service afterwards to pick up the URL.
+        """
+        instance = self.get_object()
+        assert_can_write(self.request.user, instance.service, action='migrate addon')
+        target = str((request.data or {}).get('mode') or '').strip()
+        if target not in ('shared', 'container'):
+            return Response(
+                {'error': 'Body must be {"mode": "shared"|"container"}.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        if instance.addon_type != Addon.Type.POSTGRES:
+            return Response(
+                {'error': 'Migration is only supported for POSTGRES addons.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        if instance.status != Addon.Status.ACTIVE:
+            return Response(
+                {'error': 'Addon must be ACTIVE to migrate.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        server = getattr(instance.service, 'server', None)
+        if server is not None and not getattr(server, 'is_primary', False):
+            return Response(
+                {'error': 'Migration is only supported for local (primary-node) addons.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        current_shared = str(getattr(instance, 'provision_mode', '') or '') == 'shared'
+        if (target == 'shared') == current_shared:
+            return Response(
+                {'error': f"Addon is already on '{target}'."},
+                status=status.HTTP_400_BAD_REQUEST)
+        from ..tasks.crud import migrate_addon_mode_task
+        ok, task_id = _guard_delay(migrate_addon_mode_task, str(instance.id), target)
+        if not ok:
+            return Response(
+                {'error': 'Broker unavailable; migration could not be queued.'},
+                status=503)
+        return Response({'status': 'queued', 'task_id': task_id, 'target_mode': target},
+                        status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['post'], url_path='retry-delete')
     def retry_delete(self, request, pk=None):

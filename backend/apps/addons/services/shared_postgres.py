@@ -688,8 +688,8 @@ def _endpoint_aliases(container: str, network: str) -> list[str]:
         return []
 
 
-def attach_alias(network: str, alias: str) -> None:
-    """Join the shared server to ``network`` with DNS ``alias`` (idempotent).
+def attach_alias(network: str, alias: str, container: str | None = None) -> None:
+    """Join ``container`` (default: shared server) to ``network`` with DNS ``alias`` (idempotent).
 
     Preserves the app-facing URL shape (``postgres-myapp``) so services
     need no changes when moving container → logical.
@@ -701,8 +701,9 @@ def attach_alias(network: str, alias: str) -> None:
     live). Brief blip on that endpoint; callers run this at provision /
     spawn time, and clients retry.
     """
+    target = container or SHARED_CONTAINER
     ensure_shared_server()
-    current = _endpoint_aliases(SHARED_CONTAINER, network)
+    current = _endpoint_aliases(target, network)
     if alias in current:
         return
     # Reconnect carrying the FULL alias set: `connect` refuses an
@@ -710,11 +711,11 @@ def attach_alias(network: str, alias: str) -> None:
     # the new alias (DNS never resolves). The disconnect is a no-op when
     # absent, so one path covers both cases.
     wanted = list(dict.fromkeys([*current, alias]))
-    _run(["docker", "network", "disconnect", network, SHARED_CONTAINER], timeout=60)
+    _run(["docker", "network", "disconnect", network, target], timeout=60)
     cmd = ["docker", "network", "connect"]
     for entry in wanted:
         cmd += ["--alias", entry]
-    cmd += [network, SHARED_CONTAINER]
+    cmd += [network, target]
     proc = _run(cmd, timeout=60)
     if proc.returncode != 0:
         raise RuntimeError(

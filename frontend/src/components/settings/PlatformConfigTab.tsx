@@ -132,15 +132,49 @@ export function PlatformConfigTab() {
                   <Input type="number" min={0} max={1440} value={config.ROLLBACK_GRACE_MINUTES ?? 10} onChange={(e) => setConfig({ ...config, ROLLBACK_GRACE_MINUTES: parseInt(e.target.value) || 0 })} />
                   <p className="text-xs text-muted-foreground">Minutes to keep rollback containers. Set 0 to clean immediately after promote.</p>
                 </div>
+                <div className="space-y-2">
+                  <Label>Deployments to Retain</Label>
+                  <Input type="number" min={1} max={10} value={config.ROLLBACK_RETAIN_DEPLOYMENTS ?? 2} onChange={(e) => setConfig({ ...config, ROLLBACK_RETAIN_DEPLOYMENTS: Math.max(1, Math.min(10, parseInt(e.target.value) || 2)) })} />
+                  <p className="text-xs text-muted-foreground">Last N deployments kept per service for instant rollback (1-10).</p>
+                </div>
               </div>
               <div className="flex justify-end">
                 <Button onClick={async () => {
                   try {
-                    const result = await systemApi.updateConfig({ ROLLBACK_GRACE_MINUTES: config.ROLLBACK_GRACE_MINUTES });
+                    const result = await systemApi.updateConfig({ ROLLBACK_GRACE_MINUTES: config.ROLLBACK_GRACE_MINUTES, ROLLBACK_RETAIN_DEPLOYMENTS: config.ROLLBACK_RETAIN_DEPLOYMENTS });
                     setConfig(result);
                     toast({ title: "Saved", description: "Rollback config updated." });
                   } catch { toast({ title: "Failed", variant: "destructive" }); }
                 }}>Save Rollback</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </ScrollReveal>
+
+      {/* Retention Hygiene — env-driven, read-only */}
+      <ScrollReveal variant="slideRight" delay={0.185}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">Retention Hygiene</CardTitle>
+            <CardDescription>Build-cache and registry pruning. Host environment values — change on the server, not here.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-1">
+                <Label>Build Cache Max Age</Label>
+                <p className="text-sm font-mono">{config.BUILD_CACHE_MAX_AGE_HOURS ?? 24}h</p>
+                <p className="text-xs text-muted-foreground">BUILD_CACHE_MAX_AGE_HOURS</p>
+              </div>
+              <div className="space-y-1">
+                <Label>Registry Tag Retention</Label>
+                <p className="text-sm font-mono">{config.REGISTRY_TAG_RETENTION_DAYS ?? 7}d</p>
+                <p className="text-xs text-muted-foreground">REGISTRY_TAG_RETENTION_DAYS</p>
+              </div>
+              <div className="space-y-1">
+                <Label>Registry Deletes / Cycle</Label>
+                <p className="text-sm font-mono">{config.REGISTRY_TAG_DELETES_PER_CYCLE ?? 25}</p>
+                <p className="text-xs text-muted-foreground">Fail-closed safety cap</p>
               </div>
             </div>
           </CardContent>

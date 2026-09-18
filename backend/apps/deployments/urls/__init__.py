@@ -25,7 +25,7 @@ from ..views import (
     SnapshotScheduleViewSet,
     SystemConfigView,
 )
-from apps.core.views.system import DatabaseHaToggleView
+from apps.core.views.system import BeatHealView, DatabaseHaToggleView, RouteFallbackView
 from ..views.addons import AddonViewSet, service_addons_unified
 from ..views.analysis import RepoAnalysisView
 from ..views.autoscale import ScalingViewSet
@@ -199,6 +199,8 @@ urlpatterns = [
     path('services/<uuid:service_id>/health/webhook/', ServiceHealthWebhookView.as_view(), name='service-health-webhook'),
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
     path('system/db-ha-toggle/', DatabaseHaToggleView.as_view(), name='db-ha-toggle'),
+    path('system/beat-heal/', BeatHealView.as_view(), name='beat-heal'),
+    path('system/route-fallback/', RouteFallbackView.as_view(), name='route-fallback'),
     path('system/security-status/', SecurityStatusView.as_view(), name='security-status'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
     path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),

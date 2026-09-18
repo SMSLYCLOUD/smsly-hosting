@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 
 export interface PipelineStage {
   name: string;
-  status: string; // 'pending', 'running', 'success', 'failed'
+  status: string; // 'pending' | 'running' | 'success' | 'failed' | 'skipped'
   duration?: number;
 }
 
@@ -28,6 +28,7 @@ export function PipelineVisualizer({ stages, className }: PipelineVisualizerProp
           const isRunning = stage.status === 'running';
           const isSuccess = stage.status === 'success';
           const isFailed = stage.status === 'failed';
+          const isSkipped = stage.status === 'skipped';
 
           return (
             <div key={stage.name} className="flex-1 flex items-center">
@@ -42,13 +43,15 @@ export function PipelineVisualizer({ stages, className }: PipelineVisualizerProp
                     isPending && "border-muted text-muted-foreground",
                     isRunning && "border-blue-500 text-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]",
                     isSuccess && "border-emerald-500 bg-emerald-500 text-white border-transparent",
-                    isFailed && "border-red-500 bg-red-500 text-white border-transparent"
+                    isFailed && "border-red-500 bg-red-500 text-white border-transparent",
+                    isSkipped && "border-dashed border-zinc-500 text-zinc-500"
                   )}
                 >
                   {isPending && <Circle className="w-4 h-4" />}
                   {isRunning && <Loader2 className="w-4 h-4 animate-spin" />}
                   {isSuccess && <CheckCircle2 className="w-5 h-5" />}
                   {isFailed && <XCircle className="w-5 h-5" />}
+                  {isSkipped && <Circle className="w-4 h-4 opacity-50" />}
                 </motion.div>
 
                 {/* Label */}
@@ -58,9 +61,11 @@ export function PipelineVisualizer({ stages, className }: PipelineVisualizerProp
                     isPending && "text-muted-foreground",
                     isRunning && "text-blue-400",
                     isSuccess && "text-emerald-400",
-                    isFailed && "text-red-400"
+                    isFailed && "text-red-400",
+                    isSkipped && "text-zinc-500"
                   )}>
                     {stage.name}
+                    {isSkipped && " (skipped)"}
                   </span>
                   {stage.duration !== undefined && stage.duration > 0 && (
                     <span className="text-[10px] text-muted-foreground flex items-center gap-1 mt-0.5">

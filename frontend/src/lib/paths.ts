@@ -40,6 +40,7 @@ export const PROTECTED_PREFIXES = [
   "/logs",
   "/monitoring",
   "/network",
+  "/clusters",
   "/replication",
   "/restore",
   "/addons",

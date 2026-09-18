@@ -161,6 +161,13 @@ class SystemConfigView(GenericAPIView):
 
             # Platform config (DB-backed)
             **self._get_platform_config(),
+
+            # Retention hygiene — env-driven with constants fallback
+            # (matches apps/deployments/constants.py defaults; read-only
+            # here because they are host env, not DB fields).
+            'BUILD_CACHE_MAX_AGE_HOURS': max(1, int(os.environ.get('BUILD_CACHE_MAX_AGE_HOURS', 24))),
+            'REGISTRY_TAG_RETENTION_DAYS': max(1, int(os.environ.get('REGISTRY_TAG_RETENTION_DAYS', 7))),
+            'REGISTRY_TAG_DELETES_PER_CYCLE': 25,
         })
 
     # Field mapping: API key → (PlatformConfig field, type)
@@ -200,6 +207,9 @@ class SystemConfigView(GenericAPIView):
         'ENFORCE_DEVICE_TRUST': ('enforce_device_trust', bool),
         # Blue-green rollback
         'ROLLBACK_GRACE_MINUTES': ('rollback_grace_minutes', int),
+        'ROLLBACK_RETAIN_DEPLOYMENTS': ('rollback_retain_deployments', int),
+        # Tenant pooling (pgcat-tenants for new shared Postgres addons)
+        'TENANT_POOLING_ENABLED': ('tenant_pooling_enabled', bool),
         # Ecosystem
         'DEFAULT_ENV_SCAN_DEPTH': ('default_env_scan_depth', str),
         # Internal network (project-scoped bridges)
@@ -270,6 +280,55 @@ class SystemConfigView(GenericAPIView):
                 'STORAGE_FREE_GB': 0,
                 'STORAGE_USED_PERCENT': 0,
             }
+
+    def _get_redbeat_conn(self):
+        """Redis connection on db 3 (redbeat lock lives there), or None."""
+        try:
+            from config.redis_sentinel import SENTINEL_ENABLED, get_master_connection
+            if SENTINEL_ENABLED:
+                return get_master_connection(
+                    password=getattr(settings, 'REDIS_PASSWORD', None),
+                    db=3,
+                )
+            import redis as redis_lib
+            return redis_lib.Redis(
+                host=getattr(settings, 'REDIS_HOST', 'redis'),
+                port=int(getattr(settings, 'REDIS_PORT', 6379)),
+                password=getattr(settings, 'REDIS_PASSWORD', '') or None,
+                socket_timeout=2,
+                db=3,
+            )
+        except Exception as exc:
+            logger.debug("Redbeat redis connection failed: %s", exc)
+            return None
+
+    def _get_beat_status(self):
+        """Redbeat scheduler lock state (Redis db 3, key ``redbeat::lock``).
+
+        TTL semantics mirror ``ensure_beat_dispatching`` in
+        ``scripts/verify_platform_integrity.sh``: a live holder extends the
+        lock every tick, so a non-negative TTL means a beat holds it, -2
+        means no lock (wedged or starting), -1 means persistent (unexpected).
+        """
+        try:
+            lock_timeout = int(os.environ.get('REDBEAT_LOCK_TIMEOUT', 600))
+        except (TypeError, ValueError):
+            lock_timeout = 600
+        result = {
+            'scheduler': 'redbeat',
+            'lock_timeout': max(300, min(lock_timeout, 3600)),
+            'lock_ttl': None,
+            'healthy': None,
+        }
+        try:
+            conn = self._get_redbeat_conn()
+            if conn is not None:
+                ttl = conn.ttl('redbeat::lock')
+                result['lock_ttl'] = int(ttl) if ttl is not None else None
+                result['healthy'] = ttl is not None and int(ttl) >= 0
+        except Exception as exc:
+            logger.debug("Beat lock probe failed: %s", exc)
+        return result
 
     def _get_infra_health(self):
         """Check live infrastructure health: host metrics + all PaaS services."""
@@ -505,6 +564,12 @@ class SystemConfigView(GenericAPIView):
                 'status': container['status'] if container else ('healthy' if running else 'missing'),
             }
 
+        # ── Beat scheduler lock ───────────────────────────────────
+        # 2026-09-17: a recreated beat couldn't acquire redbeat::lock (dead
+        # predecessor held it). Surface the lock TTL so the dashboard can
+        # show scheduler health instead of failing silently.
+        infra['beat'] = self._get_beat_status()
+
         # ── Host-level security ───────────────────────────────────
         host_security = {}
 
@@ -624,6 +689,276 @@ class SystemConfigView(GenericAPIView):
             return Response(payload, status=status_code)
 
         return Response(payload, status=status.HTTP_202_ACCEPTED)
+
+
+class BeatHealView(GenericAPIView):
+    """POST /api/v1/system/beat-heal/ — release a stale redbeat lock + restart beat.
+
+    Same gates as ``ensure_beat_dispatching`` in
+    ``scripts/verify_platform_integrity.sh``: exactly one local beat
+    container, started >15 min ago, silent for 15 min, and a lock TTL that
+    proves staleness (a live holder extends every tick, so TTL > 300 means
+    someone is alive). Refuses instead of guessing.
+    """
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    BEAT_CONTAINER = 'smsly-hosting-celery-beat-1'
+    LOCK_KEY = 'redbeat::lock'
+    LIVE_TTL_FLOOR = 300
+    MIN_BEAT_AGE_S = 900
+
+    def post(self, request):
+        gate = self._check_gates()
+        if gate.get('error'):
+            return Response(gate, status=status.HTTP_409_CONFLICT)
+        actions = []
+        if gate['lock_ttl'] is not None and gate['lock_ttl'] >= 0:
+            deleted = self._del_lock()
+            if not deleted:
+                return Response(
+                    {'error': 'Stale lock confirmed but DEL failed — inspect redis db 3 manually.'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            actions.append(f"released stale lock (ttl was {gate['lock_ttl']}s)")
+        else:
+            actions.append('no lock held — nothing to release')
+        restart = self._docker('restart', self.BEAT_CONTAINER, timeout=90)
+        if restart.get('error'):
+            return Response(
+                {'error': f"Lock released but beat restart failed: {restart['error']}",
+                 'actions': actions},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        actions.append('restarted beat container')
+        return Response({
+            'status': 'ok',
+            'actions': actions,
+            'message': 'Beat lock healed. Watch /status for Dispatching within a few minutes.',
+        })
+
+    # -- gates (all must pass) ----------------------------------------
+    def _check_gates(self):
+        started_at = self._docker(
+            'inspect', self.BEAT_CONTAINER,
+            '--format', '{{.State.StartedAt}}', timeout=15)
+        if started_at.get('error'):
+            return {'error': 'Beat container not running locally — nothing to heal.'}
+        age = self._parse_age_s(started_at.get('output', ''))
+        if age is not None and age < self.MIN_BEAT_AGE_S:
+            return {'error': f'Beat restarted {int(age)}s ago — schedules still warming up; retry later.'}
+        peers = self._docker(
+            'ps', '--format', '{{.Names}}', timeout=15).get('output', '')
+        beat_peers = [n for n in peers.split() if 'celery-beat' in n]
+        if len(beat_peers) > 1:
+            return {'error': f'{len(beat_peers)} beat containers run locally — refusing auto-heal (possible live peer).'}
+        if self._dispatch_count_15m() > 0:
+            return {'error': 'Beat dispatched tasks in the last 15m — it is alive; no heal needed.'}
+        ttl = self._lock_ttl()
+        if ttl is None:
+            return {'error': 'Lock state unreadable — check redis db 3 manually.'}
+        if ttl == -1:
+            return {'error': 'Lock is persistent (no TTL) — unexpected; inspect manually.'}
+        if ttl > self.LIVE_TTL_FLOOR:
+            return {'error': f'Lock looks live (ttl={ttl}s) — a holder may be extending it; inspect manually.'}
+        return {'lock_ttl': ttl}
+
+    # -- helpers --------------------------------------------------------
+    def _docker(self, *args, timeout=30):
+        try:
+            result = subprocess.run(
+                ['docker', *args],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if result.returncode != 0:
+                return {'error': (result.stderr or result.stdout or 'docker failed').strip()[:300]}
+            return {'output': (result.stdout or '').strip()}
+        except subprocess.TimeoutExpired:
+            return {'error': 'docker command timed out'}
+        except Exception as exc:
+            return {'error': str(exc)[:300]}
+
+    def _parse_age_s(self, started_at):
+        try:
+            from datetime import datetime, timezone
+            ts = started_at.strip().strip("'")
+            # docker: 2026-09-18T10:00:00.123456789Z (nanoseconds)
+            ts = re.sub(r'(\.\d{6})\d+', r'\1', ts).replace('Z', '+00:00')
+            started = datetime.fromisoformat(ts)
+            return (datetime.now(timezone.utc) - started).total_seconds()
+        except Exception:
+            return None
+
+    def _dispatch_count_15m(self):
+        try:
+            result = subprocess.run(
+                ['docker', 'logs', self.BEAT_CONTAINER, '--since', '15m'],
+                capture_output=True, text=True, timeout=25,
+            )
+            out = (result.stdout or '') + (result.stderr or '')
+            return sum(1 for line in out.splitlines() if 'Sending due task' in line)
+        except Exception:
+            return -1
+
+    def _lock_ttl(self):
+        try:
+            conn = SystemConfigView()._get_redbeat_conn()
+            if conn is None:
+                return None
+            ttl = conn.ttl(self.LOCK_KEY)
+            return int(ttl) if ttl is not None else None
+        except Exception:
+            return None
+
+    def _del_lock(self):
+        try:
+            conn = SystemConfigView()._get_redbeat_conn()
+            if conn is None:
+                return False
+            return bool(conn.delete(self.LOCK_KEY))
+        except Exception:
+            return False
+
+
+class RouteFallbackView(GenericAPIView):
+    """GET/PUT /api/v1/system/route-fallback/ — edit the edge 503 pages.
+
+    The route-fallback Caddy container serves ``index.html`` ("waking up")
+    and ``disabled.html`` ("route disabled") from ``/etc/rb-fallback`` via a
+    read-only directory bind of ``infrastructure/route-fallback/``. Reads and
+    writes go through ``docker cp`` against the live container, so edits take
+    effect immediately (HTML is served per-request; no reload needed). The
+    Caddyfile itself is intentionally NOT editable here.
+
+    Every saved page must keep the request-ID contract
+    (``http.request.uuid``) so the dashboard error boundaries and the
+    auto-retry script keep working.
+    """
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    DIR = '/etc/rb-fallback'
+    FILES = ('index.html', 'disabled.html')
+    MAX_BYTES = 200 * 1024
+
+    def get(self, request):
+        container = self._container()
+        if container is None:
+            return Response(
+                {'error': 'route-fallback container not found.'}, status=404)
+        pages = {}
+        for name in self.FILES:
+            content = self._read_page(container, name)
+            if content is None:
+                return Response(
+                    {'error': f'Could not read {name} from {container}.'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            pages[name] = content
+        return Response({'container': container, 'pages': pages})
+
+    def put(self, request):
+        pages = (request.data or {}).get('pages') or {}
+        if not isinstance(pages, dict) or not pages:
+            return Response(
+                {'error': 'Body must be {"pages": {"index.html": "...", ...}}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        unknown = [k for k in pages if k not in self.FILES]
+        if unknown:
+            return Response(
+                {'error': f'Unknown pages: {", ".join(unknown)}. Editable: {", ".join(self.FILES)}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        container = self._container()
+        if container is None:
+            return Response(
+                {'error': 'route-fallback container not found.'}, status=404)
+        saved = []
+        for name, content in pages.items():
+            error = self._validate(name, content)
+            if error:
+                return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
+        for name, content in pages.items():
+            if not self._write_page(container, name, content):
+                return Response(
+                    {'error': f'Wrote {", ".join(saved)} but failed on {name}. Re-check the page.'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            saved.append(name)
+        return Response({'status': 'ok', 'saved': saved, 'container': container})
+
+    # -- helpers --------------------------------------------------------
+    def _container(self):
+        try:
+            result = subprocess.run(
+                ['docker', 'ps', '--format', '{{.Names}}'],
+                capture_output=True, text=True, timeout=15,
+            )
+            names = (result.stdout or '').split()
+        except Exception:
+            return None
+        cands = [n for n in names if 'route-fallback' in n]
+        if not cands:
+            return None
+        cands.sort(key=len)
+        return cands[0]
+
+    def _read_page(self, container, name):
+        import io
+        import tarfile
+        try:
+            result = subprocess.run(
+                ['docker', 'cp', f'{container}:{self.DIR}/{name}', '-'],
+                capture_output=True, timeout=20,
+            )
+            if result.returncode != 0 or not result.stdout:
+                return None
+            with tarfile.open(fileobj=io.BytesIO(result.stdout)) as tar:
+                member = tar.next()
+                if member is None:
+                    return None
+                f = tar.extractfile(member)
+                if f is None:
+                    return None
+                return f.read().decode('utf-8')
+        except Exception as exc:
+            logger.debug("route-fallback read failed: %s", exc)
+            return None
+
+    def _validate(self, name, content):
+        if not isinstance(content, str) or not content.strip():
+            return f'{name} must be non-empty HTML.'
+        if len(content.encode('utf-8')) > self.MAX_BYTES:
+            return f'{name} exceeds {self.MAX_BYTES // 1024}KB.'
+        if 'http.request.uuid' not in content:
+            return (f'{name} must keep the request-ID contract '
+                    '(http.request.uuid) — the page would break error correlation.')
+        return ''
+
+    def _write_page(self, container, name, content):
+        import os
+        import tempfile
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
+                f.write(content)
+                path = f.name
+            result = subprocess.run(
+                ['docker', 'cp', path, f'{container}:{self.DIR}/{name}'],
+                capture_output=True, text=True, timeout=30,
+            )
+            return result.returncode == 0
+        except Exception as exc:
+            logger.debug("route-fallback write failed: %s", exc)
+            return False
+        finally:
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
 
 class DatabaseHaToggleView(GenericAPIView):

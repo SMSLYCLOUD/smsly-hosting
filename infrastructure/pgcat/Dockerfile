@@ -32,8 +32,9 @@ RUN ln -sf /usr/local/bin/python3 /usr/local/bin/python && \
     python3 -c "import psycopg2; print('psycopg2 ok', psycopg2.__version__)"
 
 COPY entrypoint.sh /entrypoint.sh
+COPY entrypoint-tenants.sh /entrypoint-tenants.sh
 COPY render_pgcat_config.py /scripts/render_pgcat_config.py
-RUN chmod +x /entrypoint.sh /scripts/render_pgcat_config.py
+RUN chmod +x /entrypoint.sh /entrypoint-tenants.sh /scripts/render_pgcat_config.py
 
 # Drop privileges after setup.  PgCat binds to 0.0.0.0:6432 (default
 # port); docker-compose maps host 10.100.0.1:5432 to container 6432.

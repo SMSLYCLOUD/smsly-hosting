@@ -179,6 +179,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.restore_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.delete_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.migrate_addon_mode_task': {'queue': 'deploy'},
     'apps.addons.tasks.addon_health_check_all': {'queue': 'deploy'},
     'apps.addons.tasks.addon_auto_vacuum': {'queue': 'deploy'},
     'apps.addons.tasks.rotate_addon_credentials_task': {'queue': 'deploy'},
