@@ -253,6 +253,9 @@ class SharedStandbyTests(SimpleTestCase):
         flat = " ".join(run_cmds[0])
         self.assertIn("pg_basebackup", flat)
         self.assertIn("-R", flat)
+        # Standby must carry the primary's tuning flags: command-line
+        # settings do not replicate and recovery aborts otherwise.
+        self.assertIn("max_connections=400", flat)
         # Fresh named volumes are root-owned 0755; the seed bypasses the image
         # entrypoint, so it must chown AND chmod (0700) or postgres refuses
         # to start.

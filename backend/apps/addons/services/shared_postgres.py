@@ -46,6 +46,13 @@ SHARED_IMAGE = "pgvector/pgvector:pg16"
 SHARED_PORT = 5432
 SHARED_MAX_CONNECTIONS = 400
 SHARED_RESERVED_CONNECTIONS = 10
+# Passed as `postgres -c` flags on BOTH primary and standby: command-line
+# settings do not replicate, and recovery refuses to start when the
+# standby's max_connections is lower than the primary's (observed live).
+POSTGRES_TUNING_FLAGS = [
+    "-c", f"max_connections={SHARED_MAX_CONNECTIONS}",
+    "-c", f"superuser_reserved_connections={SHARED_RESERVED_CONNECTIONS}",
+]
 ROLE_CONNECTION_LIMIT = 10
 ROLE_STATEMENT_TIMEOUT = "30s"
 
@@ -145,8 +152,7 @@ def ensure_shared_server() -> str:
                  "-v", f"{SHARED_VOLUME}:/var/lib/postgresql/data",
                  SHARED_IMAGE,
                  "postgres",
-                 "-c", f"max_connections={SHARED_MAX_CONNECTIONS}",
-                 "-c", f"superuser_reserved_connections={SHARED_RESERVED_CONNECTIONS}"],
+                 *POSTGRES_TUNING_FLAGS],
                 timeout=180,
             )
             if proc.returncode != 0 and "already in use" not in (proc.stderr or ""):
@@ -277,7 +283,10 @@ def ensure_shared_standby() -> str:
                 "chmod 0700 /var/lib/postgresql/data; "
                 f"gosu postgres pg_basebackup -h {SHARED_CONTAINER} -p {SHARED_PORT} "
                 f"-U {REPLICATOR_ROLE} -D /var/lib/postgresql/data -Fp -Xs -P -R; "
-                "exec gosu postgres postgres"],
+                # Same tuning flags as the primary: command-line settings
+                # do not replicate, and recovery aborts when the standby's
+                # max_connections is lower (observed live).
+                "exec gosu postgres postgres " + " ".join(POSTGRES_TUNING_FLAGS)],
                 timeout=600,
             )
             if seed.returncode != 0 and "already in use" not in (seed.stderr or ""):
