@@ -298,7 +298,7 @@ def github_app_manifest_setup(request):
 
     # Browser flow: send the user straight into the INSTALL step (the
     # App exists now; installing it on their org is the only thing left).
-    frontend = "/dashboard/settings?tab=integrations&github_app=created"
+    frontend = "/settings?tab=git&github_app=created"
     if app_slug:
         import urllib.parse
         state = pyjwt.encode(
