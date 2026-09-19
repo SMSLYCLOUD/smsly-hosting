@@ -591,7 +591,7 @@ run_migrations() {
             echo -e "${GREEN}  ✓ Migrations complete on retry${NC}" || \
             echo -e "${YELLOW}  ⚠ Migrations still failing (non-fatal, will retry on next update)${NC}"
     fi
-    timeout 120 docker compose -f "$COMPOSE_PATH" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed${NC}"
+        timeout -k 5 120 docker compose -f "$COMPOSE_PATH" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed${NC}"
 }
 
 wait_for_backend() {

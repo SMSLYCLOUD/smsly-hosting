@@ -431,7 +431,7 @@
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
             echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
+            timeout -k 5 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
             set_checkpoint "update_db_migrated"
 
@@ -515,7 +515,7 @@
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
             echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
+            timeout -k 5 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
             # 5. Clean celerybeat-schedule and restart celery workers
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
@@ -643,7 +643,7 @@
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
             echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
+            timeout -k 5 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
             # 11. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"

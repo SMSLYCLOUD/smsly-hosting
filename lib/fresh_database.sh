@@ -301,7 +301,7 @@ echo -e "${BLUE}  → Collecting Static Files...${NC}"
         fi
     done
     echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
-    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput < /dev/null || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
+    timeout -k 5 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput < /dev/null || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
     # NOTE: heredoc (not `bash -c "..."`) on purpose: the bundle regen
     # pipeline inlines `source` lines, and a source line inside a
