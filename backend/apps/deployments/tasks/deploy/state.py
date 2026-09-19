@@ -71,3 +71,21 @@ def _post_deploy_success(deployment: Deployment, service: Service, log_line_func
     with suppress(Exception):
         from .caddy import _regenerate_caddyfile
         _regenerate_caddyfile()
+    with suppress(Exception):
+        # Promote recreates the canonical container — the sidecar's
+        # `network_mode: container:<old-id>` dangles on the stopped backup
+        # while reporting running+healthy mounts. Rebind it to the live
+        # container now instead of serving unmeshed until a beat notices.
+        # Best-effort by design: the promotion already succeeded and the
+        # app is live — a mesh hiccup must never fail it retroactively.
+        from apps.mtls.models import MtlsConfig
+        cfg = MtlsConfig.objects.filter(
+            service=service, enabled=True, sidecar_enabled=True,
+        ).first()
+        if cfg is not None:
+            from apps.mtls.services.envoy_sidecar import EnvoySidecar
+            live_id = (
+                getattr(deployment, "container_id", "")
+                or getattr(service, "active_runtime_id", "")
+            )
+            EnvoySidecar.reattach_if_stale(service, live_container_id=live_id)

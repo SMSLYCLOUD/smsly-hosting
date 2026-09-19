@@ -1035,8 +1035,20 @@ def mtls_repair(request, service_id):
                 # reach agent.sock. Recreate with current mounts; the app
                 # container is untouched (seconds of sidecar absence only).
                 mount_check = EnvoySidecar.check_socket_mount_healthy(svc)
+                _remount_reason = str(mount_check.get("reason") or "")
                 if mount_check.get("healthy"):
-                    continue
+                    # Mounts fine, but the namespace may dangle on a
+                    # promote-swapped container (running sidecar, dead
+                    # network). Unknowns never churn — fall through to
+                    # reattach only on a determinate stale binding.
+                    ns_check = EnvoySidecar.check_namespace_current(svc)
+                    if ns_check.get("current") is not False or not ns_check.get("stale"):
+                        continue
+                    logger.warning(
+                        "mTLS repair: stale sidecar namespace for %s (%s)",
+                        svc.name, ns_check.get("reason"),
+                    )
+                    _remount_reason = str(ns_check.get("reason") or _remount_reason)
                 if "unavailable" in str(mount_check.get("reason", "")):
                     continue  # daemon hiccup — don't churn on unknowns
                 # Never orphan: without a running app container inject
@@ -1065,7 +1077,7 @@ def mtls_repair(request, service_id):
                     sidecars_remounted.append(svc.name)
                     logger.info(
                         "mTLS repair: remounted sidecar for %s (%s): %s",
-                        svc.name, mount_check.get("reason"),
+                        svc.name, _remount_reason,
                         result.get("status"),
                     )
                 except Exception as exc:

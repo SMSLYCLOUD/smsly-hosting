@@ -14,6 +14,33 @@ from apps.deployments.models import Deployment, Service
 logger = logging.getLogger(__name__)
 
 
+def _shared_backend_container(addon) -> tuple[str, str]:
+    """Resolve the backing container for a shared POSTGRES addon.
+
+    Shared addons are logical databases — there is no per-addon container.
+    Returns (container_name, kind) where kind is human-readable for errors.
+    Pooler-routed addons resolve to the pgcat-tenants pooler (which carries
+    the alias); all others resolve to the shared Postgres server.
+    """
+    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+    if getattr(addon, 'pooler_routed', False):
+        try:
+            from apps.addons.services import tenant_pooler as _pooler
+            name = _pooler.tenants_container_name()
+        except Exception:
+            name = None
+        if name:
+            return name, "tenant pooler"
+    return SHARED_CONTAINER, "shared Postgres server"
+
+
+def _is_shared_postgres(addon) -> bool:
+    return (
+        getattr(addon, 'addon_type', '') == 'POSTGRES'
+        and str(getattr(addon, 'provision_mode', '') or '') == 'shared'
+    )
+
+
 def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
     from apps.addons.services.addon_provisioner import addon_provisioner
     from apps.deployments.models.addons import Addon
@@ -27,11 +54,17 @@ def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
                 f"connection URL. Provisioning may have failed silently."
             )
         container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        backend_kind = "addon container"
+        if _is_shared_postgres(addon):
+            # Logical database on the shared server (or behind the tenant
+            # pooler) — there is intentionally no per-addon container.
+            container_name, backend_kind = _shared_backend_container(addon)
         cid, running = addon_provisioner._container_status(container_name)
         if not cid or not running:
             raise RuntimeError(
-                f"Addon {addon.addon_type} ({addon.name}) container "
-                f"{container_name} is not running (cid={cid}, running={running}). "
+                f"Addon {addon.addon_type} ({addon.name}) backend "
+                f"{backend_kind} '{container_name}' is not running "
+                f"(cid={cid}, running={running}). "
                 f"The service cannot start without its addon."
             )
 
@@ -191,16 +224,21 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
         if not hostname or not port:
             continue
 
-        # The addon's container name follows the standard naming convention
-        # (see addon_provisioner._container_name). We look it up by both
-        # name and ID to handle renames.
+        # The addon's backing container follows the standard naming
+        # convention (see addon_provisioner._container_name), except for
+        # shared POSTGRES addons which resolve to the shared server (or
+        # tenant pooler). We look it up by both name and ID to handle
+        # renames.
         container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        backend_kind = "container"
+        if _is_shared_postgres(addon):
+            container_name, backend_kind = _shared_backend_container(addon)
         try:
             addon_container = client.containers.get(container_name)
         except docker.errors.NotFound:
             errors.append(
                 f"Addon {addon.addon_type} ({addon.name}): "
-                f"container '{container_name}' is not running. "
+                f"{backend_kind} '{container_name}' is not running. "
                 f"Service cannot start without its addon."
             )
             continue
@@ -219,7 +257,7 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
         if addon_container.status != 'running':
             errors.append(
                 f"Addon {addon.addon_type} ({addon.name}): "
-                f"container '{container_name}' is in state "
+                f"{backend_kind} '{container_name}' is in state "
                 f"'{addon_container.status}', expected 'running'."
             )
             continue

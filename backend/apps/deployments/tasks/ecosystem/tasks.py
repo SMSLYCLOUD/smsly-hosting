@@ -1,9 +1,125 @@
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
 ECOSYSTEM_TRUST_DOMAIN = "ecosystem.local"
 PLATFORM_TRUST_DOMAIN = "platform.local"
+
+
+def _prepare_ecosystem_mesh(entries_by_key, mtls_enabled: bool = True) -> str | None:
+    """Warm everything the per-service sidecar gate needs, failing the PLAN fast.
+
+    Sidecar creation itself must wait for each running app container (it
+    shares that container's network namespace), but every OTHER fallible
+    step can run up front: template presence, sidecar image availability,
+    agent responsiveness, and SPIRE entries for every planned internal
+    service. A failure here returns an error string (caller fails the plan
+    record — cheap, before any deployment exists) instead of failing N
+    service deploys one by one at their readiness gates. Entry
+    pre-creation is best-effort (the per-service ensure is the backstop;
+    creation is idempotent via "already exists").
+    """
+    if not mtls_enabled:
+        return None
+    names: list[str] = []
+    try:
+        for _key, _entry in (entries_by_key or {}).items():
+            if not isinstance(_entry, dict):
+                continue
+            _plan = _entry.get("plan")
+            _internal = True
+            if isinstance(_plan, dict):
+                _internal = bool(_plan.get("internal", True))
+            if not _internal:
+                continue
+            _name = str(_entry.get("requested_name") or "").strip()
+            if _name:
+                names.append(_name)
+    except Exception as exc:
+        logger.warning("Mesh prep: could not collect service names: %s", exc)
+        names = []
+    if not names:
+        return None
+
+    # 1. Envoy template must exist — without it every inject fails identically.
+    try:
+        import os as _os
+        from apps.mtls.services import envoy_sidecar as _sidecar_mod
+        _template = _os.getenv("ENVOY_TEMPLATE_PATH") or _os.path.join(
+            _os.path.dirname(_sidecar_mod.__file__),
+            "..", "..", "..", "..",
+            "infrastructure", "envoy", "envoy.yaml.template",
+        )
+        if not _os.path.isfile(_template):
+            return (
+                "Mesh prep failed: Envoy template missing "
+                f"({_template}). Sidecars can never render."
+            )
+    except Exception as exc:
+        return f"Mesh prep failed checking Envoy template: {exc}"
+
+    # 2. Sidecar image warm (pull/build) — the most failure-prone step
+    # (registry auth, network). Once, here, not per service.
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        from apps.mtls.services.envoy_sidecar import EnvoySidecar as _Sidecar
+        _client = get_docker_client()
+        _Sidecar.ensure_sidecar_image(_client)
+    except Exception as exc:
+        return (
+            "Mesh prep failed: sidecar image unavailable "
+            f"({exc}). Fix registry/auth before deploying."
+        )
+
+    # 3. Ecosystem agent must answer — without it no SVID is ever issued.
+    # Poll briefly: the agent may still be attesting after infra ensure.
+    try:
+        from apps.mtls.views import ECOSYSTEM_SPIRE_AGENT_CONTAINER
+        _agent_ok = False
+        _deadline = time.time() + 60
+        while time.time() < _deadline:
+            try:
+                _probe = _client.containers.get(ECOSYSTEM_SPIRE_AGENT_CONTAINER)
+                _res = _probe.exec_run(
+                    ["/opt/spire/bin/spire-agent", "healthcheck",
+                     "-socketPath", "/opt/spire/run/agent.sock"],
+                    demux=False,
+                )
+                if getattr(_res, "exit_code", 1) == 0:
+                    _agent_ok = True
+                    break
+            except Exception:
+                pass
+            time.sleep(5)
+        if not _agent_ok:
+            return (
+                "Mesh prep failed: ecosystem SPIRE agent is not healthy. "
+                "No SVID can be issued — check the agent container."
+            )
+    except Exception as exc:
+        return f"Mesh prep failed checking SPIRE agent health: {exc}"
+
+    # 4. Pre-create entries (best-effort warn; per-service ensure backstops).
+    try:
+        from apps.deployments.tasks_spiffe import (
+            _create_spire_entry,
+            _live_ecosystem_agent_id,
+        )
+        _parent = _live_ecosystem_agent_id()
+        for _name in names:
+            try:
+                _create_spire_entry(_name, parent_id=_parent)
+            except Exception as exc:
+                logger.warning(
+                    "Mesh prep: entry pre-create failed for %s: %s",
+                    _name, exc,
+                )
+    except Exception as exc:
+        logger.warning("Mesh prep: entry pre-create unavailable: %s", exc)
+
+    logger.info("Mesh prep complete for %d ecosystem service(s)", len(names))
+    return None
 
 
 def _configure_platform_mtls(service, enabled: bool = True) -> None:
@@ -1201,6 +1317,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if not entries_by_key:
         _fail_plan_record(plan_id, "No deployable services in plan (all skipped or missing repos)")
         return {"error": "No deployable services in plan"}
+
+    # ── Mesh prep: warm everything the per-service sidecar gate needs ──
+    # Image pulls, template presence, agent health and SPIRE entries are
+    # all verified/created here — once, before any deployment exists — so
+    # a mesh problem fails the PLAN fast instead of failing N service
+    # deploys one by one at their readiness gates (strict services stay
+    # strict: the per-service gate is unchanged).
+    if bool(mtls_config.get("enabled", True)):
+        _mesh_error = _prepare_ecosystem_mesh(entries_by_key, mtls_enabled=True)
+        if _mesh_error:
+            _fail_plan_record(plan_id, _mesh_error)
+            return {"error": _mesh_error}
 
     # ── Cross-project adoption pre-pass ─────────────────────────────────
     # Before shared-addon provisioning, adopt services created by PREVIOUS

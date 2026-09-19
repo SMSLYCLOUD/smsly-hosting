@@ -410,7 +410,7 @@ class EnvoySidecar:
             from apps.deployments.services.mtls_integration import resolve_spire_volume_name
             socket_volume = resolve_spire_volume_name(SPIRE_AGENT_SOCKET_VOLUME)
             svids_volume = resolve_spire_volume_name(SPIRE_SVIDS_VOLUME)
-            container = client.containers.run(
+            run_kwargs = dict(
                 image=ENVOY_IMAGE,
                 name=sidecar_name,
                 detach=True,
@@ -468,6 +468,35 @@ class EnvoySidecar:
                 nano_cpus=int(0.25e9),  # 0.25 CPU
                 pids_limit=64,
             )
+            # Daemon hiccups (500s, timeouts) are transient — one retry
+            # before failing. 409/conflict means a peer won the race and
+            # is handled as already_running below, never retried.
+            # ImageNotFound is deterministic (missing image) — retrying
+            # cannot help, fail fast so callers surface it clearly.
+            container = None
+            for _attempt in (1, 2):
+                try:
+                    container = client.containers.run(**run_kwargs)
+                    break
+                except Exception as run_exc:
+                    if not EnvoySidecar._is_retryable_run_error(run_exc) or _attempt >= 2:
+                        raise
+                    logger.warning(
+                        "Sidecar create for %s hit transient daemon error, "
+                        "retrying once: %s", service.name, run_exc,
+                    )
+                    time.sleep(5)
+                    try:
+                        _peer = client.containers.get(sidecar_name)
+                        _peer.reload()
+                        if getattr(_peer, "status", "") == "running":
+                            logger.info(
+                                "Envoy sidecar %s appeared during inject retry for %s",
+                                sidecar_name, service.name,
+                            )
+                            return {"status": "already_running", "name": sidecar_name}
+                    except Exception:
+                        pass
 
             logger.info(
                 "Injected Envoy sidecar %s for service %s",
@@ -703,6 +732,138 @@ class EnvoySidecar:
             }
 
     @staticmethod
+    def _is_retryable_run_error(exc) -> bool:
+        """True when a failed sidecar create is worth one retry.
+
+        409/conflict (peer won the race) is handled as already_running,
+        never retried. ImageNotFound is deterministic — retrying cannot
+        help. Everything else (daemon 500s, timeouts, socket-proxy
+        hiccups) is transient. Duck-typed on status_code so no docker
+        import is needed here.
+        """
+        detail = str(exc)
+        status = getattr(exc, "status_code", None)
+        if status == 409 or "already in use" in detail or "Conflict" in detail:
+            return False
+        if status == 404 or "No such image" in detail:
+            return False
+        return True
+
+    @staticmethod
+    def _normalize_container_id(cid) -> str:
+        return str(cid or "").strip().lower()
+
+    @staticmethod
+    def _ids_match(a, b) -> bool:
+        """Full-vs-short container id comparison (either direction)."""
+        a = EnvoySidecar._normalize_container_id(a)
+        b = EnvoySidecar._normalize_container_id(b)
+        if not a or not b or len(a) < 4 or len(b) < 4:
+            return False
+        return a == b or a.startswith(b) or b.startswith(a)
+
+    @staticmethod
+    def check_namespace_current(service, live_container_id=None) -> dict:
+        """True when the sidecar shares the CURRENT live container's net namespace.
+
+        Blue-green promote recreates the canonical container; the sidecar's
+        ``network_mode: container:<old-id>`` then dangles on a stopped /
+        renamed backup while the sidecar itself still reports running with
+        healthy mounts — no existing check catches that. Returns
+        ``{"current": True/False/None, ...}``; None means unknown (inspect
+        unavailable or unexpected mode) and callers must NOT churn on it.
+        """
+        sidecar_name = EnvoySidecar.get_sidecar_name(service)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+
+            client = get_docker_client()
+            live_id = EnvoySidecar._normalize_container_id(live_container_id)
+            if not live_id:
+                main = EnvoySidecar._find_main_container(client, service)
+                live_id = EnvoySidecar._normalize_container_id(
+                    getattr(main, "id", "") if main is not None else ""
+                )
+            if not live_id:
+                return {
+                    "current": None, "stale": False,
+                    "reason": "no live container",
+                    "sidecar_network": "", "live_id": "",
+                }
+            try:
+                sidecar = client.containers.get(sidecar_name)
+            except Exception:
+                return {
+                    "current": False, "stale": False,
+                    "reason": "sidecar missing",
+                    "sidecar_network": "", "live_id": live_id,
+                }
+            try:
+                sidecar.reload()
+            except Exception:
+                pass
+            if getattr(sidecar, "status", "") != "running":
+                return {
+                    "current": False, "stale": False,
+                    "reason": f"sidecar {getattr(sidecar, 'status', '?')}",
+                    "sidecar_network": "", "live_id": live_id,
+                }
+            host_config = (getattr(sidecar, "attrs", None) or {}).get("HostConfig", {}) or {}
+            net_mode = str(host_config.get("NetworkMode") or "")
+            if not net_mode.startswith("container:"):
+                return {
+                    "current": None, "stale": False,
+                    "reason": f"unexpected network mode {net_mode or 'missing'}",
+                    "sidecar_network": net_mode, "live_id": live_id,
+                }
+            bound_id = net_mode.split("container:", 1)[1]
+            if EnvoySidecar._ids_match(bound_id, live_id):
+                return {
+                    "current": True, "stale": False,
+                    "reason": "namespace current",
+                    "sidecar_network": net_mode, "live_id": live_id,
+                }
+            return {
+                "current": False, "stale": True,
+                "reason": f"sidecar bound to {bound_id[:12]}, live is {live_id[:12]}",
+                "sidecar_network": net_mode, "live_id": live_id,
+            }
+        except Exception as exc:
+            return {
+                "current": None, "stale": False,
+                "reason": f"namespace check unavailable: {exc}",
+                "sidecar_network": "", "live_id": "",
+            }
+
+    @staticmethod
+    def reattach_if_stale(service, live_container_id=None) -> dict:
+        """Rebind the sidecar to the live container after a container swap.
+
+        Missing sidecar -> inject. Determinately stale namespace (promote
+        left it on a dead container) -> remove + inject. Unknown state ->
+        the remount path (safe no-op when already fine). Inject errors
+        propagate so callers keep their contracts.
+        """
+        ns = EnvoySidecar.check_namespace_current(service, live_container_id)
+        if ns.get("current") is True:
+            return {
+                "status": "current", "reattached": False,
+                "name": EnvoySidecar.get_sidecar_name(service),
+            }
+        if ns.get("stale"):
+            logger.warning(
+                "Reattaching stale sidecar for %s (%s)",
+                service.name, ns.get("reason"),
+            )
+            EnvoySidecar.remove_sidecar(service)
+            result = EnvoySidecar.inject_sidecar(service)
+            result["reattached"] = True
+            return result
+        result = EnvoySidecar.remount_if_stale(service)
+        result["reattached"] = bool(result.get("remounted"))
+        return result
+
+    @staticmethod
     def remount_if_stale(service) -> dict:
         """Inject, recreating first when the socket mount is stale.
 
@@ -744,6 +905,16 @@ class EnvoySidecar:
         return result
 
     @staticmethod
+    def _is_missing_container(exc) -> bool:
+        """True when a Docker error means 'no such container' (vs daemon down)."""
+        detail = str(exc).lower()
+        return (
+            getattr(exc, "status_code", None) == 404
+            or "no such container" in detail
+            or "not found" in detail and "image" not in detail
+        )
+
+    @staticmethod
     def wait_sidecar_ready(service, timeout_seconds: int = 120) -> bool:
         """Wait until the sidecar is serving with an issued SVID.
 
@@ -760,9 +931,33 @@ class EnvoySidecar:
         want = f"service/{safe_name}"
         deadline = time.time() + max(10, int(timeout_seconds or 120))
         last_state = "unknown"
+        reinjects = 0
         while time.time() < deadline:
             try:
-                container = client.containers.get(sidecar_name)
+                try:
+                    container = client.containers.get(sidecar_name)
+                except Exception as get_exc:
+                    # Sidecar vanished mid-wait (removed out-of-band, never
+                    # injected after a swap). Re-inject bounded times within
+                    # the same deadline instead of burning it all waiting
+                    # for a container that will never appear.
+                    if reinjects < 2 and EnvoySidecar._is_missing_container(get_exc):
+                        reinjects += 1
+                        logger.warning(
+                            "Sidecar %s vanished while waiting for %s — "
+                            "re-injecting (%d/2)",
+                            sidecar_name, service.name, reinjects,
+                        )
+                        try:
+                            EnvoySidecar.inject_sidecar(service)
+                        except Exception as inject_exc:
+                            logger.debug(
+                                "Wait-path re-inject failed for %s: %s",
+                                service.name, inject_exc,
+                            )
+                        time.sleep(5)
+                        continue
+                    raise
                 if getattr(container, "status", "") != "running":
                     last_state = f"container {getattr(container, 'status', '?')}"
                     time.sleep(5)

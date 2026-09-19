@@ -586,6 +586,14 @@ class EcosystemDeployTaskTests(TestCase):
             "apps.mtls.views.ensure_ecosystem_spire", return_value="ready"
         )
         self._spire_patcher.start()
+        # Hermetic: mesh prep warms the sidecar image and probes the
+        # SPIRE agent over Docker — same category as above. Unit tests
+        # cover prep itself in test_sidecar_hardening.MeshPrepTests.
+        self._mesh_prep_patcher = patch(
+            "apps.deployments.tasks.ecosystem.tasks._prepare_ecosystem_mesh",
+            return_value=None,
+        )
+        self._mesh_prep_patcher.start()
         # Hermetic: the wave-engine kickoff uses app.send_task, which
         # ignores task_always_eager and needs a live broker. Mock the
         # transport; the wave task itself is covered by its own tests.
@@ -598,6 +606,7 @@ class EcosystemDeployTaskTests(TestCase):
     def tearDown(self):
         self._send_task_patcher.stop()
         self._spire_patcher.stop()
+        self._mesh_prep_patcher.stop()
 
     @patch("apps.deployments.tasks.ecosystem.tasks._queue_wave", return_value=1)
     def test_local_provider_without_managed_server_queues_local_deployment(self, _queue_wave):
