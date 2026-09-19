@@ -1,6 +1,53 @@
 # -----------------------------------------------------------------------------
 # 4. Deployment
 # -----------------------------------------------------------------------------
+# ─── Registry auth pair self-heal (runs on EVERY invocation, resume included)
+# .env's REGISTRY_PASSWORD and auth/htpasswd must always agree: the deploy
+# step generates them as a pair, but rollback can restore a pre-generation
+# .env while htpasswd keeps the new password (or an operator overwrites one
+# side by hand). Either divergence breaks every push with "no basic auth
+# credentials". Idempotent, touches nothing running — registry:2.8.3 reads
+# htpasswd per-request, so no restart is needed after a rewrite.
+ensure_registry_auth_pair() {
+    [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] || return 0
+    local _pair_user="" _pair_pass="" _pair_ok=false
+    _pair_user="$(grep -m1 '^REGISTRY_USER=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+    [ -n "$_pair_user" ] || _pair_user="smsly-registry"
+    _pair_pass="$(grep -m1 '^REGISTRY_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+    if [ -z "$_pair_pass" ]; then
+        _pair_pass="$(python3 -c "import secrets; print(secrets.token_urlsafe(24))" 2>/dev/null || openssl rand -hex 18 || echo 'auto-generated-change-me')"
+        if grep -q '^REGISTRY_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null; then
+            sed -i "s/^REGISTRY_PASSWORD=.*/REGISTRY_PASSWORD=${_pair_pass}/" "$INSTALL_DIR/.env"
+        else
+            echo "REGISTRY_PASSWORD=${_pair_pass}" >> "$INSTALL_DIR/.env"
+        fi
+        if ! grep -q '^REGISTRY_USER=' "$INSTALL_DIR/.env" 2>/dev/null; then
+            echo "REGISTRY_USER=${_pair_user}" >> "$INSTALL_DIR/.env"
+        fi
+        echo -e "${BLUE}  → Generated missing REGISTRY_PASSWORD${NC}"
+    fi
+    if [ -f "$INSTALL_DIR/auth/htpasswd" ]; then
+        if command -v htpasswd >/dev/null 2>&1; then
+            htpasswd -vb "$INSTALL_DIR/auth/htpasswd" "$_pair_user" "$_pair_pass" >/dev/null 2>&1 && _pair_ok=true
+        else
+            _pair_ok=true  # no verifier available; leave the file alone
+        fi
+    fi
+    if [ "$_pair_ok" != "true" ]; then
+        mkdir -p "$INSTALL_DIR/auth"
+        if command -v htpasswd >/dev/null 2>&1; then
+            htpasswd -Bbn "$_pair_user" "$_pair_pass" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null \
+                && echo -e "${BLUE}  → Rewrote registry htpasswd from .env${NC}" \
+                || echo -e "${YELLOW}    ⚠ Could not rewrite registry htpasswd${NC}"
+        else
+            python3 -c "import bcrypt,sys; print('${_pair_user}:' + bcrypt.hashpw(sys.argv[1].encode(), bcrypt.gensalt(10)).decode())" "$_pair_pass" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null \
+                && echo -e "${BLUE}  → Rewrote registry htpasswd from .env${NC}" \
+                || echo -e "${YELLOW}    ⚠ Could not rewrite registry htpasswd${NC}"
+        fi
+    fi
+    unset _pair_user _pair_pass _pair_ok
+}
+ensure_registry_auth_pair
 STACK_DEPLOYED_FROM_CHECKPOINT=false
 if is_checkpoint_done "stack_deployed"; then
     STACK_DEPLOYED_FROM_CHECKPOINT=true

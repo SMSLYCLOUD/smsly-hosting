@@ -118,6 +118,16 @@ safe_update_snapshot() {
         cp "$INSTALL_DIR/.env" "$BACKUP_DIR/pre-update.env"  && _ok ".env backed up" || _warn ".env backup failed"
     fi
 
+    # Backup registry auth material alongside .env. The deploy step
+    # generates REGISTRY_PASSWORD into .env AND writes auth/htpasswd from
+    # it as a pair; restoring a pre-password .env while keeping a
+    # post-generation htpasswd (or vice versa) permanently breaks every
+    # registry push with "no basic auth credentials" (2026-09-19).
+    if [ -d "$INSTALL_DIR/auth" ]; then
+        rm -rf "$BACKUP_DIR/pre-update.auth" 2>/dev/null || true
+        cp -a "$INSTALL_DIR/auth" "$BACKUP_DIR/pre-update.auth"  && _ok "registry auth backed up" || _warn "registry auth backup failed"
+    fi
+
     # Redis RDB snapshot (non-fatal — container may not be running)
     if timeout 10 docker exec smsly-hosting-redis-1 redis-cli SAVE ; then
         _ok "Redis RDB saved"
@@ -235,6 +245,14 @@ safe_update_rollback() {
     # Restore .env from pre-update backup
     if [ -f "$BACKUP_DIR/pre-update.env" ]; then
         cp "$BACKUP_DIR/pre-update.env" "$INSTALL_DIR/.env"  && _ok ".env restored" || _warn ".env restore failed"
+    fi
+
+    # Restore registry auth material with .env (keeps the pair consistent —
+    # see snapshot note above; htpasswd alone would keep a password .env
+    # no longer has).
+    if [ -d "$BACKUP_DIR/pre-update.auth" ]; then
+        rm -rf "$INSTALL_DIR/auth" 2>/dev/null || true
+        cp -a "$BACKUP_DIR/pre-update.auth" "$INSTALL_DIR/auth"  && _ok "registry auth restored" || _warn "registry auth restore failed"
     fi
 
     # Clear stale lock from the failed original install.sh
