@@ -161,7 +161,20 @@ def sync_pgcat_config(*, trigger_reload: bool = True) -> dict[str, Any]:
         return result
 
     # Render the config inside the container. The generator already
-    # reads DB_REPLICA_HOSTS from the environment.
+    # reads DB_REPLICA_HOSTS from the environment. Build the env as a
+    # real dict: container Env is a LIST ("K=V" strings), and `{**list}`
+    # raises TypeError (this silently broke every sync). The fresh
+    # endpoints value must win over any stale value in the image env.
+    _exec_env: dict[str, str] = {}
+    try:
+        for _entry in (container.attrs.get("Config", {}) or {}).get("Env", []) or []:
+            if "=" in str(_entry):
+                _k, _, _v = str(_entry).partition("=")
+                if _k:
+                    _exec_env[_k] = _v
+    except Exception as exc:
+        logger.debug("Could not read container env for pgcat sync: %s", exc)
+    _exec_env[DB_REPLICA_HOSTS_ENV] = endpoints_str
     try:
         exec_result = container.exec_run(
             [
@@ -169,7 +182,7 @@ def sync_pgcat_config(*, trigger_reload: bool = True) -> dict[str, Any]:
                 "/scripts/render_pgcat_config.py",
                 "/etc/pgcat/pgcat.toml",
             ],
-            environment={DB_REPLICA_HOSTS_ENV: endpoints_str, **container.attrs.get("Config", {}).get("Env", [])},
+            environment=_exec_env,
             user="pgcat",
         )
         if exec_result.exit_code != 0:
@@ -222,8 +235,14 @@ def _find_pgcat_container() -> str | None:
             except NotFound:
                 continue
         # Fallback: scan for any container with 'pgcat' in its name.
+        # NEVER match the tenants pooler (pgcat-tenants): rendering the
+        # platform config into it poisoned its volume with a config it
+        # cannot serve, crash-looping it until manual repair (2026-09-20).
         for c in client.containers.list():
-            if "pgcat" in (c.name or "").lower():
+            _name = (c.name or "").lower()
+            if "tenants" in _name:
+                continue
+            if "pgcat" in _name:
                 return c.name
     except Exception as exc:
         logger.warning("Could not enumerate docker containers: %s", exc)
