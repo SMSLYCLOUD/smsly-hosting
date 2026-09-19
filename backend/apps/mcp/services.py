@@ -23,6 +23,19 @@ MCP_IMAGE = os.getenv("MCP_SERVER_IMAGE", "smsly-hosting-backend:latest")
 MCP_PORT = int(os.getenv("MCP_SERVER_PORT", "8001") or 8001)
 MCP_NETWORK = os.getenv("MCP_SERVER_NETWORK", "smsly-net")
 MCP_MEM_LIMIT = os.getenv("MCP_SERVER_MEM_LIMIT", "512m")
+# The container reuses the backend image, whose baked-in healthcheck probes
+# :8000/healthz — meaningless here (we serve SSE on MCP_PORT). Override it
+# at creation with a TCP probe, or Docker reports unhealthy forever.
+# (docker-py takes nanoseconds for the durations.)
+MCP_HEALTHCHECK = {
+    "test": ["CMD-SHELL",
+             f"python3 -c \"import socket;s=socket.socket();s.settimeout(5);"
+             f"s.connect(('127.0.0.1',{MCP_PORT}));s.close()\""],
+    "interval": 30_000_000_000,
+    "timeout": 10_000_000_000,
+    "retries": 3,
+    "start_period": 60_000_000_000,
+}
 # Auto-start: the managed container restarts with Docker (unless-stopped)
 # and the ensure_mcp_server_running beat recreates it if ever removed.
 # Set MCP_AUTOSTART=false to return to fully manual control.
@@ -88,6 +101,7 @@ def _to_status(container) -> dict:
         "exists": True,
         "running": container.status == "running",
         "status": container.status,
+        "health": (state.get("Health") or {}).get("Status"),
         "container_id": (container.id or "")[:12],
         "image": (attrs.get("Config") or {}).get("Image", ""),
         "started_at": state.get("StartedAt", ""),
@@ -141,6 +155,7 @@ def _ensure_container(client):
         labels={"managed_by": "smsly-hosting", "smsly.mcp": "true"},
         restart_policy={"Name": "unless-stopped"},
         mem_limit=MCP_MEM_LIMIT,
+        healthcheck=MCP_HEALTHCHECK,
         detach=True,
     )
     for extra in networks[1:]:

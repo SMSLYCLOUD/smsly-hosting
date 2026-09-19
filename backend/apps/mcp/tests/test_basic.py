@@ -139,6 +139,40 @@ class EnsureMcpServerTests(TestCase):
         mock_start.assert_not_called()
 
 
+class McpContainerCreateTests(TestCase):
+    def test_create_overrides_backend_healthcheck(self):
+        from apps.mcp import services as svc
+        client = MagicMock()
+        client.containers.get.side_effect = Exception("missing")
+        created = MagicMock()
+        client.containers.create.return_value = created
+        with patch("apps.mcp.services._get_client", return_value=client), \
+             patch("apps.mcp.services._own_networks", return_value=["smsly-net"]):
+            result = svc._ensure_container(client)
+        self.assertIs(result, created)
+        _, kwargs = client.containers.create.call_args
+        healthcheck = kwargs.get("healthcheck") or {}
+        probe = " ".join(healthcheck.get("test") or [])
+        # Must probe the MCP port, never the backend :8000/healthz probe
+        # baked into the reused image (that mismatch reported the
+        # container unhealthy forever).
+        self.assertIn(str(svc.MCP_PORT), probe)
+        self.assertNotIn("8000", probe)
+
+    def test_status_surfaces_health(self):
+        from apps.mcp import services as svc
+        container = MagicMock()
+        container.status = "running"
+        container.id = "abc123def456"
+        container.attrs = {
+            "State": {"StartedAt": "x", "Health": {"Status": "healthy"}},
+            "Config": {"Image": "img"},
+            "NetworkSettings": {"Networks": {}},
+        }
+        result = svc._to_status(container)
+        self.assertEqual(result["health"], "healthy")
+
+
 class McpTokenApiTests(TestCase):
     def setUp(self):
         from rest_framework.test import APIClient
