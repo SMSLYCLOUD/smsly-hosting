@@ -25539,7 +25539,10 @@ if [ "${REDIS_MIN_REPLICAS_TO_WRITE:-1}" != "0" ]; then
     _redis_synced=false
     _redis_slaves=""
     for i in $(seq 1 60); do
-        _redis_slaves="$(timeout 10 docker compose -f "$COMPOSE_FILE" exec -T redis-primary \
+        # -k 5: bare `timeout` waits forever if the child ignores SIGTERM
+        # (observed live: one hung `compose exec` wedged the whole install
+        # at this gate with a healthy replica attached).
+        _redis_slaves="$(timeout -k 5 10 docker compose -f "$COMPOSE_FILE" exec -T redis-primary \
             redis-cli -a "${REDIS_PASSWORD:-}" --no-auth-warning info replication 2>/dev/null \
             | grep -E '^connected_slaves:' | cut -d: -f2 | tr -d '\r[:space:]' || true)"
         if [ -n "$_redis_slaves" ] && [ "$_redis_slaves" -ge 1 ] 2>/dev/null; then
