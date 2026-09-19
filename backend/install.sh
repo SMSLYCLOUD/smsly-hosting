@@ -9212,7 +9212,46 @@ check_caddy_conflict() {
         echo -e "Then re-run installer."
         exit 1
     fi
+    # Provider images often ship a host web server (nginx/apache) that binds
+    # :80/:443 before our edge starts — the Caddy recreate then dies with
+    # "address already in use" hours into the install (2026-09-19: image
+    # nginx held :80, caddy-1 failed to bind). Docker-published ports show
+    # as docker-proxy listeners — only non-docker holders are conflicts.
+    local _holder=""
+    _holder="$(_host_web_port_holder 80 || true)"
+    if [ -z "$_holder" ]; then
+        _holder="$(_host_web_port_holder 443 || true)"
+    fi
+    if [ -n "$_holder" ]; then
+        echo -e "${RED}ERROR: Host process '${_holder}' is listening on port 80/443${NC}"
+        echo -e "${YELLOW}Grid's edge (Docker Caddy on master, Traefik on nodes) needs those ports.${NC}"
+        echo -e ""
+        echo -e "Run:"
+        echo -e "  sudo systemctl stop ${_holder}"
+        echo -e "  sudo systemctl disable ${_holder}"
+        echo -e ""
+        echo -e "If '${_holder}' is not a systemd service, stop whatever started it,"
+        echo -e "verify with 'ss -tlnp | grep -E \":(80|443)\"', then re-run installer."
+        exit 1
+    fi
     echo -e "${GREEN}  ✓ No host-level Caddy/Traefik conflict detected${NC}"
+}
+
+# Print the host process holding TCP <port> (80/443), ignoring Docker's own
+# port publishing (docker-proxy). Prints nothing when free or uncheckable.
+_host_web_port_holder() {
+    local port=""
+    port="${1:-}"
+    [ -n "$port" ] || return 0
+    if ! command -v ss >/dev/null 2>&1; then
+        return 0
+    fi
+    local line=""
+    line="$(ss -tlnp 2>/dev/null | grep -E ":${port} " | grep -v docker-proxy | head -1 || true)"
+    [ -n "$line" ] || return 0
+    local proc=""
+    proc="$(printf '%s' "$line" | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -1 || true)"
+    printf '%s' "$proc"
 }
 
 wait_for_apt_lock() {
