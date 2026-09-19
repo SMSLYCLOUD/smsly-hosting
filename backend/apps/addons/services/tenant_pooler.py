@@ -100,11 +100,31 @@ def list_tenant_pools(with_passwords=False):
     return pools
 
 
+def _admin_credentials():
+    """Pgcat admin user/pass for the tenants config (same as platform pgcat).
+
+    pgcat refuses to start without them (BadConfig crash-loop, observed
+    live). Sourced from the same env the platform pooler renders from —
+    backend containers receive the full .env file.
+    """
+    import os
+    user = os.environ.get('PGCAT_ADMIN_USERNAME', 'pgcat_admin') or 'pgcat_admin'
+    password = os.environ.get('PGCAT_ADMIN_PASSWORD', '') or ''
+    if not password:
+        raise RuntimeError(
+            'PGCAT_ADMIN_PASSWORD is not set in the backend environment — '
+            'refusing to render a tenants config that would crash-loop the pooler.')
+    return user, password
+
+
 def render_tenants_config(pools):
     """Render a pgcat.toml with one transaction pool per tenant alias."""
     from apps.addons.services.shared_postgres import SHARED_CONTAINER
+    admin_user, admin_pass = _admin_credentials()
     lines = [
         '[general]',
+        f'admin_username = "{admin_user}"',
+        f'admin_password = "{admin_pass}"',
         'server_lifetime = 86400000',
         'idle_timeout = 60000',
         'dns_cache_enabled = true',
@@ -173,9 +193,21 @@ def _write_remote_toml(container, content):
 
 
 def push_tenants_config():
-    """Render + push tenant pools; restart pooler only when changed."""
+    """Render + push tenant pools; restart pooler only when changed.
+
+    Never pushes an unrenderable config: a render failure (e.g. missing
+    admin password) returns ok=False and leaves the running pooler
+    untouched — pushing a BadConfig would crash-loop it.
+    """
     pools = list_tenant_pools(with_passwords=True)
-    content = render_tenants_config(pools)
+    try:
+        content = render_tenants_config(pools)
+    except Exception as exc:
+        logger.warning("tenant pooler: render failed, pooler untouched: %s", exc)
+        return {'ok': False, 'pools': len(pools), 'error': str(exc)[:300]}
+    if not content.strip():
+        return {'ok': False, 'pools': len(pools),
+                'error': 'rendered config is empty — pooler untouched.'}
     container = tenants_container_name()
     if container is None:
         return {'ok': False, 'pools': len(pools),

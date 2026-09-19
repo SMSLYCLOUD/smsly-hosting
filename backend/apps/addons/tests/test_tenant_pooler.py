@@ -9,17 +9,34 @@ from apps.deployments.models import Addon, Service
 
 User = get_user_model()
 
+ADMIN_ENV = {"PGCAT_ADMIN_USERNAME": "pgcat_admin", "PGCAT_ADMIN_PASSWORD": "test-admin-pw"}
+
 
 class RenderTests(TestCase):
     def test_render_one_pool_per_alias(self):
-        content = tp.render_tenants_config([{
-            'alias': 'postgres-acme', 'user': 'u1', 'db': 'd1', 'password': 'pw1',
-        }])
+        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
+            content = tp.render_tenants_config([{
+                'alias': 'postgres-acme', 'user': 'u1', 'db': 'd1', 'password': 'pw1',
+            }])
         self.assertIn('[pools.postgres-acme]', content)
         self.assertIn('pool_mode = "transaction"', content)
         self.assertIn('database = "d1"', content)
         self.assertIn('password = "pw1"', content)
         self.assertIn('smsly-shared-postgres', content)
+
+    def test_render_includes_admin_credentials(self):
+        """pgcat refuses to start without admin_username/admin_password
+        (BadConfig crash-loop, observed live)."""
+        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
+            content = tp.render_tenants_config([])
+        self.assertIn('admin_username = "pgcat_admin"', content)
+        self.assertIn('admin_password = "test-admin-pw"', content)
+
+    def test_render_fails_without_admin_password(self):
+        env = {"PGCAT_ADMIN_USERNAME": "pgcat_admin", "PGCAT_ADMIN_PASSWORD": ""}
+        with mock.patch.dict("os.environ", env, clear=False):
+            with self.assertRaises(RuntimeError):
+                tp.render_tenants_config([])
 
 
 class ListPoolsTests(TestCase):
@@ -63,7 +80,8 @@ class PushTests(TestCase):
             connection_url="postgresql://u1:pw1@postgres-a:5432/d1")
 
     def _push(self, remote_content):
-        with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
+        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False), \
+             mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
              mock.patch.object(tp, 'container_running', return_value=True), \
              mock.patch.object(tp, '_read_remote_toml', return_value=remote_content), \
              mock.patch.object(tp, '_write_remote_toml', return_value={}) as writer, \
@@ -72,7 +90,8 @@ class PushTests(TestCase):
         return result, writer, runner
 
     def test_no_restart_when_unchanged(self):
-        content = tp.render_tenants_config(tp.list_tenant_pools(with_passwords=True))
+        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
+            content = tp.render_tenants_config(tp.list_tenant_pools(with_passwords=True))
         result, writer, runner = self._push(content)
         self.assertTrue(result['ok'])
         self.assertFalse(result['changed'])
@@ -89,7 +108,21 @@ class PushTests(TestCase):
         writer.assert_called_once()
 
     def test_missing_container(self):
-        with mock.patch.object(tp, 'tenants_container_name', return_value=None):
+        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False), \
+             mock.patch.object(tp, 'tenants_container_name', return_value=None):
             result = tp.push_tenants_config()
         self.assertFalse(result['ok'])
         self.assertIn('not found', result['error'])
+
+    def test_render_failure_leaves_pooler_untouched(self):
+        """A bad render must never push a crash-looping config."""
+        env = {"PGCAT_ADMIN_USERNAME": "pgcat_admin", "PGCAT_ADMIN_PASSWORD": ""}
+        with mock.patch.dict("os.environ", env, clear=False), \
+             mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
+             mock.patch.object(tp, '_write_remote_toml') as writer, \
+             mock.patch.object(tp, '_run', return_value={}) as runner:
+            result = tp.push_tenants_config()
+        self.assertFalse(result['ok'])
+        writer.assert_not_called()
+        restart_calls = [c for c in runner.call_args_list if 'restart' in str(c)]
+        self.assertEqual(restart_calls, [])

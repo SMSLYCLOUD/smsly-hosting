@@ -8,7 +8,9 @@ set -e
 CONFIG="/etc/pgcat/pgcat.toml"
 
 echo "pgcat-tenants: waiting for backend-rendered config at $CONFIG..."
-while [ ! -f "$CONFIG" ]; do sleep 5; done
+# -s (non-empty), not -f: an empty file makes pgcat exit BadConfig and
+# the container crash-loops instead of waiting (observed live).
+while [ ! -s "$CONFIG" ]; do sleep 5; done
 
 echo "pgcat-tenants: starting..."
 exec pgcat "$CONFIG"
