@@ -144,7 +144,7 @@ diagnose_migration_locks() {
     [ -f "$env_file" ] && source "$env_file"  || true
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
         db psql \
             -U "${POSTGRES_USER:-smsly_admin}" \
@@ -465,18 +465,18 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     }
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi

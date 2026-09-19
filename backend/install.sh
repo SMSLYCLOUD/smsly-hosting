@@ -1151,10 +1151,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+    if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -1194,19 +1194,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         else
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
+            if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
             else
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
@@ -2024,7 +2024,7 @@ diagnose_migration_locks() {
     [ -f "$env_file" ] && source "$env_file"  || true
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
         db psql \
             -U "${POSTGRES_USER:-smsly_admin}" \
@@ -2345,18 +2345,18 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     }
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi
@@ -2896,10 +2896,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+    if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -2939,19 +2939,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         else
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
+            if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
             else
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
@@ -4012,11 +4012,11 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -4072,7 +4072,7 @@ _harden_crowdsec_cf_value() {
     local default="${3:-}"
     local val=""
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-hosting-backend-1$"; then
-        val="$(timeout 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
+        val="$(timeout -k 5 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
     fi
     if [ -z "$val" ] && [ -f "$INSTALL_DIR/.env" ]; then
         val="$(grep -E "^${env_key}=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
@@ -4144,11 +4144,11 @@ _harden_crowdsec_cloudflare_bouncer() {
         return 0
     fi
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -4683,7 +4683,7 @@ _harden_spire_start_agent() {
         return 0
     fi
     local token
-    token="$(timeout 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
@@ -6483,7 +6483,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Backend DNS Checks ----"
-    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis  || echo "backend DNS check failed"
+    timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis  || echo "backend DNS check failed"
     echo ""
 
     echo "---- Key Logs (tail 120) ----"
@@ -6539,7 +6539,7 @@ verify_endpoints() {
             EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" ) || EP1_CODE="000"
         fi
     else
-        if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
+        if timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
             EP1_CODE="200"
         elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" ; then
             EP1_CODE="200"
@@ -6675,7 +6675,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Backend DNS Checks ----"
-    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis  || echo "backend DNS check failed"
+    timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis  || echo "backend DNS check failed"
     echo ""
 
     echo "---- Key Logs (tail 120) ----"
@@ -10524,11 +10524,11 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -10584,7 +10584,7 @@ _harden_crowdsec_cf_value() {
     local default="${3:-}"
     local val=""
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-hosting-backend-1$"; then
-        val="$(timeout 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
+        val="$(timeout -k 5 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
     fi
     if [ -z "$val" ] && [ -f "$INSTALL_DIR/.env" ]; then
         val="$(grep -E "^${env_key}=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
@@ -10656,11 +10656,11 @@ _harden_crowdsec_cloudflare_bouncer() {
         return 0
     fi
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -11195,7 +11195,7 @@ _harden_spire_start_agent() {
         return 0
     fi
     local token
-    token="$(timeout 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
@@ -12106,11 +12106,11 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -12166,7 +12166,7 @@ _harden_crowdsec_cf_value() {
     local default="${3:-}"
     local val=""
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-hosting-backend-1$"; then
-        val="$(timeout 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
+        val="$(timeout -k 5 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
     fi
     if [ -z "$val" ] && [ -f "$INSTALL_DIR/.env" ]; then
         val="$(grep -E "^${env_key}=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
@@ -12238,11 +12238,11 @@ _harden_crowdsec_cloudflare_bouncer() {
         return 0
     fi
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -12777,7 +12777,7 @@ _harden_spire_start_agent() {
         return 0
     fi
     local token
-    token="$(timeout 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
@@ -13359,7 +13359,7 @@ fi
          # reach the correct DB hostname.
          _already_migrated=false
          if docker ps --format '{{.Names}}'  | grep -qx 'smsly-postgres-primary'; then
-             _tables=$(timeout 30 docker exec smsly-postgres-primary psql -U smsly_admin -d smsly_hosting -t -A \
+             _tables=$(timeout -k 5 30 docker exec smsly-postgres-primary psql -U smsly_admin -d smsly_hosting -t -A \
                  -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"  || echo 0)
              if [ "${_tables:-0}" -gt 50 ]; then
                  _already_migrated=true
@@ -13633,7 +13633,7 @@ fi
 
             # Clean stale celerybeat-schedule (prevents Permission denied crash loop)
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed${NC}"
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed${NC}"
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
             celery_svcs="celery celery-deploy celery-fast celery-beat"
@@ -13715,7 +13715,7 @@ fi
 
             # 5. Clean celerybeat-schedule and restart celery workers
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
 
             restart_svcs="celery celery-deploy celery-fast celery-beat"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -13843,7 +13843,7 @@ fi
 
             # 11. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
             
             restart_svcs="celery celery-beat celery-deploy celery-fast"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -13927,10 +13927,10 @@ fi
                     echo -e "${YELLOW}  ⚠ PATRONI_SUPERUSER_PASSWORD unset — skipping infisical database creation${NC}"
                 fi
             elif [ -n "$_db_container" ]; then
-                _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
+                _db_exists=$(timeout -k 5 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
-                    timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
+                    timeout -k 5 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
                         "CREATE DATABASE infisical;"  && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
@@ -14006,7 +14006,7 @@ fi
             echo -e "${BLUE}  → Syncing platform secrets to Infisical...${NC}"
             backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
             if [ -n "$backend_container" ]; then
-                timeout 60 docker exec "$backend_container" python manage.py sync_infisical_secrets --push  || \
+                timeout -k 5 60 docker exec "$backend_container" python manage.py sync_infisical_secrets --push  || \
                     echo -e "${YELLOW}  ⚠ Infisical sync failed (non-fatal — secrets remain in .env)${NC}"
             fi
         fi
@@ -14041,7 +14041,7 @@ fi
         # cAdvisor, Node Exporter).
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
         if [ -n "$backend_container" ]; then
-            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
+            timeout -k 5 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
         fi
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
         # ─── Build-cache images (apt-cacher-ng floats :latest) ──────────
@@ -14059,9 +14059,9 @@ fi
         # Idempotent: pre-check keeps logs clean; the "already exists"
         # fallback covers concurrent registration by the harden path.
         _crowdsec_out=""
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
-        elif _crowdsec_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" 2>&1)"; then
+        elif _crowdsec_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" 2>&1)"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
         elif echo "$_crowdsec_out" | grep -q "already exists"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -14207,7 +14207,7 @@ if d_count > 0:
     fi
     worker_container="$(resolve_container_target "$raw_worker")"
     DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_container"  || echo "")"
-    if timeout 20 docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10  | grep -q "deploy"; then
+    if timeout -k 5 20 docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10  | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
     elif [ "$DEPLOY_WORKER_HEALTH" = "healthy" ] || [ "$DEPLOY_WORKER_HEALTH" = "running" ]; then
         echo -e "${GREEN}  ✓ Deployment worker container is healthy/running (queue inspect timed out)${NC}"
@@ -14983,10 +14983,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+    if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -15026,19 +15026,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         else
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
+            if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
             else
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
@@ -15856,7 +15856,7 @@ diagnose_migration_locks() {
     [ -f "$env_file" ] && source "$env_file"  || true
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
         db psql \
             -U "${POSTGRES_USER:-smsly_admin}" \
@@ -16177,18 +16177,18 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     }
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi
@@ -18065,10 +18065,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+    if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -18108,19 +18108,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         else
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
+            if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
             else
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
@@ -18938,7 +18938,7 @@ diagnose_migration_locks() {
     [ -f "$env_file" ] && source "$env_file"  || true
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
         db psql \
             -U "${POSTGRES_USER:-smsly_admin}" \
@@ -19259,18 +19259,18 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     }
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi
@@ -19886,10 +19886,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+    if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -19929,19 +19929,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         else
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
+            if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
             else
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
@@ -20759,7 +20759,7 @@ diagnose_migration_locks() {
     [ -f "$env_file" ] && source "$env_file"  || true
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
         db psql \
             -U "${POSTGRES_USER:-smsly_admin}" \
@@ -21080,18 +21080,18 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     }
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi
@@ -21177,7 +21177,7 @@ SMSLY_WORKERS_EOF
                 EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" ) || EP1_CODE="000"
             fi
         else
-            if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
+            if timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
                 EP1_CODE="200"
             elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" ; then
                 EP1_CODE="200"
@@ -22546,11 +22546,11 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -22606,7 +22606,7 @@ _harden_crowdsec_cf_value() {
     local default="${3:-}"
     local val=""
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-hosting-backend-1$"; then
-        val="$(timeout 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
+        val="$(timeout -k 5 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
     fi
     if [ -z "$val" ] && [ -f "$INSTALL_DIR/.env" ]; then
         val="$(grep -E "^${env_key}=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
@@ -22678,11 +22678,11 @@ _harden_crowdsec_cloudflare_bouncer() {
         return 0
     fi
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -23217,7 +23217,7 @@ _harden_spire_start_agent() {
         return 0
     fi
     local token
-    token="$(timeout 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
@@ -23714,11 +23714,11 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -23774,7 +23774,7 @@ _harden_crowdsec_cf_value() {
     local default="${3:-}"
     local val=""
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-hosting-backend-1$"; then
-        val="$(timeout 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
+        val="$(timeout -k 5 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
     fi
     if [ -z "$val" ] && [ -f "$INSTALL_DIR/.env" ]; then
         val="$(grep -E "^${env_key}=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
@@ -23846,11 +23846,11 @@ _harden_crowdsec_cloudflare_bouncer() {
         return 0
     fi
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -24525,11 +24525,11 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -24585,7 +24585,7 @@ _harden_crowdsec_cf_value() {
     local default="${3:-}"
     local val=""
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-hosting-backend-1$"; then
-        val="$(timeout 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
+        val="$(timeout -k 5 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
     fi
     if [ -z "$val" ] && [ -f "$INSTALL_DIR/.env" ]; then
         val="$(grep -E "^${env_key}=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
@@ -24657,11 +24657,11 @@ _harden_crowdsec_cloudflare_bouncer() {
         return 0
     fi
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -25259,7 +25259,7 @@ ensure_egress_mirror() {
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
         if [ -n "$backend_container" ]; then
-            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
+            timeout -k 5 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
         fi
     fi
 
@@ -25317,10 +25317,10 @@ ensure_egress_mirror() {
                     echo -e "${YELLOW}  ⚠ PATRONI_SUPERUSER_PASSWORD unset — skipping infisical database creation${NC}"
                 fi
             elif [ -n "$_db_container" ]; then
-                _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
+                _db_exists=$(timeout -k 5 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
-                    timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
+                    timeout -k 5 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
                         "CREATE DATABASE infisical;"  && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
@@ -25492,7 +25492,7 @@ if [ "$_db_mode" = "external" ]; then
     done
 else
     for i in $(seq 1 24); do
-        if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" pg_isready -U "$_db_exec_user" < /dev/null ; then
+        if timeout -k 5 10 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" pg_isready -U "$_db_exec_user" < /dev/null ; then
             echo -e "${GREEN}  ✓ Database is ready (attempt $i).${NC}"
             DB_READY=true
             break
@@ -25530,7 +25530,7 @@ if [ "$_db_mode" = "external" ]; then
 elif [ "$_db_mode" = "patroni" ]; then
     echo -e "${BLUE}  → Syncing database password via patroni superuser...${NC}"
     PW_SYNCED=false
-    if [ -n "$_db_exec_pass" ] && timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    if [ -n "$_db_exec_pass" ] && timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="$_db_exec_pass" "$_db_exec_svc" \
         psql -U "$_db_exec_user" -d postgres \
         -c "ALTER USER ${POSTGRES_USER:-smsly_admin} WITH PASSWORD '${_db_pw_escaped}';" \
@@ -25551,13 +25551,13 @@ else
     DB_SUPERUSER="${POSTGRES_USER:-smsly_admin}"
     DB_NAME="${POSTGRES_DB:-smsly_hosting}"
     PW_SYNCED=false
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" \
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" \
         psql -U "$DB_SUPERUSER" -d postgres \
         -c "ALTER USER ${DB_SUPERUSER} WITH PASSWORD '${_db_pw_escaped}';" \
         < /dev/null ; then
         echo -e "${GREEN}  ✓ Database password synced via superuser ${DB_SUPERUSER}${NC}"
         PW_SYNCED=true
-    elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" \
+    elif timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" \
         psql -U postgres -d postgres \
         -c "ALTER USER ${DB_SUPERUSER} WITH PASSWORD '${_db_pw_escaped}';" \
         < /dev/null ; then
@@ -25583,7 +25583,7 @@ if [ "$_db_mode" = "external" ]; then
         exit 1
     fi
 elif [ "$_db_mode" = "patroni" ]; then
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="$_db_check_pass" "$_db_exec_svc" \
         psql -h "$_db_check_host" -p "$_db_check_port" -U "$_db_check_user" -d "$_db_name" -c "SELECT 1;" < /dev/null ; then
         echo -e "${GREEN}  ✓ Database password verified over TCP (via ${_db_check_host}:${_db_check_port})${NC}"
@@ -25592,7 +25592,7 @@ elif [ "$_db_mode" = "patroni" ]; then
         exit 1
     fi
 else
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="$_db_check_pass" "$_db_exec_svc" \
         psql -h "$_db_check_host" -U "$_db_check_user" -d "$_db_name" -c "SELECT 1;" < /dev/null ; then
         echo -e "${GREEN}  ✓ Database password verified over TCP${NC}"
@@ -25662,7 +25662,7 @@ fi
     # Uses the mode's exec endpoint (external mode has no local container).
     if [ "$_db_mode" = "external" ]; then
         echo -e "${YELLOW}    ⚠ External mode: cannot terminate server-side connections; relying on migration locks${NC}"
-    elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    elif timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="$_db_exec_pass" "$_db_exec_svc" \
         psql -U "$_db_exec_user" -d "$_db_name" \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
@@ -25684,7 +25684,7 @@ fi
         echo -e "${YELLOW}  ⚠ Migration attempt 1 failed — killing stale connections and retrying...${NC}"
         if [ "$_db_mode" = "external" ]; then
             echo -e "${YELLOW}    ⚠ External mode: cannot terminate server-side connections; retrying migration directly${NC}"
-        elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+        elif timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
             -e PGPASSWORD="$_db_exec_pass" "$_db_exec_svc" \
             psql -U "$_db_exec_user" -d "$_db_name" \
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
@@ -26494,10 +26494,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+    if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -26537,19 +26537,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         else
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
+            if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
             else
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
@@ -27367,7 +27367,7 @@ diagnose_migration_locks() {
     [ -f "$env_file" ] && source "$env_file"  || true
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
         db psql \
             -U "${POSTGRES_USER:-smsly_admin}" \
@@ -27688,18 +27688,18 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     }
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi
@@ -28751,7 +28751,7 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: skipping master admin and Local Docker provider setup.${NC}"
     set_checkpoint "admin_created"
 else
-ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1)
+ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1)
 
 if [ "${ADMIN_EXISTS:-0}" = "1" ]; then
     echo -e "${GREEN}  ✓ Admin user check bypassed or already exists — skipping${NC}"
@@ -28780,7 +28780,7 @@ User = get_user_model()
 admin = User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')
 token = Token.objects.create(user=admin)
 print(token.key)
-" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 > "$INSTALL_DIR/.token"
+" | timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 > "$INSTALL_DIR/.token"
         echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
         chmod 600 "$INSTALL_DIR/.token"
 
@@ -28816,7 +28816,7 @@ if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
 print('CREATED' if created else 'EXISTS')
-" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 
+" | timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
 fi
@@ -28843,7 +28843,7 @@ if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
 print('CREATED' if created else 'EXISTS')
-" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1
+" | timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1
     echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
 fi
     echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
@@ -28860,7 +28860,7 @@ fi
     # is DRF-authenticated (@permission_classes([IsAuthenticated])) and 401s
     # when invoked with a RequestFactory request, so the phrase was never
     # written on fresh installs. This mirrors exactly what the view does.
-    RECOVERY_PHRASE="$(timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    RECOVERY_PHRASE="$(timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 import json
 from apps.deployments.models.core import PlatformConfig
 from apps.core.services.recovery import generate_recovery_phrase, generate_recovery_salt, hash_recovery_phrase
@@ -29411,7 +29411,7 @@ BACKEND_OK=false
 BACKEND_STATUS=""
 for attempt in $(seq 1 24); do
     BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}"  || true)"
-    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live < /dev/null ; then
+    if timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live < /dev/null ; then
         BACKEND_OK=true
         break
     fi
@@ -29444,7 +29444,7 @@ echo -e "${BLUE}  → [1/4] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live < /dev/null ; then
+    if timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live < /dev/null ; then
         HEALTH_OK=true
         break
     elif curl -sfL --max-time 5 http://127.0.0.1:8000/health/live ; then
@@ -29459,7 +29459,7 @@ echo ""
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
     READY_OK=false
-    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready < /dev/null  && READY_OK=true
+    timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready < /dev/null  && READY_OK=true
     if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8000/health/ready ; then
         echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
     fi
@@ -29756,8 +29756,8 @@ fi
 echo -e "\n${YELLOW}[11/11] Finalizing Inter-Node Connectivity...${NC}"
 echo -e "${BLUE}  → Registering this node and creating authentication tokens...${NC}"
 # Use -T to avoid TTY issues in non-interactive mode
-if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes < /dev/null ; then
-    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix < /dev/null || true
+if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes < /dev/null ; then
+    timeout -k 5 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix < /dev/null || true
     echo -e "${GREEN}  ✓ Node registered as Primary (if Master) and API tokens verified${NC}"
 else
     echo -e "${YELLOW}  ⚠ diagnose_nodes command not available in this version; skipping.${NC}"

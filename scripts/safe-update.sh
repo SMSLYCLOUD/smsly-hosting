@@ -106,7 +106,7 @@ safe_update_snapshot() {
     local backup_file="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql"
 
     _progress "Backing up database (timeout: 120s)..."
-    if timeout 120 docker exec smsly-postgres-primary pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB" > "$backup_file" ; then
+    if timeout -k 5 120 docker exec smsly-postgres-primary pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB" > "$backup_file" ; then
         _ok "DB backup: $(du -h "$backup_file" | cut -f1)"
     else
         _warn "DB backup failed — continuing without safety net"
@@ -129,7 +129,7 @@ safe_update_snapshot() {
     fi
 
     # Redis RDB snapshot (non-fatal — container may not be running)
-    if timeout 10 docker exec smsly-hosting-redis-1 redis-cli SAVE ; then
+    if timeout -k 5 10 docker exec smsly-hosting-redis-1 redis-cli SAVE ; then
         _ok "Redis RDB saved"
         timeout 10 docker cp smsly-hosting-redis-1:/data/dump.rdb "$BACKUP_DIR/pre-update-redis.rdb" || echo -e "${YELLOW}    ⚠ Redis dump copy failed${NC}"
     else
@@ -137,7 +137,7 @@ safe_update_snapshot() {
     fi
 
     # RabbitMQ definitions export (non-fatal — container or rabbitmqadmin may not be available)
-    if timeout 15 docker exec smsly-hosting-rabbitmq-1 rabbitmqadmin export "$BACKUP_DIR/pre-update-rabbitmq-defs.json" ; then
+    if timeout -k 5 15 docker exec smsly-hosting-rabbitmq-1 rabbitmqadmin export "$BACKUP_DIR/pre-update-rabbitmq-defs.json" ; then
         _ok "RabbitMQ definitions exported"
     else
         _warn "RabbitMQ export skipped (container or rabbitmqadmin not available)"
@@ -279,7 +279,7 @@ safe_update_rollback() {
     # leave behind new-version tables from a partial migration).
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
         _warn "Restoring database from backup..."
-        timeout 600 docker exec -i smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
+        timeout -k 5 600 docker exec -i smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
             _ok "DB restored" || _warn "DB restore failed"
     fi
 

@@ -106,7 +106,7 @@ _harden_spire_start_agent() {
         return 0
     fi
     local token
-    token="$(timeout 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1

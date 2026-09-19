@@ -70,11 +70,11 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -130,7 +130,7 @@ _harden_crowdsec_cf_value() {
     local default="${3:-}"
     local val=""
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-hosting-backend-1$"; then
-        val="$(timeout 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
+        val="$(timeout -k 5 60 docker exec smsly-hosting-backend-1 python manage.py shell -c "from apps.deployments.models import PlatformConfig; print('CFVAL:' + str(PlatformConfig.get_config_value('$field', '')))" 2>/dev/null | grep '^CFVAL:' | cut -c7- | tail -n 1)"
     fi
     if [ -z "$val" ] && [ -f "$INSTALL_DIR/.env" ]; then
         val="$(grep -E "^${env_key}=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
@@ -202,11 +202,11 @@ _harden_crowdsec_cloudflare_bouncer() {
         return 0
     fi
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"

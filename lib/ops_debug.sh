@@ -29,7 +29,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Backend DNS Checks ----"
-    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis  || echo "backend DNS check failed"
+    timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis  || echo "backend DNS check failed"
     echo ""
 
     echo "---- Key Logs (tail 120) ----"

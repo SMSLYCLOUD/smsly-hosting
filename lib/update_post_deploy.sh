@@ -130,7 +130,7 @@ if d_count > 0:
     fi
     worker_container="$(resolve_container_target "$raw_worker")"
     DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_container"  || echo "")"
-    if timeout 20 docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10  | grep -q "deploy"; then
+    if timeout -k 5 20 docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10  | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
     elif [ "$DEPLOY_WORKER_HEALTH" = "healthy" ] || [ "$DEPLOY_WORKER_HEALTH" = "running" ]; then
         echo -e "${GREEN}  ✓ Deployment worker container is healthy/running (queue inspect timed out)${NC}"
@@ -468,7 +468,7 @@ SMSLY_WORKERS_EOF
                 EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" ) || EP1_CODE="000"
             fi
         else
-            if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
+            if timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
                 EP1_CODE="200"
             elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" ; then
                 EP1_CODE="200"

@@ -163,7 +163,7 @@
          # reach the correct DB hostname.
          _already_migrated=false
          if docker ps --format '{{.Names}}'  | grep -qx 'smsly-postgres-primary'; then
-             _tables=$(timeout 30 docker exec smsly-postgres-primary psql -U smsly_admin -d smsly_hosting -t -A \
+             _tables=$(timeout -k 5 30 docker exec smsly-postgres-primary psql -U smsly_admin -d smsly_hosting -t -A \
                  -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"  || echo 0)
              if [ "${_tables:-0}" -gt 50 ]; then
                  _already_migrated=true
@@ -437,7 +437,7 @@
 
             # Clean stale celerybeat-schedule (prevents Permission denied crash loop)
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed${NC}"
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed${NC}"
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
             celery_svcs="celery celery-deploy celery-fast celery-beat"
@@ -519,7 +519,7 @@
 
             # 5. Clean celerybeat-schedule and restart celery workers
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
 
             restart_svcs="celery celery-deploy celery-fast celery-beat"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -647,7 +647,7 @@
 
             # 11. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
             
             restart_svcs="celery celery-beat celery-deploy celery-fast"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -731,10 +731,10 @@
                     echo -e "${YELLOW}  ⚠ PATRONI_SUPERUSER_PASSWORD unset — skipping infisical database creation${NC}"
                 fi
             elif [ -n "$_db_container" ]; then
-                _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
+                _db_exists=$(timeout -k 5 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
-                    timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
+                    timeout -k 5 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
                         "CREATE DATABASE infisical;"  && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
@@ -810,7 +810,7 @@
             echo -e "${BLUE}  → Syncing platform secrets to Infisical...${NC}"
             backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
             if [ -n "$backend_container" ]; then
-                timeout 60 docker exec "$backend_container" python manage.py sync_infisical_secrets --push  || \
+                timeout -k 5 60 docker exec "$backend_container" python manage.py sync_infisical_secrets --push  || \
                     echo -e "${YELLOW}  ⚠ Infisical sync failed (non-fatal — secrets remain in .env)${NC}"
             fi
         fi
@@ -845,7 +845,7 @@
         # cAdvisor, Node Exporter).
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
         if [ -n "$backend_container" ]; then
-            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
+            timeout -k 5 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
         fi
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
         # ─── Build-cache images (apt-cacher-ng floats :latest) ──────────
@@ -863,9 +863,9 @@
         # Idempotent: pre-check keeps logs clean; the "already exists"
         # fallback covers concurrent registration by the harden path.
         _crowdsec_out=""
-        if timeout 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
-        elif _crowdsec_out="$(timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" 2>&1)"; then
+        elif _crowdsec_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" 2>&1)"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
         elif echo "$_crowdsec_out" | grep -q "already exists"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"

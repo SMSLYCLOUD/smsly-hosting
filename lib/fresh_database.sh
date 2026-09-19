@@ -67,7 +67,7 @@ if [ "$_db_mode" = "external" ]; then
     done
 else
     for i in $(seq 1 24); do
-        if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" pg_isready -U "$_db_exec_user" < /dev/null ; then
+        if timeout -k 5 10 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" pg_isready -U "$_db_exec_user" < /dev/null ; then
             echo -e "${GREEN}  ✓ Database is ready (attempt $i).${NC}"
             DB_READY=true
             break
@@ -105,7 +105,7 @@ if [ "$_db_mode" = "external" ]; then
 elif [ "$_db_mode" = "patroni" ]; then
     echo -e "${BLUE}  → Syncing database password via patroni superuser...${NC}"
     PW_SYNCED=false
-    if [ -n "$_db_exec_pass" ] && timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    if [ -n "$_db_exec_pass" ] && timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="$_db_exec_pass" "$_db_exec_svc" \
         psql -U "$_db_exec_user" -d postgres \
         -c "ALTER USER ${POSTGRES_USER:-smsly_admin} WITH PASSWORD '${_db_pw_escaped}';" \
@@ -126,13 +126,13 @@ else
     DB_SUPERUSER="${POSTGRES_USER:-smsly_admin}"
     DB_NAME="${POSTGRES_DB:-smsly_hosting}"
     PW_SYNCED=false
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" \
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" \
         psql -U "$DB_SUPERUSER" -d postgres \
         -c "ALTER USER ${DB_SUPERUSER} WITH PASSWORD '${_db_pw_escaped}';" \
         < /dev/null ; then
         echo -e "${GREEN}  ✓ Database password synced via superuser ${DB_SUPERUSER}${NC}"
         PW_SYNCED=true
-    elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" \
+    elif timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T "$_db_exec_svc" \
         psql -U postgres -d postgres \
         -c "ALTER USER ${DB_SUPERUSER} WITH PASSWORD '${_db_pw_escaped}';" \
         < /dev/null ; then
@@ -158,7 +158,7 @@ if [ "$_db_mode" = "external" ]; then
         exit 1
     fi
 elif [ "$_db_mode" = "patroni" ]; then
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="$_db_check_pass" "$_db_exec_svc" \
         psql -h "$_db_check_host" -p "$_db_check_port" -U "$_db_check_user" -d "$_db_name" -c "SELECT 1;" < /dev/null ; then
         echo -e "${GREEN}  ✓ Database password verified over TCP (via ${_db_check_host}:${_db_check_port})${NC}"
@@ -167,7 +167,7 @@ elif [ "$_db_mode" = "patroni" ]; then
         exit 1
     fi
 else
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    if timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="$_db_check_pass" "$_db_exec_svc" \
         psql -h "$_db_check_host" -U "$_db_check_user" -d "$_db_name" -c "SELECT 1;" < /dev/null ; then
         echo -e "${GREEN}  ✓ Database password verified over TCP${NC}"
@@ -237,7 +237,7 @@ fi
     # Uses the mode's exec endpoint (external mode has no local container).
     if [ "$_db_mode" = "external" ]; then
         echo -e "${YELLOW}    ⚠ External mode: cannot terminate server-side connections; relying on migration locks${NC}"
-    elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    elif timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="$_db_exec_pass" "$_db_exec_svc" \
         psql -U "$_db_exec_user" -d "$_db_name" \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
@@ -259,7 +259,7 @@ fi
         echo -e "${YELLOW}  ⚠ Migration attempt 1 failed — killing stale connections and retrying...${NC}"
         if [ "$_db_mode" = "external" ]; then
             echo -e "${YELLOW}    ⚠ External mode: cannot terminate server-side connections; retrying migration directly${NC}"
-        elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+        elif timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
             -e PGPASSWORD="$_db_exec_pass" "$_db_exec_svc" \
             psql -U "$_db_exec_user" -d "$_db_name" \
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \

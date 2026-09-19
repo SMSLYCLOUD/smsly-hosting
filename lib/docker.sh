@@ -512,10 +512,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+    if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -555,19 +555,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+        if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         else
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
+            post_routers=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
+            if timeout -k 5 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
             else
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
+                eps=$(timeout -k 5 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"

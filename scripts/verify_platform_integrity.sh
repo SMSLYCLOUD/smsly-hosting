@@ -193,12 +193,12 @@ ensure_migrations() {
         return 0
     fi
     local check_output
-    check_output=$(timeout 120 docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
+    check_output=$(timeout -k 5 120 docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
         -w /app "$backend_container" \
         python manage.py migrate --check --noinput 2>&1) || true
     if echo "$check_output" | grep -q "Your models have changes"; then
         log "ALERT: pending migrations detected — applying now"
-        timeout 300 docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
+        timeout -k 5 300 docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
             -w /app "$backend_container" \
             python manage.py migrate --noinput 2>&1 | tail -3
         log "migrations applied"
@@ -321,7 +321,7 @@ ensure_cf_bouncer_running() {
         return 0
     fi
     local last_pull=""
-    last_pull=$(timeout 30 docker exec smsly-crowdsec cscli bouncers list -o json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); [print(x.get('last_pull','')) for x in (d if isinstance(d,list) else d.get('bouncers',d)) if str(x.get('name',''))=='cloudflare-bouncer']" 2>/dev/null | head -n 1) || true
+    last_pull=$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list -o json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); [print(x.get('last_pull','')) for x in (d if isinstance(d,list) else d.get('bouncers',d)) if str(x.get('name',''))=='cloudflare-bouncer']" 2>/dev/null | head -n 1) || true
     if [ -z "$last_pull" ]; then
         log "ALERT: cloudflare-bouncer registered but never pulled decisions — edge blocking is stale; run install.sh --update"
     else
@@ -425,13 +425,13 @@ ensure_openappsec_shadow_parity() {
     # 308, so we parse the FIRST HTTP block (Caddy's own answer) and
     # ignore followed hops; curl never follows without -L, matching it.
     local direct_a
-    direct_a=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: shadow-probe.invalid" http://127.0.0.1:80/ 2>&1 | grep 'HTTP/' | head -n 1 | awk '{print $2}' || true)
+    direct_a=$(timeout -k 5 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: shadow-probe.invalid" http://127.0.0.1:80/ 2>&1 | grep 'HTTP/' | head -n 1 | awk '{print $2}' || true)
     # Shadow fetches retry: the loopback hairpin to the published shadow
     # port flakes under load — one bad attempt must not cry divergence.
     local shadow_a
     shadow_a=$(for _try in 1 2 3; do timeout 15 curl -s -o /dev/null -w '%{http_code}' -H "Host: shadow-probe.invalid" "http://127.0.0.1:$shadow_port/" 2>/dev/null && break || sleep 3; done | tail -n 1)
     local direct_raw
-    direct_raw=$(timeout 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: $domain" http://127.0.0.1:80/health 2>&1 || true)
+    direct_raw=$(timeout -k 5 20 docker exec smsly-hosting-caddy-1 wget -S --spider --header "Host: $domain" http://127.0.0.1:80/health 2>&1 || true)
     local shadow_b
     shadow_b=$(for _try in 1 2 3; do timeout 15 curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" "http://127.0.0.1:$shadow_port/health" 2>/dev/null && break || sleep 3; done | tail -n 1)
     # curl prints 000 on connection failure — normalise to empty so the
@@ -614,9 +614,9 @@ _redbeat_lock_ttl() {
     for container in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -i -E 'redis' | grep -v -i 'sentinel'); do
         local ttl
         if [ -n "$pass" ]; then
-            ttl=$(timeout 10 docker exec "$container" redis-cli -a "$pass" -n 3 TTL redbeat::lock 2>/dev/null | tail -n 1)
+            ttl=$(timeout -k 5 10 docker exec "$container" redis-cli -a "$pass" -n 3 TTL redbeat::lock 2>/dev/null | tail -n 1)
         else
-            ttl=$(timeout 10 docker exec "$container" redis-cli -n 3 TTL redbeat::lock 2>/dev/null | tail -n 1)
+            ttl=$(timeout -k 5 10 docker exec "$container" redis-cli -n 3 TTL redbeat::lock 2>/dev/null | tail -n 1)
         fi
         case "$ttl" in ''|*[!0-9-]*) continue ;; esac
         printf '%s' "$ttl"
@@ -633,9 +633,9 @@ _redbeat_lock_del() {
     local container
     for container in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -i -E 'redis' | grep -v -i 'sentinel'); do
         if [ -n "$pass" ]; then
-            timeout 10 docker exec "$container" redis-cli -a "$pass" -n 3 DEL redbeat::lock >/dev/null 2>&1 && return 0
+            timeout -k 5 10 docker exec "$container" redis-cli -a "$pass" -n 3 DEL redbeat::lock >/dev/null 2>&1 && return 0
         else
-            timeout 10 docker exec "$container" redis-cli -n 3 DEL redbeat::lock >/dev/null 2>&1 && return 0
+            timeout -k 5 10 docker exec "$container" redis-cli -n 3 DEL redbeat::lock >/dev/null 2>&1 && return 0
         fi
     done
     return 1

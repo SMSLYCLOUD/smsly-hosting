@@ -8,7 +8,7 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: skipping master admin and Local Docker provider setup.${NC}"
     set_checkpoint "admin_created"
 else
-ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1)
+ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1)
 
 if [ "${ADMIN_EXISTS:-0}" = "1" ]; then
     echo -e "${GREEN}  ✓ Admin user check bypassed or already exists — skipping${NC}"
@@ -37,7 +37,7 @@ User = get_user_model()
 admin = User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')
 token = Token.objects.create(user=admin)
 print(token.key)
-" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 > "$INSTALL_DIR/.token"
+" | timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 > "$INSTALL_DIR/.token"
         echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
         chmod 600 "$INSTALL_DIR/.token"
 
@@ -73,7 +73,7 @@ if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
 print('CREATED' if created else 'EXISTS')
-" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 
+" | timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
 fi
@@ -100,7 +100,7 @@ if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
 print('CREATED' if created else 'EXISTS')
-" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1
+" | timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1
     echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
 fi
     echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
@@ -117,7 +117,7 @@ fi
     # is DRF-authenticated (@permission_classes([IsAuthenticated])) and 401s
     # when invoked with a RequestFactory request, so the phrase was never
     # written on fresh installs. This mirrors exactly what the view does.
-    RECOVERY_PHRASE="$(timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    RECOVERY_PHRASE="$(timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 import json
 from apps.deployments.models.core import PlatformConfig
 from apps.core.services.recovery import generate_recovery_phrase, generate_recovery_salt, hash_recovery_phrase
