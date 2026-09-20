@@ -667,6 +667,35 @@ ensure_cosign_key_readable() {
     fi
 }
 
+# ── 16. Tenant pooler (pgcat-tenants) must not crash-loop ────────────────
+# 2026-09-20: the pooler's volume got stamped with the PLATFORM render
+# (replica-sync fallback matched any name containing 'pgcat' while the
+# platform pooler restarted). pgcat rejects foreign content with
+# BadConfig and the container restart-loops, invisible until someone
+# runs `docker ps`. Alert-only by design: auto-deleting the volume
+# could drop live tenant pools — an operator decides.
+ensure_tenants_pooler_healthy() {
+    timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 >/dev/null 2>&1 \
+        || { log "pgcat-tenants absent — skipping pooler check"; return 0; }
+    local state="" health="" restarts=""
+    state=$(timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 --format '{{.State.Status}}' 2>/dev/null || echo unknown)
+    health=$(timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>/dev/null || true)
+    restarts=$(timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 --format '{{.RestartCount}}' 2>/dev/null || echo unknown)
+    if [ "$state" = "restarting" ]; then
+        log "ALERT: pgcat-tenants is crash-looping (restarts=${restarts}) — check 'docker logs smsly-hosting-pgcat-tenants-1' for BadConfig (foreign content in pgcat_tenants_config volume?)"
+        return 0
+    fi
+    if [ -n "$health" ] && [ "$health" != "healthy" ] && [ "$health" != "starting" ]; then
+        log "ALERT: pgcat-tenants health is '${health}' (restarts=${restarts}) — tenants may be without pooling"
+        return 0
+    fi
+    if timeout -k 5 15 docker logs smsly-hosting-pgcat-tenants-1 --since 60m 2>&1 | grep -a -q "Config parse error: BadConfig"; then
+        log "ALERT: pgcat-tenants logged BadConfig in the last hour — its volume holds an unparseable pgcat.toml (platform render stamped by replica sync?)"
+        return 0
+    fi
+    log "pgcat-tenants ${state}${health:+ (health: ${health})}"
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -687,4 +716,5 @@ ensure_memory_tuning
 ensure_weekly_image_prune
 ensure_beat_dispatching
 ensure_cosign_key_readable
+ensure_tenants_pooler_healthy
 log "integrity check complete"
