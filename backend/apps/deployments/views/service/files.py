@@ -141,10 +141,15 @@ class FileBrowserActionsMixin:
             }, status=status.HTTP_400_BAD_REQUEST)
 
         def _retry_browse(resp, orchestrator, remote_id, config):
-            """Retry file_browse with fallback paths."""
+            """Retry file_browse with fallback paths.
+
+            Contract: return a DRF Response on success, else None so the
+            dispatcher falls through to on_error/generic handling. Never
+            return the raw requests response (it is not renderable).
+            """
             # Stop retrying if the error indicates the node is down or unreachable
             if resp is None or resp.status_code >= 500:
-                return resp
+                return None
 
             original_path = config.get('params', {}).get('path', '')
             fallback_paths = ['/app', '/', '/var/www', '/opt', '/home']
@@ -208,7 +213,7 @@ class FileBrowserActionsMixin:
             host = provider.host or getattr(provider, 'api_url', None)
             if host:
                 return ManagedServer.objects.filter(
-                    Q(host=host) | Q(private_ip=host)
+                    Q(host=host) | Q(private_ip=host) | Q(wg_address=host)
                 ).first()
         return None
 

@@ -38,6 +38,12 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
             'ALLOWED_HOSTS=': None,
             'CSRF_TRUSTED_ORIGINS=': None,
             'CORS_ALLOWED_ORIGINS=': None,
+            # WAF kill-switch + enforcement mode for the installer reconcile
+            # (lib/harden_openappsec.sh reads shell env, then .env).
+            # Written best-effort like every other entry here: skipped
+            # when the file is absent or read-only.
+            'OPENAPPSEC_ENABLED=': '1' if getattr(instance, 'openappsec_enabled', True) else '0',
+            'OPENAPPSEC_MODE=': str(getattr(instance, 'openappsec_mode', 'detect-learn') or 'detect-learn'),
         }
 
         for _env_path in ("/app/.env", "/caddy-config/.env"):

@@ -149,8 +149,8 @@ class RemoteClientMixin:
         if has_wg:
             if is_lite:
                 append(f"http://{wg_ip}:8000")
-                append(f"http://{wg_ip}")
                 append(f"http://{wg_ip}:8090")
+                append(f"http://{wg_ip}")
             else:
                 append(f"http://{wg_ip}:8000")
                 append(f"http://{wg_ip}:8090")

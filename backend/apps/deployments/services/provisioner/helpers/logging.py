@@ -25,6 +25,11 @@ def _broadcast_provision_log(server: ManagedServer, message: str):
         logger.debug("Failed to send provision log via channel layer: %s", exc)
 
 
+# Cap retained provision logs: thousands of per-line DB writes over a
+# 15-minute provision bloat the row without bound otherwise.
+PROVISION_LOGS_KEEP_CHARS = 200_000
+
+
 def _append_log(server: ManagedServer, line: str):
     timestamp = timezone.now().strftime("%Y-%m-%d %H:%M:%S")
     correlation_id = getattr(server, "_provision_correlation_id", None)
@@ -35,6 +40,9 @@ def _append_log(server: ManagedServer, line: str):
     line = re.sub(r'([A-Za-z0-9+/=]{40,})', r'[REDACTED]', line)
     line = re.sub(r'([0-9a-f]{32,})', r'[REDACTED]', line)
     formatted_line = f"[{timestamp}] [tx:{correlation_id}] {line}"
-    server.provision_logs += formatted_line + "\n"
+    combined = (server.provision_logs or "") + formatted_line + "\n"
+    if len(combined) > PROVISION_LOGS_KEEP_CHARS:
+        combined = "[... truncated older logs ...]\n" + combined[-PROVISION_LOGS_KEEP_CHARS:]
+    server.provision_logs = combined
     server.save(update_fields=["provision_logs", "updated_at"])
     _broadcast_provision_log(server, formatted_line)

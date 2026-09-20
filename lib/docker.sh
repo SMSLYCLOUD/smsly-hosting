@@ -185,9 +185,19 @@ compose_stack_services() {
         local node_crowd="${NODE_CROWDSEC:-1}"
         local node_falco="${NODE_FALCO:-1}"
         local node_spire="${NODE_SPIRE:-1}"
+        # NODE_LOG_SHIPPING defaults to 1 so pre-existing .env files (which
+        # lack the var) keep shipping logs. Promtail is the security log
+        # path to master CrowdSec — it stays up when EITHER observability
+        # or log-shipping is enabled, so disabling metrics to save RAM
+        # never silently blinds master-edge analysis.
+        local node_log="${NODE_LOG_SHIPPING:-1}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
+        # (promtail handled separately below — it is a security path)
         if [ "$node_obs" != "1" ]; then
-            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
+            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels)$"
+        fi
+        if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then
+            exclude_pattern="$exclude_pattern|^(promtail)$"
         fi
         # CrowdSec excluded when NODE_CROWDSEC=0
         if [ "$node_crowd" != "1" ]; then
@@ -241,8 +251,10 @@ stop_node_excluded_services() {
     local node_crowd="${NODE_CROWDSEC:-1}"
     local node_falco="${NODE_FALCO:-1}"
     local node_spire="${NODE_SPIRE:-1}"
+    local node_log="${NODE_LOG_SHIPPING:-1}"
     local extras=""
-    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
+    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels"
+    if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then extras="$extras promtail"; fi
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
     [ "$node_spire" != "1" ] && extras="$extras spire-agent"

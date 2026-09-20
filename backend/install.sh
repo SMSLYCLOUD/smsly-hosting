@@ -509,7 +509,11 @@ EOF
     )
     local _entry
     for _entry in "${_master_secrets_to_sync[@]}"; do
-        local _key="${_entry%%|*}"
+        # Entries after the first carry a leading "|" separator and use
+        # "KEY:description" form — strip the separator first, then split
+        # on ":". (Previously only the first of six secrets synced.)
+        local _tmp="${_entry#|}"
+        local _key="${_tmp%%:*}"
         # Read the master secret from the master's .env file.
         # MASTER_ENV_<KEY> env vars are NOT exported by the provisioner;
         # secrets are written to a temporary file and read via env_get_value.
@@ -824,9 +828,19 @@ compose_stack_services() {
         local node_crowd="${NODE_CROWDSEC:-1}"
         local node_falco="${NODE_FALCO:-1}"
         local node_spire="${NODE_SPIRE:-1}"
+        # NODE_LOG_SHIPPING defaults to 1 so pre-existing .env files (which
+        # lack the var) keep shipping logs. Promtail is the security log
+        # path to master CrowdSec — it stays up when EITHER observability
+        # or log-shipping is enabled, so disabling metrics to save RAM
+        # never silently blinds master-edge analysis.
+        local node_log="${NODE_LOG_SHIPPING:-1}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
+        # (promtail handled separately below — it is a security path)
         if [ "$node_obs" != "1" ]; then
-            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
+            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels)$"
+        fi
+        if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then
+            exclude_pattern="$exclude_pattern|^(promtail)$"
         fi
         # CrowdSec excluded when NODE_CROWDSEC=0
         if [ "$node_crowd" != "1" ]; then
@@ -880,8 +894,10 @@ stop_node_excluded_services() {
     local node_crowd="${NODE_CROWDSEC:-1}"
     local node_falco="${NODE_FALCO:-1}"
     local node_spire="${NODE_SPIRE:-1}"
+    local node_log="${NODE_LOG_SHIPPING:-1}"
     local extras=""
-    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
+    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels"
+    if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then extras="$extras promtail"; fi
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
     [ "$node_spire" != "1" ] && extras="$extras spire-agent"
@@ -2569,9 +2585,19 @@ compose_stack_services() {
         local node_crowd="${NODE_CROWDSEC:-1}"
         local node_falco="${NODE_FALCO:-1}"
         local node_spire="${NODE_SPIRE:-1}"
+        # NODE_LOG_SHIPPING defaults to 1 so pre-existing .env files (which
+        # lack the var) keep shipping logs. Promtail is the security log
+        # path to master CrowdSec — it stays up when EITHER observability
+        # or log-shipping is enabled, so disabling metrics to save RAM
+        # never silently blinds master-edge analysis.
+        local node_log="${NODE_LOG_SHIPPING:-1}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
+        # (promtail handled separately below — it is a security path)
         if [ "$node_obs" != "1" ]; then
-            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
+            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels)$"
+        fi
+        if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then
+            exclude_pattern="$exclude_pattern|^(promtail)$"
         fi
         # CrowdSec excluded when NODE_CROWDSEC=0
         if [ "$node_crowd" != "1" ]; then
@@ -2625,8 +2651,10 @@ stop_node_excluded_services() {
     local node_crowd="${NODE_CROWDSEC:-1}"
     local node_falco="${NODE_FALCO:-1}"
     local node_spire="${NODE_SPIRE:-1}"
+    local node_log="${NODE_LOG_SHIPPING:-1}"
     local extras=""
-    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
+    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels"
+    if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then extras="$extras promtail"; fi
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
     [ "$node_spire" != "1" ] && extras="$extras spire-agent"
@@ -4212,6 +4240,61 @@ _harden_openappsec_is_enabled() {
     return 1
 }
 
+# Resolve the enforcement mode from the shell env first, then .env
+# (mirrors _harden_openappsec_is_enabled). Settings → Security Scanning
+# writes OPENAPPSEC_MODE via the backend .env sync.
+_harden_openappsec_desired_mode() {
+    local _mode="${OPENAPPSEC_MODE:-}"
+    if [ -z "$_mode" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _mode=$(grep -E '^OPENAPPSEC_MODE=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
+    fi
+    if [ "$_mode" != "prevent" ]; then
+        _mode="detect-learn"
+    fi
+    printf '%s\n' "$_mode"
+}
+
+_harden_openappsec_apply_mode() {
+    # Converge local_policy.yaml with the desired enforcement mode.
+    # Fail-safe by construction: only a line that is EXACTLY a top-level
+    # `mode:` assignment is rewritten; any unknown schema is left
+    # untouched with a warning (never corrupt the policy). Operator and
+    # SaaS tuning (override-mode, practices) is never modified.
+    # Restarts the agent only when the file actually changed (with
+    # timeout wrappers per AGENTS.md #6).
+    command -v docker >/dev/null 2>&1 || return 0
+    local conf_dir="${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/openappsec/conf"
+    local policy="$conf_dir/local_policy.yaml"
+    [ -f "$policy" ] || return 0
+    local desired=""
+    desired="$(_harden_openappsec_desired_mode)"
+    local current=""
+    current=$(grep -E '^[[:space:]]*mode:[[:space:]]*(detect-learn|prevent)[[:space:]]*$' "$policy" 2>/dev/null | head -1 | grep -oE '(detect-learn|prevent)' || true)
+    if [ -z "$current" ]; then
+        echo -e "${YELLOW}    ⚠ open-appsec policy has no plain mode line — leaving as-is (wanted: $desired)${NC}"
+        return 0
+    fi
+    if [ "$current" = "$desired" ]; then
+        return 0
+    fi
+    local tmp_policy="$conf_dir/.local_policy.tmp"
+    if ! sed -E "s/^([[:space:]]*mode:[[:space:]]*)(detect-learn|prevent)([[:space:]]*)$/\1$desired\3/" "$policy" > "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite failed — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    if ! grep -qE "^[[:space:]]*mode:[[:space:]]*$desired[[:space:]]*$" "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite did not take — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    mv "$tmp_policy" "$policy"
+    echo -e "${BLUE}  → [harden] open-appsec mode $current → $desired — restarting agent...${NC}"
+    timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
+        echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    return 0
+}
+
 _harden_openappsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     if ! _harden_openappsec_is_enabled; then
@@ -4247,6 +4330,7 @@ _harden_openappsec_bootstrap() {
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
     fi
+    _harden_openappsec_apply_mode || true
     # Blocking start — wait for the shadow port to answer.
     local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}"
     local i=""
@@ -4271,6 +4355,9 @@ _harden_openappsec_reconcile() {
     # (AGENTS.md #16). Non-fatal by design.
     command -v docker >/dev/null 2>&1 || return 0
     if _harden_openappsec_is_enabled; then
+        # Enabled path: converge the enforcement mode too, so a Settings
+        # mode flip applies on the next update without a full rebuild.
+        _harden_openappsec_apply_mode || true
         return 0
     fi
     local stray=""
@@ -7652,9 +7739,11 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
+    env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
     env_ensure_var "$env_file" "NODE_CROWDSEC" "1" "Enable CrowdSec WAF/IPS"
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
+    env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
     # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
     # ~1-2GB real). Fill-if-absent so an explicit operator value survives
     # updates; mirrors the fresh_config sizing ladder.
@@ -7668,6 +7757,7 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
     fi
+    env_ensure_var "$env_file" "OPENAPPSEC_MODE" "detect-learn" "WAF enforcement mode (detect-learn shadow vs prevent enforce); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -8663,9 +8753,11 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
+    env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
     env_ensure_var "$env_file" "NODE_CROWDSEC" "1" "Enable CrowdSec WAF/IPS"
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
+    env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
     # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
     # ~1-2GB real). Fill-if-absent so an explicit operator value survives
     # updates; mirrors the fresh_config sizing ladder.
@@ -8679,6 +8771,7 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
     fi
+    env_ensure_var "$env_file" "OPENAPPSEC_MODE" "detect-learn" "WAF enforcement mode (detect-learn shadow vs prevent enforce); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -10724,6 +10817,61 @@ _harden_openappsec_is_enabled() {
     return 1
 }
 
+# Resolve the enforcement mode from the shell env first, then .env
+# (mirrors _harden_openappsec_is_enabled). Settings → Security Scanning
+# writes OPENAPPSEC_MODE via the backend .env sync.
+_harden_openappsec_desired_mode() {
+    local _mode="${OPENAPPSEC_MODE:-}"
+    if [ -z "$_mode" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _mode=$(grep -E '^OPENAPPSEC_MODE=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
+    fi
+    if [ "$_mode" != "prevent" ]; then
+        _mode="detect-learn"
+    fi
+    printf '%s\n' "$_mode"
+}
+
+_harden_openappsec_apply_mode() {
+    # Converge local_policy.yaml with the desired enforcement mode.
+    # Fail-safe by construction: only a line that is EXACTLY a top-level
+    # `mode:` assignment is rewritten; any unknown schema is left
+    # untouched with a warning (never corrupt the policy). Operator and
+    # SaaS tuning (override-mode, practices) is never modified.
+    # Restarts the agent only when the file actually changed (with
+    # timeout wrappers per AGENTS.md #6).
+    command -v docker >/dev/null 2>&1 || return 0
+    local conf_dir="${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/openappsec/conf"
+    local policy="$conf_dir/local_policy.yaml"
+    [ -f "$policy" ] || return 0
+    local desired=""
+    desired="$(_harden_openappsec_desired_mode)"
+    local current=""
+    current=$(grep -E '^[[:space:]]*mode:[[:space:]]*(detect-learn|prevent)[[:space:]]*$' "$policy" 2>/dev/null | head -1 | grep -oE '(detect-learn|prevent)' || true)
+    if [ -z "$current" ]; then
+        echo -e "${YELLOW}    ⚠ open-appsec policy has no plain mode line — leaving as-is (wanted: $desired)${NC}"
+        return 0
+    fi
+    if [ "$current" = "$desired" ]; then
+        return 0
+    fi
+    local tmp_policy="$conf_dir/.local_policy.tmp"
+    if ! sed -E "s/^([[:space:]]*mode:[[:space:]]*)(detect-learn|prevent)([[:space:]]*)$/\1$desired\3/" "$policy" > "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite failed — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    if ! grep -qE "^[[:space:]]*mode:[[:space:]]*$desired[[:space:]]*$" "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite did not take — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    mv "$tmp_policy" "$policy"
+    echo -e "${BLUE}  → [harden] open-appsec mode $current → $desired — restarting agent...${NC}"
+    timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
+        echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    return 0
+}
+
 _harden_openappsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     if ! _harden_openappsec_is_enabled; then
@@ -10759,6 +10907,7 @@ _harden_openappsec_bootstrap() {
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
     fi
+    _harden_openappsec_apply_mode || true
     # Blocking start — wait for the shadow port to answer.
     local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}"
     local i=""
@@ -10783,6 +10932,9 @@ _harden_openappsec_reconcile() {
     # (AGENTS.md #16). Non-fatal by design.
     command -v docker >/dev/null 2>&1 || return 0
     if _harden_openappsec_is_enabled; then
+        # Enabled path: converge the enforcement mode too, so a Settings
+        # mode flip applies on the next update without a full rebuild.
+        _harden_openappsec_apply_mode || true
         return 0
     fi
     local stray=""
@@ -12306,6 +12458,61 @@ _harden_openappsec_is_enabled() {
     return 1
 }
 
+# Resolve the enforcement mode from the shell env first, then .env
+# (mirrors _harden_openappsec_is_enabled). Settings → Security Scanning
+# writes OPENAPPSEC_MODE via the backend .env sync.
+_harden_openappsec_desired_mode() {
+    local _mode="${OPENAPPSEC_MODE:-}"
+    if [ -z "$_mode" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _mode=$(grep -E '^OPENAPPSEC_MODE=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
+    fi
+    if [ "$_mode" != "prevent" ]; then
+        _mode="detect-learn"
+    fi
+    printf '%s\n' "$_mode"
+}
+
+_harden_openappsec_apply_mode() {
+    # Converge local_policy.yaml with the desired enforcement mode.
+    # Fail-safe by construction: only a line that is EXACTLY a top-level
+    # `mode:` assignment is rewritten; any unknown schema is left
+    # untouched with a warning (never corrupt the policy). Operator and
+    # SaaS tuning (override-mode, practices) is never modified.
+    # Restarts the agent only when the file actually changed (with
+    # timeout wrappers per AGENTS.md #6).
+    command -v docker >/dev/null 2>&1 || return 0
+    local conf_dir="${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/openappsec/conf"
+    local policy="$conf_dir/local_policy.yaml"
+    [ -f "$policy" ] || return 0
+    local desired=""
+    desired="$(_harden_openappsec_desired_mode)"
+    local current=""
+    current=$(grep -E '^[[:space:]]*mode:[[:space:]]*(detect-learn|prevent)[[:space:]]*$' "$policy" 2>/dev/null | head -1 | grep -oE '(detect-learn|prevent)' || true)
+    if [ -z "$current" ]; then
+        echo -e "${YELLOW}    ⚠ open-appsec policy has no plain mode line — leaving as-is (wanted: $desired)${NC}"
+        return 0
+    fi
+    if [ "$current" = "$desired" ]; then
+        return 0
+    fi
+    local tmp_policy="$conf_dir/.local_policy.tmp"
+    if ! sed -E "s/^([[:space:]]*mode:[[:space:]]*)(detect-learn|prevent)([[:space:]]*)$/\1$desired\3/" "$policy" > "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite failed — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    if ! grep -qE "^[[:space:]]*mode:[[:space:]]*$desired[[:space:]]*$" "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite did not take — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    mv "$tmp_policy" "$policy"
+    echo -e "${BLUE}  → [harden] open-appsec mode $current → $desired — restarting agent...${NC}"
+    timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
+        echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    return 0
+}
+
 _harden_openappsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     if ! _harden_openappsec_is_enabled; then
@@ -12341,6 +12548,7 @@ _harden_openappsec_bootstrap() {
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
     fi
+    _harden_openappsec_apply_mode || true
     # Blocking start — wait for the shadow port to answer.
     local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}"
     local i=""
@@ -12365,6 +12573,9 @@ _harden_openappsec_reconcile() {
     # (AGENTS.md #16). Non-fatal by design.
     command -v docker >/dev/null 2>&1 || return 0
     if _harden_openappsec_is_enabled; then
+        # Enabled path: converge the enforcement mode too, so a Settings
+        # mode flip applies on the next update without a full rebuild.
+        _harden_openappsec_apply_mode || true
         return 0
     fi
     local stray=""
@@ -14656,9 +14867,19 @@ compose_stack_services() {
         local node_crowd="${NODE_CROWDSEC:-1}"
         local node_falco="${NODE_FALCO:-1}"
         local node_spire="${NODE_SPIRE:-1}"
+        # NODE_LOG_SHIPPING defaults to 1 so pre-existing .env files (which
+        # lack the var) keep shipping logs. Promtail is the security log
+        # path to master CrowdSec — it stays up when EITHER observability
+        # or log-shipping is enabled, so disabling metrics to save RAM
+        # never silently blinds master-edge analysis.
+        local node_log="${NODE_LOG_SHIPPING:-1}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
+        # (promtail handled separately below — it is a security path)
         if [ "$node_obs" != "1" ]; then
-            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
+            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels)$"
+        fi
+        if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then
+            exclude_pattern="$exclude_pattern|^(promtail)$"
         fi
         # CrowdSec excluded when NODE_CROWDSEC=0
         if [ "$node_crowd" != "1" ]; then
@@ -14712,8 +14933,10 @@ stop_node_excluded_services() {
     local node_crowd="${NODE_CROWDSEC:-1}"
     local node_falco="${NODE_FALCO:-1}"
     local node_spire="${NODE_SPIRE:-1}"
+    local node_log="${NODE_LOG_SHIPPING:-1}"
     local extras=""
-    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
+    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels"
+    if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then extras="$extras promtail"; fi
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
     [ "$node_spire" != "1" ] && extras="$extras spire-agent"
@@ -16732,9 +16955,11 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
+    env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
     env_ensure_var "$env_file" "NODE_CROWDSEC" "1" "Enable CrowdSec WAF/IPS"
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
+    env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
     # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
     # ~1-2GB real). Fill-if-absent so an explicit operator value survives
     # updates; mirrors the fresh_config sizing ladder.
@@ -16748,6 +16973,7 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
     fi
+    env_ensure_var "$env_file" "OPENAPPSEC_MODE" "detect-learn" "WAF enforcement mode (detect-learn shadow vs prevent enforce); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -17738,9 +17964,19 @@ compose_stack_services() {
         local node_crowd="${NODE_CROWDSEC:-1}"
         local node_falco="${NODE_FALCO:-1}"
         local node_spire="${NODE_SPIRE:-1}"
+        # NODE_LOG_SHIPPING defaults to 1 so pre-existing .env files (which
+        # lack the var) keep shipping logs. Promtail is the security log
+        # path to master CrowdSec — it stays up when EITHER observability
+        # or log-shipping is enabled, so disabling metrics to save RAM
+        # never silently blinds master-edge analysis.
+        local node_log="${NODE_LOG_SHIPPING:-1}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
+        # (promtail handled separately below — it is a security path)
         if [ "$node_obs" != "1" ]; then
-            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
+            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels)$"
+        fi
+        if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then
+            exclude_pattern="$exclude_pattern|^(promtail)$"
         fi
         # CrowdSec excluded when NODE_CROWDSEC=0
         if [ "$node_crowd" != "1" ]; then
@@ -17794,8 +18030,10 @@ stop_node_excluded_services() {
     local node_crowd="${NODE_CROWDSEC:-1}"
     local node_falco="${NODE_FALCO:-1}"
     local node_spire="${NODE_SPIRE:-1}"
+    local node_log="${NODE_LOG_SHIPPING:-1}"
     local extras=""
-    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
+    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels"
+    if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then extras="$extras promtail"; fi
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
     [ "$node_spire" != "1" ] && extras="$extras spire-agent"
@@ -19559,9 +19797,19 @@ compose_stack_services() {
         local node_crowd="${NODE_CROWDSEC:-1}"
         local node_falco="${NODE_FALCO:-1}"
         local node_spire="${NODE_SPIRE:-1}"
+        # NODE_LOG_SHIPPING defaults to 1 so pre-existing .env files (which
+        # lack the var) keep shipping logs. Promtail is the security log
+        # path to master CrowdSec — it stays up when EITHER observability
+        # or log-shipping is enabled, so disabling metrics to save RAM
+        # never silently blinds master-edge analysis.
+        local node_log="${NODE_LOG_SHIPPING:-1}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
+        # (promtail handled separately below — it is a security path)
         if [ "$node_obs" != "1" ]; then
-            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
+            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels)$"
+        fi
+        if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then
+            exclude_pattern="$exclude_pattern|^(promtail)$"
         fi
         # CrowdSec excluded when NODE_CROWDSEC=0
         if [ "$node_crowd" != "1" ]; then
@@ -19615,8 +19863,10 @@ stop_node_excluded_services() {
     local node_crowd="${NODE_CROWDSEC:-1}"
     local node_falco="${NODE_FALCO:-1}"
     local node_spire="${NODE_SPIRE:-1}"
+    local node_log="${NODE_LOG_SHIPPING:-1}"
     local extras=""
-    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
+    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels"
+    if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then extras="$extras promtail"; fi
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
     [ "$node_spire" != "1" ] && extras="$extras spire-agent"
@@ -22746,6 +22996,61 @@ _harden_openappsec_is_enabled() {
     return 1
 }
 
+# Resolve the enforcement mode from the shell env first, then .env
+# (mirrors _harden_openappsec_is_enabled). Settings → Security Scanning
+# writes OPENAPPSEC_MODE via the backend .env sync.
+_harden_openappsec_desired_mode() {
+    local _mode="${OPENAPPSEC_MODE:-}"
+    if [ -z "$_mode" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _mode=$(grep -E '^OPENAPPSEC_MODE=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
+    fi
+    if [ "$_mode" != "prevent" ]; then
+        _mode="detect-learn"
+    fi
+    printf '%s\n' "$_mode"
+}
+
+_harden_openappsec_apply_mode() {
+    # Converge local_policy.yaml with the desired enforcement mode.
+    # Fail-safe by construction: only a line that is EXACTLY a top-level
+    # `mode:` assignment is rewritten; any unknown schema is left
+    # untouched with a warning (never corrupt the policy). Operator and
+    # SaaS tuning (override-mode, practices) is never modified.
+    # Restarts the agent only when the file actually changed (with
+    # timeout wrappers per AGENTS.md #6).
+    command -v docker >/dev/null 2>&1 || return 0
+    local conf_dir="${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/openappsec/conf"
+    local policy="$conf_dir/local_policy.yaml"
+    [ -f "$policy" ] || return 0
+    local desired=""
+    desired="$(_harden_openappsec_desired_mode)"
+    local current=""
+    current=$(grep -E '^[[:space:]]*mode:[[:space:]]*(detect-learn|prevent)[[:space:]]*$' "$policy" 2>/dev/null | head -1 | grep -oE '(detect-learn|prevent)' || true)
+    if [ -z "$current" ]; then
+        echo -e "${YELLOW}    ⚠ open-appsec policy has no plain mode line — leaving as-is (wanted: $desired)${NC}"
+        return 0
+    fi
+    if [ "$current" = "$desired" ]; then
+        return 0
+    fi
+    local tmp_policy="$conf_dir/.local_policy.tmp"
+    if ! sed -E "s/^([[:space:]]*mode:[[:space:]]*)(detect-learn|prevent)([[:space:]]*)$/\1$desired\3/" "$policy" > "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite failed — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    if ! grep -qE "^[[:space:]]*mode:[[:space:]]*$desired[[:space:]]*$" "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite did not take — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    mv "$tmp_policy" "$policy"
+    echo -e "${BLUE}  → [harden] open-appsec mode $current → $desired — restarting agent...${NC}"
+    timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
+        echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    return 0
+}
+
 _harden_openappsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     if ! _harden_openappsec_is_enabled; then
@@ -22781,6 +23086,7 @@ _harden_openappsec_bootstrap() {
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
     fi
+    _harden_openappsec_apply_mode || true
     # Blocking start — wait for the shadow port to answer.
     local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}"
     local i=""
@@ -22805,6 +23111,9 @@ _harden_openappsec_reconcile() {
     # (AGENTS.md #16). Non-fatal by design.
     command -v docker >/dev/null 2>&1 || return 0
     if _harden_openappsec_is_enabled; then
+        # Enabled path: converge the enforcement mode too, so a Settings
+        # mode flip applies on the next update without a full rebuild.
+        _harden_openappsec_apply_mode || true
         return 0
     fi
     local stray=""
@@ -24383,9 +24692,11 @@ SMSLY_ENABLE_STARTUP_CADDY_SYNC=$ENV_STARTUP_CADDY_SYNC
 TRAEFIK_HTTP_BIND=$ENV_TRAEFIK_HTTP_BIND
 TRAEFIK_HTTPS_BIND=$ENV_TRAEFIK_HTTPS_BIND
 NODE_SECURITY=${NODE_SECURITY:-1}
+NODE_OBSERVABILITY=${NODE_OBSERVABILITY:-1}
 NODE_CROWDSEC=${NODE_CROWDSEC:-1}
 NODE_FALCO=${NODE_FALCO:-1}
 NODE_SPIRE=${NODE_SPIRE:-1}
+NODE_LOG_SHIPPING=${NODE_LOG_SHIPPING:-1}
 EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
@@ -26167,9 +26478,19 @@ compose_stack_services() {
         local node_crowd="${NODE_CROWDSEC:-1}"
         local node_falco="${NODE_FALCO:-1}"
         local node_spire="${NODE_SPIRE:-1}"
+        # NODE_LOG_SHIPPING defaults to 1 so pre-existing .env files (which
+        # lack the var) keep shipping logs. Promtail is the security log
+        # path to master CrowdSec — it stays up when EITHER observability
+        # or log-shipping is enabled, so disabling metrics to save RAM
+        # never silently blinds master-edge analysis.
+        local node_log="${NODE_LOG_SHIPPING:-1}"
         # Observability agents excluded when NODE_OBSERVABILITY=0
+        # (promtail handled separately below — it is a security path)
         if [ "$node_obs" != "1" ]; then
-            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels|promtail)$"
+            exclude_pattern="$exclude_pattern|^(cadvisor|node-exporter|docker-labels)$"
+        fi
+        if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then
+            exclude_pattern="$exclude_pattern|^(promtail)$"
         fi
         # CrowdSec excluded when NODE_CROWDSEC=0
         if [ "$node_crowd" != "1" ]; then
@@ -26223,8 +26544,10 @@ stop_node_excluded_services() {
     local node_crowd="${NODE_CROWDSEC:-1}"
     local node_falco="${NODE_FALCO:-1}"
     local node_spire="${NODE_SPIRE:-1}"
+    local node_log="${NODE_LOG_SHIPPING:-1}"
     local extras=""
-    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels promtail"
+    [ "$node_obs" != "1" ] && extras="$extras cadvisor node-exporter docker-labels"
+    if [ "$node_obs" != "1" ] && [ "$node_log" != "1" ]; then extras="$extras promtail"; fi
     [ "$node_crowd" != "1" ] && extras="$extras crowdsec"
     [ "$node_falco" != "1" ] && extras="$extras falco"
     [ "$node_spire" != "1" ] && extras="$extras spire-agent"
@@ -28243,9 +28566,11 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
+    env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
     env_ensure_var "$env_file" "NODE_CROWDSEC" "1" "Enable CrowdSec WAF/IPS"
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
+    env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
     # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
     # ~1-2GB real). Fill-if-absent so an explicit operator value survives
     # updates; mirrors the fresh_config sizing ladder.
@@ -28259,6 +28584,7 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
     fi
+    env_ensure_var "$env_file" "OPENAPPSEC_MODE" "detect-learn" "WAF enforcement mode (detect-learn shadow vs prevent enforce); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"

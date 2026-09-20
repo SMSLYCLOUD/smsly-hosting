@@ -135,7 +135,7 @@ export default function AiDocsPage() {
                                 <tr><td className="p-3">Grok (xAI)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">grok-3-mini</td></tr>
                                 <tr><td className="p-3">Gemini</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">gemini-2.0-flash</td></tr>
                                 <tr><td className="p-3">Claude (Anthropic)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">claude-sonnet-4-20250514</td></tr>
-                                <tr><td className="p-3">DeepSeek</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">deepseek-coder</td></tr>
+                                <tr><td className="p-3">DeepSeek</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">deepseek-chat</td></tr>
                                 <tr><td className="p-3">OpenRouter</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">openrouter/auto</td></tr>
                                 <tr><td className="p-3">Groq</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">llama-3.3-70b-versatile</td></tr>
                                 <tr><td className="p-3">Alibaba (Qwen)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">qwen-max</td></tr>
@@ -143,7 +143,7 @@ export default function AiDocsPage() {
                                 <tr><td className="p-3">Local LLM (Ollama / vLLM / LM Studio)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">local-model</td></tr>
                                 <tr><td className="p-3">Trulay Cloud</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">smsly-latest</td></tr>
                                 <tr><td className="p-3">FreeModel.dev</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">gpt-4o-mini</td></tr>
-                                <tr><td className="p-3">OpenCode API</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">opencode-latest</td></tr>
+                                <tr><td className="p-3">OpenCode (Zen)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">big-pickle</td></tr>
                                 <tr><td className="p-3">Mistral (La Plateforme)</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">mistral-small-latest</td></tr>
                                 <tr><td className="p-3">NVIDIA NIM</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">nvidia/llama-3.1-nemotron-70b-instruct</td></tr>
                                 <tr><td className="p-3">Cloudflare Workers AI</td><td className="p-3 font-mono text-purple-600 dark:text-purple-400">@cf/meta/llama-3.1-8b-instruct</td></tr>
@@ -163,7 +163,7 @@ export default function AiDocsPage() {
                     </ol>
                     <p>Either path calls <code>_sync_db_to_env()</code> which writes the keys into the worker process&apos;s environment so the next LLM call picks them up.</p>
                     <h3>The <code>_validate_https_allowlist</code> Gate</h3>
-                    <p>The Jules provider&apos;s <code>jules_base_url</code> is validated against <code>settings.JULES_ALLOWED_HOSTS</code> (default <code>[&apos;api.jules.google.com&apos;]</code>). Any other host is rejected at <code>clean()</code> time. The validator requires <code>https://</code> and the host to be in the allowlist. This prevents an admin from accidentally pointing Jules at an attacker-controlled endpoint.</p>
+                    <p>The Jules provider is opt-in: set <code>jules_base_url</code> to your operator-run Jules-compatible gateway. It is validated against <code>settings.JULES_ALLOWED_HOSTS</code> (default <code>[&apos;api.jules.google.com&apos;]</code> — extend it with your gateway host). Empty means disabled. Any other host is rejected at <code>clean()</code> time. The validator requires <code>https://</code> and the host to be in the allowlist. This prevents an admin from accidentally pointing Jules at an attacker-controlled endpoint. The Local LLM provider is likewise disabled until its base URL is set to an allowlisted host.</p>
 
                     <h2 id="rate-limits" className="text-2xl font-bold flex items-center gap-2">
                         <ListChecks className="w-5 h-5 text-purple-600" /> Rate Limits
@@ -262,7 +262,7 @@ export default function AiDocsPage() {
   -d '{
     "openai_api_key": "sk-...",
     "openai_model": "gpt-4o",
-    "jules_base_url": "https://api.jules.google.com/v1"
+    "jules_base_url": "https://jules-gateway.example.com/v1"
   }'`}</CodeBlock>
 
                     <h3>Chat completion (solo or Senate)</h3>
@@ -339,7 +339,7 @@ export default function AiDocsPage() {
 
                     <h3>&quot;Provider &apos;jules&apos; not in JULES_ALLOWED_HOSTS&quot;</h3>
                     <p>The platform&apos;s <code>JULES_ALLOWED_HOSTS</code> setting is missing the host portion of <code>jules_base_url</code>. Default is <code>[&apos;api.jules.google.com&apos;]</code>. If you self-host Jules, add the host to the allowlist in <code>.env</code>:</p>
-                    <CodeBlock>{`JULES_ALLOWED_HOSTS=api.jules.google.com,jules.internal.example.com`}</CodeBlock>
+                    <CodeBlock>{`JULES_ALLOWED_HOSTS=jules.internal.example.com`}</CodeBlock>
 
                     <h3>Streaming cuts off after the first chunk</h3>
                     <p>The platform&apos;s reverse proxy (Traefik) has a 60s idle timeout by default. Long streams (Senate committees with 5 members) may exceed this. Raise the timeout in <code>traefik_dynamic.yml</code> (<code>transport.respondingTimeouts.idleTimeout</code>).</p>

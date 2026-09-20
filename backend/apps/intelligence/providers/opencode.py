@@ -9,16 +9,18 @@ class OpenCodeProvider(AIProvider):
     """
     OpenCode AI provider — configurable gateway.
 
-    Uses an OpenAI-compatible `/chat/completions` endpoint.
+    Uses the OpenCode Zen OpenAI-compatible `/chat/completions` endpoint
+    (``https://opencode.ai/zen/v1``). The legacy ``api.opencode.ai/v1``
+    host returns Not Found for all API paths, so it is not used.
     """
 
     def __init__(self, model_override: str | None = None):
         self.api_key = _sanitize_api_key(os.environ.get("OPENCODE_API_KEY", ""))
-        default_model = os.environ.get("OPENCODE_MODEL", "opencode-latest")
-        self.model = model_override or _normalize_model(default_model, "opencode-latest")
+        default_model = os.environ.get("OPENCODE_MODEL", "big-pickle")
+        self.model = model_override or _normalize_model(default_model, "big-pickle")
         self.base_url = os.environ.get(
             "OPENCODE_BASE_URL",
-            "https://api.opencode.ai/v1",
+            "https://opencode.ai/zen/v1",
         ).rstrip("/")
 
     def name(self) -> str:

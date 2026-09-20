@@ -8,9 +8,12 @@ class CloudflareProvider(AIProvider):
     """
     Cloudflare Workers AI provider — accessed via AI Gateway.
 
-    Uses an OpenAI-compatible `/chat/completions` endpoint through
-    Cloudflare AI Gateway. Requires a Cloudflare account and AI Gateway setup.
-    Base URL format: https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/workers-ai
+    Uses the OpenAI-compatible Unified API endpoint through
+    Cloudflare AI Gateway:
+    ``https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/compat``
+    with ``/chat/completions`` appended. Replace YOUR_ACCOUNT_ID with
+    your Cloudflare account ID. Requires a Cloudflare account and
+    AI Gateway setup.
     """
 
     def __init__(self, model_override: str | None = None):
@@ -19,8 +22,17 @@ class CloudflareProvider(AIProvider):
         self.model = model_override or _normalize_model(default_model, "@cf/meta/llama-3.1-8b-instruct")
         self.base_url = os.environ.get(
             "CLOUDFLARE_BASE_URL",
-            "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai",
+            "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/compat",
         ).rstrip("/")
+
+    def is_configured(self) -> bool:
+        if not self.api_key or not self.base_url:
+            return False
+        # The factory placeholder is not a working endpoint — the operator
+        # must substitute their real Cloudflare account ID.
+        if "YOUR_ACCOUNT_ID" in self.base_url:
+            return False
+        return True
 
     def name(self) -> str:
         return f"Cloudflare AI ({self.model})"
@@ -29,6 +41,11 @@ class CloudflareProvider(AIProvider):
     def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Cloudflare] API key not configured.")
+        if not self.base_url or "YOUR_ACCOUNT_ID" in self.base_url:
+            raise ValueError(
+                "[Cloudflare] base URL not configured. Replace YOUR_ACCOUNT_ID "
+                "in CLOUDFLARE_BASE_URL with your Cloudflare account ID."
+            )
 
         messages = []
         if system_prompt:

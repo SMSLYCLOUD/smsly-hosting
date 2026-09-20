@@ -2,8 +2,11 @@
 """
 Loki-to-File Log Bridge for CrowdSec
 
-Periodically queries Loki for node Caddy access logs and writes them to
-a local directory that CrowdSec watches for security analysis.
+Periodically queries Loki for node access logs (full-node Caddy and
+lite-agent Traefik) and writes them to a local directory that CrowdSec
+watches for security analysis. Caddy and Traefik logs use different
+CrowdSec parsers, so each format gets its own filename prefix and a
+matching acquis stanza (see infrastructure/crowdsec/acquis.yaml).
 
 Environment variables:
   LOKI_URL         - Loki API URL (default: http://smsly-loki:3100)
@@ -56,11 +59,22 @@ def ns_to_rfc3339(ns: str) -> str:
     return dt.isoformat()
 
 
-def query_loki(client: httpx.Client, start: str, end: str) -> list[dict]:
-    """Query Loki for node Caddy access logs."""
+# Loki job -> filename prefix. Each format keeps its own NON-OVERLAPPING
+# prefix so the CrowdSec acquis globs route files to the correct parser
+# (caddy vs traefik): `node_*` would also match `node_traefik_*`, so the
+# traefik prefix must not start with `node_`. Keys must match the
+# promtail `job` labels.
+JOB_FILE_PREFIXES = {
+    "caddy-access": "node_",
+    "traefik-access": "agent_traefik_",
+}
+
+
+def query_loki(client: httpx.Client, job: str, start: str, end: str) -> list[dict]:
+    """Query Loki for node access logs of one job."""
     url = f"{LOKI_URL}/loki/api/v1/query_range"
     params = {
-        "query": '{job="caddy-access"}',
+        "query": '{job="%s"}' % job,
         "start": start,
         "end": end,
         "limit": 5000,
@@ -85,14 +99,14 @@ def query_loki(client: httpx.Client, start: str, end: str) -> list[dict]:
         return []
 
 
-def write_logs(logs: list[dict], log_dir: Path) -> int:
+def write_logs(logs: list[dict], log_dir: Path, prefix: str) -> int:
     """Write log lines to per-node files. Returns number of lines written."""
     written = 0
     for entry in logs:
         node_id = entry["node_id"]
         # Sanitize node_id for filename
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in node_id)
-        log_file = log_dir / f"node_{safe_name}.log"
+        log_file = log_dir / f"{prefix}{safe_name}.log"
         try:
             with open(log_file, "a") as f:
                 f.write(entry["line"] + "\n")
@@ -115,15 +129,17 @@ def main():
     with httpx.Client(timeout=30) as client:
         while True:
             now_ns = str(int(datetime.now(timezone.utc).timestamp() * 1e9))
-            logs = query_loki(client, last_ts_ns, now_ns)
-            if logs:
-                written = write_logs(logs, log_dir)
-                # Advance timestamp to the latest log entry
-                max_ts = max(e["timestamp_ns"] for e in logs)
-                last_ts_ns = str(int(max_ts) + 1)  # +1 ns to avoid duplicates
-                log.info("Wrote %d log lines from Loki", written)
-            else:
-                log.debug("No new logs")
+            for job, prefix in JOB_FILE_PREFIXES.items():
+                logs = query_loki(client, job, last_ts_ns, now_ns)
+                if logs:
+                    written = write_logs(logs, log_dir, prefix)
+                    # Advance timestamp to the latest log entry
+                    max_ts = max(e["timestamp_ns"] for e in logs)
+                    if int(max_ts) + 1 > int(last_ts_ns):
+                        last_ts_ns = str(int(max_ts) + 1)  # +1 ns to avoid duplicates
+                    log.info("Wrote %d %s log lines from Loki", written, job)
+                else:
+                    log.debug("No new %s logs", job)
             time.sleep(POLL_INTERVAL)
 
 

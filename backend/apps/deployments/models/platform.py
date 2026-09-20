@@ -19,6 +19,7 @@ class ManagedServer(models.Model):
     class Status(models.TextChoices):
         ONLINE = "ONLINE", "Online"
         OFFLINE = "OFFLINE", "Offline"
+        DEGRADED = "DEGRADED", "Degraded"
         UNKNOWN = "UNKNOWN", "Unknown"
 
     class ProvisionStatus(models.TextChoices):
@@ -143,9 +144,13 @@ class ManagedServer(models.Model):
         blank=True,
         help_text=(
             "Optional components enabled on this node. Keys: "
-            "observability (cadvisor/node-exporter/docker-labels/promtail), "
-            "security (fail2ban/ufw/apparmor/auditd/kernel/gvisor), "
-            "crowdsec, falco, spire (spire-agent, spire-agent-ecosystem)."
+            "observability (cadvisor/node-exporter/docker-labels metrics), "
+            "security (reserved — host/kernel hardening via fail2ban/ufw/"
+            "apparmor/auditd/kernel/gvisor always runs on nodes regardless "
+            "of this flag), "
+            "crowdsec, falco, spire (spire-agent, spire-agent-ecosystem), "
+            "log_shipping (ship node access logs to master CrowdSec for "
+            "centralized edge analysis; independent of observability)."
         ),
     )
 
@@ -340,6 +345,22 @@ class PlatformConfig(models.Model):
     enable_crowdsec_waf = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="Enable CrowdSec WAF to block malicious traffic automatically")
+    openappsec_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text="Enable the open-appsec WAF shadow stack (agent + Envoy "
+                  "attachment, detect-learn). Toggled from Settings → "
+                  "Security Scanning; synced to OPENAPPSEC_ENABLED in .env "
+                  "for the installer reconcile.")
+    openappsec_mode = models.CharField(  # type: ignore[var-annotated]
+        max_length=16, default='detect-learn',
+        choices=[('detect-learn', 'Shadow — detect and learn'),
+                 ('prevent', 'Enforce — block')],
+        help_text="WAF enforcement mode. Shadow observes without blocking; "
+                  "enforce blocks malicious requests inline. Set from "
+                  "Settings → Security Scanning; applied to local_policy.yaml "
+                  "by the installer reconcile (takes effect on next update). "
+                  "Prove shadow parity first — enforce on a mis-tuned policy "
+                  "blocks legitimate traffic.")
     max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")

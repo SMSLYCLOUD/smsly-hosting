@@ -288,16 +288,15 @@ def _build_targets(service, active_deployment):
         configured = os.environ.get("TRAEFIK_INTERNAL_URL", "").strip()
         if configured:
             internal_urls.append(configured.rstrip("/"))
-        internal_urls.append("http://traefik:80")
         is_lite = getattr(service.server, "is_lite_agent", False) if service.server else False
         if is_lite:
-            internal_urls.extend(
-                [
-                    "http://127.0.0.1:80",
-                    "http://localhost:80",
-                ]
-            )
+            # Lite services run on a REMOTE node: the master's loopback
+            # and edge can never reach them. Probe only via mesh/private
+            # targets below; anything master-local is a false negative
+            # that triggers bogus auto-restart/rollback.
+            pass
         else:
+            internal_urls.append("http://traefik:80")
             internal_urls.extend(
                 [
                     "http://127.0.0.1:8081",

@@ -28,7 +28,7 @@ class GeminiProvider(AIProvider):
         contents.append({"role": "user", "parts": [{"text": prompt}]})
 
         candidate_models: list[str] = []
-        for candidate in [self.model, "gemini-2.0-flash", "gemini-1.5-flash"]:
+        for candidate in [self.model, "gemini-2.0-flash", "gemini-2.5-flash"]:
             normalized = str(candidate or "").strip().replace("models/", "")
             if normalized and normalized not in candidate_models:
                 candidate_models.append(normalized)

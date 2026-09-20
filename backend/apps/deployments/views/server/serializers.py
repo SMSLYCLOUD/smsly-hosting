@@ -185,21 +185,21 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
                 )
             try:
                 ip = ipaddress.ip_address(hostname)
-                # SECURITY: reject ALL non-global unicast addresses.
-                # A valid user-registered node has a public IP
-                # (the operator's VPS), so anything in private
-                # ranges is an SSRF target.
+                # SECURITY: reject loopback / link-local / multicast /
+                # reserved / unspecified (classic SSRF targets, including
+                # the 169.254.169.254 cloud-metadata address). RFC1918
+                # private addresses are ALLOWED: WireGuard mesh
+                # (10.100.x.x) and VPC private-IP fleets are supported
+                # topologies that must be able to register.
                 from django.conf import settings
                 allow_local = getattr(settings, 'ALLOW_LOCAL_NODES', False)
                 if not allow_local:
-                    if not ip.is_global or (
-                        ip.is_loopback or ip.is_link_local
-                        or ip.is_multicast or ip.is_reserved
-                        or ip.is_unspecified or ip.is_private
-                    ):
+                    if (ip.is_loopback or ip.is_link_local
+                            or ip.is_multicast or ip.is_reserved
+                            or ip.is_unspecified):
                         raise serializers.ValidationError(
                             f"api_url IP {ip} is not a public address "
-                            f"(loopback / private / link-local / reserved)."
+                            f"(loopback / link-local / multicast / reserved)."
                         )
             except ValueError:
                 pass  # hostname — allowed
@@ -278,7 +278,9 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
         # The provisioner script will automatically fetch it from the remote node
         # once the lite agent is installed.
         if data.get("node_type") == "node" and data.get("is_lite_agent"):
-            data["is_lite_agent"] = False
+            raise serializers.ValidationError(
+                {"is_lite_agent": "Contradictory flags: use node_type='agent-lite' for lite agents, or set is_lite_agent to false."}
+            )
         return data
 
 

@@ -51,7 +51,18 @@ def bootstrap_view(request, token):
     is_media_node = payload_data.get("is_media_node", False)
     is_primary = payload_data.get("is_primary", False)
     allow_user_workloads = payload_data.get("allow_user_workloads", True)
-    node_components = payload_data.get("node_components", {})
+    # Component defaults mirror the dashboard DEFAULT_NODE_COMPONENTS
+    # and provision_server.py: absent keys mean "default", never
+    # "everything off". An explicit false always wins (opt-out).
+    node_components = {
+        "observability": True,
+        "security": True,
+        "crowdsec": False,
+        "falco": False,
+        "spire": False,
+        "log_shipping": True,
+        **(payload_data.get("node_components", {}) or {}),
+    }
     node_number = payload_data.get("node_number", "")
     node_domain = payload_data.get("node_domain", "")
     wg_address = payload_data.get("wg_address", "")
@@ -100,6 +111,7 @@ def bootstrap_view(request, token):
         _env_line("NODE_CROWDSEC", _comp_flag("crowdsec")),
         _env_line("NODE_FALCO", _comp_flag("falco")),
         _env_line("NODE_SPIRE", _comp_flag("spire")),
+        _env_line("NODE_LOG_SHIPPING", _comp_flag("log_shipping")),
         _env_line("SMSLY_NODE_HOST", host),
     ]
     if server_id:
@@ -136,9 +148,47 @@ def bootstrap_view(request, token):
                 from apps.deployments.services.provisioner.helpers.server_config import _get_master_mesh_ip
                 master_mesh_ip = _get_master_mesh_ip()
             except Exception:
-                master_mesh_ip = master_ip
+                master_mesh_ip = ""
+        # Never fall back to the public IP for the mesh address: internal
+        # ports (5432 etc.) are firewalled there, and lib/agent-lite.sh
+        # refuses to build DATABASE_URL from it. Omit instead so the
+        # agent fails fast with a clear message.
+        _mesh_ok = False
         if master_mesh_ip:
+            try:
+                import ipaddress as _ipmod
+                _parsed = _ipmod.ip_address(master_mesh_ip.strip())
+                _mesh_ok = (
+                    _parsed.is_private or _parsed.is_link_local
+                ) and not _parsed.is_loopback
+            except ValueError:
+                _mesh_ok = False
+        if _mesh_ok:
             env_lines.append(_env_line("MASTER_MESH_IP", master_mesh_ip))
+        # Bootstrap must carry everything lib/agent-lite.sh hard-fails
+        # without (MASTER_DB_PASSWORD etc.) plus the node identity/queue.
+        # build_agent_lite_install_env() provisions the dedicated lite DB
+        # user — the single owner of these values.
+        if server_id:
+            try:
+                from apps.deployments.models.servers import ManagedServer
+                from apps.deployments.services.provisioner.helpers.server_config import (
+                    build_agent_lite_install_env,
+                )
+                _srv = ManagedServer.objects.filter(id=server_id).first()
+                if _srv is not None:
+                    _lite_env, _ = build_agent_lite_install_env(_srv)
+                    for _k in (
+                        "MASTER_DB_USER", "MASTER_DB_PASSWORD",
+                        "MASTER_MQ_PASSWORD", "MASTER_REDIS_PASSWORD",
+                        "MASTER_FIELD_ENCRYPTION_KEY",
+                        "SMSLY_NODE_ID", "SMSLY_NODE_QUEUE",
+                    ):
+                        _v = str(_lite_env.get(_k) or "").strip()
+                        if _v:
+                            env_lines.append(_env_line(_k, _v))
+            except Exception:
+                pass
 
     env_block = "\n".join(env_lines)
 

@@ -106,25 +106,31 @@ class GrokProvider(AIProvider):
                         continue
 
     def get_balance(self) -> dict:
-        """Fetch xAI/Grok credit balance."""
+        """Probe xAI/Grok API availability.
+
+        xAI exposes no key-scoped balance endpoint, so a ``/v1/models``
+        probe is the honest signal: 200 means the key works.
+        """
         if not self.api_key:
             return {"balance": "Not configured", "currency": "", "raw": {}}
         try:
             client = _get_client("grok", timeout=15)
             resp = client.get(
-                f"{self.BASE_URL}/api-key",
+                f"{self.BASE_URL}/models",
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
             if resp.status_code == 200:
-                data = resp.json()
-                remaining = data.get("remaining_balance", None)
-                if remaining is not None:
-                    return {
-                        "balance": f"${remaining:.2f}",
-                        "currency": "USD",
-                        "raw": data,
-                    }
-                return {"balance": "Active", "currency": "USD", "raw": data}
+                try:
+                    model_count = len(resp.json().get("data", []))
+                except Exception:
+                    model_count = 0
+                return {
+                    "balance": f"Active ({model_count} models available)" if model_count else "Active",
+                    "currency": "USD",
+                    "raw": {},
+                }
+            if resp.status_code == 401:
+                return {"balance": "Invalid API key", "currency": "", "raw": {}}
             return {
                 "balance": "Active (check console.x.ai)",
                 "currency": "USD",

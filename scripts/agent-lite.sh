@@ -82,7 +82,7 @@ if ! mkdir "$LOCK_FILE" ; then
 fi
 
 # ─── Log setup ───────────────────────────────────────────────────────────────
-exec > >(tee -a "$LOG_FILE") 
+exec > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2)
 
 # ─── Directory guard ─────────────────────────────────────────────────────────
 if [ ! -d "$INSTALL_DIR" ]; then
@@ -252,6 +252,21 @@ ensure_agent_env_defaults() {
     master_ip="$(env_get_value "$env_file" "MASTER_IP")"
     master_mesh_ip="$(env_get_value "$env_file" "MASTER_MESH_IP")"
 
+    # Single owner for the shared-DB URLs: derive DATABASE_URL /
+    # DIRECT_DATABASE_URL from MASTER_DB_* + mesh IP when missing, so a
+    # bare scripts/ install never runs with an empty DATABASE_URL while
+    # lib/agent-lite.sh does the same derivation differently.
+    local _master_db_user="" _master_db_pass=""
+    _master_db_user="$(env_get_value "$env_file" "MASTER_DB_USER")"
+    [ -n "$_master_db_user" ] || _master_db_user="smsly_admin"
+    _master_db_pass="$(env_get_value "$env_file" "MASTER_DB_PASSWORD")"
+    local _db_host="${master_mesh_ip:-$master_ip}"
+    if [ -z "$(env_get_value "$env_file" "DATABASE_URL")" ] && [ -n "$_master_db_pass" ] && [ -n "$_db_host" ]; then
+        env_set_value "$env_file" "DATABASE_URL" "postgresql://${_master_db_user}:${_master_db_pass}@${_db_host}:5432/smsly_hosting"
+        env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${_master_db_user}:${_master_db_pass}@${_db_host}:5432/smsly_hosting"
+        echo -e "${BLUE}  -> Derived DATABASE_URL from master DB credentials${NC}"
+    fi
+
     if [ -n "$master_mesh_ip" ]; then
         registry_host="$master_mesh_ip"
     else
@@ -379,7 +394,9 @@ configure_docker_registry_trust() {
     if [ -n "$master_ip" ]; then
         add_registry "${master_ip}:5000"
         add_registry "${master_ip}:5001"
-        mirrors+=("http://${master_ip}:5001")
+        # NOTE: never register the authenticated master registry as a
+        # registry-mirror (mirrors must be pull-through caches) — it
+        # breaks pulls. Insecure-registry entries above are sufficient.
     fi
 
     [ "${#registries[@]}" -eq 0 ] && return 0
@@ -472,8 +489,14 @@ docker_login() {
     local registry="${CONTAINER_REGISTRY_URL:-$(env_get_value "$env_file" "CONTAINER_REGISTRY_URL"  || echo "")}"
     local user="${REGISTRY_USER:-$(env_get_value "$env_file" "REGISTRY_USER"  || echo "smsly-registry")}"
     local pass="${REGISTRY_PASSWORD:-$(env_get_value "$env_file" "REGISTRY_PASSWORD"  || echo "")}"
-    [ -z "$registry" ] && registry="127.0.0.1:5000"
-    [ -z "$pass" ] && return 0
+    if [ -z "$registry" ]; then
+        echo -e "${YELLOW}  ⚠ No registry configured, skipping login${NC}"
+        return 0
+    fi
+    if [ -z "$pass" ]; then
+        echo -e "${YELLOW}  ⚠ No registry password, skipping login to $registry${NC}"
+        return 0
+    fi
     echo "$pass" | docker login "$registry" -u "$user" --password-stdin || echo -e "${YELLOW}    ⚠ Docker registry login failed (non-fatal)${NC}"
 }
 
@@ -620,9 +643,10 @@ wait_for_registrar() {
     local interval=3
     while [ "$elapsed" -lt "$timeout" ]; do
         if docker compose -f "$COMPOSE_PATH" ps --status running agent-registrar  | grep -q "Up"; then
-            # Verify the Python process is actually running inside
-            # the container (it might be in start_period limbo)
-            if timeout 10 docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py ; then
+            # Verify the registrar is actually heartbeating (freshness
+            # marker it maintains itself) — pgrep is not guaranteed in
+            # this image, and a live process need not be progressing.
+            if timeout -k 5 10 docker compose -f "$COMPOSE_PATH" exec -T agent-registrar sh -c 'test $(( $(date +%s) - $(cat /tmp/registrar.last_heartbeat 2>/dev/null || echo 0) )) -lt 120' ; then
                 echo -e "${GREEN}  ✓ Agent registrar is running${NC}"
                 return 0
             fi
@@ -657,7 +681,11 @@ final_health_check() {
     fi
 
     # 2. Celery worker subscribed to its queue?
-    if timeout 15 docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect ping -d celery@$(hostname)@%h  | grep -q "pong"; then
+    # Target the worker by its configured node ID (SMSLY_NODE_ID), not
+    # the host's hostname: the worker registers as ${SMSLY_NODE_ID}@%h.
+    _node_id_for_ping="$(env_get_value "$INSTALL_DIR/.env" "SMSLY_NODE_ID"  || true)"
+    [ -n "$_node_id_for_ping" ] || _node_id_for_ping="$(hostname)"
+    if timeout -k 5 15 docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect ping -d "celery@${_node_id_for_ping}@%h"  | grep -q "pong"; then
         celery_ok=1
         echo -e "${GREEN}    ✓ Celery worker (ping pong)${NC}"
     else
@@ -671,8 +699,8 @@ final_health_check() {
         fi
     fi
 
-    # 3. Agent registrar running?
-    if timeout 10 docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py ; then
+    # 3. Agent registrar heartbeating?
+    if timeout -k 5 10 docker compose -f "$COMPOSE_PATH" exec -T agent-registrar sh -c 'test $(( $(date +%s) - $(cat /tmp/registrar.last_heartbeat 2>/dev/null || echo 0) )) -lt 120' ; then
         registrar_ok=1
         echo -e "${GREEN}    ✓ Agent registrar process is alive${NC}"
     else
@@ -736,7 +764,7 @@ do_install() {
     configure_docker_registry_trust
     ensure_networks
     ensure_backups_volume
-    for _img in tecnativa/docker-socket-proxy:latest traefik:v3.6; do
+    for _img in tecnativa/docker-socket-proxy:0.2 traefik:v3.6; do
         if docker image inspect "$_img" ; then
             echo -e "${GREEN}  ✓ $_img cached${NC}"
         elif docker pull "$_img" ; then
@@ -810,7 +838,14 @@ do_update_full() {
     }
 
     echo -e "${BLUE}  → Restarting all services...${NC}"
-    docker compose -f "$COMPOSE_PATH" up -d --force-recreate
+    # Edge rule: never --force-recreate traefik (drops in-flight HTTP/WS).
+    # Recreate everything else, then check-then-start the edge.
+    docker compose -f "$COMPOSE_PATH" up -d --force-recreate socket-proxy redis rabbitmq backend celery-worker agent-registrar
+    if docker compose -f "$COMPOSE_PATH" ps traefik 2>/dev/null | grep -q "Up"; then
+        echo -e "${BLUE}    Traefik already running — left untouched${NC}"
+    else
+        docker compose -f "$COMPOSE_PATH" up -d --no-deps traefik
+    fi
 
     sync_local_rabbitmq_password
     wait_for_backend 60 3
@@ -845,7 +880,14 @@ do_update_half() {
     docker compose -f "$COMPOSE_PATH" pull || echo -e "${YELLOW}    ⚠ Image pull failed${NC}"
 
     echo -e "${BLUE}  → Restarting all services...${NC}"
-    docker compose -f "$COMPOSE_PATH" up -d --force-recreate
+    # Edge rule: never --force-recreate traefik (drops in-flight HTTP/WS).
+    # Recreate everything else, then check-then-start the edge.
+    docker compose -f "$COMPOSE_PATH" up -d --force-recreate socket-proxy redis rabbitmq backend celery-worker agent-registrar
+    if docker compose -f "$COMPOSE_PATH" ps traefik 2>/dev/null | grep -q "Up"; then
+        echo -e "${BLUE}    Traefik already running — left untouched${NC}"
+    else
+        docker compose -f "$COMPOSE_PATH" up -d --no-deps traefik
+    fi
 
     sync_local_rabbitmq_password
     wait_for_backend 60 3

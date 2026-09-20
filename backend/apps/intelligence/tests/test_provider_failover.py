@@ -25,8 +25,11 @@ class _WorkingProvider(AIProvider):
 
 
 class ProviderFailoverTests(TestCase):
-    @patch("apps.intelligence.providers.ask_collaborative")
-    @patch("apps.intelligence.providers.get_configured_providers")
+    # NOTE: patch targets must be the `queries` module globals, which is
+    # where `ask_with_fallback` looks these names up. Patching the
+    # re-exported attributes on the `providers` package has no effect.
+    @patch("apps.intelligence.providers.queries.ask_collaborative")
+    @patch("apps.intelligence.providers.queries.get_configured_providers")
     def test_committee_total_failure_rescues_with_direct_provider(
         self,
         mock_configured,
@@ -36,7 +39,7 @@ class ProviderFailoverTests(TestCase):
             _WorkingProvider("OpenAI (gpt-4o-mini)"),
             _WorkingProvider("Grok (grok-3-mini)"),
         ]
-        mock_collab.return_value = ("mock-response", "Mock AI (all 2 senators failed)")
+        mock_collab.side_effect = RuntimeError("committee down")
 
         response, provider = ask_with_fallback("hello")
 

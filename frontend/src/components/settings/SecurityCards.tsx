@@ -237,6 +237,43 @@ export function SecurityScanningCard({ config, onChange }: SecurityCardProps) {
         <div className="border-t pt-4 mt-4">
           <div className="flex items-center justify-between rounded-lg border p-4">
             <div className="space-y-0.5">
+              <Label className="text-base">open-appsec WAF</Label>
+              <p className="text-sm text-muted-foreground">Shadow WAF on a loopback port in detect-learn mode — proves every filter verdict against direct traffic before any edge cutover. Live status shows under Insights → Security.</p>
+            </div>
+            <Switch
+              checked={config.openappsec_enabled ?? true}
+              onCheckedChange={(v) => onChange("openappsec_enabled", v)}
+            />
+          </div>
+          {config.openappsec_enabled !== false && (
+            <div className="space-y-2 mt-3 ml-1">
+              <Label>Enforcement mode</Label>
+              <Select
+                value={config.openappsec_mode ?? "detect-learn"}
+                onValueChange={(v) => onChange("openappsec_mode", v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="detect-learn" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="detect-learn">Shadow — detect and learn (observe only)</SelectItem>
+                  <SelectItem value="prevent">Enforce — block malicious requests</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Enforce blocks real traffic inline. Switch only after the shadow shows clean parity —
+                enforcing on a mis-tuned policy blocks legitimate users. Live mode shows under Insights → Security.
+              </p>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground mt-2 ml-1">
+            Synced to the host .env for the installer reconcile; takes effect on the next update.
+          </p>
+        </div>
+
+        <div className="border-t pt-4 mt-4">
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
               <Label className="text-base">Require Backup Encryption</Label>
               <p className="text-sm text-muted-foreground">Force encryption for all server backups. Auto-enabled in production.</p>
             </div>

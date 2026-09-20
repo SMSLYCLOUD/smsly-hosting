@@ -18,15 +18,15 @@ The AI subsystem has three layers:
 | Grok (xAI) | `GROK_API_KEY` | `grok-3-mini` | |
 | Gemini | `GEMINI_API_KEY` | `gemini-2.0-flash` | |
 | Claude (Anthropic) | `CLAUDE_API_KEY` | `claude-sonnet-4-20250514` | |
-| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-coder` | |
+| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-chat` | |
 | OpenRouter | `OPENROUTER_API_KEY` | `openrouter/auto` | Routes to the cheapest model by default. |
 | Groq | `GROQ_API_KEY` | `llama-3.3-70b-versatile` | Very low latency. |
 | Alibaba (Qwen) | `ALIBABA_API_KEY` | `qwen-max` | |
-| Jules (Google) | `JULES_API_KEY` | `jules-latest` | Used by the auto-fix loop, not for general chat. |
-| Local LLM (OpenAI-compatible) | `LOCALLLM_API_KEY` | `local-model` | Base URL configurable for Ollama, vLLM, LM Studio. |
+| Jules (Google) | `JULES_API_KEY` | `jules-latest` | Opt-in: set `jules_base_url` to your operator-run Jules-compatible gateway. Empty = disabled. |
+| Local LLM (OpenAI-compatible) | `LOCALLLM_API_KEY` | `local-model` | Disabled until `localllm_base_url` points at an allowlisted host (Ollama, vLLM, LM Studio). |
 | SMSLY Cloud | `SMSLYCLOUD_API_KEY` | `smsly-latest` | Hosted proxy. |
 | FreeModel.dev | `FREEMODEL_API_KEY` | `gpt-4o-mini` | Free tier for development. |
-| OpenCode API | `OPENCODE_API_KEY` | `opencode-latest` | |
+| OpenCode (Zen) | `OPENCODE_API_KEY` | `big-pickle` | Via `https://opencode.ai/zen/v1`. |
 | Mistral (La Plateforme) | `MISTRAL_API_KEY` | `mistral-small-latest` | |
 | NVIDIA NIM | `NVIDIA_API_KEY` | `nvidia/llama-3.1-nemotron-70b-instruct` | |
 | Cloudflare Workers AI | `CLOUDFLARE_API_KEY` | `@cf/meta/llama-3.1-8b-instruct` | Via the AI Gateway. |
@@ -168,7 +168,7 @@ curl -sS -X POST http://localhost:8000/api/v1/ai/providers/update/ \
   -d '{
     "openai_api_key": "sk-...",
     "openai_model": "gpt-4o",
-    "jules_base_url": "https://api.jules.google.com/v1"
+    "jules_base_url": "https://jules-gateway.example.com/v1"
   }'
 ```
 

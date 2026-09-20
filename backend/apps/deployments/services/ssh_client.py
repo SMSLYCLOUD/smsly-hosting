@@ -7,6 +7,11 @@ import re
 import shlex
 import time
 
+try:
+    import fcntl
+except ImportError:  # Windows dev machines have no fcntl
+    fcntl = None  # type: ignore[assignment]
+
 import paramiko
 
 logger = logging.getLogger(__name__)
@@ -38,7 +43,9 @@ class _TOFUPolicy(paramiko.MissingHostKeyPolicy):
         self._key = self._store = None
 
     def _store_path(self) -> str:
-        return _KNOWN_HOSTS_PATH
+        # Read the env override at call time (not import time) so tests
+        # and runtime reconfiguration can redirect the store.
+        return os.environ.get("SMSLY_KNOWN_HOSTS_PATH", _KNOWN_HOSTS_PATH)
 
     def _load_store(self) -> dict:
         path = self._store_path()
@@ -47,15 +54,34 @@ class _TOFUPolicy(paramiko.MissingHostKeyPolicy):
         try:
             with open(path, encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError as exc:
+            # A corrupt store must NEVER silently become empty: that
+            # would trust the next presented key (MITM accept). Fail
+            # closed so the operator repairs or deletes the file.
+            raise paramiko.SSHException(
+                f"TOFU store corrupt at {path}: {exc}"
+            )
+        except OSError:
             return {}
 
     def _save_store(self, store: dict):
         path = self._store_path()
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
+            tmp_path = f"{path}.{os.getpid()}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                try:
+                    if hasattr(fcntl, "LOCK_EX"):
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                except Exception:
+                    pass
                 json.dump(store, f, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+            os.replace(tmp_path, path)
         except OSError as exc:
             logger.warning("TOFU: failed to save known_hosts: %s", exc)
 

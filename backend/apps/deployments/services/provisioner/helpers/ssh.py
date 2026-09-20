@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import shlex
+import time
 
 import paramiko
 
@@ -34,20 +35,33 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
         "username": server.ssh_user,
         "timeout": 30,
         "banner_timeout": 30,
+        "auth_timeout": 30,
+        # Never consult the local agent or ~/.ssh keys: auth must come
+        # only from the server record, otherwise provisioning
+        # nondeterministically succeeds with the operator's key.
+        "look_for_keys": False,
+        "allow_agent": False,
     }
 
     if server.ssh_key:
         key_file = io.StringIO(server.ssh_key)
         passphrase = getattr(server, "ssh_key_passphrase", "") or None
         pkey: paramiko.PKey | None = None
-        try:
-            pkey = paramiko.RSAKey.from_private_key(key_file, password=passphrase)
-        except paramiko.SSHException:
-            key_file.seek(0)
+        for _loader in (
+            paramiko.RSAKey.from_private_key,
+            paramiko.Ed25519Key.from_private_key,
+            paramiko.ECDSAKey.from_private_key,
+        ):
             try:
-                pkey = paramiko.Ed25519Key.from_private_key(key_file, password=passphrase)
+                key_file.seek(0)
+                pkey = _loader(key_file, password=passphrase)
+                break
             except paramiko.SSHException:
-                pkey = None
+                continue
+            except (ValueError, Exception):
+                # binascii/malformed-key errors are not SSHException;
+                # try the next format instead of aborting the chain.
+                continue
         if pkey is not None:
             connect_kwargs["pkey"] = pkey
         elif server.ssh_password:
@@ -59,20 +73,39 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     else:
         raise ValueError("No SSH credentials provided (need password or key)")
 
-    try:
-        client.connect(**connect_kwargs)
-    except paramiko.AuthenticationException:
-        if "pkey" in connect_kwargs and server.ssh_password:
-            logger.warning(
-                "SSH key auth failed for %s — falling back to password "
-                "(key may be stale from prior provisioning).",
-                server.host,
-            )
-            connect_kwargs.pop("pkey")
-            connect_kwargs["password"] = server.ssh_password
+    last_exc: Exception | None = None
+    for _attempt in range(3):
+        try:
             client.connect(**connect_kwargs)
-        else:
+            break
+        except paramiko.AuthenticationException:
+            if "pkey" in connect_kwargs and server.ssh_password:
+                logger.warning(
+                    "SSH key auth failed for %s — falling back to password "
+                    "(key may be stale from prior provisioning).",
+                    server.host,
+                )
+                connect_kwargs.pop("pkey")
+                connect_kwargs["password"] = server.ssh_password
+                client.connect(**connect_kwargs)
+                break
             raise
+        except (OSError, EOFError, paramiko.SSHException) as exc:
+            # Transient network/banner failures: retry with backoff.
+            last_exc = exc
+            logger.warning(
+                "SSH connect to %s failed (attempt %d/3): %s",
+                server.host, _attempt + 1, exc,
+            )
+            time.sleep(2 * (_attempt + 1))
+    else:
+        raise last_exc  # type: ignore[misc]
+    try:
+        _transport = client.get_transport()
+        if _transport is not None and _transport.is_active():
+            _transport.set_keepalive(30)
+    except Exception:
+        pass
     return client
 
 
@@ -121,8 +154,18 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
         _exit = _stdout.channel.recv_exit_status()
         if _exit != 0:
             raise RuntimeError(f"SSH command exited with code {_exit}")
+        # Stash the operator-supplied key BEFORE overwriting: rollback
+        # restores this backup instead of blanking ssh_key (blanking
+        # strands key-only hosts with no way to retry).
+        try:
+            _meta = dict(getattr(server, "provider_metadata", None) or {})
+            if server.ssh_key and not _meta.get("ssh_key_backup"):
+                _meta["ssh_key_backup"] = server.ssh_key
+                server.provider_metadata = _meta
+        except Exception:
+            pass
         server.ssh_key = priv_key_pem
-        server.save(update_fields=['ssh_key', 'updated_at'])
+        server.save(update_fields=['ssh_key', 'provider_metadata', 'updated_at'])
         _append_log(server, f"🔒 IP-restricted SSH key added (from=\"{allowed_ips}\")")
     except Exception as exc:
         _append_log(server, f"⚠ IP-restricted SSH key skipped: {exc}")
@@ -154,7 +197,23 @@ def _harden_node_ssh(ssh, server: ManagedServer) -> None:
         test_ssh = _paramiko.SSHClient()
         from apps.deployments.services.ssh_client import _get_tofu_policy
         test_ssh.set_missing_host_key_policy(_get_tofu_policy(server.host, server.ssh_port))
-        pkey = _paramiko.Ed25519Key.from_private_key(io.StringIO(server.ssh_key))
+        pkey = None
+        _key_file = io.StringIO(server.ssh_key)
+        _passphrase = getattr(server, "ssh_key_passphrase", "") or None
+        for _loader in (
+            _paramiko.Ed25519Key.from_private_key,
+            _paramiko.RSAKey.from_private_key,
+            _paramiko.ECDSAKey.from_private_key,
+        ):
+            try:
+                _key_file.seek(0)
+                pkey = _loader(_key_file, password=_passphrase)
+                break
+            except Exception:
+                continue
+        if pkey is None:
+            _append_log(server, "⚠ SSH cleanup skipped: restricted key has unknown format")
+            return
         test_ssh.connect(
             hostname=server.host,
             port=server.ssh_port,

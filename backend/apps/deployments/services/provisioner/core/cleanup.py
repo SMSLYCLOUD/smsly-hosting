@@ -24,6 +24,13 @@ def _rollback_stale_provisioning(server: ManagedServer) -> None:
     node_db_user = metadata.get("node_db_user")
     if node_db_user:
         _drop_db_user(node_db_user)
+        try:
+            from apps.deployments.services.provisioner.helpers.database import (
+                _rerender_pgcat_config,
+            )
+            _rerender_pgcat_config()
+        except Exception as exc:
+            logger.debug("Rollback: pgcat re-render skipped for %s: %s", server.name, exc)
 
     # 2. Remove iptables rules for the node's public IP
     host = getattr(server, "host", "") or ""
@@ -37,7 +44,28 @@ def _rollback_stale_provisioning(server: ManagedServer) -> None:
                  "-j", "ACCEPT"],
                 capture_output=True, timeout=5,
             )
+            if getattr(server, "is_lite_agent", False):
+                subprocess.run(
+                    ["ufw", "delete", "allow", "from", validated_ip,
+                     "to", "any", "port", "5432", "proto", "tcp"],
+                    capture_output=True, timeout=5,
+                )
         except (ValueError, Exception):
+            pass
+
+    # 2b. Remove the mesh-IP registry rule (added untracked by firewall harden)
+    _wg = getattr(server, "wg_address", None) or ""
+    if _wg:
+        try:
+            import ipaddress as _ipa
+            _validated_wg = str(_ipa.ip_address(str(_wg)))
+            subprocess.run(
+                ["iptables", "-D", "DOCKER-USER",
+                 "-s", _validated_wg, "-p", "tcp", "--dport", "5000",
+                 "-j", "ACCEPT"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
             pass
 
     # 3. Remove WireGuard peer if one was created
@@ -54,7 +82,8 @@ def _rollback_stale_provisioning(server: ManagedServer) -> None:
         except Exception as exc:
             logger.debug("Rollback: WG peer removal failed for %s: %s", server.name, exc)
 
-    # 4. Remove DNS record if node_domain was assigned
+    # 4. Remove DNS record if node_domain was assigned (30s guard: a
+    # Cloudflare hang must not stall the sweeper past its time limit)
     node_domain = getattr(server, "node_domain", "") or ""
     if node_domain:
         try:
@@ -63,16 +92,50 @@ def _rollback_stale_provisioning(server: ManagedServer) -> None:
             config = PlatformConfig.load()
             cf_token = getattr(config, "cloudflare_api_token", "") or ""
             if cf_token:
-                delete_dns_record(node_domain, cf_token)
-                logger.info("Rollback: deleted DNS record for %s", node_domain)
+                import threading as _threading
+                _dns_exc: list[Exception] = []
+
+                def _do_delete():
+                    try:
+                        delete_dns_record(node_domain, cf_token)
+                    except Exception as exc:  # noqa: BLE001
+                        _dns_exc.append(exc)
+
+                _t = _threading.Thread(target=_do_delete, daemon=True)
+                _t.start()
+                _t.join(timeout=30)
+                if _t.is_alive():
+                    logger.warning("Rollback: DNS cleanup timed out for %s", node_domain)
+                elif _dns_exc:
+                    raise _dns_exc[0]
+                else:
+                    logger.info("Rollback: deleted DNS record for %s", node_domain)
         except Exception as exc:
             logger.debug("Rollback: DNS cleanup failed for %s: %s", server.name, exc)
 
-    # 5. Clear sensitive fields
+    # 5. Clear sensitive fields — restoring the operator's SSH key backup
+    # instead of blanking it (blanking strands key-only hosts). The
+    # dropped node_db_user marker is cleared too since the role is gone.
     update_fields = []
-    if server.ssh_key:
-        server.ssh_key = ""
+    _meta = dict(getattr(server, "provider_metadata", None) or {})
+    _backup = _meta.get("ssh_key_backup")
+    _meta_changed = False
+    if _backup:
+        server.ssh_key = _backup
         update_fields.append("ssh_key")
+        try:
+            del _meta["ssh_key_backup"]
+            _meta_changed = True
+        except Exception:
+            pass
+    if _meta.pop("node_db_user", None) is not None:
+        _meta_changed = True
+    if _meta_changed:
+        try:
+            server.provider_metadata = _meta
+            update_fields.append("provider_metadata")
+        except Exception:
+            pass
     if getattr(server, "node_db_password", None):
         server.node_db_password = ""
         update_fields.append("node_db_password")

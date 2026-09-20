@@ -370,10 +370,10 @@ class LLMBaseURLValidationTests(TestCase):
     def test_legitimate_urls_pass(self):
         from django.core.exceptions import ValidationError
         self.solo.freemodel_base_url = "https://api.freemodel.dev/v1"
-        self.solo.opencode_base_url = "https://api.opencode.ai/v1"
+        self.solo.opencode_base_url = "https://opencode.ai/zen/v1"
         self.solo.mistral_base_url = "https://api.mistral.ai/v1"
         self.solo.nvidia_base_url = "https://integrate.api.nvidia.com/v1"
-        self.solo.cloudflare_base_url = "https://gateway.ai.cloudflare.com/v1/acct/gw/workers-ai"
+        self.solo.cloudflare_base_url = "https://gateway.ai.cloudflare.com/v1/acct/gw/compat"
         try:
             self.solo.full_clean()
         except ValidationError as exc:

@@ -19,6 +19,61 @@ _harden_openappsec_is_enabled() {
     return 1
 }
 
+# Resolve the enforcement mode from the shell env first, then .env
+# (mirrors _harden_openappsec_is_enabled). Settings → Security Scanning
+# writes OPENAPPSEC_MODE via the backend .env sync.
+_harden_openappsec_desired_mode() {
+    local _mode="${OPENAPPSEC_MODE:-}"
+    if [ -z "$_mode" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _mode=$(grep -E '^OPENAPPSEC_MODE=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
+    fi
+    if [ "$_mode" != "prevent" ]; then
+        _mode="detect-learn"
+    fi
+    printf '%s\n' "$_mode"
+}
+
+_harden_openappsec_apply_mode() {
+    # Converge local_policy.yaml with the desired enforcement mode.
+    # Fail-safe by construction: only a line that is EXACTLY a top-level
+    # `mode:` assignment is rewritten; any unknown schema is left
+    # untouched with a warning (never corrupt the policy). Operator and
+    # SaaS tuning (override-mode, practices) is never modified.
+    # Restarts the agent only when the file actually changed (with
+    # timeout wrappers per AGENTS.md #6).
+    command -v docker >/dev/null 2>&1 || return 0
+    local conf_dir="${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/openappsec/conf"
+    local policy="$conf_dir/local_policy.yaml"
+    [ -f "$policy" ] || return 0
+    local desired=""
+    desired="$(_harden_openappsec_desired_mode)"
+    local current=""
+    current=$(grep -E '^[[:space:]]*mode:[[:space:]]*(detect-learn|prevent)[[:space:]]*$' "$policy" 2>/dev/null | head -1 | grep -oE '(detect-learn|prevent)' || true)
+    if [ -z "$current" ]; then
+        echo -e "${YELLOW}    ⚠ open-appsec policy has no plain mode line — leaving as-is (wanted: $desired)${NC}"
+        return 0
+    fi
+    if [ "$current" = "$desired" ]; then
+        return 0
+    fi
+    local tmp_policy="$conf_dir/.local_policy.tmp"
+    if ! sed -E "s/^([[:space:]]*mode:[[:space:]]*)(detect-learn|prevent)([[:space:]]*)$/\1$desired\3/" "$policy" > "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite failed — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    if ! grep -qE "^[[:space:]]*mode:[[:space:]]*$desired[[:space:]]*$" "$tmp_policy" 2>/dev/null; then
+        echo -e "${YELLOW}    ⚠ open-appsec mode rewrite did not take — leaving as-is${NC}"
+        rm -f "$tmp_policy"
+        return 0
+    fi
+    mv "$tmp_policy" "$policy"
+    echo -e "${BLUE}  → [harden] open-appsec mode $current → $desired — restarting agent...${NC}"
+    timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
+        echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    return 0
+}
+
 _harden_openappsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     if ! _harden_openappsec_is_enabled; then
@@ -54,6 +109,7 @@ _harden_openappsec_bootstrap() {
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
     fi
+    _harden_openappsec_apply_mode || true
     # Blocking start — wait for the shadow port to answer.
     local shadow_port="${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}"
     local i=""
@@ -78,6 +134,9 @@ _harden_openappsec_reconcile() {
     # (AGENTS.md #16). Non-fatal by design.
     command -v docker >/dev/null 2>&1 || return 0
     if _harden_openappsec_is_enabled; then
+        # Enabled path: converge the enforcement mode too, so a Settings
+        # mode flip applies on the next update without a full rebuild.
+        _harden_openappsec_apply_mode || true
         return 0
     fi
     local stray=""

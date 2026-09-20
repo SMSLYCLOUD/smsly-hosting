@@ -139,7 +139,7 @@ class AIProviderSettings(models.Model):
     claude_model = models.CharField(max_length=100, default="claude-sonnet-4-20250514", blank=True)  # type: ignore[var-annotated]
 
     deepseek_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    deepseek_model = models.CharField(max_length=100, default="deepseek-coder", blank=True)  # type: ignore[var-annotated]
+    deepseek_model = models.CharField(max_length=100, default="deepseek-chat", blank=True)  # type: ignore[var-annotated]
 
     # OpenAI-compatible Providers
     openrouter_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
@@ -155,9 +155,9 @@ class AIProviderSettings(models.Model):
     jules_model = models.CharField(max_length=100, default="jules-latest", blank=True)  # type: ignore[var-annotated]
     jules_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
-        default="https://api.jules.google.com/v1",
+        default="",
         blank=True,
-        help_text="OpenAI-compatible base URL for Jules provider",
+        help_text="OpenAI-compatible base URL for Jules provider (operator-run Jules-compatible gateway)",
     )
     jules_auto_deploy_pr = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
@@ -169,9 +169,9 @@ class AIProviderSettings(models.Model):
     localllm_model = models.CharField(max_length=100, default="local-model", blank=True)  # type: ignore[var-annotated]
     localllm_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
-        default="http://localhost:11434/v1",
+        default="",
         blank=True,
-        help_text="OpenAI-compatible base URL for local LLM (e.g. Ollama, vLLM)",
+        help_text="OpenAI-compatible base URL for local LLM (e.g. Ollama, vLLM). Empty = provider disabled.",
     )
 
     # SMSLY Cloud AI
@@ -188,14 +188,14 @@ class AIProviderSettings(models.Model):
         help_text="OpenAI-compatible base URL for FreeModel.dev provider",
     )
 
-    # OpenCode API
+    # OpenCode API (Zen)
     opencode_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    opencode_model = models.CharField(max_length=100, default="opencode-latest", blank=True)  # type: ignore[var-annotated]
+    opencode_model = models.CharField(max_length=100, default="big-pickle", blank=True)  # type: ignore[var-annotated]
     opencode_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
-        default="https://api.opencode.ai/v1",
+        default="https://opencode.ai/zen/v1",
         blank=True,
-        help_text="OpenAI-compatible base URL for OpenCode API provider",
+        help_text="OpenAI-compatible base URL for OpenCode Zen provider",
     )
 
     # Mistral AI (La Plateforme)
@@ -223,14 +223,14 @@ class AIProviderSettings(models.Model):
     cloudflare_model = models.CharField(max_length=100, default="@cf/meta/llama-3.1-8b-instruct", blank=True)  # type: ignore[var-annotated]
     cloudflare_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
-        default="https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai",
+        default="https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/compat",
         blank=True,
-        help_text="Cloudflare AI Gateway URL. Replace YOUR_ACCOUNT_ID with your Cloudflare account ID.",
+        help_text="Cloudflare AI Gateway compat URL. Replace YOUR_ACCOUNT_ID with your Cloudflare account ID.",
     )
 
     # Kimi (Moonshot AI)
     kimi_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    kimi_model = models.CharField(max_length=100, default="kimi-latest", blank=True)  # type: ignore[var-annotated]
+    kimi_model = models.CharField(max_length=100, default="kimi-k2.6", blank=True)  # type: ignore[var-annotated]
     kimi_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default="https://api.moonshot.ai/v1",
@@ -293,6 +293,24 @@ class AIProviderSettings(models.Model):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Every write must invalidate the DB→env snapshot: otherwise the
+        # 30s cache-hit path in `_sync_db_to_env` re-applies the previous
+        # snapshot and a cleared/rotated key stays live in worker env.
+        # Lazy import: providers must never be imported at models-module
+        # load time. A cache outage must never break settings writes.
+        try:
+            from django.core.cache import cache as _cache
+
+            from apps.intelligence.providers.sync import (
+                DB_SETTINGS_SYNC_CACHE_KEY as _sync_key,
+            )
+
+            _cache.delete(_sync_key)
+        except Exception:
+            pass
+
     def clean(self):
         super().clean()
         # SECURITY: each provider's base_url must use https and point to
@@ -324,7 +342,7 @@ class AIProviderSettings(models.Model):
         )
         _validate_https_allowlist(
             self.opencode_base_url, 'opencode_base_url',
-            ['api.opencode.ai'],
+            ['opencode.ai'],
         )
         _validate_https_allowlist(
             self.mistral_base_url, 'mistral_base_url',
@@ -338,6 +356,16 @@ class AIProviderSettings(models.Model):
             self.cloudflare_base_url, 'cloudflare_base_url',
             ['gateway.ai.cloudflare.com'],
         )
+        if (
+            self.cloudflare_api_key
+            and self.cloudflare_base_url
+            and "YOUR_ACCOUNT_ID" in self.cloudflare_base_url
+        ):
+            raise ValidationError(
+                {'cloudflare_base_url': 'cloudflare_base_url still contains the '
+                 'YOUR_ACCOUNT_ID placeholder. Replace it with your Cloudflare '
+                 'account ID.'}
+            )
         _validate_https_allowlist(
             self.kimi_base_url, 'kimi_base_url',
             list(getattr(settings, 'KIMI_ALLOWED_HOSTS', ['api.moonshot.ai'])),

@@ -154,7 +154,11 @@ EOF
     )
     local _entry
     for _entry in "${_master_secrets_to_sync[@]}"; do
-        local _key="${_entry%%|*}"
+        # Entries after the first carry a leading "|" separator and use
+        # "KEY:description" form — strip the separator first, then split
+        # on ":". (Previously only the first of six secrets synced.)
+        local _tmp="${_entry#|}"
+        local _key="${_tmp%%:*}"
         # Read the master secret from the master's .env file.
         # MASTER_ENV_<KEY> env vars are NOT exported by the provisioner;
         # secrets are written to a temporary file and read via env_get_value.

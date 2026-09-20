@@ -10,15 +10,32 @@ class JulesProvider(AIProvider):
 
     Uses an OpenAI-compatible `/chat/completions` API endpoint so it can run
     against managed Jules-compatible gateways without custom SDK coupling.
+
+    Opt-in: there is no public Jules chat-completions endpoint, so the
+    factory default base URL is empty. The operator must point
+    JULES_BASE_URL at their Jules-compatible gateway (allowlisted via
+    ``settings.JULES_ALLOWED_HOSTS``) for this provider to activate.
     """
+
+    #: Host shipped in earlier releases. It does not resolve (NXDOMAIN), so
+    #: values carried over from existing installs are never treated as
+    #: configured — the operator must set a working gateway URL.
+    DEAD_DEFAULT_BASE_URL = "https://api.jules.google.com/v1"
 
     def __init__(self):
         self.api_key = _sanitize_api_key(os.environ.get("JULES_API_KEY", ""))
         self.model = _normalize_model(os.environ.get("JULES_MODEL"), "jules-latest")
         self.base_url = os.environ.get(
             "JULES_BASE_URL",
-            "https://api.jules.google.com/v1",
+            "",
         ).rstrip("/")
+
+    def is_configured(self) -> bool:
+        if not self.api_key or not self.base_url:
+            return False
+        if self.base_url.rstrip("/") == self.DEAD_DEFAULT_BASE_URL:
+            return False
+        return True
 
     def name(self) -> str:
         return f"Jules ({self.model})"
@@ -27,6 +44,11 @@ class JulesProvider(AIProvider):
     def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Jules] API key not configured.")
+        if not self.base_url:
+            raise ValueError(
+                "[Jules] base URL not configured. Point JULES_BASE_URL at "
+                "your Jules-compatible gateway to enable this provider."
+            )
 
         messages = []
         if system_prompt:

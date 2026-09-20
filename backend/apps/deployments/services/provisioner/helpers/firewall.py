@@ -11,9 +11,14 @@ from .logging import _append_log
 logger = logging.getLogger(__name__)
 
 
-def _harden_master_firewall(server: ManagedServer) -> None:
+def _harden_master_firewall(server: ManagedServer) -> str:
+    """Harden master firewall for a node; return the validated WG IP or "".
+
+    The returned mesh IP must be tracked by the caller for rollback —
+    rules added here otherwise leak when provisioning fails.
+    """
     if not server.host:
-        return
+        return ""
 
     try:
         validated_ip = str(ipaddress.ip_address(server.host))
@@ -21,7 +26,7 @@ def _harden_master_firewall(server: ManagedServer) -> None:
         logger.warning(
             "Skipping firewall hardening: invalid IP %s", server.host
         )
-        return
+        return ""
 
     _append_log(server, f"🛡️ Hardening Master firewall for Node IP: {validated_ip}...")
 
@@ -91,10 +96,13 @@ def _harden_master_firewall(server: ManagedServer) -> None:
                     server,
                     f"✅ iptables: Allowed mesh IP {validated_wg} -> registry port 5000",
                 )
+            _append_log(server, "✅ Master firewall rules synchronized for this node.")
+            return validated_wg
         except (ValueError, Exception) as exc:
             logger.debug("Skipping WireGuard IP iptables rule: %s", exc)
 
     _append_log(server, "✅ Master firewall rules synchronized for this node.")
+    return ""
 
 
 def _prepare_remote_install_lock(ssh, server: ManagedServer) -> None:
@@ -136,7 +144,7 @@ if kill -0 "$pid" 2>/dev/null; then
 fi
 rm -f "$lock"
 """
-    _stdin, stdout, stderr = ssh.exec_command(command)
+    _stdin, stdout, stderr = ssh.exec_command(command, timeout=120)
     exit_code = stdout.channel.recv_exit_status()
     output = (
         stdout.read().decode("utf-8", errors="replace")
@@ -162,7 +170,13 @@ rm -f "$lock"
             _append_log(server, "⚠️ Installer lock points at a non-installer process; refusing to remove it automatically.")
 
     if exit_code != 0:
+        if exit_code == 41:
+            raise RuntimeError(
+                "Remote installer lock is active (another installer is "
+                "running on this server). Retry later — do NOT clear the "
+                "lock while that installer is alive."
+            )
         raise RuntimeError(
-            "Remote installer lock is active. Retry after the current install finishes "
-            "or clear /tmp/smsly-install.lock on the server if it is stale."
+            "Remote installer lock is held by a non-installer process. "
+            "Clear /tmp/smsly-install.lock on the server manually if it is stale."
         )

@@ -216,7 +216,28 @@ def node_watchdog_task(self):
             results["checked"] += 1
 
             if not server.ssh_key and not server.ssh_password:
-                logger.debug("Skipping %s — no SSH credentials", server.name)
+                if getattr(server, "is_lite_agent", False):
+                    # SSH-less lite agents: health via agent heartbeat,
+                    # not SSH diagnostics (which would skip them forever).
+                    from datetime import timedelta
+                    _hb = getattr(server, "last_agent_heartbeat_at", None)
+                    try:
+                        _fresh = (
+                            _hb is not None
+                            and (timezone.now() - _hb) < timedelta(minutes=5)
+                        )
+                    except Exception:
+                        _fresh = False
+                    server.status = (
+                        ManagedServer.Status.ONLINE if _fresh
+                        else ManagedServer.Status.OFFLINE
+                    )
+                    server.last_health_check = timezone.now()
+                    server.save(update_fields=["status", "last_health_check", "updated_at"])
+                    if server.status == ManagedServer.Status.OFFLINE:
+                        results["offline"] += 1
+                else:
+                    logger.debug("Skipping %s — no SSH credentials", server.name)
                 continue
 
             orchestrator = SelfHealingOrchestrator(server)

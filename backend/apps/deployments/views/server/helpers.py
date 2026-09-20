@@ -218,7 +218,10 @@ def _refresh_managed_server_health(server):
     update_fields = {"status", "last_health_check", "services_count"}
 
     if base:
-        if server.api_url != base:
+        # Only fill an empty api_url: rewriting it on every probe flaps
+        # between equivalent candidates when master and worker disagree
+        # on order, churning downstream routing.
+        if not server.api_url:
             server.api_url = base
             update_fields.add("api_url")
 
@@ -360,7 +363,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
             except Exception as exc:
                 logger.debug("HMAC token exchange failed for %s via %s: %s", server.host, url_base, exc)
 
-        allow_pw_exchange = str(os.environ.get("ALLOW REMOTE_PASSWORD_EXCHANGE", "")).lower() in {
+        allow_pw_exchange = str(os.environ.get("ALLOW_REMOTE_PASSWORD_EXCHANGE", "")).lower() in {
             "1", "true", "yes", "on"
         }
 

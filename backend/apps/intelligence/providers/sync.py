@@ -14,6 +14,12 @@ SYSTEM_PROMPT = (
 BALANCE_CACHE_TTL_SECONDS = int(os.environ.get("AI_BALANCE_CACHE_TTL_SECONDS", "60") or "60")
 BALANCE_FETCH_BUDGET_SECONDS = int(os.environ.get("AI_BALANCE_FETCH_BUDGET_SECONDS", "8") or "8")
 
+#: Cache key for the DB→env snapshot written by `_sync_db_to_env`.
+#: `AIProviderSettings.save()` deletes it on every write so a cleared or
+#: rotated key takes effect immediately instead of lingering in worker
+#: `os.environ` until the 30s TTL expires.
+DB_SETTINGS_SYNC_CACHE_KEY = "ai:db_settings_sync"
+
 
 def _get_db_settings():
     """
@@ -110,7 +116,7 @@ def _effective_env_value(db_value: str | None, env_key: str, default: str = "") 
 
 def _sync_db_to_env():
     """Push DB-stored keys/models into process env so provider classes work (cached 30s)."""
-    cache_key = "ai:db_settings_sync"
+    cache_key = DB_SETTINGS_SYNC_CACHE_KEY
     cached = cache.get(cache_key)
     if cached is not None:
         os.environ.update(cached)
@@ -136,21 +142,21 @@ def _sync_db_to_env():
         ("alibaba_api_key", "ALIBABA_API_KEY", ""),
         ("alibaba_model", "ALIBABA_MODEL", "qwen-max"),
         ("deepseek_api_key", "DEEPSEEK_API_KEY", ""),
-        ("deepseek_model", "DEEPSEEK_MODEL", "deepseek-coder"),
+        ("deepseek_model", "DEEPSEEK_MODEL", "deepseek-chat"),
         ("jules_api_key", "JULES_API_KEY", ""),
         ("jules_model", "JULES_MODEL", "jules-latest"),
-        ("jules_base_url", "JULES_BASE_URL", "https://api.jules.google.com/v1"),
+        ("jules_base_url", "JULES_BASE_URL", ""),
         ("localllm_api_key", "LOCALLM_API_KEY", ""),
         ("localllm_model", "LOCALLM_MODEL", "local-model"),
-        ("localllm_base_url", "LOCALLM_BASE_URL", "http://localhost:11434/v1"),
+        ("localllm_base_url", "LOCALLM_BASE_URL", ""),
         ("smslycloud_api_key", "SMSLYCLOUD_API_KEY", ""),
         ("smslycloud_model", "SMSLYCLOUD_MODEL", "smsly-latest"),
         ("freemodel_api_key", "FREEMODEL_API_KEY", ""),
         ("freemodel_model", "FREEMODEL_MODEL", "gpt-4o-mini"),
         ("freemodel_base_url", "FREEMODEL_BASE_URL", "https://api.freemodel.dev/v1"),
         ("opencode_api_key", "OPENCODE_API_KEY", ""),
-        ("opencode_model", "OPENCODE_MODEL", "opencode-latest"),
-        ("opencode_base_url", "OPENCODE_BASE_URL", "https://api.opencode.ai/v1"),
+        ("opencode_model", "OPENCODE_MODEL", "big-pickle"),
+        ("opencode_base_url", "OPENCODE_BASE_URL", "https://opencode.ai/zen/v1"),
         ("mistral_api_key", "MISTRAL_API_KEY", ""),
         ("mistral_model", "MISTRAL_MODEL", "mistral-small-latest"),
         ("mistral_base_url", "MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),
@@ -159,9 +165,9 @@ def _sync_db_to_env():
         ("nvidia_base_url", "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
         ("cloudflare_api_key", "CLOUDFLARE_API_KEY", ""),
         ("cloudflare_model", "CLOUDFLARE_MODEL", "@cf/meta/llama-3.1-8b-instruct"),
-        ("cloudflare_base_url", "CLOUDFLARE_BASE_URL", "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai"),
+        ("cloudflare_base_url", "CLOUDFLARE_BASE_URL", "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/compat"),
         ("kimi_api_key", "KIMI_API_KEY", ""),
-        ("kimi_model", "KIMI_MODEL", "kimi-latest"),
+        ("kimi_model", "KIMI_MODEL", "kimi-k2.6"),
         ("kimi_base_url", "KIMI_BASE_URL", "https://api.moonshot.ai/v1"),
         ("orcarouter_api_key", "ORCAROUTER_API_KEY", ""),
         ("orcarouter_model", "ORCAROUTER_MODEL", "orcarouter/auto"),

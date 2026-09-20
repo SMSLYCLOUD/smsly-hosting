@@ -25,7 +25,6 @@ from ..helpers import (
     _build_local_source_bundle,
     _env_bool,
     _get_master_mesh_ip,
-    _installer_logs_confirm_success,
     _load_install_script,
     _node_queue_name,
     _prepare_remote_install_lock,
@@ -44,7 +43,7 @@ from ..provisioning_resources import _ProvisioningResources
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=0, soft_time_limit=TASK_TIME_LIMIT_PROVISION[0], time_limit=TASK_TIME_LIMIT_PROVISION[1], name="apps.deployments.services.provisioner.provision_server")
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_PROVISION[0], time_limit=TASK_TIME_LIMIT_PROVISION[1], name="apps.deployments.services.provisioner.provision_server")
 def provision_server(self, server_id: str, skip_reboot: bool = False):
     try:
         with transaction.atomic():
@@ -98,15 +97,33 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         ).strip().lower() not in ("0", "false", "no", "off")
         use_local_bundle = prefer_local_bundle
 
-        _harden_master_firewall(server)
+        _harden_wg_ip = _harden_master_firewall(server)
+        if _harden_wg_ip:
+            resources.track_iptables_port5000(_harden_wg_ip)
         try:
             _validated_ip = str(ipaddress.ip_address(server.host))
+            resources.track_iptables_port5000(_validated_ip)
         except (ValueError, TypeError):
-            _validated_ip = server.host
-        resources.track_iptables_port5000(_validated_ip)
+            # Hostname nodes: no firewall rule can be written for an
+            # unresolved name, and tracking the raw hostname produces
+            # bogus ufw/iptables rules that fail silently on rollback.
+            # Skip tracking (do NOT record the hostname); if the master
+            # firewall defaults to deny, registry pulls will fail and
+            # the installer log will show it.
+            logger.warning(
+                "Skipping firewall rule tracking for non-IP host %s",
+                server.host,
+            )
         if getattr(server, "is_lite_agent", False):
-            for port in ("5432",):
-                resources.track_firewall_rule(server.host, port)
+            try:
+                _lite_ip = str(ipaddress.ip_address(server.host))
+                for port in ("5432",):
+                    resources.track_firewall_rule(_lite_ip, port)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "Skipping lite DB firewall tracking for non-IP host %s",
+                    server.host,
+                )
 
         ssh = _get_ssh_client(server)
         _append_log(server, "✅ SSH connection established")
@@ -119,29 +136,30 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         _append_log(server, "🚀 Uploading install script...")
         sftp = ssh.open_sftp()
-
-        script_name = "install-media-node.sh" if server_install_mode(server) == "media" else "install.sh"
-        install_script_content, install_script_source = _load_install_script(script_name=script_name)
-        _append_log(server, f"🚀 Installer source: {install_script_source}")
-        if use_local_bundle:
-            _append_log(
-                server,
-                "ℹ️ Provisioning in local-bundle mode (no GitHub clone required).",
-            )
-        else:
-            _append_log(
-                server,
-                "ℹ️ Installer repository is public; using unauthenticated GitHub clone.",
-            )
-        remote_script = sftp.open("/tmp/smsly-install.sh", "w")
         try:
-            remote_script.write(install_script_content)
-            remote_script.flush()
+            script_name = "install-media-node.sh" if server_install_mode(server) == "media" else "install.sh"
+            install_script_content, install_script_source = _load_install_script(script_name=script_name)
+            _append_log(server, f"🚀 Installer source: {install_script_source}")
+            if use_local_bundle:
+                _append_log(
+                    server,
+                    "ℹ️ Provisioning in local-bundle mode (no GitHub clone required).",
+                )
+            else:
+                _append_log(
+                    server,
+                    "ℹ️ Installer repository is public; using unauthenticated GitHub clone.",
+                )
+            remote_script = sftp.open("/tmp/smsly-install.sh", "w")
+            try:
+                remote_script.write(install_script_content)
+                remote_script.flush()
+            finally:
+                remote_script.close()
+            sftp.chmod("/tmp/smsly-install.sh", 0o755)
         finally:
-            remote_script.close()
-        sftp.chmod("/tmp/smsly-install.sh", 0o755)
-
-        sftp.close()
+            with contextlib.suppress(Exception):
+                sftp.close()
         _append_log(server, "✅ Install script uploaded")
 
         run_prefix = ""
@@ -201,12 +219,26 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             "SMSLY_NODE_HOST": server.host,
         }
 
-        node_components = getattr(server, "node_components", None) or {}
+        # Defaults mirror the dashboard DEFAULT_NODE_COMPONENTS
+        # (frontend/src/app/servers/page.tsx): an absent key means
+        # "default", never "everything off" — API-created servers without
+        # an explicit components dict get the same baseline as UI ones.
+        # An explicit false always wins (opt-out).
+        node_components = {
+            "observability": True,
+            "security": True,
+            "crowdsec": False,
+            "falco": False,
+            "spire": False,
+            "log_shipping": True,
+            **(getattr(server, "node_components", None) or {}),
+        }
         install_env["NODE_OBSERVABILITY"] = "1" if node_components.get("observability") else "0"
         install_env["NODE_SECURITY"] = "1" if node_components.get("security") else "0"
         install_env["NODE_CROWDSEC"] = "1" if node_components.get("crowdsec") else "0"
         install_env["NODE_FALCO"] = "1" if node_components.get("falco") else "0"
         install_env["NODE_SPIRE"] = "1" if node_components.get("spire") else "0"
+        install_env["NODE_LOG_SHIPPING"] = "1" if node_components.get("log_shipping") else "0"
 
         install_args: list[str] = []
         install_mode = server_install_mode(server)
@@ -300,7 +332,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     logger.error("Failed to provision DNS/TLS for node %s: %s", server.name, e)
                     _append_log(server, f"⚠️ Automated TLS: Failed to generate DNS record: {e}")
 
-        stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'")
+        stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'", timeout=30)
         remote_mode = stdout.read().decode().strip()
         if "RESUME" in remote_mode:
             _append_log(server, "ℹ️ Found partial installation state. Resuming from last checkpoint...")
@@ -376,17 +408,10 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         exit_code = channel.recv_exit_status()
         _append_log(server, f"\n[installer] Install script exited with code: {exit_code}")
 
-        is_success_in_logs = _installer_logs_confirm_success(server.provision_logs)
-
         if exit_code != 0:
-            if is_success_in_logs:
-                _append_log(server, "Installer logs confirm success despite a non-zero SSH exit status.")
-                server.provision_status = ManagedServer.ProvisionStatus.DONE
-                server.save(update_fields=["provision_status"])
-            else:
-                server.provision_status = ManagedServer.ProvisionStatus.FAILED
-                server.save(update_fields=["provision_status"])
-                raise RuntimeError(f"Install script failed with exit code {exit_code}")
+            server.provision_status = ManagedServer.ProvisionStatus.FAILED
+            server.save(update_fields=["provision_status"])
+            raise RuntimeError(f"Install script failed with exit code {exit_code}")
 
         with contextlib.suppress(Exception):
             ssh.exec_command(
@@ -778,8 +803,25 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             try:
                 ssh_password = str(server.ssh_password or "").strip()
                 if ssh_password:
+                    from .tls_verify import (
+                        _check_pin_after_handshake,
+                        resolve_tls_verify_for_url,
+                    )
                     for username in ("admin", "root"):
                         exchange_url = f"{api_url}/api/v1/auth/node-token-exchange/"
+                        # Never send host SSH credentials over an
+                        # unverified channel: pin/verify like the HMAC
+                        # path above. On plain HTTP to a non-local target
+                        # the exchange is skipped entirely.
+                        verify, fingerprint = resolve_tls_verify_for_url(
+                            exchange_url
+                        )
+                        if not exchange_url.startswith("https://"):
+                            logger.warning(
+                                "Skipping node token exchange for %s: non-TLS URL",
+                                server.name,
+                            )
+                            break
                         resp = requests.post(
                             exchange_url,
                             json={
@@ -788,7 +830,13 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                                 "node_name": f"Primary-{server.owner.username}",
                             },
                             timeout=15,
+                            verify=verify,
+                            stream=True,
                         )
+                        if fingerprint:
+                            _check_pin_after_handshake(resp, fingerprint)
+                        _ = resp.content
+                        resp.close()
                         if resp.status_code == 200:
                             new_token = resp.json().get("token")
                             if new_token:

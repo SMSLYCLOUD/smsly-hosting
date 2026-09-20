@@ -56,10 +56,25 @@ class _ProvisioningResources:
             self._remove_ssh_key()
         if self._wg_peer_id:
             self._remove_wg_peer()
-        # Clear sensitive fields from the server model
+        # Clear sensitive fields from the server model — but NEVER strand
+        # the operator's original SSH key: _restrict_ssh_key_to_master_ip
+        # stashes it in provider_metadata['ssh_key_backup'] before
+        # overwriting, and rollback restores it. Blanking only applies
+        # when this run added the key (nothing to strand otherwise).
         try:
             update_fields = []
-            if self.server.ssh_key:
+            _meta = dict(getattr(self.server, "provider_metadata", None) or {})
+            _backup = _meta.get("ssh_key_backup")
+            if _backup:
+                self.server.ssh_key = _backup
+                update_fields.append("ssh_key")
+                try:
+                    del _meta["ssh_key_backup"]
+                    self.server.provider_metadata = _meta
+                    update_fields.append("provider_metadata")
+                except Exception:
+                    pass
+            elif self._ssh_key_added and self.server.ssh_key:
                 self.server.ssh_key = ""
                 update_fields.append("ssh_key")
             if getattr(self.server, "node_db_password", None):
@@ -149,7 +164,7 @@ class _ProvisioningResources:
             )
             subprocess.run(
                 ["iptables", "-D", "DOCKER-USER",
-                 "-s", node_ip, "-p", "tcp", "--dport", "5000",
+                 "-s", node_ip, "-p", "tcp", "--dport", port,
                  "-j", "ACCEPT"],
                 capture_output=True, timeout=5,
             )
@@ -163,11 +178,21 @@ class _ProvisioningResources:
         try:
             key_file = io.StringIO(self.server.ssh_key)
             passphrase = getattr(self.server, "ssh_key_passphrase", "") or None
-            try:
-                pkey = paramiko.Ed25519Key.from_private_key(key_file, password=passphrase)
-            except Exception:
-                key_file.seek(0)
-                pkey = paramiko.RSAKey.from_private_key(key_file, password=passphrase)
+            pkey = None
+            for _loader in (
+                paramiko.Ed25519Key.from_private_key,
+                paramiko.RSAKey.from_private_key,
+                paramiko.ECDSAKey.from_private_key,
+            ):
+                try:
+                    key_file.seek(0)
+                    pkey = _loader(key_file, password=passphrase)
+                    break
+                except Exception:
+                    continue
+            if pkey is None:
+                logger.warning("Rollback: stored SSH key has unknown format, skipping remote removal")
+                return
             client = paramiko.SSHClient()
             from apps.deployments.services.ssh_client import _get_tofu_policy
             client.set_missing_host_key_policy(_get_tofu_policy(self.server.host, self.server.ssh_port))
@@ -187,7 +212,7 @@ class _ProvisioningResources:
                     client.connect(**connect_kwargs)
             else:
                 client.connect(**connect_kwargs)
-            client.exec_command('sed -i "/smsly-self-heal/d" ~/.ssh/authorized_keys')
+            client.exec_command('sed -i "/smsly-self-heal/d" ~/.ssh/authorized_keys', timeout=15)
             client.close()
             _append_log(self.server, "🧹 Rolled back SSH key from remote node")
         except Exception as exc:

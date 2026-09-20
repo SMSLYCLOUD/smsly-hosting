@@ -120,13 +120,13 @@ export function AiTab() {
   const hasUrl = (id: string) => ["jules", "localllm", "freemodel", "opencode", "mistral", "nvidia", "cloudflare", "kimi", "orcarouter", "zenmax", "agentrouter"].includes(id);
 
   const baseUrlPlaceholders: Record<string, string> = {
-    jules: "https://api.jules.google.com/v1",
+    jules: "https://jules-gateway.example.com/v1",
     localllm: "http://localhost:11434/v1",
     freemodel: "https://api.freemodel.dev/v1",
-    opencode: "https://api.opencode.ai/v1",
+    opencode: "https://opencode.ai/zen/v1",
     mistral: "https://api.mistral.ai/v1",
     nvidia: "https://integrate.api.nvidia.com/v1",
-    cloudflare: "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai",
+    cloudflare: "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/compat",
     kimi: "https://api.moonshot.ai/v1",
     orcarouter: "https://api.orcarouter.com/v1",
     zenmax: "https://api.zenmax.ai/v1",

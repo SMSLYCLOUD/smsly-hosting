@@ -237,7 +237,7 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
               ) : !openappsec.enabled ? (
                 "Disabled"
               ) : openappsec.agent_running && openappsec.envoy_running ? (
-                <>Shadow · {openappsec.policy_mode === "prevent" ? "Prevent" : "Detect-learn"}{openappsec.verdicts_recent ? "" : " (idle)"}</>
+                <>{openappsec.policy_mode === "prevent" ? "Enforce · Prevent" : "Shadow · Detect-learn"}{openappsec.verdicts_recent ? "" : " (idle)"}{openappsec.mode_configured && openappsec.policy_mode !== "unknown" && openappsec.mode_configured !== openappsec.policy_mode ? ` (pending: ${openappsec.mode_configured})` : ""}</>
               ) : (
                 "Degraded"
               )}

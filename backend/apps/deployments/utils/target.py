@@ -46,6 +46,6 @@ def resolve_remote_server(service, latest_deploy):
         host = provider.host or getattr(provider, 'api_url', None)
         if host:
             return ManagedServer.objects.filter(
-                Q(host=host) | Q(private_ip=host)
+                Q(host=host) | Q(private_ip=host) | Q(wg_address=host)
             ).first()
     return None

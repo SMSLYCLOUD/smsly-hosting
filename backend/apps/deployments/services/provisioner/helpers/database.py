@@ -1,7 +1,6 @@
 import logging
 import os
 import secrets
-import urllib.error
 
 from apps.deployments.models.servers import ManagedServer
 
@@ -31,7 +30,7 @@ def _provision_node_db_credentials(server: ManagedServer):
         from psycopg2 import sql
         from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-        conn = psycopg2.connect(master_db_url)
+        conn = psycopg2.connect(master_db_url, connect_timeout=10)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 
         is_new_user = False
@@ -185,7 +184,9 @@ def _verify_agent_db_connectivity(ssh, server: ManagedServer, start_time: float)
         return
 
     _append_log(server, "Verifying agent DB connectivity via health endpoint...")
-    deadline = start_time + 120
+    # Fresh 120s window from NOW (not from provision start — the installer
+    # alone takes 5-15 minutes, so an inherited deadline is already dead).
+    deadline = _time_mod.monotonic() + 120
     import time as _time_mod
     while _time_mod.monotonic() < deadline:
         try:
@@ -197,7 +198,8 @@ def _verify_agent_db_connectivity(ssh, server: ManagedServer, start_time: float)
             if '"status":"healthy"' in body or '"database":"healthy"' in body:
                 _append_log(server, "Agent DB connectivity verified (health endpoint reports healthy).")
                 return
-        except (urllib.error.URLError, OSError) as exc:
+        except Exception as exc:
+            # Best-effort probe: SSH failures must not fail provisioning.
             logger.debug("Agent health check failed: %s", exc)
         _time_mod.sleep(5)
 

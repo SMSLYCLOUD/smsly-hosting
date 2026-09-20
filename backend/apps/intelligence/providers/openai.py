@@ -106,40 +106,35 @@ class OpenAIProvider(AIProvider):
                         continue
 
     def get_balance(self) -> dict:
-        """Fetch OpenAI credit balance."""
+        """Probe OpenAI API availability.
+
+        OpenAI has no key-scoped balance endpoint (the legacy
+        ``dashboard/billing/credit_grants`` feed is retired and
+        ``organization/costs`` requires an admin key), so a ``/v1/models``
+        probe is the honest signal: 200 means the key works.
+        """
         if not self.api_key:
             return {"balance": "Not configured", "currency": "", "raw": {}}
         try:
             client = _get_client("openai", timeout=15)
             resp = client.get(
-                "https://api.openai.com/dashboard/billing/credit_grants",
+                f"{self.BASE_URL}/models",
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
             if resp.status_code == 200:
-                data = resp.json()
-                total = data.get("total_granted", 0)
-                used = data.get("total_used", 0)
-                remaining = data.get("total_available", total - used)
+                try:
+                    model_count = len(resp.json().get("data", []))
+                except Exception:
+                    model_count = 0
                 return {
-                    "balance": f"${remaining:.2f}",
+                    "balance": f"Active ({model_count} models available)" if model_count else "Active",
                     "currency": "USD",
-                    "raw": {
-                        "total_granted": total,
-                        "total_used": used,
-                        "remaining": remaining
-                    },
+                    "raw": {},
                 }
-            resp2 = client.get(
-                "https://api.openai.com/v1/organization/costs",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                params={"limit": 1},
-            )
-            if resp2.status_code == 200:
-                return {
-                    "balance": "Active (usage-based)",
-                    "currency": "USD",
-                    "raw": resp2.json()
-                }
+            if resp.status_code == 401:
+                return {"balance": "Invalid API key", "currency": "", "raw": {}}
+            if resp.status_code == 429:
+                return {"balance": "Rate limited", "currency": "USD", "raw": {}}
             return {
                 "balance": "Active (check platform.openai.com)",
                 "currency": "USD",

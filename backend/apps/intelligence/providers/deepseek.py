@@ -12,7 +12,7 @@ class DeepSeekProvider(AIProvider):
 
     def __init__(self):
         self.api_key = _sanitize_api_key(os.environ.get("DEEPSEEK_API_KEY", ""))
-        self.model = _normalize_model(os.environ.get("DEEPSEEK_MODEL"), "deepseek-coder")
+        self.model = _normalize_model(os.environ.get("DEEPSEEK_MODEL"), "deepseek-chat")
 
     def name(self) -> str:
         return f"DeepSeek ({self.model})"

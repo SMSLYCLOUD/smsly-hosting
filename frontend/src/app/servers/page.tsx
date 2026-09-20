@@ -1025,7 +1025,7 @@ function NodeComponents({ value, onChange, show }: {
     if (!show) return null;
     const toggle = (key: keyof typeof value) => onChange({ ...value, [key]: !value[key] });
     const items: { key: keyof typeof value; icon: typeof Activity; label: string; desc: string; active: string; inactive: string; iconColor: string }[] = [
-        { key: 'observability', icon: Activity, label: 'Observability', desc: 'Promtail, cAdvisor, node-exporter, docker-labels', active: 'border-emerald-500/50 bg-emerald-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-emerald-500' },
+        { key: 'observability', icon: Activity, label: 'Observability', desc: 'cAdvisor, node-exporter, docker-labels', active: 'border-emerald-500/50 bg-emerald-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-emerald-500' },
         { key: 'security', icon: Shield, label: 'Security Stack', desc: 'fail2ban, UFW, AppArmor, auditd, kernel hardening, gVisor', active: 'border-amber-500/50 bg-amber-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-amber-500' },
         { key: 'crowdsec', icon: AlertTriangle, label: 'CrowdSec WAF', desc: 'Community-powered web application firewall', active: 'border-orange-500/50 bg-orange-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-orange-500' },
         { key: 'falco', icon: Zap, label: 'Falco', desc: 'Runtime security monitoring (~200MB)', active: 'border-red-500/50 bg-red-500/5', inactive: 'border-border hover:border-muted-foreground/30', iconColor: 'text-red-500' },
@@ -1663,6 +1663,11 @@ function ServerCard({
                             {server.node_components?.spire && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-500 font-medium">
                                     SPIRE
+                                </span>
+                            )}
+                            {server.node_components?.log_shipping !== false && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">
+                                    Log Shipping
                                 </span>
                             )}
                         </div>

@@ -64,6 +64,10 @@ class SecurityStatusWiringTests(TestCase):
             password="pass123",
         )
         from apps.deployments.models.core import PlatformConfig
+        # load() caches the singleton in LocMemCache, which Django does
+        # NOT flush between tests — without this, test N>1 gets test 1's
+        # rolled-back row and save(update_fields) hits zero rows.
+        PlatformConfig.clear_cache()
         config = PlatformConfig.load()
         config.enable_crowdsec_waf = True
         config.save(update_fields=["enable_crowdsec_waf"])
@@ -106,6 +110,19 @@ class SecurityStatusWiringTests(TestCase):
         self.assertEqual(oa["policy_mode"], "detect-learn")
         self.assertTrue(oa["verdicts_recent"])
         self.assertEqual(oa["shadow_port"], 18081)
+
+    @patch("apps.core.views.security.subprocess.run")
+    def test_openappsec_disabled_in_db_overrides_env(self, mock_run):
+        # DB toggle is source of truth: explicit False wins even when the
+        # container env still carries the old install-time value.
+        from apps.deployments.models.core import PlatformConfig
+        config = PlatformConfig.load()
+        config.openappsec_enabled = False
+        config.save(update_fields=["openappsec_enabled"])
+        mock_run.side_effect = _run_map()
+        with patch.dict("os.environ", {"OPENAPPSEC_ENABLED": "1"}):
+            data = self._get().data
+        self.assertFalse(data["openappsec"]["enabled"])
 
     @patch("apps.core.views.security.subprocess.run")
     def test_crowdsec_first_strike_runtime_flag(self, mock_run):

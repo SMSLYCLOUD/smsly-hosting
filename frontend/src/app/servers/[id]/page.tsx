@@ -476,6 +476,21 @@ export default function ServerDetailPage() {
                                         SPIRE
                                     </span>
                                 )}
+                                {server.node_components?.log_shipping !== false && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">
+                                        Log Shipping
+                                    </span>
+                                )}
+                                {!server.is_primary && server.verify_tls !== undefined && (
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${server.verify_tls ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
+                                        TLS {server.verify_tls ? 'Verified' : 'Unverified'}
+                                    </span>
+                                )}
+                                {!server.is_primary && server.tls_cert_sha256_set && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-500 font-medium">
+                                        Cert Pinned
+                                    </span>
+                                )}
                                 <span className={`text-xs font-bold px-2 py-0.5 rounded ${sc.bg} ${sc.color}`}>
                                     {sc.label}
                                 </span>
@@ -559,7 +574,7 @@ export default function ServerDetailPage() {
                             exit={{ opacity: 0, y: -10 }}
                             transition={{ duration: 0.15 }}
                         >
-                            {activeTab === 'overview' && <OverviewTab server={server} />}
+                            {activeTab === 'overview' && <OverviewTab server={server} onRefresh={fetchServer} />}
                             {activeTab === 'services' && (
                                 <ServicesTab
                                     services={services}
@@ -609,9 +624,26 @@ export default function ServerDetailPage() {
 
 // ─── Overview Tab ───────────────────────────────────────────────────────────
 
-function OverviewTab({ server }: { server: ManagedServer }) {
+function OverviewTab({ server, onRefresh }: { server: ManagedServer; onRefresh: () => void }) {
     const sc = STATUS_COLORS[server.status] || STATUS_COLORS.UNKNOWN;
     const StatusIcon = server.status === 'ONLINE' ? Wifi : server.status === 'OFFLINE' ? WifiOff : Globe;
+    const [tlsToggling, setTlsToggling] = useState(false);
+    const confirm = useConfirm();
+
+    const handleToggleVerifyTls = async () => {
+        if (server.is_primary) return;
+        const next = !(server.verify_tls ?? true);
+        if (!next && !await confirm({ title: 'Disable TLS verification?', message: 'The master will accept ANY certificate from this node, including attacker MITM certs. Only use for local dev nodes.', confirmText: 'Disable', variant: 'destructive' })) return;
+        setTlsToggling(true);
+        try {
+            await serversApi.update(server.id, { verify_tls: next });
+            toast({ title: next ? 'TLS verification enabled' : 'TLS verification disabled' });
+            onRefresh();
+        } catch {
+            toast({ title: 'Failed to update TLS setting', variant: 'destructive' });
+        }
+        setTlsToggling(false);
+    };
 
     const stats = [
         { label: 'Services', value: server.services_count, icon: Activity },
@@ -715,6 +747,37 @@ function OverviewTab({ server }: { server: ManagedServer }) {
                     </div>
                 )}
             </div>
+
+            {/* TLS Security */}
+            {!server.is_primary && (
+                <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+                    <h3 className="font-bold text-sm uppercase text-muted-foreground">TLS Security</h3>
+                    <div className="flex items-center justify-between gap-4">
+                        <div>
+                            <p className="text-sm font-medium">Verify node certificate</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                                {server.tls_cert_sha256_set
+                                    ? 'Connections are pinned to the registered certificate.'
+                                    : 'No certificate pin registered — verification uses the system trust store.'}
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                            {server.tls_cert_sha256_set && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-500 font-medium">
+                                    Cert Pinned
+                                </span>
+                            )}
+                            <button
+                                onClick={handleToggleVerifyTls}
+                                disabled={tlsToggling}
+                                className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${server.verify_tls ?? true ? 'border-emerald-500/30 text-emerald-500' : 'border-border text-muted-foreground hover:bg-muted/50'}`}
+                            >
+                                {tlsToggling ? <Loader2 size={14} className="animate-spin" /> : (server.verify_tls ?? true) ? 'Verified' : 'Unverified'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

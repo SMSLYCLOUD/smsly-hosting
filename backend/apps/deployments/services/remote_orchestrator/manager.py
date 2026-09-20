@@ -38,6 +38,8 @@ class RemoteOrchestrator(
             fresh = ManagedServer.objects.only(
                 "api_token", "gateway_secret", "api_url", "host",
                 "ssh_key", "ssh_password", "ssh_user", "ssh_port",
+                "wg_address", "is_lite_agent", "is_primary",
+                "verify_tls", "tls_cert_sha256",
             ).get(id=server.id if isinstance(server.id, uuid.UUID) else server.pk)
             self.server = fresh
         except Exception:

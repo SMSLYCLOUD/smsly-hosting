@@ -14,3 +14,13 @@ filenames:
 labels:
   type: caddy
   source: node
+---
+# Lite-agent Traefik access logs (shipped via loki-log-bridge by the
+# agent-lite promtail). Separate non-overlapping prefix + traefik parser —
+# `node_*` above would also glob-match a `node_traefik_*` name, so this
+# prefix deliberately does not start with `node_`.
+filenames:
+  - /var/log/crowdsec/nodes/agent_traefik_*.log
+labels:
+  type: traefik
+  source: node

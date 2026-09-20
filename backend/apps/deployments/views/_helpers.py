@@ -779,6 +779,21 @@ def _resolve_requested_deploy_target(request, service: Service):
             "effective_server": None,
         }
 
+    if getattr(target_server, "is_lite_agent", False) and not getattr(target_server, "agent_ready", False):
+        return {
+            "ok": False,
+            "response": Response(
+                {
+                    'error': (
+                        f'Server {target_server.name} is ONLINE but its agent '
+                        'has not finished registering (agent_ready=False). '
+                        'Wait for installer/registrar completion before deploying.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        }
+
     if target_server.status != ManagedServer.Status.ONLINE:
         return {
             "ok": False,

@@ -226,18 +226,23 @@ class SecurityStatusView(GenericAPIView):
                 pass
 
         # ── open-appsec WAF (detect-learn shadow) ─────────────────────
-        # No Settings toggle exists (env-gated: OPENAPPSEC_ENABLED); the
-        # UI had zero visibility into the stack. Report liveness +
-        # attachment proof (recent envoy verdicts) + policy mode.
+        # Source of truth is the Settings toggle (PlatformConfig
+        # .openappsec_enabled, synced to OPENAPPSEC_ENABLED in .env for
+        # the installer reconcile). The env fallback covers rows that
+        # pre-date the field; the containers below report runtime truth.
         openappsec = {
             "enabled": False, "agent_running": False,
             "envoy_running": False, "policy_mode": "unknown",
+            "mode_configured": str(getattr(config, "openappsec_mode", "detect-learn") or "detect-learn"),
             "verdicts_recent": False, "shadow_port": 18081,
         }
         try:
             import os
-            openappsec["enabled"] = (
-                os.getenv("OPENAPPSEC_ENABLED", "0").strip() == "1"
+            openappsec["enabled"] = bool(
+                getattr(
+                    config, "openappsec_enabled",
+                    os.getenv("OPENAPPSEC_ENABLED", "0").strip() == "1",
+                )
             )
             port_result = subprocess.run(
                 ["docker", "port", "smsly-appsec-envoy"],

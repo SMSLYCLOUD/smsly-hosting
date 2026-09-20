@@ -102,6 +102,8 @@ class DomainConfigView(GenericAPIView):
             'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
             'smsly_strict_ssh_host_key_check': config.smsly_strict_ssh_host_key_check,
             'enable_crowdsec_waf': config.enable_crowdsec_waf,
+            'openappsec_enabled': config.openappsec_enabled,
+            'openappsec_mode': config.openappsec_mode,
             'trivy_enabled': config.trivy_enabled,
             'trivy_fail_on_severity': config.trivy_fail_on_severity,
             'cosign_enabled': config.cosign_enabled,
@@ -211,6 +213,16 @@ class DomainConfigView(GenericAPIView):
                 config.wildcard_subdomains = _parse_bool(data.get('wildcard_subdomains'))
             if 'enable_crowdsec_waf' in data:
                 config.enable_crowdsec_waf = _parse_bool(data.get('enable_crowdsec_waf'))
+            if 'openappsec_enabled' in data:
+                config.openappsec_enabled = _parse_bool(data.get('openappsec_enabled'))
+            if 'openappsec_mode' in data:
+                mode = str(data.get('openappsec_mode') or '').strip()
+                if mode not in ('detect-learn', 'prevent'):
+                    return Response(
+                        {'error': "openappsec_mode must be 'detect-learn' or 'prevent'"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                config.openappsec_mode = mode
             if 'crowdsec_auto_unblock_enabled' in data:
                 config.crowdsec_auto_unblock_enabled = _parse_bool(
                     data.get('crowdsec_auto_unblock_enabled'))

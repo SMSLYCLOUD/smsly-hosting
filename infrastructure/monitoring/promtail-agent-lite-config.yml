@@ -1,0 +1,22 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://${MASTER_MESH_IP:-10.100.0.1}:3100/loki/api/v1/push
+
+scrape_configs:
+  # Traefik access logs (JSON format, written by the agent's Traefik
+  # --accesslog.filepath). Shipped raw with the node id; parsing happens
+  # in Loki queries / the master log bridge — never filter here.
+  - job_name: traefik-access
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: traefik-access
+          node_id: ${SMSLY_NODE_ID:-unknown}
+          __path__: /var/log/traefik/access.log

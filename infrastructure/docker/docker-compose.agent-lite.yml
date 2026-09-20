@@ -12,6 +12,9 @@ services:
       IMAGES: 1
       NETWORKS: 1
       VOLUMES: 1
+      INFO: 1
+      EVENTS: 1
+      AUTH: 1
       POST: 1
       BUILD: 1
       EXEC: 1
@@ -92,6 +95,8 @@ services:
     env_file: ../../.env
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
+      - DOCKER_NETWORK=smsly-net
+      - SMSLY_BUILDS_DIR=/opt/smsly-hosting/builds
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
@@ -111,6 +116,12 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
+      # Deploy/build paths mirrored from prod: builders write here and
+      # staticfiles/media must persist across recreates.
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+      - /opt/smsly-cache:/opt/smsly-cache:z
+      - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
       # backups_data: shared with the master so backup encryption keys
       # downloaded via /api/v1/servers/{id}/download-key/ are persisted
       # locally and the node can restore without re-prompting.
@@ -136,11 +147,12 @@ services:
   celery-worker:
     image: ${SMSLY_IMAGE_BACKEND:-smsly-hosting-backend}
     restart: unless-stopped
-    command: sh -c 'celery -A config worker --loglevel=info -Q "$${SMSLY_NODE_QUEUE:-deploy},fast,celery" --hostname="$${SMSLY_NODE_ID:-agent}@%h" --concurrency=4'
+    command: sh -c 'celery -A config worker --loglevel=info -Q "$${SMSLY_NODE_QUEUE:-deploy},deploy,fast,celery" --hostname="$${SMSLY_NODE_ID:-agent}@%h" --concurrency=4'
     env_file: ../../.env
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
       - DOCKER_NETWORK=smsly-net
+      - SMSLY_BUILDS_DIR=/opt/smsly-hosting/builds
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
@@ -156,6 +168,10 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+      - /opt/smsly-cache:/opt/smsly-cache:z
+      - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
       - backups_data:/app/backups
     networks:
       - smsly-net
@@ -208,12 +224,10 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      # The registrar is a long-running Python process; if it's
-      # stuck the process supervisor won't restart it (no
-      # `restart: on-failure` on a healthcheck failure). We use
-      # `pgrep` to check the process is alive — simpler and
-      # more reliable than the touch-file approach.
-      test: ["CMD-SHELL", "pgrep -f 'python /usr/local/bin/agent_registrar.py' >/dev/null || exit 1"]
+      # Freshness marker maintained by the registrar itself
+      # (scripts/agent_registrar.py) — pgrep is not guaranteed in this
+      # image (only docker-cli/curl/tzdata installed).
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(cat /tmp/registrar.last_heartbeat 2>/dev/null || echo 0) )) -lt 120 || exit 1"]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -231,11 +245,20 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.endpoint=tcp://socket-proxy:2375
+      - --providers.docker.network=smsly-net
       - --entrypoints.web.address=:80
       - --ping=true
       - --log.level=WARN
+      # JSON access log shipped to master Loki for centralized edge
+      # analysis (CrowdSec). File lives on the traefik_logs volume
+      # shared with promtail below.
+      - --accesslog=true
+      - --accesslog.filepath=/var/log/traefik/access.log
+      - --accesslog.format=json
     ports:
       - "80:80"
+    volumes:
+      - traefik_logs:/var/log/traefik
     depends_on:
       socket-proxy:
         condition: service_healthy
@@ -249,9 +272,46 @@ services:
       retries: 5
       start_period: 10s
 
+  # ============================================================
+  # Promtail (Log Shipping to Master — security path, always on)
+  # Ships Traefik access logs to master's Loki for CrowdSec analysis.
+  # Edge analysis is centralized on the master; this agent keeps no
+  # local WAF. Lightweight (~MBs) by design.
+  # ============================================================
+  promtail:
+    image: grafana/promtail:2.9.3
+    restart: unless-stopped
+    environment:
+      - MASTER_MESH_IP=${MASTER_MESH_IP:-10.100.0.1}
+      - SMSLY_NODE_ID=${SMSLY_NODE_ID:-unknown}
+    volumes:
+      - traefik_logs:/var/log/traefik:ro
+      - ../monitoring/promtail-agent-lite-config.yml:/etc/promtail/config.yml:ro
+      - promtail-positions:/tmp
+    command: -config.file=/etc/promtail/config.yml -config.expand-env=true
+    depends_on:
+      traefik:
+        condition: service_started
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "cat /proc/1/status > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${PROMTAIL_MEMORY_LIMIT:-256M}
+
 volumes:
   redis_data:
   backups_data:
+  static_volume:
+  media_volume:
+  traefik_logs:
+  promtail-positions:
 
 networks:
   smsly-net:
