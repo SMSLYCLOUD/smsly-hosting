@@ -646,24 +646,52 @@ _redbeat_lock_del() {
 # as uid 1000 (backend/Dockerfile) and check readability before signing,
 # so a root-owned key silently disables ALL image signing on every fresh
 # install. Self-heals ownership hourly (chmod preserved).
+# 2026-09-20 addendum: a worker created BEFORE the keys existed holds a
+# stale bind (host fine, container blind) → signing SKIPs and, with
+# cosign_require_verification on, fails builds. Detect via an in-worker
+# readability probe and recreate celery-deploy (mount reconverges, no
+# identity change). Host-missing keys stay ALERT-only: regenerating
+# would rotate the signing identity and orphan existing signatures.
 ensure_cosign_key_readable() {
     local keydir="$INSTALL_DIR/cosign-keys"
     local key="$keydir/cosign.key"
     [ -d "$keydir" ] || return 0
     if [ ! -f "$key" ]; then
-        log "cosign key missing — image signing falls back to keyless (installer regenerates on update)"
+        log "ALERT: cosign key missing on host — image signing falls back to keyless (regenerate via install.sh --update preflight)"
         return 0
     fi
     local owner
     owner=$(stat -c '%u:%g' "$key" 2>/dev/null) || owner="unknown"
     if [ "$owner" = "1000:1000" ]; then
         log "cosign key readable by workers (1000:1000)"
-        return 0
-    fi
-    if chown 1000:1000 "$key" 2>/dev/null; then
+    elif chown 1000:1000 "$key" 2>/dev/null; then
         log "cosign key was $owner — chowned to 1000:1000 so workers can sign"
     else
         log "ALERT: cosign key owned by $owner and chown failed — image signing is silently skipped"
+        return 0
+    fi
+    # Stale-mount probe: host is fine, but is the worker blind?
+    local worker="smsly-hosting-celery-deploy-1"
+    command -v docker >/dev/null 2>&1 || return 0
+    [ "$(docker inspect -f '{{.State.Running}}' "$worker" 2>/dev/null)" = "true" ] || {
+        log "cosign worker $worker not running — skipping mount probe"
+        return 0
+    }
+    if timeout -k 5 20 docker exec --user 1000 "$worker" test -r /opt/smsly-hosting/cosign-keys/cosign.key 2>/dev/null; then
+        log "cosign key visible inside $worker"
+        return 0
+    fi
+    log "ALERT: cosign key on host but invisible inside $worker (stale bind) — recreating worker"
+    local compose_file="$INSTALL_DIR/docker-compose.prod.yml"
+    if [ -f "$compose_file" ] && timeout -k 5 180 docker compose -f "$compose_file" up -d celery-deploy >/dev/null 2>&1; then
+        sleep 10
+        if timeout -k 5 20 docker exec --user 1000 "$worker" test -r /opt/smsly-hosting/cosign-keys/cosign.key 2>/dev/null; then
+            log "cosign mount healed via $worker recreate"
+        else
+            log "ALERT: $worker recreated but key still invisible — inspect the cosign-keys bind"
+        fi
+    else
+        log "ALERT: $worker recreate FAILED — cosign signing still blind"
     fi
 }
 
