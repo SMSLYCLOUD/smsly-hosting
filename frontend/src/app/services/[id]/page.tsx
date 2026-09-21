@@ -32,6 +32,7 @@ import { AiRouterTab } from '@/components/settings/AiRouterTab';
 import BackupsTab from '@/components/settings/BackupsTab';
 import { CloudStorageTab } from '@/components/settings/CloudStorageTab';
 import { PreviewsList } from '@/components/deployments/PreviewsList';
+import { DeployRefDialog } from '@/components/deployments/DeployRefDialog';
 import { SafeDeployPanel } from '@/components/deployments/SafeDeployPanel';
 import { DeploymentApprovalsPanel } from '@/components/deployments/DeploymentApprovalsPanel';
 import { toast } from '@/components/ui/use-toast';
@@ -61,6 +62,7 @@ export default function ServiceDetailPage() {
     const [activeTab, setActiveTab] = useState('overview');
     const [aiKey, setAiKey] = useState('');
     const [redeploying, setRedeploying] = useState(false);
+    const [deployDialogOpen, setDeployDialogOpen] = useState(false);
     const [julesFixing, setJulesFixing] = useState(false);
     const [watchConfigLoading, setWatchConfigLoading] = useState(false);
     const [watchConfigSaving, setWatchConfigSaving] = useState(false);
@@ -192,12 +194,11 @@ export default function ServiceDetailPage() {
         }
     };
 
-    const handleRedeploy = async () => {
+    const handleRedeploy = async (ref: string = 'HEAD') => {
         if (!service) return;
-        if (!await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) return;
         try {
             setRedeploying(true);
-            const deployResult = await servicesApi.deploy(service.id, 'HEAD', targetServerId);
+            const deployResult = await servicesApi.deploy(service.id, ref, targetServerId);
             if (deployResult?.existing_deployment) {
                 const statusLabel = deployResult?.existing_deployment?.status || 'in progress';
                 toast({
@@ -956,12 +957,27 @@ export default function ServiceDetailPage() {
                                         </select>
                                         <button
                                             className="bg-primary hover:bg-primary/90 text-white font-bold py-2 px-3 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
-                                            onClick={handleRedeploy}
+                                            onClick={async () => {
+                                                // Git-backed services pick branch/commit;
+                                                // image-only services keep the instant flow.
+                                                if (service?.repository_url) setDeployDialogOpen(true);
+                                                else if (await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) handleRedeploy('HEAD');
+                                            }}
                                             disabled={redeploying}
                                         >
                                             {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
                                             {redeploying ? 'Deploying...' : 'Redeploy'}
                                         </button>
+                                        {service?.repository_url && (
+                                            <DeployRefDialog
+                                                isOpen={deployDialogOpen}
+                                                onClose={() => setDeployDialogOpen(false)}
+                                                repositoryUrl={service.repository_url}
+                                                defaultBranch={service.branch || 'main'}
+                                                deploying={redeploying}
+                                                onDeploy={(ref) => { setDeployDialogOpen(false); handleRedeploy(ref); }}
+                                            />
+                                        )}
                                     </div>
                                 </div>
                             </div>
