@@ -8,9 +8,10 @@ DEFAULT_HEALTH_CHECK_INTERVAL = 30  # seconds
 DEFAULT_HEALTH_CHECK_TIMEOUT = 300  # seconds
 DEFAULT_HEALTH_CHECK_RETRIES = 90
 
-# Deploy timeouts
+# Deploy timeouts (real Dockerfile builds run 14-21 min: gateway ~14,
+# marketer ~17-21. A 300s cap kills healthy builds mid-layer.)
 DEPLOY_CONTAINER_TIMEOUT = 300  # seconds
-DOCKER_BUILD_TIMEOUT = 300  # seconds
+DOCKER_BUILD_TIMEOUT = 1800  # seconds (30 min)
 OLLAMA_PULL_TIMEOUT = 1800  # seconds
 
 # Self-healing
