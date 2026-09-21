@@ -213,11 +213,11 @@ class BuildManager:
             # Falls back to uncapped `docker build` when systemd-run is absent.
             build_cmd = ["docker", "build", "-t", image_tag, "."]
             try:
-                # 10G mem / 2 CPU per build — Chromium/maturin/npm builds OOM-kill
-                # under smaller caps; host relies on 2 build slots to bound total.
+                # 10G mem / 4 CPU per build — single build slot, so one build may
+                # burst without starving the host's 8 cores.
                 build_cmd = [
                     "systemd-run", "--scope",
-                    "-p", "MemoryMax=10G", "-p", "CPUQuota=200%",
+                    "-p", "MemoryMax=10G", "-p", "CPUQuota=400%",
                     "--", "docker", "build", "-t", image_tag, ".",
                 ]
                 # Probe quickly; if systemd-run missing, fall back
