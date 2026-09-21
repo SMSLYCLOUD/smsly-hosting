@@ -278,6 +278,52 @@ class TestGvisorExtraHosts(TestCase):
             )
         self.assertEqual(hosts, ["redis-shared:172.30.224.2"])
 
+    def test_shared_postgres_resolves_via_shared_server(self):
+        """Regression: shared addons have no per-addon container — the
+        DB hostname must resolve via the shared server, not
+        smsly-addon-postgres-<id> (which raises, skipping the entry)."""
+        from apps.addons.services.shared_postgres import SHARED_CONTAINER
+        svc = _service()
+        svc.project_id = "proj-1"
+        addon = _addon_row(
+            addon_id="pg-shared-1",
+            url="postgresql://u:p@myapp-postgres:5432/db",
+        )
+        addon.name = "myapp-postgres"
+        addon.addon_type = "POSTGRES"
+        addon.provision_mode = "shared"
+        addon.pooler_routed = False
+        with patch("apps.deployments.models.addons.Addon") as mock_addon_cls:
+            mock_addon_cls.objects.filter.return_value.filter.return_value = [
+                addon
+            ]
+            old = _runsc_container()
+            client, _, _ = _client_with_addon(old, addon_ip="172.30.224.5")
+            seen = []
+
+            orig_get = client.containers.get.side_effect
+
+            def _get(name):
+                seen.append(str(name))
+                if str(name) == "smsly-addon-postgres-pg-shared-1":
+                    raise Exception("No such container")
+                return orig_get(name)
+
+            client.containers.get.side_effect = _get
+            # Shared server answers under its canonical name here.
+            shared = MagicMock()
+            shared.attrs = {"NetworkSettings": {"Networks": {
+                "smsly-net-96e85eee": {"IPAddress": "172.30.224.5"},
+            }}}
+            client.containers.get.side_effect = lambda n: (
+                shared if str(n) == SHARED_CONTAINER else _get(n)
+            )
+            hosts = _resolve_gvisor_extra_hosts(
+                svc, {"smsly-net-96e85eee", "smsly-platform-net"},
+                client, live=[],
+            )
+        self.assertEqual(hosts, ["myapp-postgres:172.30.224.5"])
+
     @patch("apps.deployments.services.mtls_integration.get_mtls_env_vars", return_value={})
     @patch("docker.from_env")
     def test_runsc_recreate_injects_extra_hosts(self, mock_from_env, _mock_mtls):

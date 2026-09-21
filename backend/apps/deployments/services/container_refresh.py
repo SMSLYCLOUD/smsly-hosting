@@ -229,6 +229,29 @@ def _resolve_gvisor_extra_hosts(service, shared_nets, client, live=None) -> list
                 continue
             atype = str(getattr(addon, "addon_type", "") or "").lower()
             cname = f"smsly-addon-{atype}-{getattr(addon, 'id', '')}"
+            if (atype == "postgres"
+                    and str(getattr(addon, "provision_mode", "") or "") == "shared"):
+                # Logical database — there is intentionally no per-addon
+                # container. Resolve the shared server (or tenant pooler)
+                # instead, mirroring _shared_backend_container in
+                # tasks/deploy/addons.py (kept local to avoid a
+                # services->tasks import cycle).
+                cname = "smsly-shared-postgres"
+                try:
+                    from apps.addons.services.shared_postgres import (
+                        SHARED_CONTAINER as _SHARED,
+                    )
+                    cname = _SHARED
+                except Exception:
+                    pass
+                if getattr(addon, "pooler_routed", False):
+                    try:
+                        from apps.addons.services import tenant_pooler as _pooler
+                        _pname = _pooler.tenants_container_name()
+                        if _pname:
+                            cname = _pname
+                    except Exception:
+                        pass
             try:
                 candidate = client.containers.get(cname)
                 candidate.reload()
