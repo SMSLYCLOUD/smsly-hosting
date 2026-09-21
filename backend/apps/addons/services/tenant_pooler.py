@@ -126,6 +126,12 @@ def render_tenants_config(pools):
     ``missing field 'host'`` even though the main pooler's own render
     omits them (verified live 2026-09-21: identical binary, /etc-path
     mounted config).
+
+    The trailing [user]/[shards]/[query_router] tables mirror the
+    binary's shipped example: without them the parser falls through to
+    ``missing field 'user'`` / ``missing field 'shards'``. They define
+    only the unused example sharding user (dead 127.0.0.1 backends —
+    nothing authenticates as it); tenant traffic uses [pools.*].
     """
     from apps.addons.services.shared_postgres import SHARED_CONTAINER
     admin_user, admin_pass = _admin_credentials()
@@ -164,6 +170,27 @@ def render_tenants_config(pools):
             f'password = "{pool["password"]}"',
             '',
         ]
+    # Legacy sharding tables, mirrored from the binary's shipped example.
+    # The parser demands top-level [user]/[shards]/[query_router] even
+    # when all live traffic uses [pools.*] (verified live 2026-09-21:
+    # without them startup fails with missing-field errors). They
+    # define only an unused example sharding user against loopback
+    # backends — nothing authenticates as it; tenant traffic uses pools.
+    lines += [
+        '[user]',
+        'name = "tenant_sharding_user"',
+        'password = "tenant_sharding_user"',
+        '',
+        '[shards]',
+        '',
+        '[shards.0]',
+        'servers = [["127.0.0.1", 5432, "primary"]]',
+        'database = "postgres"',
+        '',
+        '[query_router]',
+        'default_role = "any"',
+        '',
+    ]
     return '\n'.join(lines) + '\n'
 
 

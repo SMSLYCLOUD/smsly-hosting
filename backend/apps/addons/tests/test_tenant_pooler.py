@@ -33,6 +33,9 @@ class RenderTests(TestCase):
         for key in ('host = "0.0.0.0"', 'port = 5432', 'pool_size = 15',
                     'pool_mode = "transaction"', 'connect_timeout = 5000'):
             self.assertIn(key, content)
+        # Legacy sharding tables the parser also requires.
+        for key in ('[user]', '[shards.0]', '[query_router]'):
+            self.assertIn(key, content)
 
     def test_render_includes_admin_credentials(self):
         """pgcat refuses to start without admin_username/admin_password
