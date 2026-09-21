@@ -1727,19 +1727,27 @@ class AddonProvisioner:
         ensure_shared_server()
         ensure_logical_db(db_user, db_name, password)
 
-        # Tenant pooling (default off): new shared addons dial the pooler
+        # Tenant pooling: new shared addons dial the pooler
         # alias instead of the server directly. Push first so the pool
         # exists before anything resolves the alias; the pooler entrypoint
-        # waits for the first push on fresh installs.
+        # waits for the first push on fresh installs. Route via the
+        # pooler only when its container is actually RUNNING — a present
+        # but crash-looping pooler must never capture new traffic.
         _pooler = None
         try:
             from .tenant_pooler import (
+                container_running,
                 push_tenants_config,
                 tenant_pooling_enabled,
                 tenants_container_name,
             )
             if tenant_pooling_enabled():
                 _pooler = tenants_container_name()
+                if _pooler and not container_running(_pooler):
+                    logger.warning(
+                        "Tenant pooler %s not running for %s — "
+                        "provisioning direct instead", _pooler, hostname)
+                    _pooler = None
                 if _pooler:
                     push_tenants_config()
         except Exception as exc:

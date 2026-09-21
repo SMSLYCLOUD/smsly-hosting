@@ -24,6 +24,16 @@ class RenderTests(TestCase):
         self.assertIn('password = "pw1"', content)
         self.assertIn('smsly-shared-postgres', content)
 
+    def test_render_general_has_binary_required_keys(self):
+        """The pooler binary rejects a host-less [general] with
+        ``missing field 'host'`` (observed live). The render must
+        always carry the keys the binary demands."""
+        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
+            content = tp.render_tenants_config([])
+        for key in ('host = "0.0.0.0"', 'port = 5432', 'pool_size = 15',
+                    'pool_mode = "transaction"', 'connect_timeout = 5000'):
+            self.assertIn(key, content)
+
     def test_render_includes_admin_credentials(self):
         """pgcat refuses to start without admin_username/admin_password
         (BadConfig crash-loop, observed live)."""

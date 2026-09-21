@@ -170,9 +170,11 @@ services:
     healthcheck:
       # Honest idle state: no backend push yet means "waiting for config"
       # (healthy), not failure. Unhealthy only when configured but down.
+      # Probes 5432: the tenants render listens on the pooled-URL port
+      # (not 6432 like the main pooler) so per-tenant aliases dial it.
       test:
       - CMD-SHELL
-      - python3 -c "import os,socket,sys; sys.exit(0) if not os.path.exists('/etc/pgcat/pgcat.toml') else (socket.create_connection(('127.0.0.1',6432),5).close())"
+      - python3 -c "import os,socket,sys; sys.exit(0) if not os.path.exists('/etc/pgcat/pgcat.toml') else (socket.create_connection(('127.0.0.1',5432),5).close())"
       interval: 30s
       timeout: 10s
       retries: 3

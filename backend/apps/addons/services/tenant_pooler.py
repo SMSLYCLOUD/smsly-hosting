@@ -118,11 +118,24 @@ def _admin_credentials():
 
 
 def render_tenants_config(pools):
-    """Render a pgcat.toml with one transaction pool per tenant alias."""
+    """Render a pgcat.toml with one transaction pool per tenant alias.
+
+    The [general] block mirrors the keys the pooler binary requires
+    (host/port/pool_size/pool_mode/connect_timeout plus the standard
+    timeouts) — a host-less general is rejected with
+    ``missing field 'host'`` even though the main pooler's own render
+    omits them (verified live 2026-09-21: identical binary, /etc-path
+    mounted config).
+    """
     from apps.addons.services.shared_postgres import SHARED_CONTAINER
     admin_user, admin_pass = _admin_credentials()
     lines = [
         '[general]',
+        'host = "0.0.0.0"',
+        'port = 5432',
+        'pool_size = 15',
+        'pool_mode = "transaction"',
+        'connect_timeout = 5000',
         f'admin_username = "{admin_user}"',
         f'admin_password = "{admin_pass}"',
         'server_lifetime = 86400000',
