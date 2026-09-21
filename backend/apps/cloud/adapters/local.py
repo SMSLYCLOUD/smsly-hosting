@@ -1125,6 +1125,27 @@ class LocalAdapter(BaseCloudAdapter):
                     _parsed = _urlparse(_addon.connection_url)
                     _host = _parsed.hostname or ''
                     _addon_container = f"smsly-addon-{_addon.addon_type.lower()}-{_addon.id}"
+                    if (str(getattr(_addon, 'addon_type', '') or '') == 'POSTGRES'
+                            and str(getattr(_addon, 'provision_mode', '') or '') == 'shared'):
+                        # Logical database — no per-addon container. Resolve
+                        # the shared server (or tenant pooler), mirroring
+                        # container_refresh (kept local to avoid imports).
+                        _addon_container = "smsly-shared-postgres"
+                        try:
+                            from apps.addons.services.shared_postgres import (
+                                SHARED_CONTAINER as _SHARED,
+                            )
+                            _addon_container = _SHARED
+                        except Exception:
+                            pass
+                        if getattr(_addon, 'pooler_routed', False):
+                            try:
+                                from apps.addons.services import tenant_pooler as _pooler
+                                _pname = _pooler.tenants_container_name()
+                                if _pname:
+                                    _addon_container = _pname
+                            except Exception:
+                                pass
                     try:
                         _container = self.docker_client.containers.get(_addon_container)
                         _container.reload()
