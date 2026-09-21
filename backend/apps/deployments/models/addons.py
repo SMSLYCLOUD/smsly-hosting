@@ -84,6 +84,7 @@ class Addon(TimeStampedModel):
         DELETED = 'DELETED', 'Deleted'
         DELETION_PENDING = 'DELETION_PENDING', 'Deletion Pending'
         DELETION_FAILED = 'DELETION_FAILED', 'Deletion Failed'
+        MIGRATING = 'MIGRATING', 'Migrating (shared <-> container)'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
     project = models.ForeignKey(  # type: ignore[var-annotated]

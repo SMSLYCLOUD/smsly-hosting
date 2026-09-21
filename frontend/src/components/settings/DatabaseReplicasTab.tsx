@@ -519,7 +519,7 @@ export function SharedPoolHaCard() {
 }
 
 // ─── Tenant pooler (pgcat-tenants) ─────────────────────────────────────────
-// Optional per-tenant pooling for shared logical DBs. Default off; enabling
+// Pooled routing for shared logical DBs. Default on; enabling
 // only affects NEW shared provisions (existing addons stay direct — sticky).
 
 export function TenantPoolerCard() {
@@ -610,7 +610,7 @@ export function TenantPoolerCard() {
                     )}
                 </CardTitle>
                 <CardDescription>
-                    Per-tenant connection pooling for shared logical databases. Off by default; sticky per addon.
+                    Per-tenant connection pooling for shared logical databases. On by default; sticky per addon.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">

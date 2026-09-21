@@ -64,3 +64,29 @@ class SystemConfigScopingTests(TestCase):
         self.assertIn("REDIS_HOST", data)
         self.assertIn("maintenance_actions", data)
         self.assertIsInstance(data["maintenance_actions"], list)
+
+    def test_admin_get_masks_secrets_and_patch_blank_keeps(self):
+        """Secrets are never echoed: GET returns "" + *_SET flags, and a
+        blank PATCH value keeps the stored secret instead of wiping it."""
+        from apps.deployments.models.core import PlatformConfig
+        admin = User.objects.create_superuser(
+            username="scoping-secrets", password="pw", email="s@e.com"
+        )
+        self.client.force_authenticate(user=admin)
+        config = PlatformConfig.load()
+        config.smtp_password = "s3cret-smtp"
+        config.save(update_fields=["smtp_password"])
+        PlatformConfig.clear_cache()
+
+        data = self.client.get(self.url).data
+        self.assertEqual(data["SMTP_PASSWORD"], "")
+        self.assertTrue(data["SMTP_PASSWORD_SET"])
+        self.assertNotIn("s3cret-smtp", str(data))
+
+        response = self.client.patch(
+            self.url, {"SMTP_PASSWORD": ""}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("s3cret-smtp", str(response.data))
+        PlatformConfig.clear_cache()
+        self.assertEqual(PlatformConfig.load().smtp_password, "s3cret-smtp")

@@ -101,7 +101,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         const targetLabel = target === 'shared' ? 'shared pool' : 'individual container';
         if (!await confirm({
             title: `Migrate to ${targetLabel}?`,
-            message: 'Data is dumped, re-provisioned, restored and verified before the old backend is dropped. The addon stays online, but restart/redeploy the owning service afterwards to pick up the new URL. Continue?',
+            message: 'The owning service is stopped for the migration window (no writes lost), then data is dumped, re-provisioned, restored and verified before the old backend is dropped. REDEPLOY the service afterwards to pick up the new URL (a plain restart keeps the old one). Continue?',
             confirmText: 'Migrate',
         })) return;
         try {

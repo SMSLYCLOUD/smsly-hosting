@@ -10,12 +10,19 @@ rolls back to the original row (mode + URL).
 Alias handling: the app-facing network alias must resolve to exactly one
 backend. Provisioning the target creates a brief duplex (both backends carry
 the alias) which is removed before the switch is complete:
-- shared -> container: strip the alias from the shared server, then drop
-  the old logical DB.
+- shared -> container: strip the alias from the shared server, sync env,
+  re-verify liveness, then drop the old logical DB last (a drop failure
+  is a warning, never a rollback — rolling back after the drop would
+  point the row at a deleted database).
 - container -> shared: remove the old container (which carries the alias).
 
-Callers must restart/redeploy the owning service afterwards: the addon env
-vars in the DB are updated, but running containers keep their old env.
+Write quiesce: the owning service's containers are stopped before the
+dump (post-dump writes would otherwise be lost) and left stopped —
+callers must REDEPLOY afterwards (a plain restart keeps the old env).
+On failure the stopped containers are restarted to restore service.
+
+Concurrency: the row is marked MIGRATING inside an atomic check-and-set;
+a second concurrent migration sees non-ACTIVE and is rejected.
 """
 from __future__ import annotations
 
@@ -106,11 +113,110 @@ def sync_addon_env_vars(addon):
         )
 
 
-def migrate_addon_mode(addon_id, target_mode):
+def _service_container_names(service) -> list[str]:
+    """Running container names owned by the service (label, then name)."""
+    names: list[str] = []
+    res = _run(['docker', 'ps', '--format', '{{.Names}}',
+                '--filter', f'label=smsly.service_id={getattr(service, "id", "")}'],
+               timeout=30)
+    if not res.get('error'):
+        names = [n for n in (res.get('output') or '').split() if n]
+    if not names:
+        svc_name = str(getattr(service, 'name', '') or '').strip()
+        if svc_name:
+            res = _run(['docker', 'ps', '--format', '{{.Names}}',
+                        '--filter', f'name=^{svc_name}$'], timeout=30)
+            if not res.get('error'):
+                names = [n for n in (res.get('output') or '').split() if n]
+    return names
+
+
+def _stop_service_containers(names: list[str]) -> None:
+    """Stop service containers pre-dump (write quiesce). Raises on failure —
+    nothing has been touched yet at that point, so aborting is safe."""
+    for name in names:
+        res = _run(['docker', 'stop', '--timeout', '30', name], timeout=60)
+        if res.get('error'):
+            raise RuntimeError(f"Could not stop service container {name}: {res['error']}")
+
+
+def _start_service_containers(names: list[str]) -> None:
+    """Best-effort restart (rollback path only — never raises)."""
+    for name in names:
+        res = _run(['docker', 'start', name], timeout=60)
+        if res.get('error'):
+            logger.warning("Migration rollback: could not restart %s: %s", name, res['error'])
+
+
+def _verify_target_via_exec(container_name: str, url: str, timeout=30) -> bool:
+    """SELECT 1 via `docker exec psql` inside the backing container.
+
+    The celery worker is not on project-scoped bridges, so addon DNS
+    names never resolve from here — direct psycopg2 dials fail even
+    when the target is healthy. Exec sidesteps Docker DNS entirely.
+    """
+    try:
+        from urllib.parse import urlparse as _urlparse
+        parsed = _urlparse(url or '')
+        user = parsed.username or 'postgres'
+        db = (parsed.path or '').lstrip('/') or 'postgres'
+        cmd = ['docker', 'exec', container_name,
+               'psql', '-U', user, '-d', 'postgres', '-tAc', 'SELECT 1']
+        env = dict(__import__('os').environ)
+        if parsed.password:
+            env['PGPASSWORD'] = parsed.password
+        import subprocess as _sp
+        result = _sp.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        return result.returncode == 0 and '1' in (result.stdout or '')
+    except Exception as exc:
+        logger.debug("Exec verify failed for %s: %s", container_name, exc)
+        return False
+
+
+def _claim_for_migration(addon_id):
+    """Atomically check ACTIVE and mark MIGRATING (concurrency guard).
+
+    A second concurrent migration blocks here, then sees MIGRATING
+    instead of ACTIVE and is rejected — no interleaved dumps.
+    """
+    from django.db import transaction
+
+    from apps.deployments.models.addons import Addon
+    with transaction.atomic():
+        addon = Addon.objects.select_for_update().select_related('service').get(id=addon_id)
+        if addon.status != Addon.Status.ACTIVE:
+            raise ValueError(
+                "Addon must be ACTIVE to migrate "
+                f"(current: {addon.status} — another migration may be running)."
+            )
+        addon.status = Addon.Status.MIGRATING
+        addon.save(update_fields=['status', 'updated_at'])
+        return addon
+
+
+def _release_migration_claim(addon, status=None) -> None:
+    """Best-effort status restore (never raises — rollback path)."""
+    try:
+        from apps.deployments.models.addons import Addon
+        addon.status = status or Addon.Status.ACTIVE
+        addon.save(update_fields=['status', 'updated_at'])
+    except Exception as exc:
+        logger.warning("Could not restore addon %s status: %s",
+                       getattr(addon, 'id', '?'), exc)
+
+
+def migrate_addon_mode(addon_id, target_mode, stop_services=True):
     """Move a POSTGRES addon between shared pool and dedicated container.
 
     Raises on failure (after best-effort rollback to the original row).
     Returns a result dict on success.
+
+    stop_services (default True) stops the owning service's containers
+    before the dump so no writes land after it — without quiesce,
+    post-dump rows are silently lost. Stopped containers are left
+    stopped: the stored connection URL changes, so the service must be
+    REDEPLOYED (a plain restart keeps the old env). On failure the
+    stopped containers are restarted to restore service.
     """
     from apps.addons.services.addon_provisioner import addon_provisioner
     from apps.addons.services.shared_postgres import SHARED_CONTAINER, drop_logical_db
@@ -118,13 +224,13 @@ def migrate_addon_mode(addon_id, target_mode):
 
     if target_mode not in ('shared', 'container'):
         raise ValueError("target_mode must be 'shared' or 'container'.")
-    addon = Addon.objects.select_related('service').get(id=addon_id)
+    addon = _claim_for_migration(addon_id)
     if addon.addon_type != 'POSTGRES':
+        _release_migration_claim(addon)
         raise ValueError("Migration is only supported for POSTGRES addons.")
-    if addon.status != Addon.Status.ACTIVE:
-        raise ValueError("Addon must be ACTIVE to migrate.")
     server = getattr(addon.service, 'server', None)
     if server is not None and not getattr(server, 'is_primary', False):
+        _release_migration_claim(addon)
         raise ValueError("Migration is only supported for local (primary-node) addons.")
     current_shared = str(getattr(addon, 'provision_mode', '') or '') == 'shared'
     if (target_mode == 'shared') == current_shared:
@@ -142,12 +248,26 @@ def migrate_addon_mode(addon_id, target_mode):
     container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
 
     logger.info("Migrating addon %s (%s -> %s)", addon.id, old_mode or 'default', target_mode)
+
+    # 0. Write quiesce: stop the owning service's containers BEFORE the
+    #    dump, otherwise post-dump writes are silently lost. Stopped
+    #    containers stay stopped — the stored URL changes, so only a
+    #    REDEPLOY (not a restart) picks it up. Restored on failure.
+    stopped_containers: list[str] = []
+    if stop_services:
+        stopped_containers = _service_container_names(addon.service)
+        if stopped_containers:
+            logger.info("Migration quiesce: stopping %s", stopped_containers)
+            _stop_service_containers(stopped_containers)
+
     # 1. Dump the source while the row still points at it.
     dump_path = addon_provisioner.create_backup(addon)
     logger.info("Migration dump for addon %s at %s", addon.id, dump_path)
 
     new_container_created = False
+    new_url_set = False
     stripped_nets = []
+    source_cleanup_warning = ''
     try:
         # 2. Flip the row and provision a fresh target (new creds).
         addon.provision_mode = target_mode
@@ -159,15 +279,23 @@ def migrate_addon_mode(addon_id, target_mode):
         addon.connection_url = new_url
         addon.coolify_uuid = _cid
         addon.save(update_fields=['connection_url', 'coolify_uuid', 'updated_at'])
+        new_url_set = True
         if target_mode == 'container':
             new_container_created = True
 
         # 3. Restore the dump into the target.
         if not addon_provisioner.restore_backup(addon, dump_path):
             raise RuntimeError("Restore into the migration target failed.")
-        # 4. Verify before touching the source.
+        # 4. Verify before touching the source: direct dial first, then
+        #    container-exec (the worker is not on project-scoped
+        #    bridges, so addon DNS names never resolve from here).
         if not verify_postgres_url(new_url):
-            raise RuntimeError("Target database failed verification (SELECT 1).")
+            exec_container = (
+                container_name if target_mode == 'container'
+                else SHARED_CONTAINER
+            )
+            if not _verify_target_via_exec(exec_container, new_url):
+                raise RuntimeError("Target database failed verification (SELECT 1).")
 
         # 5. Remove the old backend + its alias.
         if target_mode == 'container':
@@ -178,8 +306,6 @@ def migrate_addon_mode(addon_id, target_mode):
                         raise RuntimeError(
                             f"Could not move alias off shared server ({net}): {res['error']}")
                     stripped_nets.append(net)
-            drop_logical_db(str(old_parts.get('username') or ''),
-                            str(old_parts.get('database') or ''))
         else:
             ok = addon_provisioner.deprovision_dispatch(container_name, addon, container_name)
             if not ok:
@@ -188,22 +314,58 @@ def migrate_addon_mode(addon_id, target_mode):
 
         # 6. Point app env at the new credentials.
         sync_addon_env_vars(addon)
+        # 7. Final liveness re-check on the new backend, then drop the
+        #    source LAST. A drop failure here is a warning (orphaned
+        #    source), never a rollback — rolling back after the drop
+        #    would point the row at a deleted database.
+        if not verify_postgres_url(new_url):
+            exec_container = (
+                container_name if target_mode == 'container'
+                else SHARED_CONTAINER
+            )
+            if not _verify_target_via_exec(exec_container, new_url):
+                raise RuntimeError("Target lost liveness after env sync — aborting before source drop.")
+        if target_mode == 'container':
+            try:
+                drop_logical_db(str(old_parts.get('username') or ''),
+                                str(old_parts.get('database') or ''))
+            except Exception as exc:
+                source_cleanup_warning = f"Old logical DB not dropped: {exc}"
+                logger.warning("Migration source cleanup failed for %s: %s", addon.id, exc)
+        addon.status = Addon.Status.ACTIVE
+        addon.save(update_fields=['status', 'updated_at'])
         logger.info("Migrated addon %s to %s", addon.id, target_mode)
-        return {
+        result = {
             'status': 'ok',
             'target_mode': target_mode,
             'backup_path': dump_path,
-            'message': ('Migration complete. Restart/redeploy the owning service '
-                        'so it picks up the new connection URL.'),
+            'message': ('Migration complete. REDEPLOY the owning service '
+                        'so it picks up the new connection URL (a plain '
+                        'restart keeps the old env).'),
         }
+        if source_cleanup_warning:
+            result['source_cleanup_warning'] = source_cleanup_warning
+        return result
     except Exception:
         # Roll back to the original row; the source is intact unless the
         # alias was already stripped (step 5) — then re-attach it.
+        # Partially-created shared backends are dropped (fresh creds —
+        # nothing else references them).
+        if new_url_set and target_mode == 'shared':
+            try:
+                from urllib.parse import urlparse as _urlparse
+                _parsed = _urlparse(addon.connection_url or '')
+                if _parsed.username and (_parsed.path or '').lstrip('/'):
+                    drop_logical_db(_parsed.username, (_parsed.path or '').lstrip('/'))
+            except Exception as exc:
+                logger.debug("Migration orphan cleanup skipped: %s", exc)
         try:
             addon.provision_mode = old_mode
             addon.connection_url = old_url
             addon.pooler_routed = old_pooled
-            addon.save(update_fields=['provision_mode', 'connection_url', 'pooler_routed', 'updated_at'])
+            addon.status = Addon.Status.ACTIVE
+            addon.save(update_fields=['provision_mode', 'connection_url',
+                                      'pooler_routed', 'status', 'updated_at'])
         except Exception as save_exc:
             logger.error("Migration rollback row-restore failed for %s: %s", addon.id, save_exc)
         for net in stripped_nets:
@@ -221,4 +383,6 @@ def migrate_addon_mode(addon_id, target_mode):
                         logger.error("Migration rollback alias strip failed (%s): %s", net, res['error'])
         if new_container_created:
             _run(['docker', 'rm', '-f', container_name], timeout=90)
+        if stopped_containers:
+            _start_service_containers(stopped_containers)
         raise

@@ -222,7 +222,15 @@ class SystemConfigView(GenericAPIView):
         pc, _ = PlatformConfig.objects.get_or_create(pk=1)
         result = {}
         for api_key, (field, _) in self._PC_FIELDS.items():
-            result[api_key] = getattr(pc, field, None)
+            value = getattr(pc, field, None)
+            if api_key in self._PC_SECRET_FIELDS:
+                # Never echo secrets back (mirrors the domain-config
+                # `*_set` pattern). Readers use KEY_SET; writers send a
+                # fresh value, blank means "keep existing" (see patch).
+                result[api_key] = ""
+                result[api_key + "_SET"] = bool(value)
+            else:
+                result[api_key] = value
         return result
 
     def _get_autoscaling_config(self):
@@ -245,6 +253,12 @@ class SystemConfigView(GenericAPIView):
         for api_key, (field, cast_type) in self._PC_FIELDS.items():
             if api_key in data:
                 raw = data[api_key]
+                if api_key in self._PC_SECRET_FIELDS and not str(raw or "").strip():
+                    # Blank means "keep existing" — a whole-config PUT from
+                    # the UI must never wipe stored secrets with empty
+                    # strings (same convention as domain-config's
+                    # registry_password guard).
+                    continue
                 if cast_type == bool:
                     setattr(pc, field, bool(raw))
                 elif cast_type == int:

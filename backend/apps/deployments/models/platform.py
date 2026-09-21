@@ -378,7 +378,7 @@ class PlatformConfig(models.Model):
         help_text="Superuser password for the shared Postgres addon server "
                   "(auto-generated on first use).")
     tenant_pooling_enabled = models.BooleanField(  # type: ignore[var-annotated]
-        default=False,
+        default=True,
         help_text="Route NEW shared Postgres addons through the pgcat-tenants "
                   "pooler instead of direct connections. Existing shared "
                   "addons keep dialling the server directly (sticky).")

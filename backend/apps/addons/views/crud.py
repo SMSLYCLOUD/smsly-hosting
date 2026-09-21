@@ -493,9 +493,11 @@ class AddonViewSet(viewsets.ModelViewSet):
     def migrate_mode(self, request, pk=None):
         """Queue a shared <-> container migration. Body: {"mode": "shared"|"container"}.
 
-        Only POSTGRES, ACTIVE, local addons. Runs async (dump + provision +
-        restore + verify); the source is dropped only after verification.
-        Restart/redeploy the owning service afterwards to pick up the URL.
+        Only POSTGRES, ACTIVE, local addons. Runs async (quiesce + dump +
+        provision + restore + verify); the source is dropped only after
+        verification. The owning service is stopped for the migration
+        window and must be REDEPLOYED afterwards to pick up the URL
+        (a plain restart keeps the old env).
         """
         instance = self.get_object()
         assert_can_write(self.request.user, instance.service, action='migrate addon')

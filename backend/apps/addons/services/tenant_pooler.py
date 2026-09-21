@@ -6,7 +6,7 @@ optionally sit behind their own pooler (``pgcat-tenants`` container, config
 in the ``pgcat_tenants_config`` volume) so app connection storms pool
 instead of hitting Postgres directly.
 
-Gated by ``PlatformConfig.tenant_pooling_enabled`` (default OFF) with
+Gated by ``PlatformConfig.tenant_pooling_enabled`` (default ON) with
 sticky semantics mirroring ``provision_mode``:
 - Existing shared addons keep dialling the server directly (their alias
   already resolves there) — enabling the gate never breaks them.
@@ -51,7 +51,7 @@ def _run(args, timeout=60):
 def tenant_pooling_enabled():
     try:
         from apps.deployments.models.platform import PlatformConfig
-        return bool(getattr(PlatformConfig.load(), 'tenant_pooling_enabled', False))
+        return bool(getattr(PlatformConfig.load(), 'tenant_pooling_enabled', True))
     except Exception:
         return False
 
