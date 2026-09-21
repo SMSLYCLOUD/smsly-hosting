@@ -886,6 +886,10 @@ class PlatformConfig(models.Model):
         'crowdsec_cf_account_id': ('CROWDSEC_CF_ACCOUNT_ID', ''),
         'crowdsec_cf_action': ('CROWDSEC_CF_ACTION', 'block'),
         'crowdsec_cf_bouncer_key': ('CROWDSEC_CF_BOUNCER_KEY', ''),
+        # NOTE: the installer reads this via get_config_value (see
+        # lib/harden_crowdsec.sh). A missing map entry silently reads
+        # as disabled no matter what the UI toggle holds.
+        'crowdsec_cf_enabled': ('CROWDSEC_CF_ENABLED', ''),
     }
 
     @classmethod
