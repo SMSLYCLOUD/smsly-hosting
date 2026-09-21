@@ -13,4 +13,10 @@ echo "pgcat-tenants: waiting for backend-rendered config at $CONFIG..."
 while [ ! -s "$CONFIG" ]; do sleep 5; done
 
 echo "pgcat-tenants: starting..."
+# NOTE: this pgcat build ignores the CLI config path and always loads
+# /etc/pgcat/pgcat.toml (verified live 2026-09-21: identical bytes pass
+# at /tmp/*.toml yet fail here; empty /etc errors NotFound despite a
+# valid argv file). $CONFIG is passed for documentation/future-proofing
+# only — the file MUST live at this exact path. Do not "fix" this by
+# pointing argv elsewhere; fix the bytes at $CONFIG instead.
 exec pgcat "$CONFIG"

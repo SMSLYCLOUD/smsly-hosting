@@ -51,6 +51,15 @@ class RenderTests(TestCase):
             with self.assertRaises(RuntimeError):
                 tp.render_tenants_config([])
 
+    def test_render_self_validates_required_schema(self):
+        """render_tenants_config must fail closed (not push BadConfig)
+        when the binary-required keys/tables go missing."""
+        with self.assertRaises(RuntimeError):
+            tp.validate_rendered_config('[general]\nport = 5432\n')
+        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
+            content = tp.render_tenants_config([])
+        tp.validate_rendered_config(content)  # must not raise
+
 
 class ListPoolsTests(TestCase):
     def setUp(self):

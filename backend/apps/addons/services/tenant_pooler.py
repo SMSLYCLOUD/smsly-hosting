@@ -117,6 +117,41 @@ def _admin_credentials():
     return user, password
 
 
+# Keys/tables the pooler binary demands (verified live 2026-09-21 by
+# mounting candidates at /etc/pgcat/pgcat.toml — the only path the
+# binary reads; CLI argv is ignored). Missing any of these crash-loops
+# the pooler with a misleading "missing field" error.
+REQUIRED_GENERAL_KEYS = (
+    'host = "0.0.0.0"',
+    'port = 5432',
+    'pool_size = 15',
+    'pool_mode = "transaction"',
+    'connect_timeout = 5000',
+)
+REQUIRED_TABLES = ('[user]', '[shards.0]', '[query_router]')
+
+
+def validate_rendered_config(content: str) -> None:
+    """Fail closed when the render would crash-loop the pooler.
+
+    Raises RuntimeError listing what's missing. Called by
+    render_tenants_config so a bad render never reaches the volume
+    (push_tenants_config treats it as a failed render and leaves the
+    running pooler untouched).
+    """
+    try:
+        import tomllib
+        tomllib.loads(content)
+    except Exception as exc:
+        raise RuntimeError(f"tenants render is not valid TOML: {exc}")
+    missing = [k for k in REQUIRED_GENERAL_KEYS if k not in content]
+    missing += [t for t in REQUIRED_TABLES if t not in content]
+    if missing:
+        raise RuntimeError(
+            "tenants render missing binary-required entries: "
+            + ", ".join(missing))
+
+
 def render_tenants_config(pools):
     """Render a pgcat.toml with one transaction pool per tenant alias.
 
@@ -191,7 +226,9 @@ def render_tenants_config(pools):
         'default_role = "any"',
         '',
     ]
-    return '\n'.join(lines) + '\n'
+    content = '\n'.join(lines) + '\n'
+    validate_rendered_config(content)
+    return content
 
 
 def _read_remote_toml(container):
