@@ -84,6 +84,77 @@ def _attach_service_addons_to_scoped_net(service) -> None:
 
 
 
+
+def _gvisor_remote_extra_hosts(ssh, service, final_env, net) -> str:
+    """``--add-host`` flags so a runsc replica resolves addon DNS names.
+
+    Mirror of the local gVisor compensation (see container_refresh and
+    the local spawn path): gVisor sandboxes cannot reach Docker's
+    embedded DNS proxy, so hostname-based connections fail. Remote
+    replicas normally dodge this because ``rewrite_env_for_mesh``
+    replaces addon URLs with literal mesh IPs — this covers only the
+    names that SURVIVED in the final env (missed rewrites, non-DB
+    addon hosts), resolved against the REMOTE node's own containers.
+
+    Same scoping rule as the local path (own addons + project-level
+    ``*-shared``): never inject other services' private hostnames.
+    Returns "" when nothing resolves. Never raises.
+    """
+    try:
+        from urllib.parse import urlparse as _urlparse
+
+        from django.db.models import Q
+
+        from apps.deployments.models.addons import Addon as _Addon
+
+        values = " ".join(str(v) for v in (final_env or {}).values())
+        if not values:
+            return ""
+        project = getattr(service, 'project', None)
+        qs = _Addon.objects.filter(status='ACTIVE')
+        if getattr(service, 'id', None):
+            clauses = Q(service_id=service.id)
+            if project is not None and getattr(project, 'id', None):
+                clauses |= Q(service__project_id=project.id,
+                             name__endswith='-shared')
+            qs = qs.filter(clauses)
+        flags = []
+        seen = set()
+        for addon in qs:
+            url = (getattr(addon, 'connection_url', '') or '').strip()
+            host = (_urlparse(url).hostname or '').strip() if url else ''
+            if not host or host in seen:
+                continue
+            if host not in values:
+                continue
+            atype = str(getattr(addon, 'addon_type', '') or '').lower()
+            cname = f"smsly-addon-{atype}-{getattr(addon, 'id', '')}"
+            if (atype == 'postgres'
+                    and str(getattr(addon, 'provision_mode', '') or '') == 'shared'):
+                # Logical database — no per-addon container on any node.
+                cname = "smsly-shared-postgres"
+            try:
+                out, _, _ = ssh.exec_command(
+                    "docker inspect " + cname
+                    + " --format '{{json .NetworkSettings.Networks}}'",
+                    raise_on_error=False, timeout=30)
+                import json as _json
+                nets = _json.loads((out or '').strip() or '{}')
+                ip = ((nets.get(net) or {}).get('IPAddress') or '').strip()
+            except Exception:
+                continue
+            if ip and host != ip:
+                flags.append("--add-host " + host + ":" + ip)
+                seen.add(host)
+        if flags:
+            logger.info(
+                "gVisor detected on remote node: injecting %d addon "
+                "hostname->IP mappings: %s", len(flags), flags)
+        return (" " + " ".join(flags)) if flags else ""
+    except Exception as exc:
+        logger.debug("Remote gVisor extra_hosts resolution skipped: %s", exc)
+        return ""
+
 def _detect_remote_runtime(ssh) -> str | None:
     """Detect sandboxed container runtime on a remote node via SSH.
 
@@ -349,8 +420,10 @@ class SpawningService:
         except Exception as e:
             logger.warning("Addon mesh rewrite failed for %s: %s", service.name, e)
         env_args = ""
+        final_env = {}
         for key, val in remote_env.items():
             value = mesh_overrides.get(key, val)
+            final_env[key] = value
             env_args += f" -e {shlex.quote(key)}={shlex.quote(value)}"
 
         # --- mTLS: Add SPIFFE env vars ---
@@ -399,6 +472,13 @@ class SpawningService:
         # Detect sandboxed runtime on the remote node
         runtime_flag = _detect_remote_runtime(ssh)
 
+        # gVisor mirror of the local extra_hosts compensation: resolve
+        # surviving addon DNS names on the remote node itself.
+        extra_hosts_flags = ""
+        if "--runtime runsc" in (runtime_flag or ""):
+            extra_hosts_flags = _gvisor_remote_extra_hosts(
+                ssh, service, final_env, net)
+
         # --- Healthcheck parity (same contract as spawn_local): without
         # explicit flags the remote `docker run` inherits the image-baked
         # check (e.g. :3000) while the app serves another port.
@@ -442,6 +522,7 @@ class SpawningService:
             f"docker run -d --name {shlex.quote(name)} "
             f"{sec_flags}"
             f"{runtime_flag} "
+            f"{extra_hosts_flags} "
             f"{health_flags}"
             f"--restart unless-stopped --network {shlex.quote(net)} "
             f"{mtls_volumes}"
