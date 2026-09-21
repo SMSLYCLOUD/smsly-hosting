@@ -149,14 +149,15 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
         from apps.deployments.models.addons import Addon
         try:
             addon = Addon.objects.get(id=self.addon_id)
-            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
             from apps.addons.services.addon_provisioner import addon_provisioner
+            container_name, notice = addon_provisioner.resolve_log_container(addon)
             logs = addon_provisioner.get_logs(container_name, tail=200)
             return {
                 'logs': logs,
                 'status': addon.status,
                 'addon_type': addon.addon_type,
                 'container_name': container_name,
+                'notice': notice,
             }
         except Addon.DoesNotExist:
             return {'logs': '', 'status': 'unknown', 'addon_type': '', 'container_name': ''}
@@ -170,7 +171,9 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
             addon = await database_sync_to_async(
                 Addon.objects.get
             )(id=self.addon_id)
-            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+            from apps.addons.services.addon_provisioner import addon_provisioner
+            container_name, _ = await database_sync_to_async(
+                addon_provisioner.resolve_log_container)(addon)
         except Exception:
             await self.send(text_data=json.dumps({'error': 'Addon not found'}))
             return

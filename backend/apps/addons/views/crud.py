@@ -675,12 +675,11 @@ class AddonViewSet(viewsets.ModelViewSet):
         GET /api/v1/addons/{id}/logs/?tail=200
         """
         addon = self.get_object()
-        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        from apps.addons.services.addon_provisioner import addon_provisioner
+        container_name, notice = addon_provisioner.resolve_log_container(addon)
 
         tail = int(request.query_params.get('tail', 200))
         tail = min(tail, 2000)
-
-        from apps.addons.services.addon_provisioner import addon_provisioner
 
         try:
             log_text = addon_provisioner.get_logs(container_name, tail=tail)
@@ -690,6 +689,7 @@ class AddonViewSet(viewsets.ModelViewSet):
                 'container_name': container_name,
                 'status': addon.status,
                 'logs': log_text,
+                'notice': notice,
             })
         except Exception as e:
             logger.error("Failed to fetch addon logs for %s: %s", pk, e)

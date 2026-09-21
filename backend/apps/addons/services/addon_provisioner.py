@@ -2329,6 +2329,37 @@ class AddonProvisioner:
 
         return {'running': False, 'status': 'unknown'}
 
+    def resolve_log_container(self, addon) -> tuple[str, str]:
+        """Backing container + notice for an addon's log tab.
+
+        Shared POSTGRES addons are logical databases — there is no
+        per-addon container, so logs come from the shared server (or
+        the tenant pooler when pooler-routed). Returns (name, notice)
+        where notice is '' for dedicated containers.
+        """
+        atype = str(getattr(addon, 'addon_type', '') or '')
+        if (atype == 'POSTGRES'
+                and str(getattr(addon, 'provision_mode', '') or '') == 'shared'):
+            if getattr(addon, 'pooler_routed', False):
+                try:
+                    from .tenant_pooler import tenants_container_name
+                    pname = tenants_container_name()
+                    if pname:
+                        return pname, (
+                            'Logical database behind the tenant pooler — '
+                            'showing pooler logs.')
+                except Exception:
+                    pass
+            try:
+                from .shared_postgres import SHARED_CONTAINER
+            except Exception:
+                SHARED_CONTAINER = 'smsly-shared-postgres'
+            return SHARED_CONTAINER, (
+                'Logical database on the shared Postgres server — '
+                'showing shared-server logs (all tenants interleaved).')
+        cname = f"smsly-addon-{atype.lower()}-{getattr(addon, 'id', '')}"
+        return cname, ''
+
     def get_logs(self, container_name: str, tail: int = 200, follow: bool = False) -> str:
         """Fetch recent logs from an addon container.
 

@@ -33,6 +33,7 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
     const [logs, setLogs] = useState('');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [notice, setNotice] = useState('');
     const [filter, setFilter] = useState<LogFilterType>('ALL');
     const [copied, setCopied] = useState(false);
     const [isLive, setIsLive] = useState(false);
@@ -55,6 +56,7 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
             const data = await addonsApi.getLogs(addonId, compact ? 100 : 200);
             setLogs(data.logs || '');
             setError(data.message || '');
+            if (data.notice) setNotice(data.notice);
         } catch {
             setError('Failed to fetch addon logs.');
         } finally {
@@ -78,6 +80,7 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
                         if (data.logs) setLogs(data.logs);
+                        if (data.notice) setNotice(data.notice);
                     } else if (data.type === 'log') {
                         setLogs(prev => prev + '\n' + (data.log || ''));
                     } else if (data.error) {
@@ -205,6 +208,11 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
 
             {/* Content */}
             <div className="flex-1 p-4 overflow-y-auto text-zinc-300 leading-relaxed custom-scrollbar">
+                {notice && (
+                    <div className="mb-3 rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2 font-sans text-[11px] text-sky-300/90">
+                        {notice}
+                    </div>
+                )}
                 {filteredLines.length > 0 ? (
                     <div className="whitespace-pre-wrap font-mono">
                         {filteredLines.map((line, i) => (
