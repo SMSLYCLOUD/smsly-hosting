@@ -2305,7 +2305,7 @@ export const addonsApi = {
       const res = await api.post(`/addons/${addonId}/toggle_bucket_public/`, { is_public: isPublic });
       return res.data;
     },
-    getLogs: async (addonId: string, tail: number = 200): Promise<{ id: string; addon_type: string; container_name: string; status: string; logs: string; message?: string }> => {
+    getLogs: async (addonId: string, tail: number = 200): Promise<{ id: string; addon_type: string; container_name: string; status: string; logs: string; message?: string; notice?: string }> => {
       const res = await api.get(`/addons/${addonId}/logs/?tail=${tail}`);
       return res.data;
     },
