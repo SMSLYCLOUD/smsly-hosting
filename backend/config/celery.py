@@ -313,6 +313,14 @@ app.conf.beat_schedule = {
         'schedule': 3600.0,
         'options': {'expires': 3600.0},
     },
+    # Recreate runsc containers whose static /etc/hosts addon entries
+    # drifted (backing container re-IP'd). gVisor has no embedded-DNS
+    # fallback, so drift == silent database outage. Capped per run.
+    'reconcile-gvisor-hosts-every-15m': {
+        'task': 'apps.deployments.tasks.reconcile_gvisor_hosts_task',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
     # Orphaned runtime-container sweep: stale green candidates (running
     # OR stopped) not referenced by any deployment, expired rollback
     # backups, and containers for DB-missing services/addons. Before this
