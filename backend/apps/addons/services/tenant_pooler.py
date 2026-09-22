@@ -165,8 +165,9 @@ def render_tenants_config(pools):
     The trailing [user]/[shards]/[query_router] tables mirror the
     binary's shipped example: without them the parser falls through to
     ``missing field 'user'`` / ``missing field 'shards'``. They define
-    only the unused example sharding user (dead 127.0.0.1 backends —
-    nothing authenticates as it); tenant traffic uses [pools.*].
+    only the unused example sharding user against the real shared server
+    (fast auth-fail, never loopback — loopback self-dials the pooler and
+    wedges it); tenant traffic uses [pools.*].
     """
     from apps.addons.services.shared_postgres import SHARED_CONTAINER
     admin_user, admin_pass = _admin_credentials()
@@ -208,9 +209,12 @@ def render_tenants_config(pools):
     # Legacy sharding tables, mirrored from the binary's shipped example.
     # The parser demands top-level [user]/[shards]/[query_router] even
     # when all live traffic uses [pools.*] (verified live 2026-09-21:
-    # without them startup fails with missing-field errors). They
-    # define only an unused example sharding user against loopback
-    # backends — nothing authenticates as it; tenant traffic uses pools.
+    # without them startup fails with missing-field errors). The example
+    # shard MUST NOT point at loopback: that self-dials the pooler's own
+    # 5432 listener, and the 5s-timeout ban storm wedges the whole pooler
+    # (AllServersDown for real pools, incident 2026-09-21). Point it at the
+    # real shared server instead: healthchecks then fail FAST on auth
+    # (unknown dummy role, no such PG user) and stay throttled by ban_time.
     lines += [
         '[user]',
         'name = "tenant_sharding_user"',
@@ -219,7 +223,7 @@ def render_tenants_config(pools):
         '[shards]',
         '',
         '[shards.0]',
-        'servers = [["127.0.0.1", 5432, "primary"]]',
+        f'servers = [["{SHARED_CONTAINER}", 5432, "primary"]]',
         'database = "postgres"',
         '',
         '[query_router]',
