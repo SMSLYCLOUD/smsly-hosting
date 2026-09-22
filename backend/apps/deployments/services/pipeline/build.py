@@ -11,6 +11,7 @@ from django.conf import settings
 from django.utils import timezone
 from apps.deployments.services.builders import cleanup_stuck_buildkit as _cleanup_stuck_buildkit
 from apps.deployments.services.builders import is_buildkit_cache_error, prune_buildkit_cache
+from apps.deployments.services.builders import _platform_build_limits as _build_limits
 
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.deployments.models import PlatformConfig
@@ -59,6 +60,57 @@ _BUILDX_USABLE: bool | None = None
 def _use_buildx() -> bool:
     """Build engine selector. Env SMSLY_DOCKER_BUILDER=classic opts out."""
     return os.environ.get("SMSLY_DOCKER_BUILDER", "buildx").strip().lower() != "classic"
+
+
+def _ephemeral_builder_enabled() -> bool:
+    """Ephemeral per-build docker-container builders (real containment).
+
+    Off by default; opt in with SMSLY_BUILDER_EPHEMERAL=1. When on, each
+    build gets a throwaway builder whose buildkitd container carries the
+    UI-tuned memory/CPU caps — unlike the systemd-run scope, which only
+    constrains the CLI wrapper on the docker driver. Registry cache
+    (--cache-from) keeps throwaway builders warm.
+    """
+    return os.environ.get("SMSLY_BUILDER_EPHEMERAL", "").strip().lower() in (
+        "1", "true", "yes")
+
+
+def _create_ephemeral_builder(name: str, mem_mb: int, cpu_pct: int) -> str | None:
+    """Create a docker-container builder with resource caps. Name or None."""
+    try:
+        created = subprocess.run(
+            ["docker", "buildx", "create", "--driver", "docker-container",
+             "--name", name],
+            capture_output=True, text=True, timeout=60,
+        )
+        if created.returncode != 0:
+            logger.warning("Ephemeral builder create failed: %s",
+                           (created.stderr or "").strip()[:200])
+            return None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("Ephemeral builder create failed: %s", exc)
+        return None
+    try:
+        subprocess.run(
+            ["docker", "update", "--memory", f"{mem_mb}m",
+             "--cpus", f"{cpu_pct / 100:g}",
+             f"buildx_buildkit_{name}0"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug("Ephemeral builder cap apply failed (build proceeds): %s", exc)
+    return name
+
+
+def _remove_ephemeral_builder(name: str) -> None:
+    """Best-effort removal. Never raises."""
+    try:
+        subprocess.run(
+            ["docker", "buildx", "rm", "-f", name],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
 
 
 def _is_buildx_infra_error(text: str) -> bool:
@@ -954,11 +1006,33 @@ class BuildMixin:
 
         secret_ids, secret_files = _stage_secret_files(secrets)
         try:
+            mem_mb, cpu_pct, timeout_s = _build_limits()
+        except Exception:
+            mem_mb, cpu_pct, timeout_s = 10240, 400, DOCKER_BUILD_TIMEOUT
+        # Ephemeral builder (opt-in): real per-build containment, since
+        # the systemd scope below only constrains the CLI wrapper on
+        # the docker driver. Container driver loads via output type.
+        builder_name = None
+        if _ephemeral_builder_enabled():
+            dep_id = str(getattr(getattr(self, 'deployment', None), 'id', '') or 'x')
+            builder_name = _create_ephemeral_builder(
+                f"smsly-eph-{dep_id[:8]}", mem_mb, cpu_pct)
+            if builder_name is None:
+                append_log(
+                    self.deployment,
+                    "Ephemeral builder unavailable — falling back to default driver.\n",
+                )
+        try:
+            # Container-driver (ephemeral) builders cannot --load; output
+            # to the daemon instead. Default driver keeps --load.
+            load_flag = ["--output", "type=docker"] if builder_name else ["--load"]
             cmd = [
                 "docker", "buildx", "build",
-                "--load", "--progress=plain",
+                *load_flag, "--progress=plain",
                 "-t", tag, "-f", dockerfile_rel,
             ]
+            if builder_name:
+                cmd += ["--builder", builder_name]
             for k, v in (buildargs or {}).items():
                 cmd += ["--build-arg", f"{k}={v}"]
             for sid, spath in zip(secret_ids, secret_files):
@@ -978,10 +1052,6 @@ class BuildMixin:
             for c in cache_from or []:
                 cmd += ["--cache-from", f"type=registry,ref={c}"]
             cmd += ["--cache-to", "type=inline", context_dir]
-            try:
-                mem_mb, cpu_pct, timeout_s = _build_limits()
-            except Exception:
-                mem_mb, cpu_pct, timeout_s = 10240, 400, DOCKER_BUILD_TIMEOUT
             try:
                 probe = subprocess.run(
                     ["systemd-run", "--version"],
@@ -1015,6 +1085,8 @@ class BuildMixin:
                 raise BuildError(f"Docker build failed: {redacted[-500:]}")
         finally:
             _cleanup_secret_files(secret_files)
+            if builder_name:
+                _remove_ephemeral_builder(builder_name)
 
     def _build_via_docker_py(
         self,
