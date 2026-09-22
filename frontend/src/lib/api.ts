@@ -2562,6 +2562,7 @@ export interface AutoscalerStatus {
   uptime_seconds: number;
   check_interval: number;
   last_check_at: string | null;
+  host?: { cpu_percent: number; cpu_count: number };
   budget: AutoscalerBudget;
   services: Record<string, AutoscalerService>;
   infra?: AutoscalerInfraStatus;

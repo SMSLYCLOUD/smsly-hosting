@@ -611,11 +611,21 @@ def _run_autoscaler_check():
     # tasks_autoscale.analyze_all_services_task (see trigger below).
     total_used = sum(s["memory_mb"] for s in services.values())
     app_budget = total_mem - infra_reserve
+    try:
+        import psutil
+        host_cpu_percent = float(psutil.cpu_percent(interval=None) or 0.0)
+        host_cpu_count = int(psutil.cpu_count() or 0)
+    except Exception:
+        host_cpu_percent, host_cpu_count = 0.0, 0
     status_data = {
         "status": "active",
         "uptime_seconds": round(time.time() - START_TIME),
         "check_interval": config.get('check_interval', DEFAULT_CHECK_INTERVAL),
         "last_check_at": timezone.now().isoformat(),
+        "host": {
+            "cpu_percent": round(host_cpu_percent, 1),
+            "cpu_count": host_cpu_count,
+        },
         "budget": {
             "total_system_mb": total_mem,
             "infra_reserve_mb": infra_reserve,
@@ -710,6 +720,7 @@ def _degraded_status() -> dict:
         "uptime_seconds": round(time.time() - START_TIME),
         "check_interval": config.get('check_interval', DEFAULT_CHECK_INTERVAL),
         "last_check_at": None,
+        "host": {"cpu_percent": 0.0, "cpu_count": 0},
         "budget": {
             "total_system_mb": total_mem,
             "infra_reserve_mb": infra_reserve,

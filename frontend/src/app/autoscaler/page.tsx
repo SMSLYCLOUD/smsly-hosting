@@ -353,7 +353,9 @@ export default function AutoscalerPage() {
 
   // Derived metrics
   const usedPercent = status ? (status.budget.used_mb / status.budget.total_system_mb) * 100 : 0;
+  const cpuPercent = status?.host?.cpu_percent ?? 0;
   const budgetColor = usedPercent > 80 ? '#ef4444' : usedPercent > 60 ? '#f59e0b' : '#10b981';
+  const cpuColor = cpuPercent > 85 ? '#ef4444' : cpuPercent > 60 ? '#f59e0b' : '#10b981';
 
   // Group services by app
   const groupedServices: Record<string, [string, AutoscalerService][]> = {};
@@ -481,7 +483,7 @@ export default function AutoscalerPage() {
         </Card>
 
         {/* ── Hero: Memory Budget Ring ─────────────────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <Card className="col-span-1 border-border/50 bg-gradient-to-b from-card to-card/50">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-widest flex items-center gap-2">
@@ -523,6 +525,51 @@ export default function AutoscalerPage() {
                 <div className="flex items-center gap-2">
                    <div className="w-2 h-2 rounded-full bg-emerald-500" />
                    Free: {((status?.budget.free_mb || 0) / 1024).toFixed(1)}GB
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ── Hero: Host CPU Ring ──────────────────────────────────────────── */}
+          <Card className="col-span-1 border-border/50 bg-gradient-to-b from-card to-card/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-widest flex items-center gap-2">
+                <Cpu size={14} /> Host CPU Load
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col items-center justify-center py-6">
+              <div className="relative">
+                <svg width="220" height="220" className="transform -rotate-90">
+                  {/* Background Track */}
+                  <circle cx="110" cy="110" r="90" fill="none" stroke="currentColor" strokeWidth="12" className="text-muted/10" />
+                  {/* Value Arc */}
+                  <circle
+                    cx="110" cy="110" r="90"
+                    fill="none" stroke={cpuColor} strokeWidth="12"
+                    strokeDasharray={2 * Math.PI * 90}
+                    strokeDashoffset={(2 * Math.PI * 90) * (1 - Math.min(cpuPercent, 100) / 100)}
+                    strokeLinecap="round"
+                    className="transition-all duration-1000 ease-out"
+                  />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-3xl font-bold tracking-tight">
+                    {status?.host ? `${cpuPercent.toFixed(0)}%` : '—'}
+                  </span>
+                  <span className="text-xs text-muted-foreground mt-1">
+                    {status?.host?.cpu_count ? `of ${status.host.cpu_count} cores` : 'host cpu'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-6 mt-6 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2">
+                   <div className="w-2 h-2 rounded-full bg-slate-500" />
+                   Cores: {status?.host?.cpu_count ?? '—'}
+                </div>
+                <div className="flex items-center gap-2">
+                   <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                   Idle: {status?.host ? `${Math.max(0, 100 - cpuPercent).toFixed(0)}%` : '—'}
                 </div>
               </div>
             </CardContent>
