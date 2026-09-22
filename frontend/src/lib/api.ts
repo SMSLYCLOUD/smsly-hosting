@@ -369,6 +369,8 @@ export interface Service {
   health_check_interval?: number;
   health_check_timeout?: number;
   health_check_retries?: number;
+  readiness_path?: string;
+  smoke_command?: string;
   // Project grouping
   project?: string | null;
   server?: string | null;

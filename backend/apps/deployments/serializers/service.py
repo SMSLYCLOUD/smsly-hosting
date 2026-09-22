@@ -519,6 +519,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'health_check_path', 'health_check_port',
             'health_check_interval', 'health_check_timeout',
             'health_check_retries', 'auto_restart', 'health_status', 'ha_mode',
+            'readiness_path', 'smoke_command',
             'external_ha_endpoint', 'external_ha_username', 'external_ha_database',
             # write-only — declared above, must be in fields or DRF asserts
             # at request time (every service detail GET 500s otherwise).

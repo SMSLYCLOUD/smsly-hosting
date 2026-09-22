@@ -456,6 +456,15 @@ class Service(TimeStampedModel):
         default=300, help_text="Seconds to wait for health check response")
     health_check_retries = models.IntegerField(  # type: ignore[var-annotated]
         default=90, help_text="Consecutive failures before marking unhealthy")
+    readiness_path = models.CharField(  # type: ignore[var-annotated]
+        max_length=255, default='', blank=True,
+        help_text="Dependency-aware readiness path (e.g. /ready). Probed on green "
+                  "before promotion and required in ongoing checks. Blank = liveness only.")
+    smoke_command = models.CharField(  # type: ignore[var-annotated]
+        max_length=500, default='', blank=True,
+        help_text="Optional post-boot smoke command run inside green via docker exec "
+                  "(e.g. python -c \"import app.main\"). Non-zero exit blocks promotion. "
+                  "Blank = off.")
     auto_restart = models.BooleanField(  # type: ignore[var-annotated]
         default=True, help_text="Automatically restart unhealthy containers")
     health_webhook_token = models.CharField(  # type: ignore[var-annotated]

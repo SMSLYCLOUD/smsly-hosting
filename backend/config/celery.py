@@ -263,6 +263,14 @@ app.conf.beat_schedule = {
         'schedule': 30.0,
         'options': {'expires': 30.0},
     },
+    # Log-error watchdog: flag services whose logs bleed errors while
+    # liveness passes (import errors swallowed at boot, skipped pools).
+    # Alert-only: never restarts or rolls back on log noise.
+    'log-error-watchdog-every-5m': {
+        'task': 'apps.core.services.log_watchdog.watch_log_errors_task',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
     # Check autoscale thresholds every 30 seconds
     'check-autoscale-every-30s': {
         'task': 'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task',

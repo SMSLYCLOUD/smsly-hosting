@@ -156,6 +156,37 @@ def _normalize_path(path: str) -> str:
     return path
 
 
+def _check_readiness(service) -> tuple[bool, str]:
+    """Strict readiness probe after liveness passes (seam for tests).
+
+    Returns ``(True, '')`` when no ``readiness_path`` is configured.
+    Otherwise a single request against the container-local address; any
+    non-2xx/3xx or transport error is a readiness failure. Retries and
+    flapping policy belong to the caller (``_handle_failure`` counts).
+    """
+    import requests
+
+    raw = str(getattr(service, 'readiness_path', '') or '').strip()
+    if not raw:
+        return True, ''
+    path = _normalize_path(raw)
+    try:
+        port = int(getattr(service, 'internal_port', 0) or 0) or 8000
+    except (TypeError, ValueError):
+        port = 8000
+    name = str(getattr(service, 'name', '') or '').strip()
+    if not name:
+        return False, 'readiness misconfigured: no service name'
+    url = f"http://{name}:{port}{path}"
+    try:
+        response = requests.get(url, timeout=10, allow_redirects=False)
+        if 200 <= response.status_code < 400:
+            return True, ''
+        return False, f"{url} readiness HTTP {response.status_code}"
+    except Exception as exc:
+        return False, f"{url} readiness failed: {exc}"
+
+
 def _candidate_health_paths(service) -> list[str]:
     paths = []
     seen = set()
@@ -644,6 +675,13 @@ def _check_service_health(service: object, Deployment: object) -> None:
                 allow_redirects=False,
             )
             if 200 <= response.status_code < 400:
+                # Liveness passed — now require readiness when configured.
+                # A live-but-degraded container (import errors swallowed at
+                # boot, skipped pools) must not read healthy.
+                ready, ready_reason = _check_readiness(service)
+                if not ready:
+                    failure_reason = ready_reason
+                    break
                 cache.delete(_failure_key(service_key))
                 restart_state = cache.get(_restart_key(service_key))
                 if restart_state:

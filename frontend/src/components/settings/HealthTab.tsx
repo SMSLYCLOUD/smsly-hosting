@@ -32,6 +32,8 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
     const [interval, setInterval_] = useState(30);
     const [timeout, setTimeout_] = useState(5);
     const [retries, setRetries] = useState(3);
+    const [readinessPath, setReadinessPath] = useState('');
+    const [smokeCommand, setSmokeCommand] = useState('');
     const [autoRestart, setAutoRestart] = useState(true);
     const [autoRollbackEnabled, setAutoRollbackEnabled] = useState(true);
     const [healthStatus, setHealthStatus] = useState('unknown');
@@ -53,6 +55,8 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
         setInterval_(s.health_check_interval ?? 30);
         setTimeout_(s.health_check_timeout ?? 5);
         setRetries(s.health_check_retries ?? 3);
+        setReadinessPath(s.readiness_path ?? '');
+        setSmokeCommand(s.smoke_command ?? '');
         setAutoRestart(s.auto_restart ?? true);
         setAutoRollbackEnabled(s.auto_rollback_enabled ?? true);
         setHealthStatus(s.health_status ?? 'unknown');
@@ -100,6 +104,8 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                 health_check_interval: interval,
                 health_check_timeout: timeout,
                 health_check_retries: retries,
+                readiness_path: readinessPath,
+                smoke_command: smokeCommand,
                 auto_restart: autoRestart,
                 auto_rollback_enabled: autoRollbackEnabled,
             } as any);
@@ -254,6 +260,33 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                             />
                             <p className="text-xs text-muted-foreground mt-1">Failures before unhealthy</p>
                         </div>
+                    </div>
+
+                    {/* Readiness + Smoke (promotion gates + strict ongoing checks) */}
+                    <div>
+                        <label className="text-sm font-medium mb-2 block">Readiness Path (optional)</label>
+                        <Input
+                            value={readinessPath}
+                            onChange={e => { markDirty(); setReadinessPath(e.target.value); }}
+                            placeholder="/ready"
+                            className="font-mono max-w-md"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                            Dependency-aware endpoint required on green before promotion and in ongoing checks. Blank = liveness only.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="text-sm font-medium mb-2 block">Smoke Command (optional)</label>
+                        <Input
+                            value={smokeCommand}
+                            onChange={e => { markDirty(); setSmokeCommand(e.target.value); }}
+                            placeholder='python -c "import app.main"'
+                            className="font-mono max-w-md"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                            Run inside green via docker exec at promotion time. Non-zero exit blocks promotion.
+                        </p>
                     </div>
 
                     {/* Auto-Restart Toggle */}

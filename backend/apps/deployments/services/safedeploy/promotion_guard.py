@@ -100,6 +100,78 @@ def _green_container_state(green_id: str) -> tuple[str, str]:
     return status, health
 
 
+def _green_base_url(green_id: str, service) -> str | None:
+    """Direct base URL for the green container via Docker DNS (seam).
+
+    Uses the container's own name (resolvable on shared bridges) plus the
+    service's internal port. Returns None when the name/port can't be
+    determined — callers treat that as "cannot probe", never as failure.
+    """
+    try:
+        import docker
+
+        green = docker.from_env().containers.get(green_id)
+        name = str(getattr(green, 'name', '') or '').strip().lstrip('/')
+        port = int(getattr(service, 'internal_port', 0) or 0) or 8000
+        if not name:
+            return None
+        return f"http://{name}:{port}"
+    except Exception as exc:
+        logger.debug("Green base URL lookup failed: %s", exc)
+        return None
+
+
+def _probe_green_readiness(base_url: str, service) -> tuple[bool, str]:
+    """Probe the service's readiness path on green (seam).
+
+    Returns ``(ok, detail)``. No readiness_path configured means
+    "not applicable" → ``(True, 'readiness not configured')``.
+    """
+    path = str(getattr(service, 'readiness_path', '') or '').strip()
+    if not path:
+        return True, 'readiness not configured'
+    if not path.startswith('/'):
+        path = f'/{path}'
+    try:
+        from apps.deployments.services.safedeploy.health_checks import (
+            perform_health_check,
+        )
+        ok, _ = perform_health_check(
+            f"{base_url.rstrip('/')}{path}",
+            service=service,
+            max_retries=3,
+            retry_delay=2.0,
+        )
+        return (True, 'ready') if ok else (False, f'readiness {path} failed')
+    except Exception as exc:
+        return False, f'readiness probe error: {exc}'
+
+
+def _run_green_smoke(green_id: str, service) -> tuple[bool, str]:
+    """Run the service's smoke_command inside green via docker exec (seam).
+
+    Returns ``(ok, detail)``. Blank command means "not applicable".
+    Truncated output is included in the detail for blocker messages.
+    """
+    cmd = str(getattr(service, 'smoke_command', '') or '').strip()
+    if not cmd:
+        return True, 'smoke not configured'
+    try:
+        import subprocess
+
+        proc = subprocess.run(
+            ['docker', 'exec', green_id, 'sh', '-c', cmd],
+            capture_output=True, text=True, timeout=60,
+        )
+        out = ((proc.stdout or '') + (proc.stderr or '')).strip()[-500:]
+        if proc.returncode == 0:
+            return True, 'smoke passed'
+        return False, f'smoke exit {proc.returncode}: {out}' if out else (
+            f'smoke exit {proc.returncode}')
+    except Exception as exc:
+        return False, f'smoke exec error: {exc}'
+
+
 def _validation_for_deployment(deployment):
     """Commit-scoped MigrationValidation for this deployment (seam)."""
     from apps.deployments.services.safedeploy.canary_guard import (
@@ -205,6 +277,38 @@ def check_promotion_readiness(
                     blockers.append(msg)
                 else:
                     warnings.append(msg + " (proceeding: require_green_healthy is off)")
+            else:
+                if not health:
+                    warnings.append(
+                        "Green has no Docker healthcheck defined — liveness "
+                        "alone gates promotion unless readiness/smoke is set."
+                    )
+                # 3b. Readiness + smoke probes (local targets only).
+                # Configured-but-failing is a blocker under the same policy
+                # as container health; unconfigured probes always pass.
+                base_url = _green_base_url(green_id, service)
+                if base_url is None:
+                    warnings.append(
+                        "Could not resolve green container address — "
+                        "readiness/smoke probes skipped."
+                    )
+                else:
+                    ready_ok, ready_detail = _probe_green_readiness(
+                        base_url, service)
+                    if not ready_ok:
+                        msg = f"Green readiness failed: {ready_detail}."
+                        if policy['require_green_healthy']:
+                            blockers.append(msg)
+                        else:
+                            warnings.append(msg + " (proceeding: require_green_healthy is off)")
+                    smoke_ok, smoke_detail = _run_green_smoke(
+                        green_id, service)
+                    if not smoke_ok:
+                        msg = f"Green smoke command failed: {smoke_detail}."
+                        if policy['require_green_healthy']:
+                            blockers.append(msg)
+                        else:
+                            warnings.append(msg + " (proceeding: require_green_healthy is off)")
         except Exception as exc:
             warnings.append(f"Could not verify green container health: {exc}")
 
