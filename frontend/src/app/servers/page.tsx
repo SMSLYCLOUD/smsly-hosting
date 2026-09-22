@@ -1764,18 +1764,23 @@ function ServerCard({
                 </div>
             )}
 
-pick            {!isProvisioning && server.node_type === 'media' && runtime?.services && (
+            {/* Media runtime is visible without opening the details drawer. */}
+            {!isProvisioning && server.node_type === 'media' && runtime?.services && (
                 <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3">
                     <div className="flex items-center justify-between mb-2">
                         <span className="text-[11px] font-bold uppercase tracking-wider text-cyan-400">
                             Media services
                         </span>
-pick                    </div>
+                        <span className="text-[10px] text-muted-foreground">live heartbeat</span>
+                    </div>
                     <div className="grid grid-cols-2 gap-1.5">
                         {Object.entries(runtime.services).map(([service, state]) => {
                             const running = state === 'running';
                             return (
-pick                                </div>
+                                <div key={service} className="flex items-center justify-between gap-2 rounded-md bg-background/60 px-2 py-1.5 text-[10px]">
+                                    <span className="truncate font-mono" title={service}>{service}</span>
+                                    <span className={running ? 'text-emerald-400' : 'text-amber-400'}>{running ? 'running' : state}</span>
+                                </div>
                             );
                         })}
                     </div>
