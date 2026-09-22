@@ -147,6 +147,10 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
     and go straight to pull + run (build-agent optimization).
     """
     from apps.deployments.services.server_guard import ServerGuard
+    from apps.deployments.tasks.deploy.helpers import _abort_if_cancelled
+
+    if _abort_if_cancelled(deployment):
+        return
 
     service = deployment.service
 

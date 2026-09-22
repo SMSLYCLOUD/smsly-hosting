@@ -53,6 +53,28 @@ def is_build_corruption_error(error_text: str) -> bool:
     return bool(_CORRUPTION_RE.search(str(error_text or "")))
 
 
+def _other_builds_in_flight(exclude_deployment_id: str = "") -> int | None:
+    """Count deployments currently running `docker build`, excluding one id.
+
+    A full builder prune + daemon restart underneath a live build deletes
+    the image it is resolving ("No such image", 2026-09-22) — worse than
+    the corruption being fixed. Automatic recovery paths must yield when
+    this is non-zero; the explicit maintenance click bypasses (it calls
+    perform_docker_recovery directly). Returns None when the check itself
+    fails (fail-closed: callers skip).
+    """
+    try:
+        from apps.deployments.models import Deployment
+
+        qs = Deployment.objects.filter(status=Deployment.Status.BUILDING)
+        if exclude_deployment_id:
+            qs = qs.exclude(id=exclude_deployment_id)
+        return qs.count()
+    except Exception as exc:
+        logger.warning("Inflight-build check failed, deferring recovery: %s", exc)
+        return None
+
+
 @shared_task(
     bind=True,
     name="apps.deployments.tasks.recover_corrupt_docker_state",
@@ -80,6 +102,18 @@ def recover_corrupt_docker_state(self, deployment_id: str = ""):
                 "Corruption recovery skipped (cooldown: %.0fs since last)", elapsed
             )
             return {"status": "skipped", "reason": "cooldown"}
+
+    # Yield to live builds: pruning/restarting underneath them deletes the
+    # image they are resolving. The failed build that triggered this is
+    # already terminal, so excluding it is exact — anything left building
+    # is a sibling that must not be disturbed.
+    inflight = _other_builds_in_flight(exclude_deployment_id=deployment_id)
+    if inflight is None or inflight > 0:
+        logger.warning(
+            "Corruption recovery deferred (inflight_builds=%s)", inflight
+        )
+        return {"status": "skipped", "reason": "inflight_builds",
+                "inflight": inflight or 0}
 
     results = perform_docker_recovery(deployment_id=deployment_id)
 
@@ -194,6 +228,17 @@ def scan_recent_builds_for_corruption(self):
                 continue
         if matched is None:
             return {"status": "ok", "matched": 0}
+        # Same yield as the recovery task itself: never dispatch a full
+        # prune/restart while a sibling build is live (defense in depth —
+        # recover_corrupt_docker_state re-checks at execution time).
+        inflight = _other_builds_in_flight()
+        if inflight is None or inflight > 0:
+            logger.warning(
+                "Corruption scan matched deployment %s but deferred "
+                "(inflight_builds=%s)", matched.id, inflight,
+            )
+            return {"status": "skipped", "reason": "inflight_builds",
+                    "matched": 1, "deployment_id": str(matched.id)}
         try:
             recover_corrupt_docker_state.delay(deployment_id=str(matched.id))
         except Exception as exc:

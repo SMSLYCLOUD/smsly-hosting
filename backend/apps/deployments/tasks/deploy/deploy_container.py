@@ -118,7 +118,10 @@ def _cancel_previous_staged(deployment: Deployment) -> None:
 def _deploy_container(deployment: Deployment, provider: CloudProvider, image_name: str,
                       staged_only: bool = False) -> None:
     from ..deployment.tasks_deploy import _post_deploy_monitor
+    from .helpers import _abort_if_cancelled
     # pylint: disable=too-many-locals, R0914
+    if _abort_if_cancelled(deployment):
+        return
     update_stage(deployment, 'Deploy', 'running')
     start = timezone.now()
 

@@ -8,6 +8,42 @@ logger = logging.getLogger(__name__)
 
 from .env import _env_bool, _env_int  # noqa: F401 — needed by build_compose, health
 
+
+def _abort_if_cancelled(deployment) -> bool:
+    """Refresh the row and stop quietly when the user cancelled mid-flight.
+
+    Cancel is DB-status-only: nothing preempts a worker blocked in a long
+    `docker build`, so a zombie can emerge from the build phase holding a
+    freshly built image. Without this gate it would DEPLOY cancelled code
+    — and, pre fleet-lock fix, it raced the slot thief on the same tag
+    ("No such image", 2026-09-22). Call at every build→deploy handoff
+    (covers smart + resume paths via _deploy_container and
+    _handle_remote_deployment). Returns True when the caller must stop.
+    Never raises.
+    """
+    try:
+        from apps.deployments.models import Deployment
+        from apps.deployments.utils import append_log, broadcast_status
+
+        try:
+            deployment.refresh_from_db()
+        except Exception:
+            return False
+        if deployment.status == Deployment.Status.CANCELLED:
+            append_log(
+                deployment,
+                "\n⏹ Deployment was cancelled during the build — "
+                "discarding the built image, nothing deployed.\n",
+            )
+            try:
+                broadcast_status(deployment)
+            except Exception:
+                pass
+            return True
+        return False
+    except Exception:
+        return False
+
 _LAZY_REEXPORTS = {
     '_deploy_container': '.deploy_container',
     '_deployment_effective_server': '.provider',

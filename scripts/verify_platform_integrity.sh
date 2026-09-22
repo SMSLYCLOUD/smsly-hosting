@@ -495,14 +495,18 @@ ensure_memory_tuning() {
 }
 
 # ── 13. Weekly unused-image prune (disk hygiene) ─────────────────────
-# `docker image prune -a` removes only images no container references,
-# so running services are safe by construction. The 7d `until` filter
-# keeps a week of rollback/rebuild cache locally; anything older
-# re-pulls on demand from registry:5000 (rollback and the build-skip
-# check both pull on miss). Daemon images can't be managed from backend
-# tasks (socket-proxy IMAGES=0 denies image endpoints), so this
-# host-side sweep is the only automatic path — the manual
-# `deployments/prune/` API stays for on-demand deep cleans.
+# Default is DANGLING-ONLY (`docker image prune -f`): untagged build
+# leftovers are the main disk hog and a dangling-only pass can never
+# yank a tagged base image out from under an in-flight build.
+# The old `-a --filter until=` sweep was creation-based: any unreferenced
+# image created >7d ago was deleted — including the base image an
+# 11-minute build was still pulling from ("No such image", 2026-09-22).
+# Daemon images can't be managed from backend tasks (socket-proxy
+# IMAGES=0 denies image endpoints), so this host-side sweep is the only
+# automatic path — the manual `deployments/prune/` API stays for
+# on-demand deep cleans. Full `-a` sweep remains available to the
+# operator via SMSLY_IMAGE_PRUNE_DEEP=1 (still marker-gated, still
+# until-filtered; run it when no build is in flight).
 # Marker-gated: the hourly script prunes at most weekly. Override the
 # cadence with SMSLY_IMAGE_PRUNE_DAYS (0 disables).
 ensure_weekly_image_prune() {
@@ -520,10 +524,17 @@ ensure_weekly_image_prune() {
         return 0
     fi
     local out
-    out=$(timeout 600 docker image prune -a -f --filter "until=$((days * 24))h" 2>&1) || {
-        log "ALERT: weekly image prune failed (exit $?)"
-        return 0
-    }
+    if [ "${SMSLY_IMAGE_PRUNE_DEEP:-0}" = "1" ]; then
+        out=$(timeout 600 docker image prune -a -f --filter "until=$((days * 24))h" 2>&1) || {
+            log "ALERT: weekly deep image prune failed (exit $?)"
+            return 0
+        }
+    else
+        out=$(timeout 600 docker image prune -f 2>&1) || {
+            log "ALERT: weekly dangling image prune failed (exit $?)"
+            return 0
+        }
+    fi
     touch "$marker" 2>/dev/null || true
     local reclaimed
     reclaimed=$(printf '%s' "$out" | grep -a -i "reclaimed" | tail -n 1)
