@@ -35,6 +35,18 @@
 
 
 set -e
+# Ensure a working docker-driver buildx builder exists and is selected.
+# The image must never depend on ambient builder state: a stale/inactive
+# `default` (e.g. a docker-container builder left behind by debugging)
+# silently disables BuildKit for every platform build (slow classic
+# fallback) and trips the status inventory. Idempotent; never fails boot.
+if command -v docker >/dev/null 2>&1; then
+    if ! docker buildx inspect smsly-docker >/dev/null 2>&1; then
+        docker buildx create --driver docker --name smsly-docker >/dev/null 2>&1 || true
+    fi
+    docker buildx use smsly-docker >/dev/null 2>&1 || true
+fi
+
 
 
 
