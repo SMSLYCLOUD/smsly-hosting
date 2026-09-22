@@ -288,3 +288,41 @@ class FleetLockOwnerStaleTests(TestCase):
         is_stale, _ = _fleet_lock_owner_is_stale(
             str(owner.id), self.HB_KEY, self.STALE_SECONDS)
         self.assertTrue(is_stale)
+
+
+class FleetLockDegradedCacheTests(TestCase):
+    """Degraded (LocMem-fallback) cache must fail closed, never build
+    concurrently behind a non-excluding lock."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="degraded-user", password="password123")
+        self.provider = CloudProvider.objects.create(
+            name="degraded-provider",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+        self.service = Service.objects.create(
+            name="degraded-svc", owner=self.user, provider=self.provider)
+        from apps.deployments.models.core import PlatformConfig
+        config = PlatformConfig.load()
+        config.max_concurrent_builds = 1
+        config.save(update_fields=["max_concurrent_builds"])
+
+    def test_degraded_cache_waits_then_times_out_without_building(self):
+        import os
+        from unittest.mock import patch as _patch
+        from django.core.cache import cache
+        deployment = Deployment.objects.create(
+            service=self.service, status=Deployment.Status.BUILDING,
+            commit_hash="abc1234")
+        with _patch.dict(os.environ,
+                          {"SMSLY_FLEET_BUILD_LOCK_WAIT_SECONDS": "30",
+                           "SMSLY_FLEET_BUILD_LOCK_POLL_SECONDS": "5"}):
+            with _patch.object(cache, "is_degraded", True, create=True):
+                with self.assertRaises(RuntimeError) as ctx:
+                    with fleet_build_lock(deployment):
+                        self.fail("must not acquire while degraded")
+        self.assertIn("concurrency limit", str(ctx.exception))
+        # No slot key claimed in the process-local fallback.
+        self.assertIsNone(cache.get("smsly_fleet_build_lock"))

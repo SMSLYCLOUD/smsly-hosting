@@ -34,6 +34,56 @@ BUILD_FAIL_TAIL_LINES = 60
 BUILD_FAIL_TAIL_CHARS = 8000
 
 
+# ── Registry-qualified local image names (build-cache engagement) ──
+# Bare `ns/name:tag` names make the daemon resolve docker.io, so
+# `cache_from` stays empty (see _registry_cache_settings) and every
+# build recompiles all layers once local cache is pruned. Prefixing
+# with the daemon-local registry host (`registry:5000`) engages
+# classic-builder layer caching + pull-on-miss + push-after-build, so
+# code-only redeploys reuse dependency layers.
+# Gates (all must pass, else legacy bare names):
+#   * SMSLY_REGISTRY_IMAGE_NAMES != 0/false/no/off (kill-switch);
+#   * CONTAINER_REGISTRY_URL is daemon-local (registry:/127./localhost
+#     markers — never an external host like ECR);
+#   * the deployment builds on the local daemon (agent daemons cannot
+#     resolve `registry:5000` — agent-lite compose runs no registry).
+def _local_registry_host() -> str:
+    raw = (getattr(settings, "CONTAINER_REGISTRY_URL", "") or "").strip()
+    host = raw.split("://")[-1].rstrip("/").split("/")[0]
+    if host.startswith(("registry:", "127.0.0.1:", "localhost:")):
+        return host
+    return ""
+
+
+def _with_local_registry(bare_name: str, deployment=None) -> str:
+    """Prefix `ns/name:tag` with the local registry host when safe.
+
+    Pure function except the deployment-locality check. Never
+    double-prefixes; never touches already-qualified (external) names.
+    """
+    name = (bare_name or "").strip()
+    if not name:
+        return name
+    if os.environ.get("SMSLY_REGISTRY_IMAGE_NAMES", "true").strip().lower() in (
+        "0", "false", "no", "off",
+    ):
+        return name
+    first = name.split("/")[0] if "/" in name else ""
+    if "." in first or ":" in first:
+        return name  # already registry-qualified (or external) — keep
+    host = _local_registry_host()
+    if not host:
+        return name
+    if deployment is not None:
+        try:
+            from apps.deployments.utils import is_deployment_local
+            if not is_deployment_local(deployment):
+                return name
+        except Exception:
+            return name
+    return f"{host}/{name}"
+
+
 def _registry_cache_settings(image_name, build_args):
     """Registry-backed BuildKit cache settings for an image build.
 
@@ -112,7 +162,10 @@ class BuildMixin:
                 project_image_namespace,
             )
             _ns = project_image_namespace(self.service)
-            self.image_name = f"{_ns}/{self.service.name.lower()}:{tag_hash}"
+            self.image_name = _with_local_registry(
+                f"{_ns}/{self.service.name.lower()}:{tag_hash}",
+                self.deployment,
+            )
 
             # ── Build cache: skip if image already exists locally ──
             if tag_hash != 'latest':
@@ -452,7 +505,12 @@ class BuildMixin:
             registry = registry.split("://")[-1].rstrip("/")
             if not registry or not self.image_name:
                 return False
-            remote = f"{registry}/{self.image_name}"
+            # Already qualified (registry-prefixed at construction) — pull
+            # as-is instead of double-prefixing.
+            remote = self.image_name
+            first = remote.split("/")[0] if "/" in remote else ""
+            if "." not in first and ":" not in first:
+                remote = f"{registry}/{self.image_name}"
             try:
                 from apps.cloud.docker_client import get_docker_client
                 client = get_docker_client()

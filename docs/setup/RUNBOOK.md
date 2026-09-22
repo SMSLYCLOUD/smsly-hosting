@@ -300,6 +300,36 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec backend python manage.py migrate <app_name> <migration_number>
 ```
 
+#### Scenario 4: Master Offline — Serve From Full Nodes
+
+Full nodes keep serving on their node-direct URLs (`https://<service>.grid<N>.<domain>`)
+while the master is down: each node runs its own DB, backend, and Caddy
+with the last-pushed routing config. New deploys, config changes, and new
+certs are unavailable until the master returns.
+
+1. Share the `gridN` URLs for critical services **before** you need them
+   (the dashboard lives on the master and is unreachable mid-outage).
+2. Treat node-direct traffic as degraded/read-only: node-local writes made
+   during the outage exist only on the node — reconcile after recovery.
+3. Drill it: firewall-drop the master from a node, confirm `slug.gridN`
+   serves, make one write, restore, verify reconciliation.
+
+### Host Image Builds vs App Builds
+
+Host-side image builds (`docker compose build`, `up -d --build`) share the
+master daemon with app builds. Running both concurrently corrupts layers
+(`CreateDiff` mount-callback / lease failures, "No such image"). Always
+gate host builds on fleet idle first:
+
+```bash
+scripts/wait_for_build_slots_free.sh && \
+  docker compose -f docker-compose.prod.yml up -d --build backend frontend
+```
+
+For failed app builds showing containerd signatures, use the dashboard
+**Recover Docker & Retry** button on the deployment (runs the prune +
+ingest clear, then re-queues) instead of a bare retry.
+
 ### Recovery Time Objectives (RTO)
 
 - **Database restore**: < 15 minutes (for databases < 10GB)

@@ -222,8 +222,33 @@ class RegistryMixin:
 
         try:
             append_log(self.deployment, f"Pushing to {registry_url}...\n")
+            # Strip a local-registry prefix before pushing elsewhere: local
+            # builds name images `registry:5000/ns/name:tag` for layer-cache
+            # engagement, and pushing that verbatim to a different host
+            # would stack hosts (`ext/registry:5000/ns/...`) while reporting
+            # success. Retag bare locally first. Third-party (external)
+            # names pass through untouched.
+            push_ref = self.image_name
+            try:
+                from apps.deployments.services.registry_routing import (
+                    _INTERNAL_HOSTS,
+                    _split_ref,
+                )
+                _phost, _prest = _split_ref(self.image_name or "")
+                if _phost and _prest and _phost in _INTERNAL_HOSTS:
+                    _norm_target = (registry_url or "").split("://")[-1].rstrip("/")
+                    if _norm_target and _phost != _norm_target:
+                        from apps.cloud.docker_client import get_docker_client
+                        get_docker_client().images.get(
+                            self.image_name).tag(_prest)
+                        push_ref = _prest
+            except Exception as _strip_exc:
+                logger.warning(
+                    "Registry prefix strip failed for %s: %s",
+                    self.image_name, _strip_exc,
+                )
             remote_tag, push_error = NixpacksBuilder.push_image(
-                self.image_name,
+                push_ref,
                 registry_url,
                 username=reg_username,
                 password=reg_password,

@@ -183,9 +183,44 @@ def fleet_build_lock(deployment):
             if _normalize_cache_value(cache.get(key)) != owner_id:
                 return
             cache.set(hb_key, _heartbeat_payload(owner_id), timeout=lock_timeout)
+            # Refresh the slot itself while we still own it: a build that
+            # legitimately outlives lock_timeout (task hard limit is
+            # higher) must not lose its slot to a waiter mid-build —
+            # double-holding one slot runs two docker builds on the same
+            # daemon/tag (2026-09-22 timeout review). Guarded by the owner
+            # check above so a stolen slot is never resurrected.
+            try:
+                if _normalize_cache_value(cache.get(key)) == owner_id:
+                    cache.set(key, owner_id, timeout=lock_timeout)
+            except Exception as exc:
+                logger.debug("Fleet lock slot refresh failed: %s", exc)
 
+    def _cache_is_degraded() -> bool:
+        # The fleet lock only excludes across worker processes when the
+        # cache is shared (Redis). FallbackRedisCache degrades to
+        # process-local LocMemCache when Redis is down — acquiring then
+        # would "succeed" without excluding anyone. Fail closed: wait
+        # (bounded by max_wait) instead of building concurrently.
+        try:
+            return bool(getattr(cache, "is_degraded", False))
+        except Exception:
+            return False
+
+    _degraded_logged = False
     while time.monotonic() - start_time < max_wait:
         deployment_id = str(deployment.id)
+        if _cache_is_degraded():
+            if not _degraded_logged:
+                _degraded_logged = True
+                append_log(
+                    deployment,
+                    "[fleet] Redis cache is degraded (process-local locks "
+                    "don't exclude) — holding the build until the cache "
+                    "recovers or the wait times out.\n",
+                )
+                broadcast_status(deployment)
+            time.sleep(poll_seconds)
+            continue
         for key in lock_keys:
             hb_key = f"{key}:heartbeat"
             if cache.add(key, deployment_id, timeout=lock_timeout):
@@ -219,10 +254,16 @@ def fleet_build_lock(deployment):
         if acquired:
             break
 
-        if attempt_count := getattr(fleet_build_lock, "_attempt_count", 0):
-            fleet_build_lock._attempt_count = attempt_count + 1
-        else:
-            fleet_build_lock._attempt_count = 1
+        # Per-waiter "already logged" state (a set, not a counter — the
+        # old global counter silenced concurrent waiters sharing one
+        # worker process and could be deleted from under a still-waiting
+        # sibling in `finally`).
+        _waiting = getattr(fleet_build_lock, "_waiting_ids", None)
+        if not isinstance(_waiting, set):
+            _waiting = set()
+            fleet_build_lock._waiting_ids = _waiting
+        if deployment_id not in _waiting:
+            _waiting.add(deployment_id)
             append_log(deployment, "[fleet] Another build is in progress across the node fleet. Waiting for a free slot...\n")
             broadcast_status(deployment)
 
@@ -250,8 +291,9 @@ def fleet_build_lock(deployment):
         if _normalize_cache_value(cache.get(held_key)) == str(deployment.id):
             cache.delete(held_key)
             cache.delete(held_hb_key)
-            if hasattr(fleet_build_lock, "_attempt_count"):
-                delattr(fleet_build_lock, "_attempt_count")
+            _waiting_done = getattr(fleet_build_lock, "_waiting_ids", None)
+            if isinstance(_waiting_done, set):
+                _waiting_done.discard(str(deployment.id))
 
 def _coerce_int(value, default: int) -> int:
     try:

@@ -131,7 +131,21 @@ def perform_docker_recovery(deployment_id: str = "") -> dict:
     need thrash protection must check ``_PRUNE_CACHE_KEY`` themselves —
     the Celery task above does; the maintenance handler clears the key
     first so an explicit operator click always runs.
+
+    HONESTY CONTRACT (2026-09-22): workers run containerized behind
+    socket-proxy with no host mounts, so some steps cannot act:
+    - ingest clear needs host /var/lib/containerd (not mounted) →
+      reported as "no_host_access", never True;
+    - daemon restart needs host systemd (absent in containers) →
+      reported as "skipped_containerized" — real restarts belong to
+      the host integrity script (ensure_containerd_healthy), which has
+      host access and restarts only when the builder is wedged.
+    Steps report True only when they actually acted. Callers must not
+    treat the dict as proof of healing — read the per-step values.
     """
+    import os
+    import shutil
+
     results = {}
 
     # 1. Prune build cache
@@ -156,29 +170,40 @@ def perform_docker_recovery(deployment_id: str = "") -> dict:
         logger.warning("Image prune failed: %s", exc)
         results["image_prune"] = False
 
-    # 3. Clear containerd ingest (corrupted layer staging area)
-    try:
-        r = subprocess.run(
-            ["sh", "-c",
-             "rm -rf /var/lib/containerd/io.containerd.content.v1.content/ingest/* 2>/dev/null; "
-             "rm -rf /var/lib/containerd/tmpmounts/* 2>/dev/null; true"],
-            capture_output=True, text=True, timeout=30,
-        )
-        results["containerd_clean"] = True
-    except Exception as exc:
-        logger.warning("Containerd cleanup failed: %s", exc)
-        results["containerd_clean"] = False
+    # 3. Clear containerd ingest (corrupted layer staging area) — host
+    # paths only. Inside a worker container the path does not exist and
+    # `rm -rf …; true` would "succeed" while doing nothing: detect first.
+    if not os.path.isdir("/var/lib/containerd"):
+        results["containerd_clean"] = "no_host_access"
+    else:
+        try:
+            r = subprocess.run(
+                ["sh", "-c",
+                 "rm -rf /var/lib/containerd/io.containerd.content.v1.content/ingest/* 2>/dev/null; "
+                 "rm -rf /var/lib/containerd/tmpmounts/* 2>/dev/null; true"],
+                capture_output=True, text=True, timeout=30,
+            )
+            results["containerd_clean"] = True
+        except Exception as exc:
+            logger.warning("Containerd cleanup failed: %s", exc)
+            results["containerd_clean"] = False
 
-    # 4. Restart Docker daemon
-    try:
-        r = subprocess.run(
-            ["sh", "-c", "systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true"],
-            capture_output=True, text=True, timeout=60,
-        )
-        results["docker_restart"] = True
-    except Exception as exc:
-        logger.warning("Docker restart failed: %s", exc)
-        results["docker_restart"] = False
+    # 4. Restart Docker daemon — host systemd only. Containerized workers
+    # have no systemd; the old code ran `... || true` and reported True
+    # while nothing happened. Report honestly; the host integrity
+    # script owns real restarts.
+    if os.path.exists("/.dockerenv") or shutil.which("systemctl") is None:
+        results["docker_restart"] = "skipped_containerized"
+    else:
+        try:
+            r = subprocess.run(
+                ["sh", "-c", "systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true"],
+                capture_output=True, text=True, timeout=60,
+            )
+            results["docker_restart"] = True
+        except Exception as exc:
+            logger.warning("Docker restart failed: %s", exc)
+            results["docker_restart"] = False
 
     logger.info(
         "Docker corruption recovery completed: %s (deployment=%s)", results, deployment_id

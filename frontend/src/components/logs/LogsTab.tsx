@@ -15,6 +15,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const { toast } = useToast();
     const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>('BUILD');
     const [runtimeMessage, setRuntimeMessage] = useState('');
+    const [runtimeRole, setRuntimeRole] = useState<'candidate' | 'live' | ''>('');
     const [pipelineStages, setPipelineStages] = useState<PipelineStage[]>([]);
     const [wsConnected, setWsConnected] = useState(false);
 
@@ -183,6 +184,9 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                             runtimeViewerRef.current?.mergeRaw(data.logs, undefined, 'rt');
                         }
                         setRuntimeMessage(data.message || '');
+                        if (data.container_role === 'candidate' || data.container_role === 'live') {
+                            setRuntimeRole(data.container_role);
+                        }
                         if (data.container_status && data.container_status !== 'running') {
                             setRuntimeMessage(
                                 data.source === 'build_logs'
@@ -223,6 +227,9 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     // Connect WS for the active tab. NOTE: we no longer gate on isBuilding
     // — the build tab needs the WS even for finished/failed deployments
     // so it can show the persisted build_logs.
+    useEffect(() => {
+        setRuntimeRole('');
+    }, [deployment?.id]);
     useEffect(() => {
         if (!deployment?.id) return;
         if (logType === 'BUILD') {
@@ -305,6 +312,9 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                             runtimeViewerRef.current?.mergeRaw(logs, undefined, 'rt-poll');
                         }
                         setRuntimeMessage(data.message || '');
+                        if (data.container_role === 'candidate' || data.container_role === 'live') {
+                            setRuntimeRole(data.container_role);
+                        }
                     }
                 } catch {
                     if (!cancelled) setRuntimeMessage('Could not connect to the API.');
@@ -403,6 +413,16 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                             <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
                             <span className="text-blue-400 font-bold">LIVE</span>
                             <RefreshCw size={10} className="animate-spin text-blue-400" />
+                            {runtimeRole === 'candidate' && (
+                                <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-bold text-amber-300" title="Streaming the staged candidate container, not live traffic">
+                                    CANDIDATE
+                                </span>
+                            )}
+                            {runtimeRole === 'live' && deployment?.status === 'STAGED' && (
+                                <span className="rounded border border-white/20 bg-white/5 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300" title="Candidate is gone — showing live traffic">
+                                    LIVE TRAFFIC
+                                </span>
+                            )}
                         </>
                     )}
                 </div>
