@@ -661,6 +661,23 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/start/`);
     return response.data;
   },
+  bulkPower: async (op: 'stop' | 'start' | 'restart'): Promise<{ task_id: string; op: string }> => {
+    const map = { stop: 'bulk-stop', start: 'bulk-start', restart: 'bulk-restart' } as const;
+    const response = await api.post(`/services/${map[op]}/`);
+    return response.data;
+  },
+  autoOffGet: async (): Promise<{ pending: { task_id: string; fires_at: string; actor: string } | null }> => {
+    const response = await api.get(`/services/auto-off/`);
+    return response.data;
+  },
+  autoOffSchedule: async (minutes: number): Promise<{ scheduled: { task_id: string; fires_at: string } }> => {
+    const response = await api.post(`/services/auto-off/`, { in_minutes: minutes });
+    return response.data;
+  },
+  autoOffCancel: async (): Promise<{ cancelled: boolean }> => {
+    const response = await api.delete(`/services/auto-off/`);
+    return response.data;
+  },
   pruneDocker: async (id: string): Promise<{
     message: string;
     deployments_deleted: number;
@@ -3238,6 +3255,115 @@ export const mcpApi = {
   },
   revokeToken: async (id: string): Promise<{ revoked: boolean }> => {
     const res = await api.delete(`/mcp/tokens/${encodeURIComponent(id)}/`);
+    return res.data;
+  },
+};
+
+export interface SecurityStatusData {
+  container_runtime: {
+    active: string;
+    sandboxed: boolean;
+    isolation_model: string;
+    kata_available: boolean;
+    gvisor_available: boolean;
+  };
+  apparmor: { enabled: boolean; profiles_loaded: number };
+  seccomp: { enabled: boolean };
+  no_new_privileges: { enabled: boolean };
+  falco: {
+    running: boolean;
+    container: string;
+    driver: string;
+    events_detected: number;
+    restarts: number;
+    capturing: boolean | null;
+  };
+  crowdsec: {
+    enabled: boolean;
+    running: boolean;
+    container: string;
+    active_bans?: number;
+    first_strike_enabled?: boolean;
+    first_strike_active?: boolean;
+  };
+  openappsec: {
+    enabled: boolean;
+    agent_running: boolean;
+    envoy_running: boolean;
+    policy_mode: string;
+    mode_configured: string;
+    verdicts_recent: boolean;
+    shadow_port: number;
+  };
+  ufw: { active: boolean };
+  fail2ban: { active: boolean; jails: string[] };
+  auditd: { active: boolean };
+  docker_socket_proxy: { enabled: boolean };
+  trivy: { enabled: boolean; fail_on_severity: string; installed: boolean };
+  device_trust: { enabled: boolean; beta: boolean; registered_devices: number };
+  kernel_hardening: { enabled: boolean };
+}
+
+export interface SecurityActivityEvent {
+  id: string;
+  source: 'falco' | 'crowdsec' | 'fail2ban' | 'openappsec' | 'auditd' | 'trivy' | string;
+  type: string;
+  severity: 'CRITICAL' | 'HIGH' | 'WARNING' | 'INFO';
+  title: string;
+  details: string;
+  target?: string;
+  timestamp: string;
+  raw?: any;
+}
+
+export interface SecurityEventsResponse {
+  summary: {
+    total_events: number;
+    falco_alerts_count: number;
+    crowdsec_bans_count: number;
+    crowdsec_alerts_count: number;
+    fail2ban_banned_count: number;
+    waf_events_count: number;
+    trivy_cves_count: number;
+  };
+  falco_events: any[];
+  crowdsec_decisions: any[];
+  crowdsec_alerts: any[];
+  fail2ban_jails: Record<string, { currently_banned: number; total_banned: number; banned_ips: string[] }>;
+  fail2ban_events: any[];
+  openappsec_events: any[];
+  auditd_events: any[];
+  trivy_findings: any[];
+  recent_activities: SecurityActivityEvent[];
+}
+
+export interface SecurityAnalysisResponse {
+  threat_level: 'LOW' | 'ELEVATED' | 'HIGH' | 'SEVERE';
+  risk_score: number;
+  executive_summary: string;
+  attack_vectors: string[];
+  hardening_actions: string[];
+  analyzed_at: string;
+  summary: any;
+}
+
+export const systemSecurityApi = {
+  getStatus: async (): Promise<SecurityStatusData> => {
+    const res = await api.get('/system/security-status/');
+    return res.data;
+  },
+  getEvents: async (source?: string, limit: number = 100): Promise<SecurityEventsResponse> => {
+    const res = await api.get('/system/security-events/', {
+      params: { ...(source ? { source } : {}), limit },
+    });
+    return res.data;
+  },
+  analyze: async (): Promise<SecurityAnalysisResponse> => {
+    const res = await api.post('/system/security-analysis/');
+    return res.data;
+  },
+  unbanCrowdSec: async (ip: string): Promise<any> => {
+    const res = await api.post('/crowdsec/unban/', { ip });
     return res.data;
   },
 };

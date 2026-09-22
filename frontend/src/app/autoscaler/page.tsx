@@ -6,7 +6,8 @@ import {
   Scaling, Activity, Cpu, Server, Layers, Radio, AlertTriangle,
   Zap, Clock, ArrowRight, Settings, RotateCw, Play, CheckCircle2,
   AlertCircle, ChevronDown, ChevronUp, Save, Bell, BellRing, Mail,
-  Webhook, HardDrive, ShieldAlert, TrendingUp
+  Webhook, HardDrive, ShieldAlert, TrendingUp, Plus, Minus, Trash2,
+  Inbox, ShieldCheck, Box, RefreshCw, Power, Timer, Loader2
 } from 'lucide-react';
 import {
   LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -14,10 +15,12 @@ import {
 } from 'recharts';
 import { ChartContainer } from '@/components/ui/chart-container';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { autoscalerApi, scalingApi, servicesApi, type Service, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService } from '@/lib/api';
+import { autoscalerApi, scalingApi, servicesApi, type Service, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService, type AutoscalerServiceReplica } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
@@ -72,6 +75,7 @@ export default function AutoscalerPage() {
   const [configOpen, setConfigOpen] = useState(false);
   const [localConfig, setLocalConfig] = useState<any>(null);
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   // Alert thresholds
   const [alertConfig, setAlertConfig] = useState({
@@ -89,6 +93,140 @@ export default function AutoscalerPage() {
   const [savingAlertConfig, setSavingAlertConfig] = useState(false);
   const [servicesList, setServicesList] = useState<Service[]>([]);
   const [togglingService, setTogglingService] = useState<string | null>(null);
+  const [scalingServiceId, setScalingServiceId] = useState<string | null>(null);
+  const [destroyingReplicaId, setDestroyingReplicaId] = useState<string | null>(null);
+  const [expandedReplicas, setExpandedReplicas] = useState<Record<string, boolean>>({});
+  const [powerBusy, setPowerBusy] = useState<string | null>(null);
+  const [timerMinutes, setTimerMinutes] = useState(30);
+  const [pendingTimer, setPendingTimer] = useState<{ task_id: string; fires_at: string; actor: string } | null>(null);
+
+  const handleManualScaleUp = async (serviceId: string, svcName: string) => {
+    setScalingServiceId(serviceId);
+    try {
+      await scalingApi.spawnReplica(serviceId, 'horizontal');
+      toast({ title: "Scale Up Spawned", description: `Provisioning +1 replica for ${svcName}` });
+      await fetchData();
+    } catch (err: any) {
+      toast({
+        title: "Scale Up Failed",
+        description: err?.response?.data?.error || err.message || "Failed to spawn replica",
+        variant: "destructive"
+      });
+    } finally {
+      setScalingServiceId(null);
+    }
+  };
+
+  const handleManualScaleDown = async (serviceId: string, svcName: string) => {
+    setScalingServiceId(serviceId);
+    try {
+      await scalingApi.scaleDown(serviceId, 1);
+      toast({ title: "Scale Down Triggered", description: `Reconciled -1 replica for ${svcName}` });
+      await fetchData();
+    } catch (err: any) {
+      toast({
+        title: "Scale Down Failed",
+        description: err?.response?.data?.error || err.message || "Failed to scale down replica",
+        variant: "destructive"
+      });
+    } finally {
+      setScalingServiceId(null);
+    }
+  };
+
+  const handleDestroyReplica = async (replicaId: string, containerName?: string | null) => {
+    setDestroyingReplicaId(replicaId);
+    try {
+      await scalingApi.destroyReplica(replicaId);
+      toast({ title: "Replica Removed", description: `Replica ${containerName || replicaId.slice(0, 8)} removed` });
+      await fetchData();
+    } catch (err: any) {
+      toast({
+        title: "Removal Failed",
+        description: err?.response?.data?.error || err.message || "Failed to remove replica",
+        variant: "destructive"
+      });
+    } finally {
+      setDestroyingReplicaId(null);
+    }
+  };
+
+  const refreshTimer = async () => {
+    try {
+      const res = await servicesApi.autoOffGet();
+      setPendingTimer(res.pending);
+    } catch { /* timer state is best-effort */ }
+  };
+
+  const handleBulkPower = async (op: 'stop' | 'start' | 'restart') => {
+    const labels = {
+      stop: { title: 'Power off ALL services?', message: 'Stops every ACTIVE tenant service container now. Platform infra is untouched. Use Power On to bring them back.', confirm: 'Power Off All' },
+      start: { title: 'Power on all stopped services?', message: 'Starts every STOPPED service container.', confirm: 'Power On All' },
+      restart: { title: 'Restart ALL services?', message: 'Restarts every ACTIVE service sequentially (~3s apart to avoid a CPU spike).', confirm: 'Restart All' },
+    } as const;
+    if (!await confirm({ title: labels[op].title, message: labels[op].message, confirmText: labels[op].confirm, variant: op === 'stop' ? 'destructive' : 'default' })) return;
+    setPowerBusy(op);
+    try {
+      await servicesApi.bulkPower(op);
+      toast({ title: `${labels[op].confirm} queued`, description: 'Sweep running in background — watch the grid.' });
+    } catch (err: any) {
+      toast({
+        title: 'Bulk power failed',
+        description: err?.response?.status === 403 ? 'Admin access required.' : err?.response?.data?.error || err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setPowerBusy(null);
+    }
+  };
+
+  const handleScheduleTimer = async () => {
+    const minutes = Math.max(1, Math.min(1440, Math.floor(timerMinutes) || 30));
+    if (!await confirm({ title: 'Schedule auto power-off?', message: `All ACTIVE services will power off in ${minutes} minute(s).`, confirmText: 'Schedule', variant: 'destructive' })) return;
+    setPowerBusy('timer');
+    try {
+      const res = await servicesApi.autoOffSchedule(minutes);
+      setPendingTimer({ ...res.scheduled, actor: '' });
+      toast({ title: 'Auto-off scheduled', description: `Fires at ${new Date(res.scheduled.fires_at).toLocaleString()}` });
+    } catch (err: any) {
+      toast({
+        title: 'Schedule failed',
+        description: err?.response?.status === 403 ? 'Admin access required.' : err?.response?.data?.error || err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setPowerBusy(null);
+    }
+  };
+
+  const handleCancelTimer = async () => {
+    setPowerBusy('timer');
+    try {
+      await servicesApi.autoOffCancel();
+      setPendingTimer(null);
+      toast({ title: 'Auto-off cancelled' });
+    } catch (err: any) {
+      toast({ title: 'Cancel failed', description: err?.response?.data?.error || err.message, variant: 'destructive' });
+    } finally {
+      setPowerBusy(null);
+    }
+  };
+
+  const toggleReplicaDrawer = (serviceKey: string) => {
+    setExpandedReplicas(prev => ({ ...prev, [serviceKey]: !prev[serviceKey] }));
+  };
+
+  const getCooldownInfo = (lastScaleAt: string | null | undefined, cooldownDownMin: number = 10) => {
+    if (!lastScaleAt) return { inCooldown: false, remainingMin: 0, text: "Ready" };
+    const lastTime = new Date(lastScaleAt).getTime();
+    const now = Date.now();
+    const elapsedMinutes = (now - lastTime) / 60000;
+    if (elapsedMinutes < cooldownDownMin) {
+      const remaining = Math.max(1, Math.ceil(cooldownDownMin - elapsedMinutes));
+      return { inCooldown: true, remainingMin: remaining, text: `Cooldown: ${remaining}m left` };
+    }
+    return { inCooldown: false, remainingMin: 0, text: "Ready" };
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -100,6 +238,7 @@ export default function AutoscalerPage() {
       setStatus(s);
       setHistory(h);
       setServicesList(svcList);
+      refreshTimer().catch(() => {});
 
       // Initialize local config from status if not edited
       if (!localConfig && s) {
@@ -294,6 +433,53 @@ export default function AutoscalerPage() {
           </div>
         )}
 
+        {/* ── Emergency Power ──────────────────────────────────────────── */}
+        <Card className="border-red-500/30 bg-gradient-to-b from-red-500/5 to-card/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-widest flex items-center gap-2">
+              <Power size={14} className="text-red-400" /> Emergency Power
+            </CardTitle>
+            <CardDescription>Stop, start, or restart every tenant service at once. Platform infra is never touched. Bulk runs async in the background.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col md:flex-row md:items-center gap-3">
+            <div className="flex gap-2 flex-wrap">
+              <Button variant="destructive" size="sm" disabled={powerBusy !== null} onClick={() => handleBulkPower('stop')} className="gap-2">
+                {powerBusy === 'stop' ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />} Power Off All
+              </Button>
+              <Button variant="outline" size="sm" disabled={powerBusy !== null} onClick={() => handleBulkPower('start')} className="gap-2">
+                {powerBusy === 'start' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} Power On All
+              </Button>
+              <Button variant="outline" size="sm" disabled={powerBusy !== null} onClick={() => handleBulkPower('restart')} className="gap-2">
+                {powerBusy === 'restart' ? <Loader2 size={14} className="animate-spin" /> : <RotateCw size={14} />} Restart All
+              </Button>
+            </div>
+            <div className="flex items-center gap-2 md:ml-auto">
+              <Timer size={14} className="text-muted-foreground" />
+              {pendingTimer ? (
+                <>
+                  <span className="text-xs text-amber-400">
+                    Auto-off fires {new Date(pendingTimer.fires_at).toLocaleString()}
+                  </span>
+                  <Button variant="ghost" size="sm" disabled={powerBusy !== null} onClick={handleCancelTimer}>Cancel</Button>
+                </>
+              ) : (
+                <>
+                  <Input
+                    type="number" min={1} max={1440}
+                    value={timerMinutes}
+                    onChange={(e) => setTimerMinutes(parseInt(e.target.value) || 30)}
+                    className="w-20 h-8 text-xs"
+                  />
+                  <span className="text-xs text-muted-foreground">min</span>
+                  <Button variant="outline" size="sm" disabled={powerBusy !== null} onClick={handleScheduleTimer} className="gap-2">
+                    {powerBusy === 'timer' ? <Loader2 size={14} className="animate-spin" /> : <Clock size={14} />} Auto-Off
+                  </Button>
+                </>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
         {/* ── Hero: Memory Budget Ring ─────────────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <Card className="col-span-1 border-border/50 bg-gradient-to-b from-card to-card/50">
@@ -387,6 +573,212 @@ export default function AutoscalerPage() {
           </Card>
         </div>
 
+        {/* ── Infrastructure Scaling & Celery Burst Pool ─────────────────── */}
+        <Card className="border-border/50 bg-gradient-to-b from-card to-card/40 overflow-hidden">
+          <CardHeader className="pb-4 border-b border-border/40">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base font-bold flex items-center gap-2">
+                  <div className="p-1.5 bg-purple-500/10 text-purple-400 rounded-lg">
+                    <Layers size={18} />
+                  </div>
+                  Infrastructure Autoscaling & Celery Burst Pool
+                </CardTitle>
+                <CardDescription className="text-xs mt-1">
+                  Idle-minimal RabbitMQ queue monitoring, burst worker scaling (celery-fast / celery-deploy), and in-flight drain protection.
+                </CardDescription>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="px-2.5 py-1 rounded-md bg-muted/60 border border-border/50 text-xs font-mono flex items-center gap-1.5">
+                  <Inbox size={13} className="text-blue-400" />
+                  <span className="text-muted-foreground">Queue Backlog:</span>
+                  <span className="font-bold text-foreground">{status?.infra?.total_queue_depth ?? 0} msgs</span>
+                </div>
+
+                {status?.infra?.scale_down_held ? (
+                  <div className="px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/30 text-xs text-amber-400 font-medium flex items-center gap-1.5 animate-pulse">
+                    <ShieldAlert size={13} />
+                    <span>Scale-Down Held (Draining {status.infra.unacknowledged_burst_tasks} tasks)</span>
+                  </div>
+                ) : (
+                  <div className="px-2.5 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-400 font-medium flex items-center gap-1.5">
+                    <ShieldCheck size={13} />
+                    <span>Drain Safety Active</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+
+          <CardContent className="p-6 space-y-6">
+            {/* Queue depths */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+              {Object.entries(status?.infra?.queues || { celery: 0, deploy: 0, fast: 0, 'media-telemetry': 0, 'media-audit': 0 }).map(([qName, count]) => (
+                <div key={qName} className="p-3 rounded-lg bg-card/60 border border-border/40 space-y-1">
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground font-mono">
+                    <span className="truncate">{qName}</span>
+                    <span className={cn(
+                      "px-1.5 py-0.5 rounded text-[10px] font-bold",
+                      count >= (status?.infra?.scale_up_threshold || 50) ? "bg-red-500/20 text-red-400" :
+                      count > 0 ? "bg-amber-500/20 text-amber-400" : "bg-muted text-muted-foreground"
+                    )}>
+                      {count}
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full bg-muted/40 rounded-full overflow-hidden">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-500",
+                        count >= (status?.infra?.scale_up_threshold || 50) ? "bg-red-500" :
+                        count > 0 ? "bg-amber-500" : "bg-emerald-500"
+                      )}
+                      style={{ width: `${Math.min(100, Math.max(count > 0 ? 12 : 0, (count / (status?.infra?.scale_up_threshold || 50)) * 100))}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Threshold rules banner */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs bg-muted/20 border border-border/40 p-3 rounded-lg text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <TrendingUp size={14} className="text-blue-400 shrink-0" />
+                <span>Scale-Up: <strong className="text-foreground">≥ {status?.infra?.scale_up_threshold || 50} msgs</strong> ({status?.infra?.scale_up_after_seconds || 60}s sustained)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <ArrowRight size={14} className="text-amber-400 shrink-0" />
+                <span>Scale-Down: <strong className="text-foreground">≤ {status?.infra?.scale_down_threshold || 5} msgs</strong> ({status?.infra?.scale_down_after_seconds || 120}s idle)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Clock size={14} className="text-purple-400 shrink-0" />
+                <span>Poll Interval: <strong className="text-foreground">{status?.infra?.check_interval_seconds || 15}s</strong> systemd service</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <ShieldCheck size={14} className="text-emerald-400 shrink-0" />
+                <span>In-Flight Drain: <strong className="text-foreground">0 unacked required</strong> before stop</span>
+              </div>
+            </div>
+
+            {/* Burst Workers Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(status?.infra?.burst_workers || []).map((bw) => (
+                <div key={bw.name} className="p-4 rounded-xl border border-border/50 bg-card/80 space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm font-mono">{bw.name}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-muted font-mono text-muted-foreground">
+                          queue: {bw.target_queue}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{bw.description}</p>
+                    </div>
+
+                    <div className={cn(
+                      "px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide flex items-center gap-1",
+                      bw.status === 'running' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                      bw.status === 'draining' ? "bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse" :
+                      bw.status === 'pending_scale_down' ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/20" :
+                      bw.status === 'busy' ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" :
+                      "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
+                    )}>
+                      <div className={cn(
+                        "w-1.5 h-1.5 rounded-full",
+                        bw.status === 'running' ? "bg-emerald-500" :
+                        bw.status === 'draining' ? "bg-amber-500 animate-pulse" :
+                        bw.status === 'pending_scale_down' ? "bg-cyan-500" :
+                        bw.status === 'busy' ? "bg-purple-500" : "bg-zinc-500"
+                      )} />
+                      {bw.status.replace(/_/g, ' ')}
+                    </div>
+                  </div>
+
+                  {/* Worker Live Metrics */}
+                  <div className="grid grid-cols-4 gap-2 py-2 px-3 rounded-lg bg-muted/30 border border-border/30 text-center font-mono">
+                    <div>
+                      <div className="text-xs font-bold text-foreground">{bw.active_tasks}</div>
+                      <div className="text-[9px] text-muted-foreground uppercase">Active Tasks</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-foreground">{bw.reserved_tasks}</div>
+                      <div className="text-[9px] text-muted-foreground uppercase">Reserved</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-foreground">{bw.cpu_percent.toFixed(1)}%</div>
+                      <div className="text-[9px] text-muted-foreground uppercase">CPU</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-foreground">{Math.round(bw.memory_mb)}MB</div>
+                      <div className="text-[9px] text-muted-foreground uppercase">RAM</div>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-muted-foreground bg-muted/20 p-2 rounded border border-border/30 flex items-center gap-1.5">
+                    <Activity size={12} className="text-muted-foreground shrink-0" />
+                    <span>{bw.status_message}</span>
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Platform Core Workers & Web Scaler */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-border/40">
+              <div className="p-3 rounded-lg bg-muted/20 border border-border/30 space-y-1">
+                <div className="flex items-center justify-between text-xs font-medium">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Server size={14} className="text-blue-400" />
+                    celery (Primary Worker)
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase">Always On</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Drains celery, deploy, and fast queues. Baseline worker that never terminates.
+                </p>
+                <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground pt-1">
+                  <span>Active: {status?.infra?.primary_worker.active_tasks ?? 0}</span>
+                  <span>CPU: {status?.infra?.primary_worker.cpu_percent?.toFixed(1) ?? 0}%</span>
+                  <span>RAM: {Math.round(status?.infra?.primary_worker.memory_mb ?? 0)}MB</span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-lg bg-muted/20 border border-border/30 space-y-1">
+                <div className="flex items-center justify-between text-xs font-medium">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Clock size={14} className="text-purple-400" />
+                    celery-beat (Scheduler)
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase">Active</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  RedBeat distributed periodic task scheduler (health probes, cleanups, autoscaler cron).
+                </p>
+                <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground pt-1">
+                  <span>CPU: {status?.infra?.scheduler.cpu_percent?.toFixed(1) ?? 0}%</span>
+                  <span>RAM: {Math.round(status?.infra?.scheduler.memory_mb ?? 0)}MB</span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-lg bg-muted/20 border border-border/30 space-y-1">
+                <div className="flex items-center justify-between text-xs font-medium">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Zap size={14} className="text-amber-400" />
+                    Web Process Scaler
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold uppercase">SIGHUP / TTIN / TTOU</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Dynamic Gunicorn worker expansion (+1) / contraction (-1) within memory budget floors.
+                </p>
+                <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground pt-1">
+                  <span>Workers: {status?.infra?.web_scaling.current_workers ?? 2} (min: {status?.infra?.web_scaling.min_workers ?? 2}, max: {status?.infra?.web_scaling.max_workers ?? 8})</span>
+                  <span>PIDs: {status?.infra?.web_scaling.pids ?? 0}</span>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* ── Service Cards Grid ───────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {Object.entries(groupedServices).map(([app, services]) => (
@@ -399,97 +791,224 @@ export default function AutoscalerPage() {
                   app === 'buyforfront' ? "border-l-emerald-500" : "border-l-amber-500"
                 )}>
                   <CardContent className="p-5 space-y-4">
-                    {/* Card Header */}
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <ServiceIcon type={svc.type} />
-                          <h3 className="font-bold text-sm tracking-tight">{name}</h3>
-                        </div>
-                        <div className="flex items-center gap-2">
-                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">
-                             {svc.app}
-                           </span>
-                           <span className={cn(
-                             "text-[10px] px-1.5 py-0.5 rounded font-bold uppercase",
-                             svc.priority === 3 ? "bg-red-500/10 text-red-500" :
-                             svc.priority === 2 ? "bg-blue-500/10 text-blue-500" : "bg-zinc-500/10 text-zinc-500"
-                           )}>
-                             P{svc.priority}
-                           </span>
-                           {(() => {
-                             const matched = servicesList.find(s => s.name === svc.app || s.name === name);
-                             if (!matched) return null;
-                             return (
-                               <Switch
-                                 checked={matched.autoscale_enabled !== false}
-                                 onCheckedChange={() => handleToggleAutoscale(matched.id, matched.autoscale_enabled)}
-                                 disabled={togglingService === matched.id}
-                                 className="scale-75"
-                                 title={matched.autoscale_enabled !== false ? 'Auto-scaling ON' : 'Auto-scaling OFF'}
-                               />
-                             );
-                           })()}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-bold font-mono leading-none">
-                          {svc.current_workers}<span className="text-muted-foreground text-sm font-normal">/{svc.max_workers}</span>
-                        </div>
-                        <div className="text-[10px] text-muted-foreground mt-1">Workers</div>
-                      </div>
-                    </div>
+                    {(() => {
+                      const matched = servicesList.find(s => s.name === svc.app || s.name === name);
+                      const serviceId = svc.service_id || matched?.id;
+                      const isAutoscaleOn = svc.autoscale_enabled !== undefined ? svc.autoscale_enabled : (matched?.autoscale_enabled !== false);
+                      const cooldownInfo = getCooldownInfo(svc.last_scale_at, svc.cooldown_down_min || 10);
+                      const hasReplicas = svc.replicas && svc.replicas.length > 0;
+                      const isExpanded = !!expandedReplicas[name];
 
-                    {/* Demand Bar */}
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-[10px] uppercase font-bold text-muted-foreground">
-                        <span>Demand Score</span>
-                        <span>{(svc.demand_score * 100).toFixed(0)}%</span>
-                      </div>
-                      <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
-                        <div
-                          className={cn("h-full rounded-full transition-all duration-500",
-                            svc.demand_score > 0.6 ? "bg-red-500" :
-                            svc.demand_score > 0.3 ? "bg-amber-500" : "bg-emerald-500"
+                      return (
+                        <>
+                          {/* Card Header */}
+                          <div className="flex items-start justify-between">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <ServiceIcon type={svc.type} />
+                                <h3 className="font-bold text-sm tracking-tight">{name}</h3>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">
+                                   {svc.app}
+                                 </span>
+                                 <span className={cn(
+                                   "text-[10px] px-1.5 py-0.5 rounded font-bold uppercase",
+                                   svc.priority === 3 ? "bg-red-500/10 text-red-500" :
+                                   svc.priority === 2 ? "bg-blue-500/10 text-blue-500" : "bg-zinc-500/10 text-zinc-500"
+                                 )}>
+                                   P{svc.priority}
+                                 </span>
+                                 {svc.vpa_enabled && (
+                                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-bold">
+                                     VPA
+                                   </span>
+                                 )}
+                                 {svc.min_replicas === 0 && (
+                                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-bold">
+                                     Scale-to-0
+                                   </span>
+                                 )}
+                                 {serviceId && (
+                                   <Switch
+                                     checked={isAutoscaleOn}
+                                     onCheckedChange={() => handleToggleAutoscale(serviceId, isAutoscaleOn)}
+                                     disabled={togglingService === serviceId}
+                                     className="scale-75"
+                                     title={isAutoscaleOn ? 'Auto-scaling ON' : 'Auto-scaling OFF'}
+                                   />
+                                 )}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-2xl font-bold font-mono leading-none">
+                                {svc.current_workers}<span className="text-muted-foreground text-sm font-normal">/{svc.max_workers}</span>
+                              </div>
+                              <div className="text-[10px] text-muted-foreground mt-1">
+                                Min: {svc.min_workers ?? 1} | Max: {svc.max_workers}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* PaaS Target & Resource Limits Bar */}
+                          <div className="flex flex-wrap items-center justify-between text-[11px] bg-muted/30 px-2.5 py-1.5 rounded-lg border border-border/40 font-mono">
+                            <span className="text-muted-foreground">
+                              Target: <strong className="text-foreground">{svc.autoscale_cpu_target || 80}% CPU</strong>
+                            </span>
+                            <span className="text-muted-foreground">
+                              Limit: <strong className="text-foreground">{svc.cpu_cores ? `${svc.cpu_cores} Cores` : 'Uncapped'} / {svc.memory_mb_allocated ? `${svc.memory_mb_allocated}MB` : `${Math.round(svc.memory_limit_mb)}MB`}</strong>
+                            </span>
+                            <span className={cn("text-[10px] font-sans font-medium", cooldownInfo.inCooldown ? "text-amber-400" : "text-emerald-400")}>
+                              {cooldownInfo.text}
+                            </span>
+                          </div>
+
+                          {/* Demand Bar */}
+                          <div className="space-y-1.5">
+                            <div className="flex justify-between text-[10px] uppercase font-bold text-muted-foreground">
+                              <span>Demand Score</span>
+                              <span>{(svc.demand_score * 100).toFixed(0)}%</span>
+                            </div>
+                            <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                              <div
+                                className={cn("h-full rounded-full transition-all duration-500",
+                                  svc.demand_score > 0.6 ? "bg-red-500" :
+                                  svc.demand_score > 0.3 ? "bg-amber-500" : "bg-emerald-500"
+                                )}
+                                style={{ width: `${Math.min(svc.demand_score * 100, 100)}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Stats Grid */}
+                          <div className="grid grid-cols-2 gap-4 pt-1">
+                             <div className="flex items-center gap-3">
+                               <GaugeRing value={svc.cpu_percent} color="#3b82f6" size={42} strokeWidth={3} />
+                               <div>
+                                 <div className="text-xs font-bold text-foreground">{svc.cpu_percent.toFixed(1)}%</div>
+                                 <div className="text-[10px] text-muted-foreground">CPU Usage</div>
+                               </div>
+                             </div>
+                             <div className="flex items-center gap-3">
+                               <GaugeRing value={svc.memory_percent} color="#8b5cf6" size={42} strokeWidth={3} />
+                               <div>
+                                 <div className="text-xs font-bold text-foreground">{Math.round(svc.memory_mb)}MB</div>
+                                 <div className="text-[10px] text-muted-foreground">of {Math.round(svc.memory_limit_mb)}MB</div>
+                               </div>
+                             </div>
+                          </div>
+
+                          {/* Manual Scaling Actions */}
+                          {serviceId && (
+                            <div className="flex items-center gap-2 pt-2 border-t border-border/40">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="flex-1 h-7 text-xs gap-1 hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-500/30"
+                                onClick={() => handleManualScaleUp(serviceId, name)}
+                                disabled={scalingServiceId === serviceId || svc.current_workers >= svc.max_workers}
+                              >
+                                <Plus size={12} />
+                                Scale Up (+1)
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="flex-1 h-7 text-xs gap-1 hover:bg-amber-500/10 hover:text-amber-400 hover:border-amber-500/30"
+                                onClick={() => handleManualScaleDown(serviceId, name)}
+                                disabled={scalingServiceId === serviceId || svc.current_workers <= (svc.min_workers ?? 1)}
+                              >
+                                <Minus size={12} />
+                                Scale Down (-1)
+                              </Button>
+                            </div>
                           )}
-                          style={{ width: `${Math.min(svc.demand_score * 100, 100)}%` }}
-                        />
-                      </div>
-                    </div>
 
-                    {/* Stats Grid */}
-                    <div className="grid grid-cols-2 gap-4 pt-2">
-                       <div className="flex items-center gap-3">
-                         <GaugeRing value={svc.cpu_percent} color="#3b82f6" size={42} strokeWidth={3} />
-                         <div>
-                           <div className="text-xs font-bold text-foreground">{svc.cpu_percent.toFixed(1)}%</div>
-                           <div className="text-[10px] text-muted-foreground">CPU</div>
-                         </div>
-                       </div>
-                       <div className="flex items-center gap-3">
-                         <GaugeRing value={svc.memory_percent} color="#8b5cf6" size={42} strokeWidth={3} />
-                         <div>
-                           <div className="text-xs font-bold text-foreground">{Math.round(svc.memory_mb)}MB</div>
-                           <div className="text-[10px] text-muted-foreground">of {Math.round(svc.memory_limit_mb)}MB</div>
-                         </div>
-                       </div>
-                    </div>
+                          {/* Replicas Drawer Toggle */}
+                          {hasReplicas && (
+                            <div className="space-y-2 pt-2 border-t border-border/30">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => toggleReplicaDrawer(name)}
+                                className="w-full justify-between h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                              >
+                                <span className="flex items-center gap-1.5 font-medium">
+                                  <Box size={13} className="text-purple-400" />
+                                  Active Replicas ({svc.replicas?.length || 0})
+                                </span>
+                                {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                              </Button>
 
-                    {/* Footer Stats */}
-                    <div className="flex items-center justify-between pt-2 border-t border-border/50 text-[10px] text-muted-foreground">
-                      <div className="flex items-center gap-2">
-                        <span>PID: {svc.pids}</span>
-                        <span>•</span>
-                        <span>Net: {(svc.net_rx_mb + svc.net_tx_mb).toFixed(1)}MB</span>
-                      </div>
-                      <div>
-                        {svc.last_action !== 'none' && (
-                          <span className="text-amber-500 flex items-center gap-1">
-                            <Clock size={10} /> {new Date(svc.last_action_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                              <AnimatePresence>
+                                {isExpanded && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    className="overflow-hidden space-y-1.5 pt-1"
+                                  >
+                                    {(svc.replicas || []).map((replica) => (
+                                      <div
+                                        key={replica.id}
+                                        className="flex items-center justify-between p-2 rounded-lg bg-muted/40 border border-border/40 text-[11px]"
+                                      >
+                                        <div className="space-y-0.5 truncate mr-2">
+                                          <div className="font-mono font-medium text-foreground truncate">
+                                            {replica.container_name || replica.id.slice(0, 8)}
+                                          </div>
+                                          <div className="text-[10px] text-muted-foreground">
+                                            node: {replica.node} • {new Date(replica.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <span className={cn(
+                                            "px-1.5 py-0.5 rounded text-[9px] font-bold uppercase",
+                                            replica.status === 'RUNNING' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                                            replica.status === 'DRAINING' ? "bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse" :
+                                            replica.status === 'SPAWNING' ? "bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse" :
+                                            "bg-red-500/10 text-red-400 border border-red-500/20"
+                                          )}>
+                                            {replica.status}
+                                          </span>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => handleDestroyReplica(replica.id, replica.container_name)}
+                                            disabled={destroyingReplicaId === replica.id}
+                                            className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400"
+                                            title="Destroy replica"
+                                          >
+                                            <Trash2 size={12} />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          )}
+
+                          {/* Footer Stats */}
+                          <div className="flex items-center justify-between pt-2 border-t border-border/50 text-[10px] text-muted-foreground">
+                            <div className="flex items-center gap-2">
+                              <span>PID: {svc.pids}</span>
+                              <span>•</span>
+                              <span>Net: {(svc.net_rx_mb + svc.net_tx_mb).toFixed(1)}MB</span>
+                            </div>
+                            <div>
+                              {svc.last_action !== 'none' && (
+                                <span className="text-amber-500 flex items-center gap-1">
+                                  <Clock size={10} /> {new Date(svc.last_action_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </CardContent>
                 </Card>
               ))}

@@ -369,7 +369,8 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
         Local: `docker stop` the active container, cancel in-flight (non-ACTIVE)
         deployments, mark the service STOPPED (health monitor skips stopped
         services — no restart fights). The ACTIVE deployment row is kept as
-        the resume point for `start`.
+        the resume point for `start`. Implementation lives in
+        apps.deployments.services.power so bulk endpoints share it.
         """
         service = self.get_object()
         assert_can_write(self.request.user, service)
@@ -400,64 +401,13 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
         except Exception as e:
             logger.error("Stop resolution/remote call failed for service %s: %s", service.id, e)
 
-        # Cancel in-flight deployments (never the ACTIVE row — it is the
-        # resume point for `start`; cancelling it diverged DB from reality).
-        count = service.deployments.filter(
-            status__in=[
-                Deployment.Status.BUILDING,
-                Deployment.Status.DEPLOYING,
-                Deployment.Status.HEALTH_CHECK,
-                Deployment.Status.QUEUED,
-                Deployment.Status.REVIEW,
-            ]
-        ).update(
-            status=Deployment.Status.CANCELLED,
-            finished_at=timezone.now(),
-        )
-
-        # Local: actually stop the container.
-        method = 'deployment_cancel_only'
-        container_id = None
-        try:
-            active_deploy = service.deployments.filter(
-                status=Deployment.Status.ACTIVE).order_by('-created_at').first()
-            container_id = active_deploy.container_id if active_deploy else None
-            if container_id:
-                from apps.deployments.services.container_runtime import ContainerRuntime
-                ContainerRuntime().stop_container(container_id)
-                method = 'docker_stop'
-        except Exception as exc:
-            logger.warning("Docker stop failed for %s (container=%s): %s", service.name, container_id, exc)
-            # DB state still flips: a missing/dead container is stopped
-            # for all practical purposes; monitor skips STOPPED either way.
-            method = 'docker_stop_failed'
-
-        service.status = Service.Status.STOPPED
-        # Health badge must not keep showing the last live state: the
-        # monitor skips stopped services, so reset to unknown here.
-        service.health_status = 'unknown'
-        service.save(update_fields=['status', 'health_status', 'updated_at'])
-
-        # Clear restart/backoff state so a later start is clean.
-        try:
-            from apps.core.services.health_monitor import reset_restart_state
-            reset_restart_state(str(service.id))
-        except Exception:
-            pass
-
-        # Log the stop action
-        AuditLog(
-            actor=request.user.get_username(),
-            action='SERVICE_STOP',
-            target=f'Service: {service.name}',
-            metadata={'service_id': str(service.id), 'deployments_cancelled': count,
-                      'method': method, 'container_id': container_id},
-        ).save()
+        from apps.deployments.services.power import stop_service
+        result = stop_service(service, actor=request.user.get_username())
 
         return Response({
             'message': f'Service {service.name} stopped',
-            'deployments_cancelled': count,
-            'method': method,
+            'deployments_cancelled': result['deployments_cancelled'],
+            'method': result['method'],
         })
 
     @action(detail=True, methods=['post'])
@@ -500,8 +450,8 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
             target_type = target["target_type"]
         except Exception as e:
             logger.debug("Start target resolution failed for %s, assuming local: %s", service.id, e)
-        try:
-            if target_type in ("remote", "lite_agent") and active_server:
+        if target_type in ("remote", "lite_agent") and active_server:
+            try:
                 from apps.deployments.services.remote_orchestrator import (
                     RemoteOrchestrator,
                 )
@@ -532,38 +482,90 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
                     metadata={'service_id': str(service.id), 'method': 'remote_docker_start'},
                 ).save()
                 return Response({'message': f'Service {service.name} started remotely'})
-        except Exception as e:
-            logger.error("Start resolution/remote call failed for service %s: %s", service.id, e)
-            return Response({'error': 'Start failed.'}, status=status.HTTP_502_BAD_GATEWAY)
+            except Exception as e:
+                logger.error("Start resolution/remote call failed for service %s: %s", service.id, e)
+                return Response({'error': 'Start failed.'}, status=status.HTTP_502_BAD_GATEWAY)
 
-        try:
-            from apps.deployments.services.container_runtime import ContainerRuntime
-            ContainerRuntime().start_container(container_id)
-        except Exception as exc:
-            logger.error("Docker start failed for %s (container=%s): %s", service.name, container_id, exc)
-            return Response({'error': 'Docker start failed.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        service.status = Service.Status.ACTIVE
-        service.health_status = 'starting'
-        service.save(update_fields=['status', 'health_status', 'updated_at'])
-        try:
-            from apps.core.services.health_monitor import reset_restart_state
-            reset_restart_state(str(service.id))
-            from django.core.cache import cache
-            cache.set(f"health:restart_grace:{service.id}", True, timeout=60)
-        except Exception:
-            pass
-        AuditLog(
-            actor=request.user.get_username(),
-            action='SERVICE_START',
-            target=f'Service: {service.name}',
-            metadata={'service_id': str(service.id), 'container_id': container_id,
-                      'method': 'docker_start'},
-        ).save()
+        from apps.deployments.services.power import start_service
+        result = start_service(service, actor=request.user.get_username())
+        if not result['ok']:
+            code = (status.HTTP_400_BAD_REQUEST
+                    if result['error'] == 'No active deployment to start.'
+                    else status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': result['error']}, status=code)
         return Response({
             'message': f'Service {service.name} started',
-            'container_id': container_id,
+            'container_id': result['container_id'],
         })
+
+    def _require_power_admin(self, request):
+        if not getattr(request.user, 'is_superuser', False):
+            return Response(
+                {'error': 'Bulk power operations require admin.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
+    @action(detail=False, methods=['post'], url_path='bulk-stop')
+    def bulk_stop(self, request):
+        """Queue stopping ALL active services (async, 202 + task id)."""
+        denied = self._require_power_admin(request)
+        if denied:
+            return denied
+        from apps.deployments.tasks.deploy.power_tasks import bulk_power_task
+        task = bulk_power_task.delay('stop', request.user.get_username())
+        return Response({'task_id': task.id, 'op': 'stop'},
+                        status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=['post'], url_path='bulk-start')
+    def bulk_start(self, request):
+        """Queue starting ALL stopped services (async, 202 + task id)."""
+        denied = self._require_power_admin(request)
+        if denied:
+            return denied
+        from apps.deployments.tasks.deploy.power_tasks import bulk_power_task
+        task = bulk_power_task.delay('start', request.user.get_username())
+        return Response({'task_id': task.id, 'op': 'start'},
+                        status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=['post'], url_path='bulk-restart')
+    def bulk_restart(self, request):
+        """Queue restarting ALL active services, staggered (async, 202)."""
+        denied = self._require_power_admin(request)
+        if denied:
+            return denied
+        from apps.deployments.tasks.deploy.power_tasks import bulk_power_task
+        task = bulk_power_task.delay('restart', request.user.get_username())
+        return Response({'task_id': task.id, 'op': 'restart'},
+                        status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=['get', 'post', 'delete'], url_path='auto-off')
+    def auto_off(self, request):
+        """Schedule (POST {in_minutes}), inspect (GET) or cancel (DELETE)
+        an automatic bulk power-off. Survives page closes (server-side ETA);
+        a worker restart may drop it — the GET endpoint reports truth."""
+        from apps.deployments.tasks.deploy.power_tasks import (
+            cancel_auto_off, pending_auto_off, schedule_auto_off,
+        )
+        if request.method == 'GET':
+            return Response({'pending': pending_auto_off()})
+        denied = self._require_power_admin(request)
+        if denied:
+            return denied
+        if request.method == 'DELETE':
+            cancelled = cancel_auto_off()
+            return Response({'cancelled': cancelled})
+        try:
+            minutes = float(request.data.get('in_minutes', 0)
+                            or request.query_params.get('in_minutes', 0))
+        except (TypeError, ValueError):
+            return Response({'error': 'in_minutes must be a number.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if minutes < 1 or minutes > 1440:
+            return Response({'error': 'in_minutes must be between 1 and 1440.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        info = schedule_auto_off(int(minutes * 60), request.user.get_username())
+        return Response({'scheduled': info}, status=status.HTTP_202_ACCEPTED)
 
     @action(
         detail=True,
