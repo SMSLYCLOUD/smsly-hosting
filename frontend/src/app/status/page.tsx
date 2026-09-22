@@ -16,26 +16,32 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const SERVICE_GROUPS = [
   { label: "Core", keys: ["backend", "frontend", "celery", "celery-beat", "celery-fast", "celery-deploy"] },
-  { label: "Database", keys: ["db", "db-replica", "postgres-primary", "postgres-replica", "pgcat", "pgbouncer", "pgbouncer-readonly"] },
+  { label: "Database", keys: ["db", "db-replica", "postgres-primary", "postgres-replica", "pgcat", "pgcat-tenants", "shared-postgres", "shared-postgres-replica", "pgbouncer", "pgbouncer-readonly"] },
   { label: "Redis HA", keys: ["redis", "redis-primary", "redis-replica", "redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3"] },
   { label: "Queue", keys: ["rabbitmq"] },
   { label: "Proxy", keys: ["traefik", "caddy", "route-fallback", "socket-proxy", "frps"] },
-  { label: "Observability", keys: ["grafana", "loki", "promtail", "prometheus", "alertmanager", "cadvisor", "node-exporter"] },
-  { label: "Security", keys: ["crowdsec", "smsly-falco", "infisical", "appsec-agent", "appsec-envoy", "appsec-db", "appsec-smartsync", "appsec-tuning-svc", "appsec-shared-storage"] },
-  { label: "Registry & Build", keys: ["registry", "docker-mirror", "verdaccio", "buildkitd"] },
-  { label: "Other", keys: ["apt-cacher", "docker-labels"] },
+  { label: "Observability", keys: ["grafana", "loki", "promtail", "prometheus", "alertmanager", "cadvisor", "node-exporter", "loki-log-bridge"] },
+  { label: "Security", keys: ["crowdsec", "cloudflare-bouncer", "smsly-falco", "infisical", "spire-server", "spire-agent", "spire-server-ecosystem", "spire-agent-ecosystem", "appsec-agent", "appsec-envoy", "appsec-db", "appsec-smartsync", "appsec-tuning-svc", "appsec-shared-storage"] },
+  { label: "Registry & Build", keys: ["registry", "docker-mirror", "verdaccio", "buildkit"] },
+  { label: "Other", keys: ["apt-cacher", "docker-labels", "mcp-server"] },
 ];
 
 const CORE_REQUIRED_SERVICES = new Set([
-  "backend", "frontend", "celery", "celery-beat", "db", "postgres-primary", "redis", "redis-primary", "rabbitmq", "traefik"
+  "backend", "frontend", "celery", "celery-beat", "db", "postgres-primary", "redis", "redis-primary", "rabbitmq", "traefik",
+  "shared-postgres", "pgcat-tenants"
 ]);
 
 const OPTIONAL_SERVICES = new Set([
   "db-replica", "postgres-replica", "pgbouncer", "pgbouncer-readonly", "pgcat",
+  "shared-postgres-replica",
   "redis-replica", "redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3",
   "celery-fast", "celery-deploy", "caddy", "route-fallback", "socket-proxy", "frps",
-  "grafana", "loki", "promtail", "prometheus", "alertmanager", "cadvisor", "node-exporter",
-  "crowdsec", "smsly-falco", "infisical", "appsec-agent", "appsec-envoy", "appsec-db", "appsec-smartsync", "appsec-tuning-svc", "appsec-shared-storage", "registry", "docker-mirror", "verdaccio", "buildkitd",
+  "grafana", "loki", "promtail", "prometheus", "alertmanager", "cadvisor", "node-exporter", "loki-log-bridge",
+  "crowdsec", "cloudflare-bouncer", "smsly-falco", "infisical",
+  "spire-server", "spire-agent", "spire-server-ecosystem", "spire-agent-ecosystem",
+  "appsec-agent", "appsec-envoy", "appsec-db", "appsec-smartsync", "appsec-tuning-svc", "appsec-shared-storage",
+  "registry", "docker-mirror", "verdaccio", "buildkit",
+  "mcp-server",
   "apt-cacher", "docker-labels"
 ]);
 

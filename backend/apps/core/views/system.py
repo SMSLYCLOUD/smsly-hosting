@@ -421,18 +421,22 @@ class SystemConfigView(GenericAPIView):
         KNOWN_SERVICES = [
             'backend', 'frontend', 'celery', 'celery-beat', 'celery-fast', 'celery-deploy',
             'db', 'db-replica', 'postgres-primary', 'postgres-replica', 'pgcat',
+            'pgcat-tenants', 'shared-postgres', 'shared-postgres-replica',
             'pgbouncer', 'pgbouncer-readonly',
             'redis', 'redis-primary', 'redis-replica',
             'redis-sentinel-1', 'redis-sentinel-2', 'redis-sentinel-3',
             'rabbitmq',
             'traefik', 'caddy', 'route-fallback', 'socket-proxy', 'frps',
             'grafana', 'loki', 'promtail', 'prometheus', 'alertmanager',
-            'cadvisor', 'node-exporter',
-            'crowdsec', 'smsly-falco', 'infisical',
+            'cadvisor', 'node-exporter', 'loki-log-bridge',
+            'crowdsec', 'cloudflare-bouncer', 'smsly-falco', 'infisical',
+            'spire-server', 'spire-agent',
+            'spire-server-ecosystem', 'spire-agent-ecosystem',
             'appsec-agent', 'appsec-envoy', 'appsec-db',
             'appsec-smartsync', 'appsec-tuning-svc',
             'appsec-shared-storage',
-            'registry', 'docker-mirror', 'verdaccio', 'buildkitd',
+            'registry', 'docker-mirror', 'verdaccio', 'buildkit',
+            'mcp-server',
             'apt-cacher', 'docker-labels',
         ]
 
@@ -524,7 +528,27 @@ class SystemConfigView(GenericAPIView):
         TCP_PROBES = {
             'rabbitmq': ('smsly-hosting-rabbitmq-1', 5672),
             'pgcat': ('smsly-hosting-pgcat-1', 6432),
+            'pgcat-tenants': ('smsly-hosting-pgcat-tenants-1', 5432),
+            'shared-postgres': ('smsly-shared-postgres', 5432),
         }
+
+        def _buildkit_ok() -> bool:
+            """Any buildx builder reporting running (seam for tests).
+
+            BuildKit here is embedded/docker-container drivers, not a
+            `buildkitd` container — container matching alone always misses.
+            """
+            try:
+                result = subprocess.run(
+                    ['docker', 'buildx', 'ls'],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode != 0:
+                    return False
+                lines = (result.stdout or '').strip().split('\n')
+                return any('running' in line for line in lines[1:])
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                return False
 
         def _http_probe(url: str) -> bool:
             try:
@@ -563,6 +587,8 @@ class SystemConfigView(GenericAPIView):
                 running = redis_ok
             elif svc_name in ('celery', 'celery-beat', 'celery-fast', 'celery-deploy'):
                 running = celery_ok
+            elif svc_name in ('buildkit',):
+                running = _buildkit_ok()
             elif svc_name in http_results:
                 running = http_results[svc_name]
             else:
