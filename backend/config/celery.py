@@ -316,6 +316,13 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
+    # Edge watchdog: outside-in apex check (public DNS + SNI probe) with
+    # DNS-drift self-heal. On-host probes lie when the edge breaks.
+    'watch-platform-edge-every-10m': {
+        'task': 'apps.domains.tasks.watch_platform_edge_task',
+        'schedule': 600.0,
+        'options': {'expires': 600.0},
+    },
     # Green reaper: stop resource-burning containers of dead rollouts.
     # Failed/stuck greens otherwise sit "Up (unhealthy)" until the 30-minute
     # orphan sweep — and referenced greens are skipped there entirely.
