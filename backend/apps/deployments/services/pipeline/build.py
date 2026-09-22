@@ -33,6 +33,94 @@ logger = logging.getLogger(__name__)
 BUILD_FAIL_TAIL_LINES = 60
 BUILD_FAIL_TAIL_CHARS = 8000
 
+# ── Build engine selection ──────────────────────────────────────────
+# SMSLY_DOCKER_BUILDER=classic forces the legacy docker-py path.
+# Default (anything else) tries `docker buildx build` first — real
+# BuildKit: cache mounts, --secret mounts, registry cache — and falls
+# back to classic only on infrastructure-class failures (missing CLI,
+# daemon unreachable, no builder). Dockerfile errors never fall back:
+# retrying them classically just burns a second full build.
+_BUILDX_INFRA_RE = re.compile(
+    r"no such file or directory.*\bdocker\b"
+    r"|\bdocker\b.*command not found|command not found.*\bdocker\b"
+    r"|errno 2.*\bdocker\b"
+    r"|cannot connect to the [Dd]ocker daemon"
+    r"|error during connect"
+    r"|connection refused"
+    r"|permission denied.*(?:docker\.sock|connect)"
+    r"|no builder|unknown driver|failed to dial|buildkitd",
+    re.IGNORECASE,
+)
+
+# Cached per worker process: CLI presence + default-driver probe.
+_BUILDX_USABLE: bool | None = None
+
+
+def _use_buildx() -> bool:
+    """Build engine selector. Env SMSLY_DOCKER_BUILDER=classic opts out."""
+    return os.environ.get("SMSLY_DOCKER_BUILDER", "buildx").strip().lower() != "classic"
+
+
+def _is_buildx_infra_error(text: str) -> bool:
+    """True when a buildx failure is environmental (fallback may help)."""
+    return bool(_BUILDX_INFRA_RE.search(str(text or "")))
+
+
+def _buildx_usable() -> bool:
+    """CLI present + default builder on the docker driver (read-only probe,
+    never mutates shared builder state). Cached per process."""
+    global _BUILDX_USABLE
+    if _BUILDX_USABLE is not None:
+        return _BUILDX_USABLE
+    usable = False
+    try:
+        if shutil.which("docker") is None:
+            usable = False
+        else:
+            probe = subprocess.run(
+                ["docker", "buildx", "inspect"],
+                capture_output=True, text=True, timeout=15,
+            )
+            usable = probe.returncode == 0 and "Driver: docker" in (probe.stdout or "")
+    except Exception as exc:
+        logger.debug("buildx usability probe failed: %s", exc)
+        usable = False
+    _BUILDX_USABLE = usable
+    return usable
+
+
+def _stage_secret_files(secrets: dict | None) -> tuple[list, list]:
+    """Write {id: value} to chmod-600 tmpfiles. Returns (ids, paths).
+
+    Caller MUST pass paths to _cleanup_secret_files in a finally block —
+    the classic path once staged these and never deleted them, leaving
+    token material in /tmp indefinitely.
+    """
+    import tempfile
+    ids: list = []
+    paths: list = []
+    for secret_id, secret_val in (secrets or {}).items():
+        if not secret_val:
+            continue
+        fd, p = tempfile.mkstemp(prefix=f"smsly-secret-{secret_id}-")
+        try:
+            os.write(fd, str(secret_val).encode())
+        finally:
+            os.close(fd)
+        os.chmod(p, 0o600)
+        ids.append(secret_id)
+        paths.append(p)
+    return ids, paths
+
+
+def _cleanup_secret_files(paths) -> None:
+    """Best-effort removal of staged secret files. Never raises."""
+    for p in paths or []:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
 
 # ── Registry-qualified local image names (build-cache engagement) ──
 # Bare `ns/name:tag` names make the daemon resolve docker.io, so
@@ -41,12 +129,14 @@ BUILD_FAIL_TAIL_CHARS = 8000
 # with the daemon-local registry host (`registry:5000`) engages
 # classic-builder layer caching + pull-on-miss + push-after-build, so
 # code-only redeploys reuse dependency layers.
-# Gates (all must pass, else legacy bare names):
-#   * SMSLY_REGISTRY_IMAGE_NAMES != 0/false/no/off (kill-switch);
-#   * CONTAINER_REGISTRY_URL is daemon-local (registry:/127./localhost
+# Gates (evaluated in order):
+#   * SMSLY_REGISTRY_IMAGE_NAMES=0/false/no/off restores legacy bare names;
+#   * CONTAINER_REGISTRY_URL must be daemon-local (registry:/127./localhost
 #     markers — never an external host like ECR);
-#   * the deployment builds on the local daemon (agent daemons cannot
-#     resolve `registry:5000` — agent-lite compose runs no registry).
+#   * local-daemon builds take the local host; remote/agent builds take the
+#     mesh host, but only after a live reachability probe (agents cannot
+#     resolve `registry:5000`, and an unreachable mesh must keep legacy
+#     bare names rather than fail the build).
 def _local_registry_host() -> str:
     raw = (getattr(settings, "CONTAINER_REGISTRY_URL", "") or "").strip()
     host = raw.split("://")[-1].rstrip("/").split("/")[0]
@@ -78,10 +168,57 @@ def _with_local_registry(bare_name: str, deployment=None) -> str:
         try:
             from apps.deployments.utils import is_deployment_local
             if not is_deployment_local(deployment):
-                return name
+                # Agent/remote daemons can't resolve the local name — try
+                # the mesh address (probe-gated, "" when unreachable).
+                mesh = _mesh_registry_host()
+                return f"{mesh}/{name}" if mesh else name
         except Exception:
             return name
     return f"{host}/{name}"
+
+
+# Maximum seconds a mesh-registry reachability probe may take.
+_MESH_PROBE_TIMEOUT = 3
+
+# Cached per worker process once a mesh registry answers.
+_MESH_OK_HOST: str | None = None
+
+
+def _mesh_registry_host() -> str:
+    """Registry host:port reachable from a REMOTE build daemon, or "".
+
+    Remote/agent daemons cannot resolve `registry:5000`; they reach the
+    master registry over WireGuard. Returns e.g. "10.100.0.1:5000" only
+    after a live TCP probe — a cached success is reused, failures always
+    re-probe (the mesh may come up later). Never raises.
+    """
+    global _MESH_OK_HOST
+    if _MESH_OK_HOST:
+        return _MESH_OK_HOST
+    try:
+        if os.environ.get("SMSLY_MESH_REGISTRY_CACHE", "true").strip().lower() in (
+            "0", "false", "no", "off",
+        ):
+            return ""
+        # Only meaningful when the platform itself runs the internal
+        # registry (never rewrite third-party/ECR names to the mesh).
+        if not _local_registry_host():
+            return ""
+        try:
+            from apps.deployments.services.provisioner.helpers.server_config import (
+                _get_master_mesh_ip,
+            )
+            mesh_ip = (_get_master_mesh_ip() or "").strip() or "10.100.0.1"
+        except Exception:
+            mesh_ip = "10.100.0.1"
+        import socket
+        with socket.create_connection((mesh_ip, 5000), timeout=_MESH_PROBE_TIMEOUT):
+            pass
+        _MESH_OK_HOST = f"{mesh_ip}:5000"
+        return _MESH_OK_HOST
+    except Exception as exc:
+        logger.debug("Mesh registry unreachable, agent builds stay bare: %s", exc)
+        return ""
 
 
 def _registry_cache_settings(image_name, build_args):
@@ -530,17 +667,15 @@ class BuildMixin:
             return False
 
     def _build_with_docker(self, context_dir: str, dockerfile_path: str):
-        """Execute Docker build via the docker-py SDK (no docker CLI required).
+        """Execute Docker build, BuildKit-first with classic fallback.
 
-        Same U6 pattern as ``apps.autoscaler.engine.container_metrics``:
-        talk to the Docker daemon over HTTP via ``apps.cloud.docker_client``
-        (which honours ``DOCKER_HOST``, pointing at the socket-proxy in
-        compose mode) instead of shelling out to the ``docker`` CLI.  The
-        CLI is not installed in the runtime image (see Batch S5: removed
-        ``docker-ce-cli`` from the backend ``Dockerfile`` to shrink the
-        attack surface), so subprocess-based ``docker build`` invocations
-        crash with ``[Errno 2] No such file or directory: 'docker'`` and
-        break every new deployment.
+        Prefers `docker buildx build` (real BuildKit: cache mounts,
+        --secret mounts, registry cache) via `_build_with_docker_engine`,
+        which falls back to the docker-py Engine-API path
+        (`_build_via_docker_py`) only on infrastructure-class failures.
+        Set SMSLY_DOCKER_BUILDER=classic to force the legacy path.
+        The CLI talks to the daemon over HTTP via DOCKER_HOST
+        (socket-proxy in compose mode), same transport as the SDK path.
         """
         # ── Runtime Hardening: patch outdated base images ──
         self._patch_dockerfile_for_runtime(dockerfile_path)
@@ -692,6 +827,55 @@ class BuildMixin:
         cache_from, build_args_dict = _registry_cache_settings(
             image_name, build_args_dict)
 
+        self._build_with_docker_engine(
+            context_dir=context_dir,
+            dockerfile_path=dockerfile_path,
+            image_name=image_name,
+            build_args_dict=build_args_dict,
+            cache_from=cache_from,
+            build_secrets=build_secrets,
+        )
+
+    def _build_with_docker_engine(
+        self,
+        context_dir: str,
+        dockerfile_path: str,
+        image_name: str,
+        build_args_dict: dict,
+        cache_from: list,
+        build_secrets: dict,
+    ):
+        """Buildx-first dispatcher with classic fallback.
+
+        Tries real BuildKit (cache mounts, secret mounts, registry cache)
+        unless SMSLY_DOCKER_BUILDER=classic. Falls back to the legacy
+        Engine-API path only on infrastructure-class failures (missing
+        CLI, unreachable daemon, no builder). Dockerfile errors and
+        timeouts raise immediately — retrying those on a second engine
+        just burns another full build.
+        """
+        if _use_buildx() and _buildx_usable():
+            try:
+                return self._build_with_buildx(
+                    context_dir=context_dir,
+                    dockerfile_path=dockerfile_path,
+                    tag=image_name,
+                    buildargs=build_args_dict,
+                    cache_from=cache_from,
+                    secrets=build_secrets,
+                )
+            except BuildError:
+                raise
+            except Exception as exc:
+                if _is_buildx_infra_error(str(exc)):
+                    append_log(
+                        self.deployment,
+                        "BuildKit unavailable "
+                        f"({str(exc)[:120]}) — falling back to classic builder...\n",
+                    )
+                else:
+                    raise BuildError(
+                        f"Docker build failed: {str(exc)[-500:]}") from exc
         self._build_via_docker_py(
             context_dir=context_dir,
             dockerfile_path=dockerfile_path,
@@ -736,6 +920,102 @@ class BuildMixin:
             return ""
         return "\n[docker daemon build-output tail]\n" + redacted + "\n"
 
+    def _build_with_buildx(
+        self,
+        context_dir: str,
+        dockerfile_path: str,
+        tag: str,
+        buildargs: dict,
+        cache_from: list,
+        secrets: dict[str, str] | None = None,
+    ):
+        """Build via `docker buildx build` (real BuildKit, docker driver).
+
+        Activates Dockerfile cache mounts, genuine --secret mounts, and
+        registry layer caching (--cache-from + inline). Single attempt —
+        the caller falls back to classic on infrastructure-class errors
+        only; Dockerfile errors raise immediately (retrying them on
+        another engine just burns a second full build).
+        """
+        from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
+        from apps.deployments.services.builders import (
+            _platform_build_limits as _build_limits,
+        )
+
+        dockerfile_rel = os.path.relpath(dockerfile_path, context_dir)
+        if dockerfile_rel.startswith(".."):
+            dockerfile_rel = os.path.basename(dockerfile_path)
+        try:
+            with open(dockerfile_path, encoding="utf-8") as _df:
+                _df_text = _df.read()
+        except OSError:
+            _df_text = ""
+        secret_aware = "mount=type=secret" in _df_text
+
+        secret_ids, secret_files = _stage_secret_files(secrets)
+        try:
+            cmd = [
+                "docker", "buildx", "build",
+                "--load", "--progress=plain",
+                "-t", tag, "-f", dockerfile_rel,
+            ]
+            for k, v in (buildargs or {}).items():
+                cmd += ["--build-arg", f"{k}={v}"]
+            for sid, spath in zip(secret_ids, secret_files):
+                cmd += ["--secret", f"id={sid},src={spath}"]
+            if not secret_aware:
+                # Compat: Dockerfiles written for ARG-based secrets can't
+                # see --secret mounts. Same exposure as the classic path
+                # (process list instead of image history — narrower window).
+                for sid in secret_ids:
+                    cmd += ["--build-arg", f"{sid}={(secrets or {}).get(sid, '')}"]
+                if secret_ids:
+                    append_log(
+                        self.deployment,
+                        "WARNING: Dockerfile is not secret-mount aware — secrets passed as build-arg (visible briefly in process list).\n"
+                        "  Add RUN --mount=type=secret mounts to hide them fully.\n",
+                    )
+            for c in cache_from or []:
+                cmd += ["--cache-from", f"type=registry,ref={c}"]
+            cmd += ["--cache-to", "type=inline", context_dir]
+            try:
+                mem_mb, cpu_pct, timeout_s = _build_limits()
+            except Exception:
+                mem_mb, cpu_pct, timeout_s = 10240, 400, DOCKER_BUILD_TIMEOUT
+            try:
+                probe = subprocess.run(
+                    ["systemd-run", "--version"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if probe.returncode == 0:
+                    cmd = [
+                        "systemd-run", "--scope",
+                        "-p", f"MemoryMax={mem_mb}M",
+                        "-p", f"CPUQuota={cpu_pct}%",
+                        "--", *cmd,
+                    ]
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
+            append_log(
+                self.deployment,
+                f"Building with BuildKit ({os.path.basename(dockerfile_path)})...\n",
+            )
+            try:
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    timeout=timeout_s, cwd=context_dir,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(f"docker CLI not found for buildx: {exc}") from exc
+            tail = ((proc.stdout or "")[-20000:] + (proc.stderr or "")[-4000:])
+            redacted = redact_values(tail, self.secret_values)
+            if redacted.strip():
+                append_log(self.deployment, redacted[-20000:] + "\n")
+            if proc.returncode != 0:
+                raise BuildError(f"Docker build failed: {redacted[-500:]}")
+        finally:
+            _cleanup_secret_files(secret_files)
+
     def _build_via_docker_py(
         self,
         context_dir: str,
@@ -760,12 +1040,10 @@ class BuildMixin:
         BuildKit cache errors get the same prune-and-retry treatment
         as the old ``_run_subprocess`` path.
 
-        ``secrets`` is a ``{secret_id: secret_value}`` dict.  Each entry is
-        written to a chmod-600 tmpfile which is passed to the Docker daemon as
-        a BuildKit secret mount (``--secret id=<id>,src=<path>``).  The files
-        are deleted unconditionally in a ``finally`` block — even on build
-        failure or cache-error retry — so secret material never persists on
-        disk beyond the build lifetime.
+        ``secrets`` is a ``{secret_id: secret_value}`` dict merged into
+        build-args (visible in ``docker history`` — the legacy Engine API
+        cannot do secret mounts; the buildx path stages real --secret
+        mounts instead).
         """
         import io
         import tarfile
@@ -780,20 +1058,16 @@ class BuildMixin:
         if dockerfile_rel.startswith(".."):
             dockerfile_rel = os.path.basename(dockerfile_path)
 
-        # ── Secret handling: prefer BuildKit --secret mounts, fallback to ARG only
-        # for docker-py legacy API. BuildKit secrets are NOT visible in
-        # `docker history` and are the secure path for GITHUB_TOKEN etc.
+        # ── Secret handling for the legacy Engine API ─────────────────────
+        # docker-py cannot do BuildKit --secret mounts, so secrets go in
+        # as buildargs (visible in `docker history` — logged below).
+        # NOTE: no tmpfiles are staged here on purpose: the SDK never
+        # consumes them, and staging-then-leaking them left token material
+        # in /tmp indefinitely (2026-09-22). The buildx path below stages
+        # files only around the subprocess call and deletes them in a
+        # finally block.
         merged_buildargs = dict(buildargs or {})
-        build_secret_files = []
-        build_secret_ids = []
         try:
-            import tempfile
-            has_buildkit_secret = False
-            # Probe if the Docker daemon supports BuildKit secrets (via buildx)
-            # For now, we still pass via buildargs for docker-py, but we
-            # immediately clear the values from image history via a follow-up
-            # layer that unsets them, and we log a clear warning.
-            # Future: switch to `docker buildx build --secret` subprocess.
             for secret_id, secret_val in (secrets or {}).items():
                 # For docker-py, we must pass as buildargs, but we will
                 # ensure the value is not persisted in the final image by
@@ -801,13 +1075,6 @@ class BuildMixin:
                 # Log the security trade-off explicitly.
                 merged_buildargs[secret_id] = secret_val
                 merged_buildargs[secret_id.upper()] = secret_val
-                # Also prepare tmpfiles for future BuildKit migration
-                fd, p = tempfile.mkstemp(prefix=f"smsly-secret-{secret_id}-")
-                os.write(fd, secret_val.encode())
-                os.close(fd)
-                os.chmod(p, 0o600)
-                build_secret_files.append(p)
-                build_secret_ids.append(secret_id)
             if secrets:
                 append_log(
                     self.deployment,
