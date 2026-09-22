@@ -311,6 +311,20 @@ export default function AutoscalerPage() {
     try {
       await servicesApi.update(serviceId, { autoscale_enabled: next } as any);
       setServicesList(prev => prev.map(s => s.id === serviceId ? { ...s, autoscale_enabled: next } : s));
+      // The switch reads autoscale_enabled from the autoscaler status map,
+      // not servicesList — patch it too or the toggle visibly snaps back
+      // until the next status poll.
+      setStatus(prev => {
+        if (!prev) return prev;
+        const services = { ...prev.services };
+        for (const [key, entry] of Object.entries(services)) {
+          if ((entry as any).service_id === serviceId) {
+            services[key] = { ...entry, autoscale_enabled: next };
+            break;
+          }
+        }
+        return { ...prev, services };
+      });
       toast({ title: next ? 'Auto-scaling enabled' : 'Auto-scaling disabled' });
     } catch (err) {
       toast({ title: 'Failed to toggle auto-scaling', variant: 'destructive' });
