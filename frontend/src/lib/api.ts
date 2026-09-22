@@ -321,7 +321,7 @@ export interface Service {
   slug: string;
   // Backend Service.Status: ACTIVE | DELETION_PENDING | DELETION_FAILED
   // | DELETED | UNKNOWN. No UPDATING/STOPPED, no lowercase variants.
-  status: 'ACTIVE' | 'DELETION_PENDING' | 'DELETION_FAILED' | 'DELETED' | 'UNKNOWN';
+  status: 'ACTIVE' | 'STOPPED' | 'DELETION_PENDING' | 'DELETION_FAILED' | 'DELETED' | 'UNKNOWN';
   repository_url?: string;
   branch?: string;
   internal_port?: number;
@@ -669,6 +669,18 @@ export const servicesApi = {
     space_reclaimed_mb: number;
   }> => {
     const response = await api.post(`/services/${id}/prune-docker/`);
+    return response.data;
+  },
+  moveProject: async (id: string, projectId: string): Promise<{
+    status: string;
+    from_project: string | null;
+    to_project: string | null;
+    mtls?: Record<string, unknown>;
+    message?: string;
+  }> => {
+    const response = await api.post(`/services/${id}/move-project/`, {
+      project_id: projectId,
+    });
     return response.data;
   },
   delete: async (id: string, force: boolean = false): Promise<void> => {
@@ -2421,7 +2433,20 @@ export const projectMembersApi = {
 // Autoscaler (VPS-level cross-service)
 // =============================================================================
 
+export interface AutoscalerServiceReplica {
+  id: string;
+  container_name?: string | null;
+  status: 'SPAWNING' | 'RUNNING' | 'DRAINING' | 'DESTROYING' | 'DESTROYED';
+  node: string;
+  node_host?: string | null;
+  spawn_reason?: string | null;
+  created_at: string;
+}
+
 export interface AutoscalerService {
+  service_id?: string;
+  autoscale_enabled?: boolean;
+  autoscale_cpu_target?: number;
   type: 'gunicorn' | 'celery' | 'daphne';
   app: string;
   priority: number;
@@ -2437,6 +2462,15 @@ export interface AutoscalerService {
   current_workers: number;
   min_workers: number;
   max_workers: number;
+  min_replicas?: number;
+  max_replicas?: number;
+  cpu_cores?: number | null;
+  memory_mb_allocated?: number | null;
+  vpa_enabled?: boolean;
+  last_scale_at?: string | null;
+  cooldown_up_min?: number;
+  cooldown_down_min?: number;
+  replicas?: AutoscalerServiceReplica[];
   last_action: string;
   last_action_at: string;
 }
@@ -2449,6 +2483,62 @@ export interface AutoscalerBudget {
   free_mb: number;
 }
 
+export interface AutoscalerInfraBurstWorker {
+  name: string;
+  description: string;
+  target_queue: string;
+  status: 'running' | 'scaled_down' | 'draining' | 'pending_scale_down' | 'busy';
+  is_running: boolean;
+  active_tasks: number;
+  reserved_tasks: number;
+  queue_depth: number;
+  drain_held: boolean;
+  status_message: string;
+  cpu_percent: number;
+  memory_mb: number;
+}
+
+export interface AutoscalerInfraStatus {
+  autoscale_enabled: boolean;
+  total_queue_depth: number;
+  queues: Record<string, number>;
+  unacknowledged_burst_tasks: number;
+  scale_down_held: boolean;
+  scale_up_threshold: number;
+  scale_down_threshold: number;
+  scale_up_after_seconds: number;
+  scale_down_after_seconds: number;
+  check_interval_seconds: number;
+  burst_workers: AutoscalerInfraBurstWorker[];
+  primary_worker: {
+    name: string;
+    description: string;
+    queues: string[];
+    status: string;
+    active_tasks: number;
+    reserved_tasks: number;
+    cpu_percent: number;
+    memory_mb: number;
+  };
+  scheduler: {
+    name: string;
+    description: string;
+    status: string;
+    cpu_percent: number;
+    memory_mb: number;
+  };
+  web_scaling: {
+    service: string;
+    strategy: string;
+    current_workers: number;
+    min_workers: number;
+    max_workers: number;
+    pids: number;
+    memory_mb: number;
+    cpu_percent: number;
+  };
+}
+
 export interface AutoscalerStatus {
   status: string;
   _stale?: boolean;
@@ -2457,6 +2547,7 @@ export interface AutoscalerStatus {
   last_check_at: string | null;
   budget: AutoscalerBudget;
   services: Record<string, AutoscalerService>;
+  infra?: AutoscalerInfraStatus;
   recent_decisions: {
     timestamp: string;
     container: string;
@@ -2530,6 +2621,14 @@ export const scalingApi = {
   },
   spawnReplica: async (serviceId: string, mode: 'horizontal' | 'vertical' = 'horizontal'): Promise<Replica> => {
     const response = await api.post(`/scaling/${serviceId}/spawn/`, null, { params: { mode } });
+    return response.data;
+  },
+  scaleDown: async (serviceId: string, count: number = 1): Promise<any> => {
+    const response = await api.post(`/scaling/${serviceId}/scale_down/`, { count });
+    return response.data;
+  },
+  analyze: async (serviceId: string): Promise<any> => {
+    const response = await api.post(`/scaling/${serviceId}/analyze/`);
     return response.data;
   },
   destroyReplica: async (replicaId: string): Promise<{ status: string; message?: string }> => {
