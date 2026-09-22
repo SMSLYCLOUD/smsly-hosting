@@ -316,6 +316,15 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
+    # Green reaper: stop resource-burning containers of dead rollouts.
+    # Failed/stuck greens otherwise sit "Up (unhealthy)" until the 30-minute
+    # orphan sweep — and referenced greens are skipped there entirely.
+    # Stop-only (logs stay debuggable); removal stays with existing flows.
+    'reap-failed-greens-every-3m': {
+        'task': 'apps.deployments.tasks.reap_failed_greens_task',
+        'schedule': 180.0,
+        'options': {'expires': 180.0},
+    },
     # Alias-aware sweep of addon containers without DB records
     'orphan-addon-gc-hourly': {
         'task': 'apps.deployments.tasks.orphan_addon_gc_task',
