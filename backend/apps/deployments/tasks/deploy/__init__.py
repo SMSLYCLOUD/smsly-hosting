@@ -4,3 +4,4 @@ from .deletion import *  # noqa: F401, F403
 from .green_reaper import *  # noqa: F401, F403
 from .health import *  # noqa: F401, F403
 from .helpers import *  # noqa: F401, F403
+from .power_tasks import *  # noqa: F401, F403
