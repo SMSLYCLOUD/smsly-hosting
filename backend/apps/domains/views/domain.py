@@ -56,6 +56,9 @@ class DomainConfigView(GenericAPIView):
             'server_ip': config.server_ip or '',
             'caddy_status': config.caddy_status,
             'max_concurrent_builds': config.max_concurrent_builds,
+            'build_memory_max_mb': getattr(config, 'build_memory_max_mb', 10240),
+            'build_cpu_quota_percent': getattr(config, 'build_cpu_quota_percent', 400),
+            'build_timeout_seconds': getattr(config, 'build_timeout_seconds', 1800),
             'ecosystem_max_concurrent_builds': config.ecosystem_max_concurrent_builds,
             'ecosystem_build_stagger_seconds': config.ecosystem_build_stagger_seconds,
             'ecosystem_default_wave_size': config.ecosystem_default_wave_size,
@@ -279,6 +282,21 @@ class DomainConfigView(GenericAPIView):
             if 'max_concurrent_builds' in data:
                 try:
                     config.max_concurrent_builds = max(1, min(10, int(data['max_concurrent_builds'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'build_memory_max_mb' in data:
+                try:
+                    config.build_memory_max_mb = max(512, min(131072, int(data['build_memory_max_mb'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'build_cpu_quota_percent' in data:
+                try:
+                    config.build_cpu_quota_percent = max(50, min(1600, int(data['build_cpu_quota_percent'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'build_timeout_seconds' in data:
+                try:
+                    config.build_timeout_seconds = max(300, min(7200, int(data['build_timeout_seconds'])))
                 except (TypeError, ValueError):
                     pass
             if 'rollback_retain_deployments' in data:

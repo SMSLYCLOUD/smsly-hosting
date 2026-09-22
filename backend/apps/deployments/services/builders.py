@@ -46,6 +46,45 @@ def is_buildkit_cache_error(exc: Exception | str) -> bool:
     return any(sig.lower() in msg for sig in BUILDKIT_CACHE_ERROR_SIGNATURES)
 
 
+# Code fallbacks for UI-tunable build limits (Settings → Platform).
+# Used when PlatformConfig is unavailable (pre-migration rows, DB down).
+BUILD_MEMORY_MAX_MB_FALLBACK = 10240
+BUILD_CPU_QUOTA_PERCENT_FALLBACK = 400
+
+
+def _platform_build_limits():
+    """Return (memory_mb, cpu_percent, timeout_s) for builds.
+
+    PlatformConfig (Settings UI) wins; code fallbacks otherwise. Values are
+    clamped to sane bounds so a bad row cannot uncap builds (memory) or
+    wedge workers (timeout 0 / negative).
+    """
+    from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
+    mem, cpu, timeout = (
+        BUILD_MEMORY_MAX_MB_FALLBACK,
+        BUILD_CPU_QUOTA_PERCENT_FALLBACK,
+        DOCKER_BUILD_TIMEOUT,
+    )
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        config = PlatformConfig.load()
+        mem = int(getattr(config, 'build_memory_max_mb', 0) or 0) or mem
+        cpu = int(getattr(config, 'build_cpu_quota_percent', 0) or 0) or cpu
+        timeout = int(getattr(config, 'build_timeout_seconds', 0) or 0) or timeout
+    except Exception:
+        pass
+    mem = max(512, min(mem, 131072))
+    cpu = max(50, min(cpu, 1600))
+    timeout = max(300, min(timeout, 7200))
+    return mem, cpu, timeout
+
+
+def _build_resource_caps():
+    """Return (memory_mb, cpu_percent) for the systemd-run build scope."""
+    mem, cpu, _ = _platform_build_limits()
+    return mem, cpu
+
+
 def prune_buildkit_cache():
     """Prune Docker BuildKit cache to recover from corruption."""
     logger.warning("Pruning BuildKit cache after cache corruption error...")
@@ -211,13 +250,13 @@ class BuildManager:
             # available so one tenant's build cannot starve the host (audit:
             # no per-build CPU/mem caps; gVisor only covers runtime).
             # Falls back to uncapped `docker build` when systemd-run is absent.
+            # Caps come from PlatformConfig (Settings UI) with code fallbacks.
             build_cmd = ["docker", "build", "-t", image_tag, "."]
             try:
-                # 10G mem / 4 CPU per build — single build slot, so one build may
-                # burst without starving the host's 8 cores.
+                mem_mb, cpu_pct = _build_resource_caps()
                 build_cmd = [
                     "systemd-run", "--scope",
-                    "-p", "MemoryMax=10G", "-p", "CPUQuota=400%",
+                    "-p", f"MemoryMax={mem_mb}M", "-p", f"CPUQuota={cpu_pct}%",
                     "--", "docker", "build", "-t", image_tag, ".",
                 ]
                 # Probe quickly; if systemd-run missing, fall back
@@ -450,14 +489,13 @@ class BuildManager:
     def _run_command(self, cmd, cwd=None, env=None, timeout=None):
         """Run command and stream output to logs.
 
-        Bounded by ``timeout`` (defaults to DOCKER_BUILD_TIMEOUT) so a hung
+        Bounded by ``timeout`` (defaults to the UI-tuned build timeout) so a hung
         Docker build cannot block a Celery worker forever. Output is drained
         on a daemon thread while the main thread waits, so the process is
         killed when the deadline passes.
         """
         if timeout is None:
-            from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
-            timeout = DOCKER_BUILD_TIMEOUT
+            _, _, timeout = _platform_build_limits()
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

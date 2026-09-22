@@ -34,6 +34,45 @@ export function EcosystemPipelineCard({ config, onChange }: PipelineCardProps) {
           />
         </div>
         <div className="space-y-2">
+          <Label>Per-Build Memory Cap MB (512-131072)</Label>
+          <Input
+            type="number"
+            min="512"
+            max="131072"
+            step="256"
+            value={config.build_memory_max_mb || 10240}
+            onChange={(e) => onChange("build_memory_max_mb", parseInt(e.target.value))}
+          />
+          <p className="text-xs text-muted-foreground">
+            systemd-run MemoryMax per docker build. Applies to the next build.
+          </p>
+        </div>
+        <div className="space-y-2">
+          <Label>Per-Build CPU Cap % (50-1600, 100 = 1 CPU)</Label>
+          <Input
+            type="number"
+            min="50"
+            max="1600"
+            step="50"
+            value={config.build_cpu_quota_percent || 400}
+            onChange={(e) => onChange("build_cpu_quota_percent", parseInt(e.target.value))}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label>Build Timeout Seconds (300-7200)</Label>
+          <Input
+            type="number"
+            min="300"
+            max="7200"
+            step="60"
+            value={config.build_timeout_seconds || 1800}
+            onChange={(e) => onChange("build_timeout_seconds", parseInt(e.target.value))}
+          />
+          <p className="text-xs text-muted-foreground">
+            Worker kills builds running longer than this. Applies to the next build.
+          </p>
+        </div>
+        <div className="space-y-2">
           <Label>Ecosystem Max Concurrent Builds (1-10)</Label>
           <Input
             type="number"

@@ -10,6 +10,15 @@ from django.conf import settings
 
 from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
 
+
+def _nixpacks_timeout():
+    """Build timeout for Nixpacks runs: UI-tuned, constant fallback."""
+    try:
+        from apps.deployments.services.builders import _platform_build_limits
+        return _platform_build_limits()[2]
+    except Exception:
+        return DOCKER_BUILD_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 
@@ -196,7 +205,7 @@ class NixpacksBuilder:
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=DOCKER_BUILD_TIMEOUT,
+                timeout=_nixpacks_timeout(),
                 env={**os.environ, "NIXPACKS_CACHE_DIR": effective_cache_dir}
             )
             # Log build output for debugging
@@ -248,7 +257,7 @@ class NixpacksBuilder:
                             check=True,
                             capture_output=True,
                             text=True,
-                            timeout=DOCKER_BUILD_TIMEOUT,
+                            timeout=_nixpacks_timeout(),
                             env={
                                 **os.environ,
                                 "NIXPACKS_CACHE_DIR": effective_cache_dir,
@@ -323,7 +332,15 @@ class NixpacksBuilder:
         for _scheme in ('https://', 'http://'):
             if _tag_url.startswith(_scheme):
                 _tag_url = _tag_url[len(_scheme):]
-        full_tag = f"{_tag_url}/{image_name}"
+        _tag_url = _tag_url.rstrip('/')
+        _first = image_name.split("/")[0] if "/" in image_name else ""
+        if _first == _tag_url:
+            # Already qualified for THIS registry (local builds name
+            # images registry-prefixed at construction) — push as-is
+            # instead of stacking a second host prefix.
+            full_tag = image_name
+        else:
+            full_tag = f"{_tag_url}/{image_name}"
 
         try:
             image = client.images.get(image_name)

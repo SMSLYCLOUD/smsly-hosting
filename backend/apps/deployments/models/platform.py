@@ -364,6 +364,15 @@ class PlatformConfig(models.Model):
     max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")
+    build_memory_max_mb = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=10240,
+        help_text="Per-build memory cap for Dockerfile builds (systemd-run MemoryMax)")
+    build_cpu_quota_percent = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=400,
+        help_text="Per-build CPU cap in percent of one core (systemd-run CPUQuota; 100 = 1 CPU)")
+    build_timeout_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=1800,
+        help_text="Cap for a single Docker build before the worker kills it")
     rollback_retain_deployments = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=2,
         help_text="Successful deployments kept per service for rollback (their images are never deleted by retention)")
