@@ -180,6 +180,12 @@ MAINTENANCE_ACTIONS = {
         "queued_message": "Build cache cleanup queued.",
         "lock_ttl": 900,
     },
+    "docker_recovery": {
+        "flag": "--docker-recovery",
+        "label": "Recover Corrupt Docker/containerd State",
+        "queued_message": "Docker recovery queued. Build cache pruned, containerd ingest cleared, daemon restarted.",
+        "lock_ttl": 900,
+    },
     "clear": {
         "flag": "--clear",
         "label": "Clear orphaned containers",

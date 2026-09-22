@@ -636,7 +636,7 @@ class SystemConfigView(GenericAPIView):
         action_spec = MAINTENANCE_ACTIONS.get(action)
         if not action_spec:
             return Response(
-                {"error": "Invalid maintenance action specified. Use clear, update, refresh, registry_gc, or build_cache."},
+                {"error": "Invalid maintenance action specified. Use clear, update, refresh, registry_gc, build_cache, or docker_recovery."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

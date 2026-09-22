@@ -30,9 +30,10 @@ from .tasks_platform_update import platform_update_task
 def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
     """
     Run maintenance commands via the Docker API from inside the Celery container.
-    Valid flags: --clear, --update, --refresh
+    Valid flags: --clear, --update, --refresh, --gc, --clear-build-cache, --docker-recovery
     """
-    if command_flag not in ['--clear', '--update', '--update-frontend', '--refresh']:
+    if command_flag not in ['--clear', '--update', '--update-frontend', '--refresh',
+                             '--gc', '--clear-build-cache', '--docker-recovery']:
         logger.error(f"Invalid maintenance command: {command_flag}")
         return {"status": "error", "reason": "invalid_command", "message": "Invalid maintenance command."}
 
@@ -80,6 +81,50 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
                     "message": result.get('message', 'Failed to write proxy reload flag.'),
                     "details": result,
                 }
+
+        elif command_flag == '--gc':
+            registry_garbage_collection_task()
+            return {
+                "status": "success",
+                "message": "Registry garbage collection completed.",
+            }
+
+        elif command_flag == '--clear-build-cache':
+            from apps.core.tasks.metrics import cleanup_build_cache_task
+
+            cleanup_build_cache_task()
+            return {
+                "status": "success",
+                "message": "Build cache cleanup completed.",
+            }
+
+        elif command_flag == '--docker-recovery':
+            from apps.deployments.tasks.build_recovery import (
+                _PRUNE_CACHE_KEY,
+                perform_docker_recovery,
+            )
+
+            # An explicit operator click bypasses the 5-minute auto-recovery
+            # cooldown so a known-corrupt daemon heals immediately.
+            cache.delete(_PRUNE_CACHE_KEY)
+            result = perform_docker_recovery(deployment_id="manual-maintenance")
+            steps = result.get("steps", {}) if isinstance(result, dict) else {}
+            cache.set(
+                _PRUNE_CACHE_KEY,
+                str(timezone.now().timestamp()),
+                300,
+            )
+            return {
+                "status": "success",
+                "message": (
+                    "Docker recovery completed "
+                    f"(builder_prune={steps.get('builder_prune')} "
+                    f"image_prune={steps.get('image_prune')} "
+                    f"containerd_clean={steps.get('containerd_clean')} "
+                    f"docker_restart={steps.get('docker_restart')})."
+                ),
+                "details": result,
+            }
 
         elif command_flag in ['--update', '--update-frontend']:
             from .models.updates import PlatformUpdate

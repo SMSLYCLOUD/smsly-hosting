@@ -27,7 +27,7 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
-from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_STANDARD
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,23 @@ def recover_corrupt_docker_state(self, deployment_id: str = ""):
             )
             return {"status": "skipped", "reason": "cooldown"}
 
+    results = perform_docker_recovery(deployment_id=deployment_id)
+
+    # Set cooldown
+    cache.set(_PRUNE_CACHE_KEY, str(timezone.now().timestamp()), _PRUNE_COOLDOWN)
+
+    return results
+
+
+def perform_docker_recovery(deployment_id: str = "") -> dict:
+    """Run the Docker/containerd recovery steps unconditionally.
+
+    Extracted so the maintenance UI (`--docker-recovery`) can reuse the
+    exact same steps without duplicating subprocess logic. Callers that
+    need thrash protection must check ``_PRUNE_CACHE_KEY`` themselves —
+    the Celery task above does; the maintenance handler clears the key
+    first so an explicit operator click always runs.
+    """
     results = {}
 
     # 1. Prune build cache
@@ -129,13 +146,74 @@ def recover_corrupt_docker_state(self, deployment_id: str = ""):
         logger.warning("Docker restart failed: %s", exc)
         results["docker_restart"] = False
 
-    # Set cooldown
-    cache.set(_PRUNE_CACHE_KEY, str(timezone.now().timestamp()), _PRUNE_COOLDOWN)
-
     logger.info(
         "Docker corruption recovery completed: %s (deployment=%s)", results, deployment_id
     )
     return {"status": "ok", "steps": results, "deployment_id": deployment_id}
+
+
+@shared_task(
+    bind=True,
+    name="apps.deployments.tasks.scan_recent_builds_for_corruption",
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
+)
+def scan_recent_builds_for_corruption(self):
+    """Periodic sweeper: trigger recovery when recent builds show corruption.
+
+    The build-pipeline hook (services/pipeline/build.py) only fires when
+    the failing worker survives long enough to classify the error. A
+    worker crash, lost log, or daemon-wedged build can leave matching
+    BUILD_FAILED rows with no recovery dispatched. This beat task (every
+    15m) scans the newest BUILD_FAILED deployments from the last 60m for
+    containerd corruption patterns and dispatches
+    ``recover_corrupt_docker_state`` once. The recovery task enforces the
+    5-minute cooldown, so this sweep cannot thrash the daemon.
+    """
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    try:
+        from apps.deployments.models import Deployment
+
+        cutoff = timezone.now() - timedelta(minutes=60)
+        recent = list(
+            Deployment.objects.filter(
+                status=Deployment.Status.BUILD_FAILED,
+                created_at__gte=cutoff,
+            )
+            .order_by("-created_at")
+            .only("id", "build_logs", "created_at")[:20]
+        )
+        matched = None
+        for dep in recent:
+            try:
+                if is_build_corruption_error(getattr(dep, "build_logs", "") or ""):
+                    matched = dep
+                    break
+            except Exception:
+                continue
+        if matched is None:
+            return {"status": "ok", "matched": 0}
+        try:
+            recover_corrupt_docker_state.delay(deployment_id=str(matched.id))
+        except Exception as exc:
+            logger.warning("Corruption scan dispatch failed: %s", exc)
+            return {"status": "error", "reason": "dispatch_failed"}
+        logger.warning(
+            "Corruption scan matched deployment %s — recovery dispatched",
+            matched.id,
+        )
+        return {
+            "status": "ok",
+            "matched": 1,
+            "deployment_id": str(matched.id),
+            "triggered": True,
+        }
+    except SoftTimeLimitExceeded:
+        return {"status": "error", "reason": "timeout"}
+    except Exception as exc:
+        logger.error("Corruption scan failed: %s", exc)
+        return {"status": "error", "reason": str(exc)}
 
 
 @shared_task(

@@ -76,6 +76,9 @@ class Addon(TimeStampedModel):
         VAULT = 'VAULT', 'HashiCorp Vault'
         CONSUL = 'CONSUL', 'Consul'
         KEYCLOAK = 'KEYCLOAK', 'Keycloak'
+        # ── Agent Browsers (self-hosted browser infrastructure for AI agents) ──
+        STEEL = 'STEEL', 'Steel Browser'
+        BROWSERLESS = 'BROWSERLESS', 'Browserless Chrome'
 
     class Status(models.TextChoices):
         PROVISIONING = 'PROVISIONING', 'Provisioning'

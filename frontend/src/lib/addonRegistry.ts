@@ -86,6 +86,10 @@ export const ADDON_REGISTRY: AddonRegistryItem[] = [
     { id: 'vault', addon_type: 'VAULT', name: 'HashiCorp Vault', description: 'Secrets management', category: 'Infrastructure', logo: '/logos/addons/vault.svg', color: 'text-yellow-400', has_dashboard: true },
     { id: 'consul', addon_type: 'CONSUL', name: 'Consul', description: 'Service discovery', category: 'Infrastructure', logo: '/logos/addons/consul.svg', color: 'text-pink-500', has_dashboard: true },
     { id: 'keycloak', addon_type: 'KEYCLOAK', name: 'Keycloak', description: 'Identity & access', category: 'Infrastructure', logo: '/logos/addons/keycloak.svg', color: 'text-blue-500', has_dashboard: true },
+
+    // ── Agent Browsers (AI) ──
+    { id: 'steel', addon_type: 'STEEL', name: 'Steel Browser', description: 'Self-hosted agent browser: sessions API, persistent profiles, stealth. Agents connect over HTTP on :3000.', category: 'AI', logo: '/logos/addons/steel.svg', color: 'text-slate-200', has_dashboard: false },
+    { id: 'browserless', addon_type: 'BROWSERLESS', name: 'Browserless Chrome', description: 'Headless Chrome for Playwright/Puppeteer scripts. CDP + REST on :3000.', category: 'AI', logo: '/logos/addons/browserless.svg', color: 'text-amber-400', has_dashboard: false },
 ];
 
 export const getAddonMetadata = (addonType: string): AddonRegistryItem | undefined => {

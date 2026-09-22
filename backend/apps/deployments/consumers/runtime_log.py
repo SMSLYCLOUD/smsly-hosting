@@ -183,6 +183,21 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 tail=tail, timestamps=True,
             ).decode('utf-8', errors='replace')
 
+            from apps.deployments.views.deployment.logs import _is_candidate_row
+            if _is_candidate_row(dep) and 'staged candidate' not in source:
+                # Candidate gone: never stream live traffic as the
+                # candidate's logs — fall back to its saved output.
+                from apps.deployments.views.deployment.logs import _candidate_saved_logs
+                return {
+                    'logs': _candidate_saved_logs(dep),
+                    'status': dep.status,
+                    'container_id': '',
+                    'container_status': 'stopped',
+                    'source': 'saved_runtime_logs',
+                    'container_role': 'candidate',
+                    'candidate_gone': True,
+                }
+
             return {
                 'logs': logs,
                 'status': dep.status,
@@ -190,6 +205,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 'container_status': container.status,
                 'source': 'live_container',
                 'lookup': source,
+                'container_role': 'candidate' if 'staged candidate' in source else 'live',
             }
         except Exception as e:
             logger.error("Failed to get initial runtime log state: %s", e)
@@ -202,7 +218,10 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
         """Stream Docker logs from the container using subprocess."""
         try:
             from apps.deployments.models import Deployment
-            from apps.deployments.views.deployment.logs import _find_container_for_logs
+            from apps.deployments.views.deployment.logs import (
+                _find_container_for_logs,
+                _is_candidate_row,
+            )
 
             dep = await database_sync_to_async(
                 Deployment.objects.get
@@ -215,6 +234,17 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 await self.send(text_data=json.dumps({
                     'type': 'error',
                     'error': 'Container not found for streaming',
+                }))
+                return
+
+            if await database_sync_to_async(_is_candidate_row)(dep) \
+                    and 'staged candidate' not in source:
+                # Candidate gone: streaming the live container here would
+                # present live traffic as the candidate's logs. Refuse —
+                # the initial state already carries the saved output.
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'error': 'Staged candidate is gone; showing its saved runtime logs.',
                 }))
                 return
 

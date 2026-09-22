@@ -117,6 +117,8 @@ class AddonProvisioner:
         'VAULT': {"image": "hashicorp/vault:1.15", "port": 8200, "env_url": "VAULT_URL", "auth": True, "env": {"VAULT_DEV_ROOT_TOKEN_ID": "{password}", "VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200"}},
         'CONSUL': {"image": "hashicorp/consul:1.16", "port": 8500, "env_url": "CONSUL_URL", "auth": False, "command": ["agent", "-dev", "-client", "0.0.0.0"], "data_dir": "/consul/data"},
         'KEYCLOAK': {"image": "quay.io/keycloak/keycloak:22.0.4", "port": 8080, "env_url": "KEYCLOAK_URL", "auth": True, "env": {"KEYCLOAK_ADMIN": "admin", "KEYCLOAK_ADMIN_PASSWORD": "{password}"}, "command": ["start-dev"], "data_dir": "/opt/keycloak/data"},
+        'STEEL': {"image": "ghcr.io/steel-dev/steel-browser:latest", "port": 3000, "env_url": "STEEL_URL", "scheme": "http", "auth": False, "health_timeout": 90, "data_dir": "/app/.cache"},
+        'BROWSERLESS': {"image": "browserless/chrome:latest", "port": 3000, "env_url": "BROWSERLESS_URL", "scheme": "http", "auth": False, "health_timeout": 90},
     }
 
     def __init__(self):

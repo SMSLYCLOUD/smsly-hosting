@@ -150,6 +150,7 @@ app.conf.task_routes = {
     'apps.mcp.tasks.ensure_mcp_server_running': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_transfers': {'queue': 'fast'},
     'apps.deployments.tasks.recover_corrupt_docker_state': {'queue': 'deploy'},
+    'apps.deployments.tasks.scan_recent_builds_for_corruption': {'queue': 'deploy'},
     'apps.deployments.tasks.ensure_migrations_applied': {'queue': 'deploy'},
     'apps.deployments.tasks.service_ha_pass': {'queue': 'fast'},
     'apps.domains.tasks.reverify_custom_domains_task': {'queue': 'fast'},
@@ -366,6 +367,15 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.ensure_migrations_applied',
         'schedule': 300.0,
         'options': {'expires': 300.0},
+    },
+    # Corruption sweeper: BUILD_FAILED rows matching containerd patterns
+    # trigger recovery even when the build worker died before its hook.
+    # Recovery enforces the 5-minute cooldown; this sweep is a cheap
+    # no-op when no recent build shows corruption.
+    'scan-build-corruption-every-15m': {
+        'task': 'apps.deployments.tasks.scan_recent_builds_for_corruption',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
     },
     # Service HA pass: evaluate ha_mode != 'none' services every 60s.
     # Gated by PlatformConfig.service_ha_enabled — a cheap no-op when the

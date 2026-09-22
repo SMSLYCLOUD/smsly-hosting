@@ -28,6 +28,7 @@ export default function DeploymentWatchPage() {
   const [deployment, setDeployment] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState<string>("Initializing deployment watch...\n");
+  const [recovering, setRecovering] = useState(false);
   const confirm = useConfirm();
 
   const fetchDeployment = async () => {
@@ -100,6 +101,38 @@ export default function DeploymentWatchPage() {
   const isFailed = isDeploymentFailed(deployment?.status);
   const isActive = isDeploymentLive(deployment?.status);
   const isDeploying = isDeploymentInProgress(deployment?.status);
+  // containerd corruption signature (mirrors
+  // backend/apps/deployments/tasks/build_recovery.py patterns). The
+  // Recover button only shows when the logs match, so a plain failure
+  // never triggers a daemon restart.
+  const buildLogText = String(deployment?.build_logs || "");
+  const showDockerRecovery = /mount callback failed|CreateDiff.*no such file|containerd.*ingest.*no such file|failed to commit.*rename.*no such file|layer not known|content digest sha256.*not found/i.test(buildLogText);
+
+  const handleRetry = async (withRecovery: boolean) => {
+    const confirmed = await confirm({
+      title: withRecovery ? "Recover Docker & retry?" : "Retry deployment?",
+      message: withRecovery
+        ? "Prunes the build cache, clears the containerd ingest area, and restarts the Docker daemon (running containers restart), then re-queues this deployment. May take minutes. Continue?"
+        : "Re-queue this deployment as-is. Continue?",
+      confirmText: withRecovery ? "Recover & Retry" : "Retry",
+      variant: withRecovery ? "destructive" : "default",
+    });
+    if (!confirmed) return;
+    setRecovering(true);
+    try {
+      await api.post(`/deployments/${id}/retry/`, withRecovery ? { docker_recovery: true } : {});
+      toast.success(withRecovery ? "Docker recovery done — retry queued" : "Retry queued", {
+        description: "The page refreshes automatically.",
+      });
+      await fetchDeployment();
+    } catch (err: any) {
+      toast.error("Retry failed", {
+        description: err?.response?.data?.error || err?.message || "Unknown error",
+      });
+    } finally {
+      setRecovering(false);
+    }
+  };
 
   return (
     <DashboardShell>
@@ -227,6 +260,26 @@ export default function DeploymentWatchPage() {
                                                 }
                                             }}>
                                                 Initiate Rollback
+                                            </Button>
+                                            {showDockerRecovery && (
+                                                <Button
+                                                    variant="destructive"
+                                                    className="w-full"
+                                                    disabled={recovering}
+                                                    onClick={() => handleRetry(true)}
+                                                >
+                                                    {recovering ? <Loader2 size={14} className="animate-spin mr-2" /> : <AlertTriangle size={14} className="mr-2" />}
+                                                    {recovering ? "Recovering…" : "Recover Docker & Retry"}
+                                                </Button>
+                                            )}
+                                            <Button
+                                                variant="outline"
+                                                className="w-full"
+                                                disabled={recovering}
+                                                onClick={() => handleRetry(false)}
+                                            >
+                                                {recovering ? <Loader2 size={14} className="animate-spin mr-2" /> : <Rocket size={14} className="mr-2" />}
+                                                Retry
                                             </Button>
                                         </CardContent>
                                     </Card>

@@ -695,6 +695,48 @@ ensure_cosign_key_readable() {
     fi
 }
 
+# ── 15b. Containerd builder state must stay usable ───────────────────
+# 2026-09-02 + live incident: corrupted layer ingest state in
+# /var/lib/containerd (mount callback / CreateDiff / ingest missing)
+# fails every build while `docker info` still passes. The build pipeline
+# auto-recovers on matching failures and the 15m corruption-scan beat
+# catches missed rows; this hourly host guard catches the wedged-daemon
+# case with no recent build row at all. Daemon restart is conditional
+# only — prune + ingest clear first, restart only if still unreadable.
+ensure_containerd_healthy() {
+    command -v docker >/dev/null 2>&1 || return 0
+    if ! timeout -k 5 15 docker info >/dev/null 2>&1; then
+        log "docker daemon unreachable — monitor_infra owns restart; skipping builder check"
+        return 0
+    fi
+    if timeout -k 5 30 docker builder du >/dev/null 2>&1; then
+        log "containerd builder state OK"
+        return 0
+    fi
+    log "ALERT: docker builder state unreadable (possible containerd corruption) — pruning build cache"
+    timeout -k 5 120 docker builder prune -af >/dev/null 2>&1 \
+        || log "ALERT: builder prune failed"
+    timeout -k 5 30 sh -c 'rm -rf /var/lib/containerd/io.containerd.content.v1.content/ingest/* 2>/dev/null; rm -rf /var/lib/containerd/tmpmounts/* 2>/dev/null; true' >/dev/null 2>&1
+    if timeout -k 5 30 docker builder du >/dev/null 2>&1; then
+        log "containerd builder state healed via prune + ingest clear (no daemon restart needed)"
+        return 0
+    fi
+    log "ALERT: builder still unreadable after prune — restarting docker daemon"
+    if [ -f /tmp/smsly-install.lock ]; then
+        log "installer lock present — skipping docker restart (retry next hour)"
+        return 0
+    fi
+    systemctl restart docker >/dev/null 2>&1 \
+        || service docker restart >/dev/null 2>&1 \
+        || { log "ALERT: docker restart FAILED — manual: builder prune + ingest clear + systemctl restart docker"; return 0; }
+    sleep 5
+    if timeout -k 5 30 docker builder du >/dev/null 2>&1; then
+        log "containerd builder state healed via daemon restart"
+    else
+        log "ALERT: builder still unreadable after daemon restart — manual intervention needed"
+    fi
+}
+
 # ── 16. Tenant pooler (pgcat-tenants) must not crash-loop ────────────────
 # 2026-09-20: the pooler's volume got stamped with the PLATFORM render
 # (replica-sync fallback matched any name containing 'pgcat' while the
@@ -744,5 +786,6 @@ ensure_memory_tuning
 ensure_weekly_image_prune
 ensure_beat_dispatching
 ensure_cosign_key_readable
+ensure_containerd_healthy
 ensure_tenants_pooler_healthy
 log "integrity check complete"

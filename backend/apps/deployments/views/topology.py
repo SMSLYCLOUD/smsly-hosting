@@ -39,7 +39,9 @@ class TopologyViewSet(viewsets.GenericViewSet):
 
         SECURITY: Enforces Hybrid RBAC — strictly linked to project.
         """
-        from django.db.models import Q
+        from django.db.models import Prefetch, Q
+
+        from apps.autoscaler.models.replica import ServiceReplica
 
         project_id = request.query_params.get('project_id')
 
@@ -51,17 +53,27 @@ class TopologyViewSet(viewsets.GenericViewSet):
         if project_id:
             qs = qs.filter(project_id=project_id)
 
-        user_services = qs.distinct().prefetch_related(
+        user_services = qs.distinct().select_related(
+            'project', 'server',
+        ).prefetch_related(
             'addons', 'volumes', 'env_vars',
-            'cron_jobs', 'replicas',
+            'cron_jobs',
+            Prefetch(
+                'replicas',
+                queryset=ServiceReplica.objects.select_related('node'),
+            ),
         )
 
         service_ids = [s.id for s in user_services]
         latest_per_service = {}
         if service_ids:
+            # .only(): rows carry MBs of build/runtime logs — fetch just
+            # the columns the graph needs or data transfer grows with log
+            # volume instead of graph size (timeout cause).
             deployments = (
                 Deployment.objects
                 .filter(service_id__in=service_ids)
+                .only('id', 'service_id', 'status', 'commit_hash', 'created_at')
                 .order_by('service_id', '-created_at')
             )
             seen = set()
@@ -361,15 +373,48 @@ class TopologyViewSet(viewsets.GenericViewSet):
         # ── Inter-service dependencies from env vars + Mesh IPs ─────────────────
         from apps.deployments.models.mesh import WireGuardPeer
 
+        # Bulk-fetch mesh state ONCE: the per-pair query this loop used to
+        # run made the endpoint O(S²·V) in DB hits (timeout at scale).
+        # select_related('server') above means no query per service here.
+        _mesh_by_server: dict = {}
+        _server_ids = [s.server_id for s in user_services if s.server_id]
+        if _server_ids:
+            for _peer in WireGuardPeer.objects.filter(
+                server_id__in=_server_ids, is_active=True,
+            ).only('server_id', 'wg_address'):
+                _mesh_by_server.setdefault(_peer.server_id, _peer.wg_address)
+
+        # Precompile per-target matchers once instead of per (service, var)
+        # pair. Match order is unchanged: name → SERVICE ref → mesh IP →
+        # private IP → public domain.
+        _targets = []
+        for other in user_services:
+            _targets.append({
+                'id': other.id,
+                'name': other.name,
+                'name_re': re.compile(
+                    rf'https?://{re.escape(other.name)}', re.IGNORECASE),
+                'ref_re': re.compile(
+                    r'\{\{SERVICE\s*:\s*' + re.escape(other.name)
+                    + r'\s*\}\}', re.IGNORECASE),
+                'mesh_ip': _mesh_by_server.get(other.server_id),
+                'private_ip': getattr(other.server, 'private_ip', None)
+                if other.server_id else None,
+                'public_domain': other.public_domain,
+            })
+
         for service in user_services:
             svc_id = str(service.id)
             for var in service.env_vars.all():
                 val = var.value or ''
                 if not val:
                     continue
+                # Cap scanned text: values can be certs/JSON blobs and the
+                # heuristics only need the head.
+                haystack = val[:2000]
 
-                for other in user_services:
-                    if other.id == service.id:
+                for target in _targets:
+                    if target['id'] == service.id:
                         continue
 
                     is_match = False
@@ -377,50 +422,42 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     evidence = ""
 
                     # 1. Match by Service Name (Standard Heuristic)
-                    if re.search(rf'https?://{re.escape(other.name)}', val, re.IGNORECASE):
+                    if target['name_re'].search(haystack):
                         is_match = True
                         match_type = "API"
-                        evidence = f"Name match: {other.name}"
+                        evidence = f"Name match: {target['name']}"
 
                     # 1b. Match by {{SERVICE:name}} placeholder (ecosystem plan format)
-                    if not is_match:
-                        pattern = (r'\{\{SERVICE\s*:\s*' + re.escape(other.name)
-                                   + r'\s*\}\}')
-                        if re.search(pattern, val, re.IGNORECASE):
-                            is_match = True
-                            match_type = "API"
-                            evidence = f"SERVICE ref: {other.name}"
+                    if not is_match and target['ref_re'].search(haystack):
+                        is_match = True
+                        match_type = "API"
+                        evidence = f"SERVICE ref: {target['name']}"
 
                     # 2. Match by Mesh IP (10.10.0.x)
-                    if not is_match:
-                        # Find other's mesh IP if exists
-                        other_peer = WireGuardPeer.objects.filter(
-                            server=other.server, is_active=True
-                        ).first()
-                        if other_peer and other_peer.wg_address in val:
-                            is_match = True
-                            match_type = "MESH"
-                            evidence = f"Mesh IP match: {other_peer.wg_address}"
+                    if not is_match and target['mesh_ip'] and target['mesh_ip'] in haystack:
+                        is_match = True
+                        match_type = "MESH"
+                        evidence = f"Mesh IP match: {target['mesh_ip']}"
 
                     # 3. Match by Private IP (AWS Internal)
-                    if not is_match and getattr(other.server, 'private_ip', None):
-                        if other.server.private_ip in val:
+                    if not is_match and target['private_ip']:
+                        if target['private_ip'] in haystack:
                             is_match = True
                             match_type = "INTERNAL"
-                            evidence = f"Private IP match: {other.server.private_ip}"
+                            evidence = f"Private IP match: {target['private_ip']}"
 
                     # 4. Match by Public Domain
-                    if not is_match and other.public_domain:
-                        if other.public_domain in val:
+                    if not is_match and target['public_domain']:
+                        if target['public_domain'] in haystack:
                             is_match = True
                             match_type = "EXTERNAL"
-                            evidence = f"Domain match: {other.public_domain}"
+                            evidence = f"Domain match: {target['public_domain']}"
 
                     if is_match:
                         edges.append({
                             'id': _edge_id(),
                             'source': svc_id,
-                            'target': str(other.id),
+                            'target': str(target['id']),
                             'type': match_type,
                             'label': var.key,
                             'data': {

@@ -10,10 +10,52 @@ from rest_framework.response import Response
 logger = logging.getLogger(__name__)
 
 
+def _container_belongs_to_service(container: object, service_id: str) -> bool:
+    """Guard against Docker id recycling: only accept the container when
+    its labels name this service — or when it carries no labels at all
+    (legacy containers predate labeling). A positive label mismatch means
+    the id was recycled and the caller must keep looking."""
+    try:
+        labels = getattr(container, 'labels', None)
+        if not labels:
+            attrs = getattr(container, 'attrs', None) or {}
+            labels = (attrs.get('Config') or {}).get('Labels') or {}
+        if not labels:
+            return True
+        return str(labels.get('smsly.service_id', '') or '') == str(service_id)
+    except Exception:
+        return True
+
+
+def _is_candidate_row(deployment: object) -> bool:
+    """True when the row owns a staged/blue-green candidate: green id set
+    or STAGED status. Such a row's runtime logs are the candidate's —
+    never live traffic's."""
+    if (getattr(deployment, 'green_container_id', '') or '').strip():
+        return True
+    return str(getattr(deployment, 'status', '') or '') == 'STAGED'
+
+
+def _candidate_saved_logs(deployment: object) -> str:
+    """The candidate's saved crash output: dedicated runtime_logs field
+    first, legacy marker-scrape of build_logs second."""
+    saved = (getattr(deployment, 'runtime_logs', '') or '').strip()
+    if saved:
+        return saved
+    saved_logs = getattr(deployment, 'build_logs', '') or ""
+    crash_match = _re.search(
+        r"--- (?:Runtime Crash Logs|Runtime Failure Logs)[^\n]*\n(.*?)--- End (?:Crash|Failure) Logs ---",
+        saved_logs, _re.DOTALL
+    )
+    return crash_match.group(1).strip() if crash_match else ""
+
+
 def _find_container_for_logs(deployment: object) -> tuple[object, str]:
     """Find the Docker container for a deployment using multiple strategies.
 
     Tries in order:
+      0. deployment.green_container_id (staged/blue-green candidate —
+         exact id, label-verified)
       1. deployment.container_id (direct lookup)
       2. smsly.service_id label (matches any deploy type)
       3. exact service container name (legacy fallback)
@@ -27,6 +69,27 @@ def _find_container_for_logs(deployment: object) -> tuple[object, str]:
     service_name = service.name
     service_id = str(service.pk)
     container_id = (deployment.container_id or "").strip()
+
+    # Strategy 0: staged/blue-green candidate. A STAGED (or HEALTH_CHECK /
+    # AWAITING_APPROVAL) row owns a green candidate that shares the
+    # smsly.service_id label — and often the service name — with the LIVE
+    # container, so every lookup below would resolve to live traffic logs
+    # instead of the candidate's. The exact green id wins whenever it still
+    # resolves to this service's container, running or stopped (a failed
+    # stage's crash output lives here, not on live). A removed id falls
+    # through to the normal strategies; a recycled id is rejected by the
+    # label check.
+    green_id = (getattr(deployment, 'green_container_id', '') or '').strip()
+    if green_id:
+        try:
+            green = client.containers.get(green_id)
+            if _container_belongs_to_service(green, service_id):
+                if green.status == 'running':
+                    return green, f"found staged candidate by green_container_id={green_id}"
+                return green, f"found stopped staged candidate green_container_id={green_id}"
+            logger.debug("Green container id %s label-mismatched (recycled), skipping", green_id)
+        except Exception as exc:
+            logger.debug("Staged candidate lookup by green id %s failed: %s", green_id, exc)
 
     # Strategy 1: Direct container_id lookup
     if container_id:
@@ -210,8 +273,25 @@ class LogsActionsMixin:
                     'id': str(deployment.id),
                     'runtime_logs': fallback_logs,
                     'source': 'saved_runtime_logs',
+                    'container_role': 'candidate' if _is_candidate_row(deployment) else 'live',
                     'message': 'Container is not running. Showing saved runtime/crash logs.',
                 })
+
+            if _is_candidate_row(deployment) and 'staged candidate' not in source:
+                # The candidate is gone (promoted, cleaned, or never
+                # recorded): the container found above serves LIVE traffic.
+                # Showing it as the candidate's logs would mislead a stage
+                # review — prefer the candidate's saved output instead.
+                saved = _candidate_saved_logs(deployment)
+                if saved:
+                    return Response({
+                        'id': str(deployment.id),
+                        'runtime_logs': saved,
+                        'source': 'saved_runtime_logs',
+                        'container_role': 'candidate',
+                        'candidate_gone': True,
+                        'message': 'Staged candidate container is gone. Showing its saved runtime logs (not live traffic).',
+                    })
 
             logs = container.logs(
                 stdout=True,
@@ -228,6 +308,7 @@ class LogsActionsMixin:
                 'runtime_logs': log_text,
                 'source': 'live_container',
                 'lookup': source,
+                'container_role': 'candidate' if 'staged candidate' in source else 'live',
             })
 
         except ImportError:

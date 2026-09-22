@@ -11,7 +11,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import UpdateTerminalStream from "@/components/terminal/UpdateTerminalStream";
 
-type MaintenanceAction = "clear" | "refresh" | "update" | "registry_gc" | "build_cache";
+type MaintenanceAction = "clear" | "refresh" | "update" | "registry_gc" | "build_cache" | "docker_recovery";
 type MaintenanceState = "idle" | "queued" | "running" | "success" | "error";
 
 interface MaintenanceTaskState {
@@ -25,6 +25,7 @@ const INITIAL_STATE: Record<MaintenanceAction, MaintenanceTaskState> = {
   refresh: { status: "idle" },
   registry_gc: { status: "idle" },
   build_cache: { status: "idle" },
+  docker_recovery: { status: "idle" },
   update: { status: "idle" },
 };
 
@@ -33,6 +34,7 @@ const COPY: Record<MaintenanceAction, { title: string; message: string; confirmT
   refresh: { title: "Sync Proxy Routing?", message: "This regenerates the proxy configuration and asks the host watcher to reload Caddy.", confirmText: "Sync Proxy" },
   registry_gc: { title: "Garbage Collect Registry?", message: "This removes unused layers from the private registry. This cannot be undone.", confirmText: "Run GC" },
   build_cache: { title: "Clear Build Caches?", message: "This clears BuildKit and language caches. Next builds might take longer.", confirmText: "Clear Caches" },
+  docker_recovery: { title: "Recover Docker / containerd?", message: "Prunes the build cache, clears the containerd ingest area, and restarts the Docker daemon. Running containers restart. Use when builds fail with layer/mount/containerd errors.", confirmText: "Recover Docker", variant: "destructive" },
   update: { title: "Update Platform?", message: "This asks the host updater to pull the latest code and rebuild services. The dashboard may briefly disconnect.", confirmText: "Update Platform" },
 };
 
@@ -136,6 +138,15 @@ export function MaintenanceTab() {
     return label;
   };
 
+  const ACTION_LABELS: Record<MaintenanceAction, string> = {
+    clear: "Clear Orphaned Containers",
+    refresh: "Sync Proxy Routing",
+    registry_gc: "Garbage Collect Registry",
+    build_cache: "Clear BuildKit Caches",
+    docker_recovery: "Recover Docker / containerd",
+    update: "Update Platform",
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -145,14 +156,14 @@ export function MaintenanceTab() {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex flex-col gap-4 rounded-lg border p-4 bg-muted/20">
-            {(["clear", "refresh", "update"] as MaintenanceAction[]).map((action, i) => (
+            {(["clear", "refresh", "registry_gc", "build_cache", "docker_recovery", "update"] as MaintenanceAction[]).map((action, i) => (
               <div key={action} className={`flex flex-col justify-between gap-4 sm:flex-row sm:items-center ${i > 0 ? "border-t pt-4" : ""}`}>
                 <div className="space-y-1">
-                  <h4 className="text-sm font-medium">{action === "clear" ? "Clear Orphaned Containers" : action === "refresh" ? "Sync Proxy Routing" : "Update Platform"}</h4>
+                  <h4 className="text-sm font-medium">{ACTION_LABELS[action]}</h4>
                   <p className="text-xs text-muted-foreground">{COPY[action].message}</p>
                   {tasks[action].message && <p className={cn("text-xs", tasks[action].status === "error" ? "text-destructive" : "text-muted-foreground")}>{tasks[action].message}</p>}
                 </div>
-                <Button variant={action === "clear" ? "destructive" : action === "update" ? "default" : "outline"} disabled={tasks[action].status === "queued" || tasks[action].status === "running"} onClick={() => handleAction(action)} className="w-full sm:w-auto">
+                <Button variant={action === "clear" || action === "docker_recovery" ? "destructive" : action === "update" ? "default" : "outline"} disabled={tasks[action].status === "queued" || tasks[action].status === "running"} onClick={() => handleAction(action)} className="w-full sm:w-auto">
                   {renderButton(action, COPY[action].confirmText)}
                 </Button>
               </div>

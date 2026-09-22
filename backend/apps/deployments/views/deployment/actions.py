@@ -144,12 +144,65 @@ class LifecycleActionsMixin:
         Re-queue a failed deployment.
         POST /api/v1/deployments/{id}/retry/
         POST /api/v1/cloud/deployments/{id}/retry/  (alias)
+
+        Body (optional): { "docker_recovery": true } — run a fresh
+        Docker/containerd recovery (builder prune, ingest + tmpmounts
+        clear, daemon restart) synchronously BEFORE re-queueing, so the
+        retry does not hit the same corrupted layer state. Approved for
+        BUILD_FAILED rows showing containerd corruption; the restart
+        kills running containers (compose restarts them).
         """
+        from django.core.cache import cache
+
         deployment = self.get_object()
-        if deployment.status not in (Deployment.Status.FAILED, Deployment.Status.CANCELLED):
+        if deployment.status not in (
+            Deployment.Status.FAILED,
+            Deployment.Status.CANCELLED,
+            Deployment.Status.BUILD_FAILED,
+        ):
             return Response(
                 {'error': f'Cannot retry deployment in {deployment.status} status.'},
                 status=status.HTTP_409_CONFLICT,
+            )
+        recovery_result = None
+        if bool(request.data.get('docker_recovery', False)):
+            from ...tasks.build_recovery import (
+                _PRUNE_CACHE_KEY,
+                is_build_corruption_error,
+                perform_docker_recovery,
+            )
+
+            logs_text = str(deployment.build_logs or "")
+            if not is_build_corruption_error(logs_text):
+                return Response(
+                    {'error': 'No containerd corruption signature in build logs — plain retry instead.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            # Explicit operator request bypasses the 5-minute auto-recovery
+            # cooldown so a known-corrupt daemon heals immediately.
+            cache.delete(_PRUNE_CACHE_KEY)
+            try:
+                recovery_result = perform_docker_recovery(
+                    deployment_id=str(deployment.id)
+                )
+            except Exception as exc:
+                logger.warning("Retry-time docker recovery failed: %s", exc)
+                recovery_result = {"status": "error", "reason": str(exc)[:300]}
+            try:
+                from django.utils import timezone as _tz
+
+                cache.set(
+                    _PRUNE_CACHE_KEY,
+                    str(_tz.now().timestamp()),
+                    300,
+                )
+            except Exception:
+                pass
+            steps = (recovery_result or {}).get("steps", {})
+            deployment.build_logs = (
+                f"{deployment.build_logs or ''}"
+                f"\n[Recovery] Operator-triggered docker recovery before retry: "
+                f"{steps}.\n"
             )
         deployment.status = Deployment.Status.QUEUED
         deployment.build_logs = (
@@ -160,7 +213,10 @@ class LifecycleActionsMixin:
         provider = _resolve_provider_for_service(deployment.service)
         if provider:
             smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
-        return Response(DeploymentSerializer(deployment).data)
+        payload = DeploymentSerializer(deployment).data
+        if recovery_result is not None:
+            payload['docker_recovery'] = recovery_result
+        return Response(payload)
 
 
     @action(detail=True, methods=['post'])

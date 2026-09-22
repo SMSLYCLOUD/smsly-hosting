@@ -308,6 +308,33 @@ APP_TEMPLATES: dict[str, AppTemplate] = {
         volumes=['/home/node/.n8n'],
         docs_url='https://hub.docker.com/r/n8nio/n8n',
     ),
+
+    # ===== AGENT BROWSERS =====
+    'steel': AppTemplate(
+        id='steel',
+        name='Steel Browser',
+        description='Self-hosted agent browser infrastructure: sessions API, persistent profiles, stealth. Needs ~4GB RAM.',
+        category='dev-tools',
+        docker_image='ghcr.io/steel-dev/steel-browser:latest',
+        default_port=3000,
+        env_vars={},
+        volumes=['/app/.cache'],
+        health_check='curl -f http://localhost:3000/api/health || exit 1',
+        docs_url='https://docs.steel.dev/overview/self-hosting/docker',
+        post_deploy_notes='API on :3000, CDP on :9223 (keep 9223 off the public internet). UI at :3000/ui.',
+    ),
+    'browserless': AppTemplate(
+        id='browserless',
+        name='Browserless Chrome',
+        description='Headless Chrome for Playwright/Puppeteer/Selenium scripts. CDP + REST on :3000.',
+        category='dev-tools',
+        docker_image='browserless/chrome:latest',
+        default_port=3000,
+        env_vars={},
+        health_check='curl -f http://localhost:3000/pressure || exit 1',
+        docs_url='https://hub.docker.com/r/browserless/chrome',
+        post_deploy_notes='Connect Playwright to ws://<host>:3000/playwright/chromium. Set a TOKEN env var if exposing publicly.',
+    ),
     'gitea': AppTemplate(
         id='gitea',
         name='Gitea',

@@ -89,6 +89,12 @@ def _socket_proxy_host_port() -> tuple:
 class EcosystemGraphBuilder:
     """Builds a topology graph of the entire SMSLY platform infrastructure."""
 
+    # Short cache: health barely changes between canvas polls, and each
+    # uncached build costs up to ~15 sequential probe timeouts. Cache key
+    # is global (admin-only endpoint, same graph for every viewer).
+    GRAPH_CACHE_KEY = "topology:ecosystem-graph"
+    GRAPH_CACHE_TTL = 30
+
     # Default service definitions — overridden at runtime with live health checks
     NODE_DEFINITIONS: list[dict[str, Any]] = [
         {
@@ -247,25 +253,41 @@ class EcosystemGraphBuilder:
 
     def build(self) -> dict[str, Any]:
         """Return {nodes: [...], edges: [...]} representing the platform ecosystem."""
+        from django.core.cache import cache
+
+        cached = cache.get(self.GRAPH_CACHE_KEY)
+        if isinstance(cached, dict) and cached.get("nodes") is not None:
+            return cached
         nodes = self._build_nodes()
         edges = [dict(e) for e in self.EDGE_DEFINITIONS]
-        return {"nodes": nodes, "edges": edges}
+        graph = {"nodes": nodes, "edges": edges}
+        cache.set(self.GRAPH_CACHE_KEY, graph, self.GRAPH_CACHE_TTL)
+        return graph
 
     def _build_nodes(self) -> list[dict[str, Any]]:
-        """Build node list with live health status from TCP probes."""
-        nodes: list[dict[str, Any]] = []
-        for defn in self.NODE_DEFINITIONS:
-            status = self._check_health(defn)
-            node = {
+        """Build node list with live health status from TCP probes.
+
+        Probes run in parallel: sequential 1.5–2s timeouts added up to
+        ~30s wall time (endpoint timeout at scale). executor.map preserves
+        NODE_DEFINITIONS order.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _probe(defn: dict[str, Any]) -> dict[str, Any]:
+            return {
                 "id": defn["id"],
                 "type": defn["type"],
                 "kind": defn["kind"],
                 "label": defn["label"],
-                "status": status,
+                "status": self._check_health(defn),
                 "metadata": defn.get("metadata", {}),
             }
-            nodes.append(node)
-        return nodes
+
+        with ThreadPoolExecutor(
+            max_workers=min(16, len(self.NODE_DEFINITIONS)),
+            thread_name_prefix="eco-health",
+        ) as pool:
+            return list(pool.map(_probe, self.NODE_DEFINITIONS))
 
     def _check_health(self, defn: dict[str, Any]) -> str:
         """Probe a service and return 'healthy', 'degraded', or 'down'."""

@@ -43,12 +43,20 @@ export function BuildTab({ service }: BuildTabProps) {
     setDeployMode(service.deploy_mode || 'SINGLE');
     setWatchPaths((service.watch_paths || []).join('\n'));
     setBotPrStrategy(service.bot_pr_strategy || 'DEPLOY');
+    setPinnedCommit('');
+    setCommits([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [service.id]);
 
   // Branch fetching state
   const [branches, setBranches] = useState<any[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
+
+  // Commit picker state (local-only pin; saved into `branch` on save —
+  // the backend accepts a SHA wherever it accepts a branch/tag).
+  const [commits, setCommits] = useState<{ sha: string; message: string }[]>([]);
+  const [loadingCommits, setLoadingCommits] = useState(false);
+  const [pinnedCommit, setPinnedCommit] = useState('');
 
   useEffect(() => {
     if (!repositoryUrl) return;
@@ -70,12 +78,39 @@ export function BuildTab({ service }: BuildTabProps) {
       .finally(() => setLoadingBranches(false));
   }, [repositoryUrl]);
 
+  useEffect(() => {
+    if (!repositoryUrl || !branch) { setCommits([]); return; }
+    // Same provider detection as the branch fetch above (mirrors
+    // lib/gitRefs.ts — keep all three in sync).
+    const match = repositoryUrl.match(/github\.com\/([^\/]+\/[^\/]+)/)
+      || repositoryUrl.match(/gitlab\.com\/([^\/]+\/[^\/]+)/)
+      || repositoryUrl.match(/bitbucket\.org\/([^\/]+\/[^\/]+)/);
+    if (!match) { setCommits([]); return; }
+    let repo = match[1];
+    if (repo.endsWith('.git')) repo = repo.slice(0, -4);
+
+    setLoadingCommits(true);
+    const api = match[0].includes('github.com') ? githubApi
+      : match[0].includes('gitlab.com') ? gitlabApi
+      : bitbucketApi;
+    api.commits(repo, branch)
+      .then((data: any) => {
+        if (!Array.isArray(data)) { setCommits([]); return; }
+        setCommits(data.slice(0, 30).map((c: any) => ({
+          sha: c.sha || c.id || c.hash || '',
+          message: (c.commit?.message || c.title || c.message || '').split('\n')[0],
+        })).filter((c: any) => c.sha));
+      })
+      .catch(() => setCommits([]))
+      .finally(() => setLoadingCommits(false));
+  }, [repositoryUrl, branch]);
+
   const handleSave = async () => {
     setSaving(true);
     try {
       await servicesApi.update(service.id, {
         repository_url: repositoryUrl || undefined,
-        branch: branch || 'main',
+        branch: pinnedCommit || branch || 'main',
         buildpack: buildpack,
         root_directory: rootDirectory,
         build_command: buildCommand,
@@ -162,6 +197,36 @@ export function BuildTab({ service }: BuildTabProps) {
               <p className="text-xs text-muted-foreground">
                 Branch, tag, or commit to deploy from. Defaults to <code>main</code>.
               </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="commit">Commit (pin to SHA, optional)</Label>
+              <select
+                id="commit"
+                value={pinnedCommit}
+                onChange={(e) => setPinnedCommit(e.target.value)}
+                disabled={loadingCommits || commits.length === 0}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              >
+                <option value="">Branch HEAD (default)</option>
+                {commits.map((c) => (
+                  <option key={c.sha} value={c.sha}>
+                    {c.sha.slice(0, 7)}{c.message ? ` — ${c.message.slice(0, 60)}` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {loadingCommits
+                  ? "Loading commits…"
+                  : commits.length > 0
+                    ? "Pin deploys to an exact commit. Save to apply."
+                    : "Commits appear once a connected repo + branch are set."}
+              </p>
+              {pinnedCommit && (
+                <div className="flex items-center gap-2 text-xs text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span>Pinned to <code>{pinnedCommit.slice(0, 7)}</code>. Save to deploy exactly this commit until unpinned.</span>
+                </div>
+              )}
             </div>
           </div>
 

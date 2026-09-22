@@ -23,6 +23,7 @@ from apps.deployments.models import Deployment, Service
 from apps.deployments.services.pipeline.build import _registry_cache_settings
 from apps.deployments.tasks.deploy.build_compose import (
     _build_lock_keys,
+    _fleet_lock_owner_is_stale,
     _host_pressure_slots,
     _max_build_slots,
     fleet_build_lock,
@@ -174,8 +175,7 @@ class FleetBuildSlotsTests(TestCase):
                 cache.get("smsly_fleet_build_lock"), str(current.id))
         self.assertIsNone(cache.get("smsly_fleet_build_lock"))
 
-    def test_live_owner_blocks_only_its_slot(self):
-        # A live owner on slot 0 must not block a waiter when slot 1
+    def test_live_owner_blocks_only_its_slot(self):        # A live owner on slot 0 must not block a waiter when slot 1
         # is free — this is the exact single-slot serialization the
         # refactor removes.
         from django.core.cache import cache
@@ -197,3 +197,94 @@ class FleetBuildSlotsTests(TestCase):
             # Slot 0 untouched — the live holder keeps building.
             self.assertEqual(
                 cache.get("smsly_fleet_build_lock"), str(holder.id))
+
+
+class FleetLockOwnerStaleTests(TestCase):
+    """_fleet_lock_owner_is_stale: liveness beats row status.
+
+    Regression for 2026-09-22: a CANCELLED owner with a fresh heartbeat
+    (worker still building — cancel is DB-status-only) was stolen,
+    running two docker builds on the same daemon/tag until one's image
+    vanished ("No such image"). A live worker must never be stolen from.
+    """
+
+    STALE_SECONDS = 600
+    HB_KEY = "test-fleet-hb"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="stale-user", password="password123")
+        self.provider = CloudProvider.objects.create(
+            name="stale-provider",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+        self.service = Service.objects.create(
+            name="stale-svc", owner=self.user, provider=self.provider)
+
+    def tearDown(self):
+        from django.core.cache import cache
+        cache.delete(self.HB_KEY)
+
+    def _deployment(self, status):
+        return Deployment.objects.create(
+            service=self.service, status=status, commit_hash="abc1234")
+
+    def _heartbeat(self, owner_id, age_seconds):
+        import time
+        from django.core.cache import cache
+        cache.set(
+            self.HB_KEY,
+            {"owner": str(owner_id), "timestamp": time.time() - age_seconds},
+            timeout=900,
+        )
+
+    def test_fresh_heartbeat_cancelled_owner_is_not_stale(self):
+        # THE incident: worker alive (fresh heartbeat) but row CANCELLED.
+        owner = self._deployment(status=Deployment.Status.CANCELLED)
+        self._heartbeat(owner.id, age_seconds=5)
+        is_stale, reason = _fleet_lock_owner_is_stale(
+            str(owner.id), self.HB_KEY, self.STALE_SECONDS)
+        self.assertFalse(is_stale, reason)
+
+    def test_fresh_heartbeat_building_owner_is_not_stale(self):
+        owner = self._deployment(status=Deployment.Status.BUILDING)
+        self._heartbeat(owner.id, age_seconds=5)
+        is_stale, reason = _fleet_lock_owner_is_stale(
+            str(owner.id), self.HB_KEY, self.STALE_SECONDS)
+        self.assertFalse(is_stale, reason)
+
+    def test_no_heartbeat_cancelled_owner_is_stale(self):
+        # Preserves test_stale_base_slot_stolen: dead worker, terminal
+        # row — still stolen.
+        owner = self._deployment(status=Deployment.Status.CANCELLED)
+        is_stale, reason = _fleet_lock_owner_is_stale(
+            str(owner.id), self.HB_KEY, self.STALE_SECONDS)
+        self.assertTrue(is_stale)
+        self.assertIn("CANCELLED", reason)
+
+    def test_stale_heartbeat_building_owner_is_stale(self):
+        owner = self._deployment(status=Deployment.Status.BUILDING)
+        self._heartbeat(owner.id, age_seconds=self.STALE_SECONDS + 60)
+        is_stale, reason = _fleet_lock_owner_is_stale(
+            str(owner.id), self.HB_KEY, self.STALE_SECONDS)
+        self.assertTrue(is_stale)
+        self.assertIn("stale", reason)
+
+    def test_missing_owner_is_stale(self):
+        import uuid
+        is_stale, reason = _fleet_lock_owner_is_stale(
+            str(uuid.uuid4()), self.HB_KEY, self.STALE_SECONDS)
+        self.assertTrue(is_stale)
+        self.assertIn("no longer exists", reason)
+
+    def test_legacy_grace_period_without_heartbeat(self):
+        import datetime
+        from django.utils import timezone
+        owner = self._deployment(status=Deployment.Status.BUILDING)
+        Deployment.objects.filter(id=owner.id).update(
+            updated_at=timezone.now() - datetime.timedelta(
+                seconds=self.STALE_SECONDS + 60))
+        is_stale, _ = _fleet_lock_owner_is_stale(
+            str(owner.id), self.HB_KEY, self.STALE_SECONDS)
+        self.assertTrue(is_stale)

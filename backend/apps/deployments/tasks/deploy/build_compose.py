@@ -76,6 +76,61 @@ def _build_lock_keys(slots: int) -> list:
     return keys
 
 
+def _fleet_lock_owner_is_stale(
+    owner_id: str, hb_key: str, stale_seconds: int,
+) -> tuple[bool, str]:
+    """Decide whether a fleet build slot holder is dead.
+
+    Liveness (heartbeat) is checked BEFORE row status: cancel is
+    DB-status-only — the owner's worker keeps building after CANCELLED
+    (smart_deploy_task only checks cancellation at startup gates), and
+    stealing the slot runs two docker builds on the same daemon/tag,
+    which deletes the image out from under the first build
+    ("No such image", 2026-09-22). A fresh heartbeat proves the worker
+    is alive, so the waiter blocks until max_wait instead of stealing.
+    """
+    from django.core.cache import cache
+
+    try:
+        owner = Deployment.objects.only("id", "status", "updated_at").get(id=owner_id)
+    except Deployment.DoesNotExist:
+        return True, "owner deployment no longer exists"
+    except Exception as exc:
+        logger.warning("Could not inspect fleet build lock owner %s: %s", owner_id, exc)
+        return False, "owner could not be inspected"
+
+    heartbeat_age: float | None = None
+    heartbeat = cache.get(hb_key)
+    if isinstance(heartbeat, dict) and str(heartbeat.get("owner")) == owner_id:
+        try:
+            heartbeat_age = time.time() - float(heartbeat.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            # Unparseable timestamp proves nothing either way — preserve
+            # the historic fail-open treatment (counts as stale below).
+            heartbeat_age = stale_seconds + 1
+    if heartbeat_age is not None and heartbeat_age <= stale_seconds:
+        return False, "owner heartbeat is fresh (worker alive)"
+
+    lock_owner_statuses = {
+        Deployment.Status.QUEUED,
+        Deployment.Status.BUILDING,
+        Deployment.Status.DEPLOYING,
+        Deployment.Status.HEALTH_CHECK,
+    }
+    if owner.status not in lock_owner_statuses:
+        return True, f"owner status is {owner.status}"
+
+    if heartbeat_age is not None:
+        return True, f"owner heartbeat is stale ({int(heartbeat_age)}s old)"
+
+    if owner.updated_at:
+        updated_age = (timezone.now() - owner.updated_at).total_seconds()
+        if updated_age > stale_seconds:
+            return True, f"legacy owner has no heartbeat and is stale ({int(updated_age)}s old)"
+
+    return False, "legacy owner has no heartbeat but is still within grace period"
+
+
 @contextmanager
 def fleet_build_lock(deployment):
     if not _env_bool("SMSLY_ENABLE_FLEET_BUILD_LOCK", True):
@@ -129,41 +184,6 @@ def fleet_build_lock(deployment):
                 return
             cache.set(hb_key, _heartbeat_payload(owner_id), timeout=lock_timeout)
 
-    def _owner_is_stale(owner_id: str, hb_key: str) -> tuple[bool, str]:
-        try:
-            owner = Deployment.objects.only("id", "status", "updated_at").get(id=owner_id)
-        except Deployment.DoesNotExist:
-            return True, "owner deployment no longer exists"
-        except Exception as exc:
-            logger.warning("Could not inspect fleet build lock owner %s: %s", owner_id, exc)
-            return False, "owner could not be inspected"
-
-        lock_owner_statuses = {
-            Deployment.Status.QUEUED,
-            Deployment.Status.BUILDING,
-            Deployment.Status.DEPLOYING,
-            Deployment.Status.HEALTH_CHECK,
-        }
-        if owner.status not in lock_owner_statuses:
-            return True, f"owner status is {owner.status}"
-
-        heartbeat = cache.get(hb_key)
-        if isinstance(heartbeat, dict) and str(heartbeat.get("owner")) == owner_id:
-            try:
-                heartbeat_age = time.time() - float(heartbeat.get("timestamp") or 0)
-            except (TypeError, ValueError):
-                heartbeat_age = stale_seconds + 1
-            if heartbeat_age <= stale_seconds:
-                return False, "owner heartbeat is fresh"
-            return True, f"owner heartbeat is stale ({int(heartbeat_age)}s old)"
-
-        if owner.updated_at:
-            updated_age = (timezone.now() - owner.updated_at).total_seconds()
-            if updated_age > stale_seconds:
-                return True, f"legacy owner has no heartbeat and is stale ({int(updated_age)}s old)"
-
-        return False, "legacy owner has no heartbeat but is still within grace period"
-
     while time.monotonic() - start_time < max_wait:
         deployment_id = str(deployment.id)
         for key in lock_keys:
@@ -181,7 +201,8 @@ def fleet_build_lock(deployment):
                 held_key = key
                 cache.set(hb_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
                 break
-            is_stale, stale_reason = _owner_is_stale(current_owner, hb_key)
+            is_stale, stale_reason = _fleet_lock_owner_is_stale(
+                current_owner, hb_key, stale_seconds)
             if is_stale:
                 append_log(
                     deployment,

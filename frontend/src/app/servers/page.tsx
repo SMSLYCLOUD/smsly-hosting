@@ -1252,6 +1252,25 @@ function ProvisionForm({
                                 <pre className="p-2 rounded-md bg-zinc-950 border border-zinc-800 text-[10px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap break-all max-h-24">
                                     {generatedPublicKey}
                                 </pre>
+                                <div className="flex items-center justify-between pt-1">
+                                    <span className="text-[10px] font-bold uppercase text-emerald-400 tracking-wider">Run on fresh VPS as root</span>
+                                    <button
+                                        type="button"
+                                        onClick={async () => {
+                                            const cmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && grep -qxF "${generatedPublicKey}" ~/.ssh/authorized_keys || echo "${generatedPublicKey}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo "Grid key installed"`;
+                                            try {
+                                                await navigator.clipboard.writeText(cmd);
+                                                toast({ title: 'Copied', description: 'Setup command copied — paste it into the VPS terminal as root.' });
+                                            } catch { /* clipboard unavailable */ }
+                                        }}
+                                        className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                                    >
+                                        <Copy size={10} /> Copy command
+                                    </button>
+                                </div>
+                                <pre className="p-2 rounded-md bg-zinc-950 border border-zinc-800 text-[10px] font-mono text-zinc-300 overflow-x-auto whitespace-pre-wrap break-all">
+                                    {`mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && grep -qxF "${generatedPublicKey}" ~/.ssh/authorized_keys || echo "${generatedPublicKey}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo "Grid key installed"`}
+                                </pre>
                             </div>
                         )}
                     </div>
