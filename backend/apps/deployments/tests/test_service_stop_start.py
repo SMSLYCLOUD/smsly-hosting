@@ -57,6 +57,7 @@ class ServiceStopStartTests(APITestCase):
         runtime_cls.return_value.stop_container.assert_called_once_with('container-123')
         service.refresh_from_db()
         self.assertEqual(service.status, 'STOPPED')
+        self.assertEqual(service.health_status, 'unknown')
         # ACTIVE row is kept as the resume point, not cancelled.
         self.assertTrue(service.deployments.filter(status=Deployment.Status.ACTIVE).exists())
 

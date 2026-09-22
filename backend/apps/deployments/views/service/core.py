@@ -137,6 +137,19 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
 
         service = serializer.save(owner=self.request.user, server=server)
 
+        # Inherit the project's identity (mTLS trust/sidecar posture).
+        # Network, registry and shared-addon URLs resolve from the project
+        # automatically at deploy time; only identity needs normalizing.
+        if service.project_id:
+            try:
+                from ...services.project_membership import (
+                    apply_project_membership,
+                )
+                apply_project_membership(service)
+            except Exception as exc:
+                logger.debug("Project inheritance skipped for %s: %s",
+                             service.name, exc)
+
         # Setup provider webhook only for direct user actions.
         if (
             not self._is_remote_sync_request()
@@ -155,6 +168,8 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
         from ...models.core import ManagedServer
 
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
+        old_project_id = str(
+            serializer.instance.project_id) if serializer.instance else None
         routing_fields = {
             'public_domain_hidden', 'wildcard_url_enabled', 'node_url_enabled',
             'wildcard_redirect_custom_domain', 'wildcard_internal_only', 'is_public',
@@ -194,6 +209,20 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
         # Reload Caddy when routing-related fields change
         if routing_changed and not self._is_remote_sync_request():
             self._sync_caddy()
+
+        # Project changed via PATCH — same inheritance as move-project
+        # (dedicated action stays the audited path for explicit moves).
+        try:
+            new_project_id = str(
+                service.project_id) if service.project_id else None
+            if new_project_id != old_project_id:
+                from ...services.project_membership import (
+                    apply_project_membership,
+                )
+                apply_project_membership(service)
+        except Exception as exc:
+            logger.debug("Project inheritance skipped for %s: %s",
+                         service.name, exc)
 
 
     def destroy(self, request, *args, **kwargs):
@@ -366,7 +395,8 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
                         timeout=15,
                     )
                 service.status = Service.Status.STOPPED
-                service.save(update_fields=['status', 'updated_at'])
+                service.health_status = 'unknown'
+                service.save(update_fields=['status', 'health_status', 'updated_at'])
         except Exception as e:
             logger.error("Stop resolution/remote call failed for service %s: %s", service.id, e)
 
@@ -403,7 +433,10 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
             method = 'docker_stop_failed'
 
         service.status = Service.Status.STOPPED
-        service.save(update_fields=['status', 'updated_at'])
+        # Health badge must not keep showing the last live state: the
+        # monitor skips stopped services, so reset to unknown here.
+        service.health_status = 'unknown'
+        service.save(update_fields=['status', 'health_status', 'updated_at'])
 
         # Clear restart/backoff state so a later start is clean.
         try:
