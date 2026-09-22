@@ -319,8 +319,8 @@ export interface Service {
   id: string;
   name: string;
   slug: string;
-  // Backend Service.Status: ACTIVE | DELETION_PENDING | DELETION_FAILED
-  // | DELETED | UNKNOWN. No UPDATING/STOPPED, no lowercase variants.
+  // Backend Service.Status: ACTIVE | STOPPED | DELETION_PENDING
+  // | DELETION_FAILED | DELETED | UNKNOWN. No UPDATING, no lowercase variants.
   status: 'ACTIVE' | 'STOPPED' | 'DELETION_PENDING' | 'DELETION_FAILED' | 'DELETED' | 'UNKNOWN';
   repository_url?: string;
   branch?: string;
