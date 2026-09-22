@@ -59,6 +59,7 @@ class DomainConfigView(GenericAPIView):
             'build_memory_max_mb': getattr(config, 'build_memory_max_mb', 10240),
             'build_cpu_quota_percent': getattr(config, 'build_cpu_quota_percent', 400),
             'build_timeout_seconds': getattr(config, 'build_timeout_seconds', 1800),
+            'edge_proxy_records': getattr(config, 'edge_proxy_records', False),
             'ecosystem_max_concurrent_builds': config.ecosystem_max_concurrent_builds,
             'ecosystem_build_stagger_seconds': config.ecosystem_build_stagger_seconds,
             'ecosystem_default_wave_size': config.ecosystem_default_wave_size,
@@ -306,6 +307,8 @@ class DomainConfigView(GenericAPIView):
                     pass
             if 'postgres_shared_addons_default' in data:
                 config.postgres_shared_addons_default = _parse_bool(data.get('postgres_shared_addons_default'))
+            if 'edge_proxy_records' in data:
+                config.edge_proxy_records = _parse_bool(data.get('edge_proxy_records'))
             if 'ecosystem_max_concurrent_builds' in data:
                 try:
                     config.ecosystem_max_concurrent_builds = max(1, min(10, int(data['ecosystem_max_concurrent_builds'])))

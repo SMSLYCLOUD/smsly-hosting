@@ -285,7 +285,7 @@ class PlatformConfig(models.Model):
     # announcement of the covering prefix redirects users to an
     # attacker with zero detection. These fields drive the shield.
     edge_proxy_records = models.BooleanField(  # type: ignore[var-annotated]
-        default=False,
+        default=True,
         help_text="Edge Shield: route DNS records through the Cloudflare "
                   "proxy (Anycast) instead of DNS-only to the origin IP. "
                   "Absorbs BGP hijack of the origin prefix and L3-L4 DDoS.")

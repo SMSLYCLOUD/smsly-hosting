@@ -1,7 +1,10 @@
 from apps.domains.services import dns
 
 
-def test_ensure_dns_records_updates_proxied_record_to_dns_only(monkeypatch):
+def test_ensure_dns_records_never_downgrades_orange_record(monkeypatch):
+    # Regression: routine reconciles used to flip orange records grey,
+    # taking the edge down unnoticed. Orange is now sticky — only an
+    # explicit operator action may downgrade.
     monkeypatch.setattr(dns, "_get_zone_id", lambda token, zone_name: "zone-1")
 
     def fake_get_records(token, zone_id, name, record_type):
@@ -32,15 +35,8 @@ def test_ensure_dns_records_updates_proxied_record_to_dns_only(monkeypatch):
     )
 
     assert result["ok"] is True
-    assert result["updated"] == ["smsly-frontend-0b774a.cloud.smsly.cloud"]
-    assert updates == [
-        {
-            "record_id": "record-1",
-            "name": "smsly-frontend-0b774a.cloud.smsly.cloud",
-            "content": "153.75.247.117",
-            "proxied": False,
-        }
-    ]
+    assert result["updated"] == []
+    assert updates == []
 
 
 def test_ensure_dns_records_creates_dns_only_record(monkeypatch):
@@ -146,3 +142,58 @@ def test_wildcard_record_follows_flag(monkeypatch):
     assert created == [
         {"name": "*.grid.smsly.cloud", "content": "176.31.201.181", "proxied": False}
     ]
+
+
+def test_grey_record_upgraded_when_desired(monkeypatch):
+    cfg = _FakePlatformConfig(
+        domain="grid.smsly.cloud", edge_proxy_records=True, edge_proxy_wildcards=False
+    )
+    monkeypatch.setattr(
+        "apps.deployments.models.PlatformConfig.load",
+        classmethod(lambda cls: cfg),
+    )
+    monkeypatch.setattr(dns, "_get_zone_id", lambda token, zone_name: "zone-1")
+    monkeypatch.setattr(
+        dns, "_get_records",
+        lambda token, zone_id, name, record_type: (
+            [{"id": "r1", "content": "176.31.201.181", "proxied": False}]
+            if record_type == "A" else []),
+    )
+    updates = []
+    monkeypatch.setattr(
+        dns, "_update_record",
+        lambda token, zone_id, record_id, name, content, proxied=False: (
+            updates.append({"content": content, "proxied": proxied}),
+            (True, "updated"))[1],
+    )
+    result = dns.ensure_dns_records(["grid.smsly.cloud"], "176.31.201.181", "token")
+    assert result["ok"] is True
+    assert result["updated"] == ["grid.smsly.cloud"]
+    assert updates == [{"content": "176.31.201.181", "proxied": True}]
+
+
+def test_ip_change_preserves_orange(monkeypatch):
+    cfg = _FakePlatformConfig(
+        domain="grid.smsly.cloud", edge_proxy_records=False, edge_proxy_wildcards=False
+    )
+    monkeypatch.setattr(
+        "apps.deployments.models.PlatformConfig.load",
+        classmethod(lambda cls: cfg),
+    )
+    monkeypatch.setattr(dns, "_get_zone_id", lambda token, zone_name: "zone-1")
+    monkeypatch.setattr(
+        dns, "_get_records",
+        lambda token, zone_id, name, record_type: (
+            [{"id": "r1", "content": "10.0.0.1", "proxied": True}]
+            if record_type == "A" else []),
+    )
+    updates = []
+    monkeypatch.setattr(
+        dns, "_update_record",
+        lambda token, zone_id, record_id, name, content, proxied=False: (
+            updates.append({"content": content, "proxied": proxied}),
+            (True, "updated"))[1],
+    )
+    result = dns.ensure_dns_records(["grid.smsly.cloud"], "176.31.201.181", "token")
+    assert result["ok"] is True
+    assert updates == [{"content": "176.31.201.181", "proxied": True}]

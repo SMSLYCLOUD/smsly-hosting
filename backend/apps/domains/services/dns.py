@@ -181,15 +181,28 @@ def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> di
         if records:
             changed = False
             for record in records:
-                if record.get("content") == server_ip and bool(record.get("proxied", False)) == desired_proxied:
+                current_proxied = bool(record.get("proxied", False))
+                # One-way ratchet: missing/incorrect IP is always fixed, but
+                # an orange-cloud record is NEVER downgraded automatically.
+                # Downgrades only happen via explicit operator action, so a
+                # routine deploy can never silently unproxy the edge (which
+                # is how apices went grey unnoticed).
+                if record.get("content") == server_ip and (
+                    current_proxied == desired_proxied
+                    or (current_proxied and not desired_proxied)
+                ):
                     continue
+                if current_proxied and not desired_proxied:
+                    logger.warning(
+                        "Keeping %s proxied (operator-set orange cloud); "
+                        "automatic downgrade refused.", domain)
                 updated, msg = _update_record(
                     token,
                     zone_id,
                     record.get("id", ""),
                     domain,
                     server_ip,
-                    proxied=desired_proxied,
+                    proxied=(current_proxied or desired_proxied),
                 )
                 if updated:
                     changed = True

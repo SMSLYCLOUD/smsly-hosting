@@ -6,6 +6,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Loader2, Save } from "lucide-react";
 import api from "@/lib/api";
 import { EcosystemPipelineCard, DeployPipelineCard } from "./PipelineCards";
+import { EdgeShieldCard } from "./EdgeShieldCard";
 import { ContainerRegistryCard } from "./ContainerRegistryCard";
 import { ObservabilityCard, BillingSmsCard } from "./ObservabilityCards";
 import { FeatureFlagsCard } from "./FeatureFlagsCard";
@@ -82,6 +83,7 @@ export function PlatformSettingsTab() {
 
       <div className="grid gap-6 md:grid-cols-2">
         <EcosystemPipelineCard config={config} onChange={handleChange} />
+        <EdgeShieldCard config={config} onChange={handleChange} />
         <DeployPipelineCard config={config} onChange={handleChange} />
         <ContainerRegistryCard config={config} onChange={handleChange} />
         <ObservabilityCard config={config} onChange={handleChange} />
