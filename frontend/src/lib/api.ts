@@ -657,6 +657,10 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/stop/`);
     return response.data;
   },
+  start: async (id: string): Promise<{ status: string; message?: string }> => {
+    const response = await api.post(`/services/${id}/start/`);
+    return response.data;
+  },
   pruneDocker: async (id: string): Promise<{
     message: string;
     deployments_deleted: number;

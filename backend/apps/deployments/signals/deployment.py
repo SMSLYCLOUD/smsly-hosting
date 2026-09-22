@@ -42,10 +42,14 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
     # The deletion lifecycle owns Service.status — never let a stray
     # Deployment save flip a service out of (or past) a deletion state,
     # or recover_stalled_deletions will never find it again.
+    # STOPPED is owned the same way: only the stop/start/restart actions
+    # may leave it, otherwise a routine save of the kept ACTIVE row would
+    # silently resurrect stopped services.
     if service.status in (
         Service.Status.DELETION_PENDING,
         Service.Status.DELETION_FAILED,
         Service.Status.DELETED,
+        Service.Status.STOPPED,
     ):
         return
 

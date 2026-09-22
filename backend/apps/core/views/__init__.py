@@ -64,7 +64,7 @@ class DashboardOverviewView(GenericAPIView):
         failed = Service.objects.filter(owner=user, status=Service.Status.DELETION_FAILED).count()
         stopped = Service.objects.filter(
             owner=user,
-            status__in=[Service.Status.DELETION_PENDING, Service.Status.DELETED],
+            status__in=[Service.Status.STOPPED, Service.Status.DELETION_PENDING, Service.Status.DELETED],
         ).count()
         unknown = total - running - failed - stopped
 

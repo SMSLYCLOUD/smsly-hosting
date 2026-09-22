@@ -587,6 +587,10 @@ def _probe_container_state(container_id: str) -> dict:
 
 def _check_service_health(service: object, Deployment: object) -> None:
     """Check a single service's health and update service status."""
+    # Operator-stopped services are intentionally down: never probe,
+    # restart, or flag them. `start` clears this state explicitly.
+    if str(getattr(service, 'status', '') or '') == 'STOPPED':
+        return
     active = (
         Deployment.objects.filter(service=service, status=Deployment.Status.ACTIVE)
         .order_by("-created_at")

@@ -160,6 +160,7 @@ class Service(TimeStampedModel):
     """
     class Status(models.TextChoices):
         ACTIVE = 'ACTIVE', 'Active'
+        STOPPED = 'STOPPED', 'Stopped'
         DELETION_PENDING = 'DELETION_PENDING', 'Deletion Pending'
         DELETION_FAILED = 'DELETION_FAILED', 'Deletion Failed'
         DELETED = 'DELETED', 'Deleted'

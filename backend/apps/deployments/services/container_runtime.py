@@ -135,6 +135,22 @@ class ContainerRuntime:
         container.restart(timeout=timeout)
         return container
 
+    def stop_container(self, container_id: str, timeout: int = 30):
+        """Stop a container by ID (no-op when already stopped)."""
+        container = self.client.containers.get(container_id)
+        container.reload()
+        if str((container.attrs.get('State', {}) or {}).get('Status') or '').lower() not in ('exited', 'dead', 'removing'):
+            container.stop(timeout=timeout)
+        return container
+
+    def start_container(self, container_id: str):
+        """Start a container by ID. Returns the container object."""
+        container = self.client.containers.get(container_id)
+        container.reload()
+        if str((container.attrs.get('State', {}) or {}).get('Status') or '').lower() != 'running':
+            container.start()
+        return container
+
     def get_container(self, container_id: str):
         """Get a container object by ID."""
         return self.client.containers.get(container_id)

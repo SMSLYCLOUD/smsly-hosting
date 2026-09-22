@@ -86,13 +86,27 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
   };
 
   const handleStop = async (serviceId: string) => {
-    if (!await confirm({ title: 'Stop service?', message: 'Stop this service and cancel active deployment activity?', variant: 'destructive', confirmText: 'Stop' })) return;
+    if (!await confirm({ title: 'Stop service?', message: 'Stop the container and cancel in-flight deployment activity? Start it again anytime.', variant: 'destructive', confirmText: 'Stop' })) return;
     setActionLoading(serviceId);
     try {
       await servicesApi.stop(serviceId);
       // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Stop failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleStart = async (serviceId: string, serviceName: string) => {
+    if (!await confirm({ title: 'Start service?', message: `Start ${serviceName}?`, confirmText: 'Start' })) return;
+    setActionLoading(serviceId);
+    try {
+      await servicesApi.start(serviceId);
+      toast({ title: 'Start triggered', description: `${serviceName} is starting.` });
+    } catch (err) {
+      console.error('Start failed:', err);
+      toast({ title: 'Start failed', description: `Could not start ${serviceName}.`, variant: 'destructive' });
     } finally {
       setActionLoading(null);
     }
@@ -420,7 +434,19 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                   {actionLoading === service.id ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
                 </Button>
               )}
-              {service.latest_deployment?.status === 'ACTIVE' && (
+              {service.status === 'STOPPED' && has(PERMISSION.SERVICE_RESTART) && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-emerald-500"
+                  title="Start"
+                  disabled={actionLoading === service.id}
+                  onClick={() => handleStart(service.id, service.name)}
+                >
+                  {actionLoading === service.id ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} fill="currentColor" />}
+                </Button>
+              )}
+              {service.status !== 'STOPPED' && service.latest_deployment?.status === 'ACTIVE' && (
                 <Button
                   variant="ghost"
                   size="icon"

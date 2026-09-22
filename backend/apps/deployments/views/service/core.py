@@ -335,12 +335,18 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
     @action(detail=True, methods=['post'])
     def stop(self, request, pk=None):
         """
-        Stop a running service.
+        Stop a running service for real.
         POST /api/v1/services/{id}/stop/
-        Cancels any active deployments and marks the service as stopped.
+        Local: `docker stop` the active container, cancel in-flight (non-ACTIVE)
+        deployments, mark the service STOPPED (health monitor skips stopped
+        services — no restart fights). The ACTIVE deployment row is kept as
+        the resume point for `start`.
         """
         service = self.get_object()
         assert_can_write(self.request.user, service)
+
+        if service.status == Service.Status.STOPPED:
+            return Response({'message': f'Service {service.name} is already stopped'})
 
         try:
             from apps.deployments.utils.target import resolve_active_execution_target
@@ -359,36 +365,171 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
                         path=f"/api/v1/services/{remote_id}/stop/",
                         timeout=15,
                     )
+                service.status = Service.Status.STOPPED
+                service.save(update_fields=['status', 'updated_at'])
         except Exception as e:
             logger.error("Stop resolution/remote call failed for service %s: %s", service.id, e)
 
-        # Cancel any active/building deployments
-        active_deployments = service.deployments.filter(
+        # Cancel in-flight deployments (never the ACTIVE row — it is the
+        # resume point for `start`; cancelling it diverged DB from reality).
+        count = service.deployments.filter(
             status__in=[
-                Deployment.Status.ACTIVE,
                 Deployment.Status.BUILDING,
                 Deployment.Status.DEPLOYING,
                 Deployment.Status.HEALTH_CHECK,
                 Deployment.Status.QUEUED,
                 Deployment.Status.REVIEW,
             ]
-        )
-        count = active_deployments.update(
+        ).update(
             status=Deployment.Status.CANCELLED,
             finished_at=timezone.now(),
         )
+
+        # Local: actually stop the container.
+        method = 'deployment_cancel_only'
+        container_id = None
+        try:
+            active_deploy = service.deployments.filter(
+                status=Deployment.Status.ACTIVE).order_by('-created_at').first()
+            container_id = active_deploy.container_id if active_deploy else None
+            if container_id:
+                from apps.deployments.services.container_runtime import ContainerRuntime
+                ContainerRuntime().stop_container(container_id)
+                method = 'docker_stop'
+        except Exception as exc:
+            logger.warning("Docker stop failed for %s (container=%s): %s", service.name, container_id, exc)
+            # DB state still flips: a missing/dead container is stopped
+            # for all practical purposes; monitor skips STOPPED either way.
+            method = 'docker_stop_failed'
+
+        service.status = Service.Status.STOPPED
+        service.save(update_fields=['status', 'updated_at'])
+
+        # Clear restart/backoff state so a later start is clean.
+        try:
+            from apps.core.services.health_monitor import reset_restart_state
+            reset_restart_state(str(service.id))
+        except Exception:
+            pass
 
         # Log the stop action
         AuditLog(
             actor=request.user.get_username(),
             action='SERVICE_STOP',
             target=f'Service: {service.name}',
-            metadata={'service_id': str(service.id), 'deployments_cancelled': count},
+            metadata={'service_id': str(service.id), 'deployments_cancelled': count,
+                      'method': method, 'container_id': container_id},
         ).save()
 
         return Response({
             'message': f'Service {service.name} stopped',
             'deployments_cancelled': count,
+            'method': method,
+        })
+
+    @action(detail=True, methods=['post'])
+    def start(self, request, pk=None):
+        """
+        Start a stopped service.
+        POST /api/v1/services/{id}/start/
+        Only STOPPED services can be started (otherwise use restart or
+        redeploy). Local: `docker start` the ACTIVE deployment's container,
+        mark ACTIVE, set health grace so the monitor doesn't false-fail.
+        """
+        service = self.get_object()
+        assert_can_write(self.request.user, service)
+
+        if service.status != Service.Status.STOPPED:
+            return Response(
+                {'error': 'Only stopped services can be started. Use restart or redeploy.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Resolve the resume point before touching remotes: no ACTIVE row
+        # means there is nothing to start (redeploy instead).
+        active_deploy = service.deployments.filter(
+            status=Deployment.Status.ACTIVE).order_by('-created_at').first()
+        container_id = active_deploy.container_id if active_deploy else None
+        if not container_id:
+            return Response(
+                {'error': 'No active deployment to start. Redeploy instead.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Remote targets forward; unresolvable targets fall back to local
+        # (same pattern as fast restart) — a wrong guess surfaces as a
+        # truthful docker error below, not a silent no-op.
+        target_type, active_server = "local", None
+        try:
+            from apps.deployments.utils.target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target["server_obj"]
+            target_type = target["target_type"]
+        except Exception as e:
+            logger.debug("Start target resolution failed for %s, assuming local: %s", service.id, e)
+        try:
+            if target_type in ("remote", "lite_agent") and active_server:
+                from apps.deployments.services.remote_orchestrator import (
+                    RemoteOrchestrator,
+                )
+                orchestrator = RemoteOrchestrator(active_server)
+                remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+                if not remote_id:
+                    return Response(
+                        {'error': 'Remote service not found; cannot start.'},
+                        status=status.HTTP_502_BAD_GATEWAY,
+                    )
+                resp = orchestrator._request(
+                    method='POST',
+                    path=f"/api/v1/services/{remote_id}/start/",
+                    timeout=15,
+                )
+                if not resp or resp.status_code not in (200, 202):
+                    return Response(
+                        {'error': 'Remote start failed.'},
+                        status=status.HTTP_502_BAD_GATEWAY,
+                    )
+                service.status = Service.Status.ACTIVE
+                service.health_status = 'starting'
+                service.save(update_fields=['status', 'health_status', 'updated_at'])
+                AuditLog(
+                    actor=request.user.get_username(),
+                    action='SERVICE_START',
+                    target=f'Service: {service.name}',
+                    metadata={'service_id': str(service.id), 'method': 'remote_docker_start'},
+                ).save()
+                return Response({'message': f'Service {service.name} started remotely'})
+        except Exception as e:
+            logger.error("Start resolution/remote call failed for service %s: %s", service.id, e)
+            return Response({'error': 'Start failed.'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        try:
+            from apps.deployments.services.container_runtime import ContainerRuntime
+            ContainerRuntime().start_container(container_id)
+        except Exception as exc:
+            logger.error("Docker start failed for %s (container=%s): %s", service.name, container_id, exc)
+            return Response({'error': 'Docker start failed.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        service.status = Service.Status.ACTIVE
+        service.health_status = 'starting'
+        service.save(update_fields=['status', 'health_status', 'updated_at'])
+        try:
+            from apps.core.services.health_monitor import reset_restart_state
+            reset_restart_state(str(service.id))
+            from django.core.cache import cache
+            cache.set(f"health:restart_grace:{service.id}", True, timeout=60)
+        except Exception:
+            pass
+        AuditLog(
+            actor=request.user.get_username(),
+            action='SERVICE_START',
+            target=f'Service: {service.name}',
+            metadata={'service_id': str(service.id), 'container_id': container_id,
+                      'method': 'docker_start'},
+        ).save()
+        return Response({
+            'message': f'Service {service.name} started',
+            'container_id': container_id,
         })
 
     @action(
@@ -559,6 +700,10 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
                             # Set restart grace period in cache
                             from django.core.cache import cache
                             cache.set(f"health:restart_grace:{service.id}", True, timeout=60)
+                            if service.status == Service.Status.STOPPED:
+                                service.status = Service.Status.ACTIVE
+                                service.health_status = 'starting'
+                                service.save(update_fields=['status', 'health_status', 'updated_at'])
                             AuditLog(
                                 actor=request.user.get_username(),
                                 action='SERVICE_FAST_RESTART',
@@ -585,7 +730,11 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
 
                     # Update health status
                     service.health_status = 'starting'
-                    service.save(update_fields=['health_status', 'updated_at'])
+                    if service.status == 'STOPPED':
+                        # Explicit operator restart of a stopped service
+                        # resumes normal monitoring.
+                        service.status = 'ACTIVE'
+                    service.save(update_fields=['health_status', 'status', 'updated_at'])
 
                     # Set restart grace period so health monitor doesn't false-fail
                     from django.core.cache import cache
