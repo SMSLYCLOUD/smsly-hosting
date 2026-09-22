@@ -847,6 +847,75 @@ install_agent_stack() {
     fi
 }
 
+# ─── Install LiveKit SFU server ────────────────────────────────────────────
+# LiveKit ships no apt package: pin a GitHub release tarball, verify its
+# sha256, and render /etc/livekit/livekit.yaml from the node .env (API
+# keys are generated in Phase 2). TURN stays on standalone coturn, so the
+# built-in TURN relay is disabled; RTC media uses UDP 30000-31000 to match
+# the pre-flight port check.
+LIVEKIT_VERSION="${LIVEKIT_VERSION:-v1.13.6}"
+LIVEKIT_SHA256_AMD64="2b61abef2b9ba14b4b8ca38b37de9a37ffc682b9931d5fc03ceca2f0b77d3e33"
+LIVEKIT_SHA256_ARM64="5c75f09173199f3f8fe0c3c0d5a41171f9b306ffce6843d752c276d11e77d19b"
+
+install_livekit() {
+    local env_file="${1:-/opt/smsly-hosting-media/.env}"
+    echo -e "${BLUE}  → Installing LiveKit server ${LIVEKIT_VERSION}...${NC}"
+
+    local arch
+    case "$(dpkg --print-architecture 2>/dev/null || uname -m)" in
+        amd64|x86_64) arch="amd64"; local want_sha="$LIVEKIT_SHA256_AMD64" ;;
+        arm64|aarch64) arch="arm64"; local want_sha="$LIVEKIT_SHA256_ARM64" ;;
+        *) echo -e "${YELLOW}  ⚠ Unsupported architecture for LiveKit binaries (non-fatal)${NC}"; return 0 ;;
+    esac
+
+    if command -v livekit-server >/dev/null 2>&1 && livekit-server --version 2>/dev/null | grep -q "$LIVEKIT_VERSION"; then
+        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} already installed${NC}"
+    else
+        local url="https://github.com/livekit/livekit/releases/download/${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION#v}_linux_${arch}.tar.gz"
+        rm -f /tmp/livekit.tgz
+        if ! curl -fsSL --max-time 300 "$url" -o /tmp/livekit.tgz; then
+            echo -e "${YELLOW}  ⚠ LiveKit download failed — WebRTC SFU unavailable (non-fatal)${NC}"
+            return 0
+        fi
+        local got_sha
+        got_sha="$(sha256sum /tmp/livekit.tgz | awk '{print $1}')"
+        if [ "$got_sha" != "$want_sha" ]; then
+            echo -e "${YELLOW}  ⚠ LiveKit checksum mismatch (got ${got_sha:0:12}…) — refusing to install (non-fatal)${NC}"
+            rm -f /tmp/livekit.tgz
+            return 0
+        fi
+        tar -xzf /tmp/livekit.tgz -C /tmp livekit-server
+        install -o root -g root -m 0755 /tmp/livekit-server /usr/local/bin/livekit-server
+        rm -f /tmp/livekit.tgz /tmp/livekit-server
+        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} installed${NC}"
+    fi
+
+    # Render config (idempotent — re-run picks up rotated keys).
+    [ -f "$env_file" ] && { set -a; source "$env_file"; set +a; }
+    mkdir -p /etc/livekit /var/lib/livekit
+    cat > /etc/livekit/livekit.yaml <<EOF
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  port_range_start: 30000
+  port_range_end: 31000
+  use_external_ip: true
+  node_ip: "${PUBLIC_IP:-127.0.0.1}"
+keys:
+  "${LIVEKIT_API_KEY:-devkey}": "${LIVEKIT_API_SECRET:-secret}"
+room:
+  empty_timeout: 300
+  max_participants: 200
+turn:
+  enabled: false
+EOF
+    chmod 640 /etc/livekit/livekit.yaml
+    chown root:smsly /etc/livekit/livekit.yaml
+    echo -e "${GREEN}  ✓ LiveKit config rendered${NC}"
+}
+
 install_media_node() {
     local script_dir="$1"
     echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
