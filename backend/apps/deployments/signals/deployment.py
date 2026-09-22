@@ -42,14 +42,13 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
     # The deletion lifecycle owns Service.status — never let a stray
     # Deployment save flip a service out of (or past) a deletion state,
     # or recover_stalled_deletions will never find it again.
-    # STOPPED is owned the same way: only the stop/start/restart actions
-    # may leave it, otherwise a routine save of the kept ACTIVE row would
-    # silently resurrect stopped services.
+    # STOPPED is owned the same way with one exception: a NEW in-flight
+    # deployment revives the service (redeploy-after-stop must not leave
+    # the row STOPPED forever while the new container serves).
     if service.status in (
         Service.Status.DELETION_PENDING,
         Service.Status.DELETION_FAILED,
         Service.Status.DELETED,
-        Service.Status.STOPPED,
     ):
         return
 
@@ -63,7 +62,13 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
 
     if latest_deployment:
         if latest_deployment.status == Deployment.Status.ACTIVE:
-            new_status = Service.Status.ACTIVE
+            # The kept ACTIVE row is the resume point for `start`, not
+            # proof of serving — a routine save of it must not resurrect
+            # a stopped service (only `start`/restart or a new in-flight
+            # deploy may leave STOPPED).
+            new_status = (Service.Status.STOPPED
+                          if service.status == Service.Status.STOPPED
+                          else Service.Status.ACTIVE)
         elif latest_deployment.status == Deployment.Status.FAILED:
             # A failed deploy does not prove the service is serving —
             # don't fabricate ACTIVE.
@@ -75,8 +80,11 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
             Deployment.Status.REVIEW,
             Deployment.Status.HEALTH_CHECK,
         ]:
-            # In-flight deploys leave the currently-running version up.
-            new_status = service.status
+            # In-flight deploys leave the currently-running version up —
+            # and revive a stopped service (redeploy means serve again).
+            new_status = (Service.Status.ACTIVE
+                          if service.status == Service.Status.STOPPED
+                          else service.status)
         else:
             new_status = service.status
     else:

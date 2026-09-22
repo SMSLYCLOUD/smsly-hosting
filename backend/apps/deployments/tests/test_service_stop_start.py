@@ -108,6 +108,20 @@ class ServiceStopStartTests(APITestCase):
         service.refresh_from_db()
         self.assertEqual(service.status, 'STOPPED')
 
+    def test_new_deploy_revives_stopped_service(self):
+        svc = _make_service(self.user, self.provider, name='revive-svc', status='STOPPED')
+        Deployment.objects.create(
+            service=svc, status=Deployment.Status.BUILDING, commit_hash='def456')
+        svc.refresh_from_db()
+        self.assertEqual(svc.status, 'ACTIVE')
+
+    def test_active_row_save_keeps_stopped(self):
+        svc = _make_service(self.user, self.provider, name='keep-svc', status='STOPPED')
+        row = svc.deployments.filter(status=Deployment.Status.ACTIVE).first()
+        row.save()
+        svc.refresh_from_db()
+        self.assertEqual(svc.status, 'STOPPED')
+
     def test_container_runtime_stop_start_helpers(self):
         from apps.deployments.services.container_runtime import ContainerRuntime
         with patch('docker.from_env') as from_env:
