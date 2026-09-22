@@ -3367,3 +3367,79 @@ export const systemSecurityApi = {
     return res.data;
   },
 };
+
+export interface StorageDiskMetrics {
+  total_gb: number;
+  used_gb: number;
+  free_gb: number;
+  used_percent: number;
+  status: 'healthy' | 'warning' | 'critical' | 'unknown';
+}
+
+export interface StorageDockerBreakdown {
+  available: boolean;
+  images: {
+    count: number;
+    size_gb: number;
+    reclaimable_gb: number;
+  };
+  containers: {
+    count: number;
+    size_gb: number;
+  };
+  volumes: {
+    count: number;
+    size_gb: number;
+    reclaimable_gb: number;
+  };
+  build_cache: {
+    count: number;
+    size_gb: number;
+    reclaimable_gb: number;
+  };
+  total_docker_gb: number;
+  total_reclaimable_gb: number;
+}
+
+export interface StorageArtifactsMetrics {
+  deployments_count: number;
+  build_logs_mb: number;
+  active_services: number;
+  stale_builds_count: number;
+}
+
+export interface StorageOverviewData {
+  disk: StorageDiskMetrics;
+  docker: StorageDockerBreakdown;
+  artifacts: StorageArtifactsMetrics;
+  timestamp: string;
+}
+
+export type StorageActionType =
+  | 'prune_build_cache'
+  | 'prune_images'
+  | 'registry_gc'
+  | 'clear_containers'
+  | 'clean_logs'
+  | 'docker_recovery';
+
+export interface StorageActionResponse {
+  status: string;
+  task_id: string;
+  action: StorageActionType;
+  message: string;
+}
+
+export const platformStorageApi = {
+  getOverview: async (): Promise<StorageOverviewData> => {
+    const res = await api.get('/system/storage-overview/');
+    return res.data;
+  },
+  runAction: async (action: StorageActionType): Promise<StorageActionResponse> => {
+    const res = await api.post('/system/storage-overview/', { action });
+    return res.data;
+  },
+  getTaskStatus: async (taskId: string) => {
+    return systemApi.getMaintenanceTask(taskId);
+  },
+};

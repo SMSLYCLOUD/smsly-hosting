@@ -101,11 +101,11 @@ def _overlay_paas_state(services: dict) -> None:
     legacy config defaults (1/4) while the PaaS engine manages
     ServiceReplica rows with per-service min/max (1/8) — the dashboard
     showed one worker forever and the service toggles had nothing to
-    match (2026-09-16: "autoscaler broken, data missing"). On exact
-    container-name == Service.name match, report 1 home instance +
-    RUNNING replicas with the service's own ceilings. Platform
-    containers (no Service row) keep legacy values. Never raises —
-    metrics must degrade to estimates, never 500.
+    match. On exact container-name == Service.name match (or app-name
+    match), report 1 home instance + RUNNING replicas with the service's
+    own ceilings, target CPU, allocated resources, VPA flag, active
+    cooldowns, and live replicas detail. Never raises — metrics must
+    degrade to estimates, never 500.
     """
     try:
         from django.db.models import Count
@@ -119,21 +119,255 @@ def _overlay_paas_state(services: dict) -> None:
             .annotate(n=Count("id"))
             .values_list("service_id", "n")
         )
-        # All services, not just ones with replicas: ceilings must be
-        # real even at zero replicas (legacy defaults 1/4 vs actual
-        # 1/8 made every card's headroom wrong).
+        active_replicas = list(
+            ServiceReplica.objects.filter(
+                status__in=['RUNNING', 'SPAWNING', 'DRAINING', 'DESTROYING']
+            ).select_related('node').order_by('-created_at')
+        )
+        replicas_by_service: dict[str, list[dict]] = {}
+        for r in active_replicas:
+            sid = str(r.service_id)
+            if sid not in replicas_by_service:
+                replicas_by_service[sid] = []
+            replicas_by_service[sid].append({
+                'id': str(r.id),
+                'container_name': r.container_name,
+                'status': r.status,
+                'node': r.node.name if r.node else 'local',
+                'node_host': r.node.host if r.node else None,
+                'spawn_reason': r.spawn_reason,
+                'created_at': r.created_at.isoformat(),
+            })
+
         rows = Service.objects.only(
-            "id", "name", "min_replicas", "max_replicas")
+            "id", "name", "autoscale_enabled", "autoscale_cpu_target",
+            "min_replicas", "max_replicas", "cpu_cores", "memory_mb",
+            "vpa_enabled", "last_scale_at", "alert_config",
+        )
         by_name = {s.name: s for s in rows}
         for name, entry in services.items():
-            svc = by_name.get(name)
+            app_name = entry.get("app")
+            svc = by_name.get(name) or (by_name.get(app_name) if app_name else None)
             if svc is None:
                 continue
+            sid_str = str(svc.id)
+            entry["service_id"] = sid_str
+            entry["autoscale_enabled"] = svc.autoscale_enabled
+            entry["autoscale_cpu_target"] = svc.autoscale_cpu_target or 80
             entry["current_workers"] = 1 + int(running.get(svc.id, 0))
-            entry["min_workers"] = svc.min_replicas or 1
+            entry["min_workers"] = 0 if svc.min_replicas == 0 else (svc.min_replicas or 1)
+            entry["min_replicas"] = svc.min_replicas
             entry["max_workers"] = svc.max_replicas or entry["max_workers"]
+            entry["max_replicas"] = svc.max_replicas
+            entry["cpu_cores"] = float(svc.cpu_cores) if svc.cpu_cores else None
+            entry["memory_mb_allocated"] = svc.memory_mb
+            entry["vpa_enabled"] = bool(svc.vpa_enabled)
+            entry["last_scale_at"] = svc.last_scale_at.isoformat() if svc.last_scale_at else None
+            alert_cfg = dict(svc.alert_config or {})
+            entry["cooldown_up_min"] = alert_cfg.get("cooldown_up_min", 3)
+            entry["cooldown_down_min"] = alert_cfg.get("cooldown_down_min", 10)
+            entry["replicas"] = replicas_by_service.get(sid_str, [])
     except Exception as exc:
         logger.debug("PaaS state overlay skipped: %s", exc)
+
+
+def _get_infra_autoscaler_state(stats: dict | None = None) -> dict:
+    """Query infrastructure autoscaler state (Celery burst workers, RabbitMQ queues, and in-flight drains).
+
+    Monitors:
+    1. Celery burst workers: celery-fast and celery-deploy.
+       - Scale up when queue >= CELERY_SCALE_UP_THRESHOLD (default: 50) for 60s
+       - Scale down when queue <= CELERY_SCALE_DOWN_THRESHOLD (default: 5) for 120s AND 0 in-flight tasks
+    2. Primary workers: celery (always on, drains all queues) and celery-beat (scheduler).
+    3. In-flight task draining: checks unacknowledged/active tasks to prevent killing multi-minute tasks.
+    4. RabbitMQ queue depths: celery, deploy, fast, media-telemetry, media-audit.
+    5. Gunicorn dynamic web process scaling: TTIN (+1) / TTOU (-1) with memory pressure budget.
+    """
+    import os
+    try:
+        autoscale_enabled = os.environ.get("CELERY_AUTOSCALE_ENABLED", "true").lower() in ("true", "1", "yes")
+        scale_up_thresh = int(os.environ.get("CELERY_SCALE_UP_THRESHOLD", 50))
+        scale_down_thresh = int(os.environ.get("CELERY_SCALE_DOWN_THRESHOLD", 5))
+        scale_up_after = int(os.environ.get("CELERY_SCALE_UP_AFTER", 60))
+        scale_down_after = int(os.environ.get("CELERY_SCALE_DOWN_AFTER", 120))
+        check_interval = int(os.environ.get("CELERY_SCALE_CHECK_INTERVAL", 15))
+    except Exception:
+        autoscale_enabled = True
+        scale_up_thresh = 50
+        scale_down_thresh = 5
+        scale_up_after = 60
+        scale_down_after = 120
+        check_interval = 15
+
+    active_by_worker: dict[str, int] = {}
+    reserved_by_worker: dict[str, int] = {}
+    ping_workers: list[str] = []
+    queues = {
+        "celery": 0,
+        "deploy": 0,
+        "fast": 0,
+        "media-telemetry": 0,
+        "media-audit": 0,
+    }
+    total_depth = 0
+
+    import sys
+    from django.conf import settings
+    is_testing = "pytest" in sys.modules or getattr(settings, "TESTING", False)
+
+    if not is_testing:
+        try:
+            from config.celery import app as celery_app
+            with celery_app.connection_for_read() as conn:
+                conn.connect_timeout = 0.5
+                conn.ensure_connection(max_retries=0, timeout=0.5)
+                insp = celery_app.control.inspect(timeout=0.5, connection=conn)
+                if insp:
+                    active_map = insp.active() or {}
+                    reserved_map = insp.reserved() or {}
+                    ping_workers = list((insp.ping() or {}).keys())
+                    for wname, tasks in active_map.items():
+                        active_by_worker[wname] = len(tasks) if isinstance(tasks, list) else 0
+                    for wname, tasks in reserved_map.items():
+                        reserved_by_worker[wname] = len(tasks) if isinstance(tasks, list) else 0
+
+                for q_name in list(queues.keys()):
+                    try:
+                        q = conn.default_channel.queue_declare(queue=q_name, passive=True)
+                        count = getattr(q, "message_count", 0) or 0
+                        queues[q_name] = count
+                        total_depth += count
+                    except Exception:
+                        pass
+        except Exception as exc:
+            logger.debug("Celery/RabbitMQ broker probe skipped: %s", exc)
+
+    def _find_stat(pattern: str) -> dict | None:
+        if not stats:
+            return None
+        for cname, s in stats.items():
+            if pattern in cname:
+                return s
+        return None
+
+    def _worker_active_count(pattern: str) -> int:
+        return sum(v for k, v in active_by_worker.items() if pattern in k)
+
+    def _worker_reserved_count(pattern: str) -> int:
+        return sum(v for k, v in reserved_by_worker.items() if pattern in k)
+
+    def _is_worker_running(pattern: str) -> bool:
+        if any(pattern in w for w in ping_workers):
+            return True
+        if _find_stat(pattern) is not None:
+            return True
+        return False
+
+    burst_workers = []
+    for bw_name, q_target, desc in [
+        ("celery-fast", "fast", "Burst Worker (Fast Queue)"),
+        ("celery-deploy", "deploy", "Burst Worker (Deploy Queue)"),
+    ]:
+        stat = _find_stat(bw_name)
+        is_running = _is_worker_running(bw_name.replace("celery-", ""))
+        active_cnt = _worker_active_count(bw_name.replace("celery-", ""))
+        reserved_cnt = _worker_reserved_count(bw_name.replace("celery-", ""))
+        q_depth = queues.get(q_target, 0)
+
+        if is_running:
+            if total_depth <= scale_down_thresh:
+                if active_cnt > 0:
+                    status = "draining"
+                    drain_held = True
+                    msg = f"Queue low ({total_depth} <= {scale_down_thresh}). Draining {active_cnt} in-flight tasks before stopping."
+                else:
+                    status = "pending_scale_down"
+                    drain_held = False
+                    msg = f"Queue idle ({total_depth} <= {scale_down_thresh}). 120s cooldown active before stopping."
+            elif total_depth >= scale_up_thresh:
+                status = "busy"
+                drain_held = False
+                msg = f"Queue pressure ({total_depth} >= {scale_up_thresh}). Actively processing."
+            else:
+                status = "running"
+                drain_held = False
+                msg = "Normal processing."
+        else:
+            status = "scaled_down"
+            drain_held = False
+            msg = f"Scaled down (idle container stopped). Scales up when queue >= {scale_up_thresh} for {scale_up_after}s."
+
+        burst_workers.append({
+            "name": bw_name,
+            "description": desc,
+            "target_queue": q_target,
+            "status": status,
+            "is_running": is_running,
+            "active_tasks": active_cnt,
+            "reserved_tasks": reserved_cnt,
+            "queue_depth": q_depth,
+            "drain_held": drain_held,
+            "status_message": msg,
+            "cpu_percent": stat.get("cpu_percent", 0.0) if stat else 0.0,
+            "memory_mb": stat.get("memory_mb", 0.0) if stat else 0.0,
+        })
+
+    # Primary always-on worker
+    primary_stat = _find_stat("smsly-hosting-celery-1") or _find_stat("celery")
+    primary_active = _worker_active_count("celery@") - sum(b["active_tasks"] for b in burst_workers)
+    primary_worker = {
+        "name": "celery",
+        "description": "Primary Platform Worker (Always On)",
+        "queues": ["celery", "deploy", "fast", "media-telemetry", "media-audit"],
+        "status": "running" if (_is_worker_running("celery") or primary_stat) else "running",
+        "active_tasks": max(0, primary_active),
+        "reserved_tasks": _worker_reserved_count("celery"),
+        "cpu_percent": primary_stat.get("cpu_percent", 0.0) if primary_stat else 0.0,
+        "memory_mb": primary_stat.get("memory_mb", 0.0) if primary_stat else 0.0,
+    }
+
+    # Celery beat scheduler
+    beat_stat = _find_stat("celery-beat")
+    beat_worker = {
+        "name": "celery-beat",
+        "description": "Periodic Task Scheduler (RedBeat)",
+        "status": "running" if beat_stat else "running",
+        "cpu_percent": beat_stat.get("cpu_percent", 0.0) if beat_stat else 0.0,
+        "memory_mb": beat_stat.get("memory_mb", 0.0) if beat_stat else 0.0,
+    }
+
+    # Gunicorn dynamic web process scaling
+    gunicorn_stat = _find_stat("backend")
+    pids = gunicorn_stat.get("pids", 0) if gunicorn_stat else 0
+    est_gunicorn_workers = max(1, pids - 1) if pids > 1 else 2
+    gunicorn_scaler = {
+        "service": "backend-gunicorn",
+        "strategy": "Signal-Driven Dynamic Scaling (TTIN +1 / TTOU -1 / SIGHUP)",
+        "current_workers": est_gunicorn_workers,
+        "min_workers": 2,
+        "max_workers": 8,
+        "pids": pids,
+        "memory_mb": gunicorn_stat.get("memory_mb", 0.0) if gunicorn_stat else 0.0,
+        "cpu_percent": gunicorn_stat.get("cpu_percent", 0.0) if gunicorn_stat else 0.0,
+    }
+
+    burst_unacked = sum(b["active_tasks"] for b in burst_workers)
+    return {
+        "autoscale_enabled": autoscale_enabled,
+        "total_queue_depth": total_depth,
+        "queues": queues,
+        "unacknowledged_burst_tasks": burst_unacked,
+        "scale_down_held": any(b["drain_held"] for b in burst_workers),
+        "scale_up_threshold": scale_up_thresh,
+        "scale_down_threshold": scale_down_thresh,
+        "scale_up_after_seconds": scale_up_after,
+        "scale_down_after_seconds": scale_down_after,
+        "check_interval_seconds": check_interval,
+        "burst_workers": burst_workers,
+        "primary_worker": primary_worker,
+        "scheduler": beat_worker,
+        "web_scaling": gunicorn_scaler,
+    }
 
 
 # ── Configuration handling (persisted in DB) ───────────────────────────────
@@ -391,6 +625,7 @@ def _run_autoscaler_check():
         },
         "services": services,
         "recent_decisions": _get_recent_decisions(),
+        "infra": _get_infra_autoscaler_state(stats),
     }
     cache.set(CACHE_KEY_STATUS, status_data, timeout=300)
     return status_data
@@ -484,6 +719,7 @@ def _degraded_status() -> dict:
         },
         "services": {},
         "recent_decisions": _get_recent_decisions(),
+        "infra": _get_infra_autoscaler_state(None),
         "_stale": True,
         "message": ("Live container stats unavailable — Docker daemon too "
                     "slow. Showing recorded scaling events; retrying."),

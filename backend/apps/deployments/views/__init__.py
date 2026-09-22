@@ -13,8 +13,13 @@ from .registry import RegistryCredentialViewSet
 from .remote import RemoteTriggerView
 from .route import RouteRecheckView
 from .schedule import BackupScheduleViewSet, SnapshotScheduleViewSet
-from apps.core.views.security import SecurityStatusView
+from apps.core.views.security import (
+    SecurityStatusView,
+    SecurityEventsView,
+    SecurityAnalysisView,
+)
 from .server_backup import ServerBackupViewSet
 from .service import ServiceViewSet
 from .snapshot import ServiceSnapshotViewSet
-from apps.core.views.system import SystemConfigView
+from apps.core.views.system import SystemConfigView, PlatformStorageOverviewView
+

@@ -100,12 +100,15 @@ def cleanup_stuck_spawning(self) -> dict[str, int]:
 
     threshold = timezone.now() - timedelta(seconds=_STUCK_SPAWN_THRESHOLD_SECONDS)
     stuck = list(ServiceReplica.objects.filter(
-        status='SPAWNING',
+        status__in=['SPAWNING', 'DRAINING', 'DESTROYING'],
         created_at__lt=threshold,
     ))
     count = len(stuck)
     if count > 0:
-        logger.warning("Cleaning up %d stuck SPAWNING replicas (older than %ds)", count, _STUCK_SPAWN_THRESHOLD_SECONDS)
+        logger.warning(
+            "Cleaning up %d stuck transitional (SPAWNING/DRAINING/DESTROYING) replicas (older than %ds)",
+            count, _STUCK_SPAWN_THRESHOLD_SECONDS,
+        )
         # Destroy the actual containers, not just the DB rows: a
         # partially-spawned container keeps `--restart unless-stopped` and
         # the canonical Traefik labels, so a DB-only flip would leave it

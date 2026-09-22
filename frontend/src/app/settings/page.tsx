@@ -20,6 +20,7 @@ import { SecurityTab } from "@/components/settings/SecurityTab";
 import { PrivacyTab } from "@/components/settings/PrivacyTab";
 import { MtlsTab } from "@/components/settings/MtlsTab";
 import { PlatformSettingsTab } from "@/components/settings/PlatformSettingsTab";
+import { PlatformStorageOverview } from "@/components/settings/PlatformStorageOverview";
 import { ProvidersTab } from "@/components/settings/ProvidersTab";
 import { AiTab } from "@/components/settings/AiTab";
 import { AuditLogsTab } from "@/components/settings/AuditLogsTab";
@@ -237,6 +238,8 @@ function SettingsContent() {
           {/* Platform */}
           <TabsContent value="platform">
             <div className="space-y-8">
+              <PlatformStorageOverview />
+              <Separator />
               <PlatformSettingsTab />
               <Separator />
               <PlatformConfigTab />

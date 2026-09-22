@@ -162,6 +162,9 @@ class SystemConfigView(GenericAPIView):
             # Platform config (DB-backed)
             **self._get_platform_config(),
 
+            # Storage metrics
+            **self._get_storage_metrics(),
+
             # Retention hygiene — env-driven with constants fallback
             # (matches apps/deployments/constants.py defaults; read-only
             # here because they are host env, not DB fields).
@@ -1118,3 +1121,175 @@ class DatabaseHaToggleView(GenericAPIView):
                 f.write(content)
         except Exception as exc:
             logger.error("Failed to update .env key %s: %s", key, exc)
+
+
+class PlatformStorageOverviewView(GenericAPIView):
+    """
+    GET  /api/v1/system/storage-overview/
+    Returns host root disk partition metrics, Docker storage breakdown (images, containers,
+    volumes, build cache), and platform artifact stats.
+
+    POST /api/v1/system/storage-overview/
+    Executes a storage optimization or maintenance action:
+      - 'prune_build_cache': Prunes BuildKit caches
+      - 'prune_images': Prunes dangling Docker images
+      - 'registry_gc': Runs private registry garbage collection
+      - 'clear_containers': Cleans dead/orphaned containers and flushes cache dirs
+      - 'clean_logs': Archives/cleans historical deployment build logs older than 14d
+      - 'docker_recovery': Full containerd/builder recovery with daemon restart
+    """
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        import shutil
+        from django.utils import timezone
+
+        # 1. Host Root Partition Metrics
+        try:
+            total, used, free = shutil.disk_usage("/")
+            used_pct = round((used / total) * 100, 1) if total > 0 else 0.0
+            disk_info = {
+                "total_gb": round(total / (1024 ** 3), 2),
+                "used_gb": round(used / (1024 ** 3), 2),
+                "free_gb": round(free / (1024 ** 3), 2),
+                "used_percent": used_pct,
+                "status": "critical" if used_pct >= 90 else ("warning" if used_pct >= 80 else "healthy"),
+            }
+        except Exception as exc:
+            logger.debug("Failed to read disk usage: %s", exc)
+            disk_info = {
+                "total_gb": 0.0,
+                "used_gb": 0.0,
+                "free_gb": 0.0,
+                "used_percent": 0.0,
+                "status": "unknown",
+            }
+
+        # 2. Docker Engine Storage Breakdown
+        docker_info = {
+            "available": False,
+            "images": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
+            "containers": {"count": 0, "size_gb": 0.0},
+            "volumes": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
+            "build_cache": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
+            "total_docker_gb": 0.0,
+            "total_reclaimable_gb": 0.0,
+        }
+
+        try:
+            import docker
+            client = docker.from_env(timeout=3)
+            df = client.df()
+            docker_info["available"] = True
+
+            imgs = df.get("Images") or []
+            imgs_size = sum(img.get("Size", 0) for img in imgs)
+            imgs_reclaimable = sum(img.get("Size", 0) for img in imgs if img.get("Containers", 0) == 0)
+            docker_info["images"] = {
+                "count": len(imgs),
+                "size_gb": round(imgs_size / (1024 ** 3), 2),
+                "reclaimable_gb": round(imgs_reclaimable / (1024 ** 3), 2),
+            }
+
+            cntrs = df.get("Containers") or []
+            cntrs_size = sum(c.get("SizeRw", 0) for c in cntrs)
+            docker_info["containers"] = {
+                "count": len(cntrs),
+                "size_gb": round(cntrs_size / (1024 ** 3), 2),
+            }
+
+            vols = df.get("Volumes") or []
+            vols_size = sum((v.get("UsageData") or {}).get("Size", 0) for v in vols)
+            vols_reclaimable = sum(
+                (v.get("UsageData") or {}).get("Size", 0)
+                for v in vols
+                if (v.get("UsageData") or {}).get("RefCount", 0) == 0
+            )
+            docker_info["volumes"] = {
+                "count": len(vols),
+                "size_gb": round(vols_size / (1024 ** 3), 2),
+                "reclaimable_gb": round(vols_reclaimable / (1024 ** 3), 2),
+            }
+
+            bc = df.get("BuildCache") or []
+            bc_size = sum(b.get("Size", 0) for b in bc)
+            bc_reclaimable = sum(b.get("Size", 0) for b in bc if not b.get("InUse", False))
+            docker_info["build_cache"] = {
+                "count": len(bc),
+                "size_gb": round(bc_size / (1024 ** 3), 2),
+                "reclaimable_gb": round(bc_reclaimable / (1024 ** 3), 2),
+            }
+
+            total_dock = imgs_size + cntrs_size + vols_size + bc_size
+            total_reclaim = imgs_reclaimable + vols_reclaimable + bc_reclaimable
+            docker_info["total_docker_gb"] = round(total_dock / (1024 ** 3), 2)
+            docker_info["total_reclaimable_gb"] = round(total_reclaim / (1024 ** 3), 2)
+        except Exception as exc:
+            logger.debug("Docker df query failed or unavailable: %s", exc)
+
+        # 3. Artifacts / Logs Breakdown
+        artifacts_info = {
+            "deployments_count": 0,
+            "build_logs_mb": 0.0,
+            "active_services": 0,
+            "stale_builds_count": 0,
+        }
+        try:
+            from apps.deployments.models import Deployment, Service
+            artifacts_info["deployments_count"] = Deployment.objects.count()
+            artifacts_info["active_services"] = Service.objects.count()
+            has_logs_count = Deployment.objects.exclude(build_logs="").count()
+            artifacts_info["build_logs_mb"] = round((has_logs_count * 50) / 1024, 2)
+            artifacts_info["stale_builds_count"] = Deployment.objects.filter(
+                status__in=[Deployment.Status.FAILED, Deployment.Status.CANCELLED, Deployment.Status.SUPERSEDED]
+            ).count()
+        except Exception as exc:
+            logger.debug("Artifacts telemetry failed: %s", exc)
+
+        return Response({
+            "disk": disk_info,
+            "docker": docker_info,
+            "artifacts": artifacts_info,
+            "timestamp": timezone.now().isoformat(),
+        })
+
+    def post(self, request):
+        if not (request.user and request.user.is_authenticated and request.user.is_staff):
+            return Response({"error": "Admin privileges required"}, status=status.HTTP_403_FORBIDDEN)
+
+        action = str(request.data.get("action") or "").strip().lower()
+        from apps.deployments.tasks.infra.tasks_maintenance import run_maintenance_task
+
+        flag_map = {
+            "prune_build_cache": "--clear-build-cache",
+            "build_cache": "--clear-build-cache",
+            "prune_images": "--prune-images",
+            "registry_gc": "--gc",
+            "clear_containers": "--clear",
+            "clear": "--clear",
+            "clean_logs": "--clean-logs",
+            "docker_recovery": "--docker-recovery",
+        }
+
+        command_flag = flag_map.get(action)
+        if not command_flag:
+            return Response({
+                "error": f"Invalid action '{action}'. Valid actions: prune_build_cache, prune_images, registry_gc, clear_containers, clean_logs, docker_recovery"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            task = run_maintenance_task.apply_async(kwargs={"command_flag": command_flag})
+            return Response({
+                "status": "queued",
+                "task_id": task.id,
+                "action": action,
+                "message": f"Storage action '{action}' queued successfully.",
+            }, status=status.HTTP_202_ACCEPTED)
+        except Exception as exc:
+            logger.exception("Failed to dispatch storage action %s: %s", action, exc)
+            return Response({
+                "error": "Failed to queue maintenance task. Check broker availability.",
+                "details": str(exc),
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+

@@ -17,6 +17,8 @@ from ..views import (
     RemoteTriggerView,
     RouteRecheckView,
     SecurityStatusView,
+    SecurityEventsView,
+    SecurityAnalysisView,
     ServerBackupViewSet,
     ServiceBackupViewSet,
     ServiceSnapshotViewSet,
@@ -24,6 +26,7 @@ from ..views import (
     SessionTokenView,
     SnapshotScheduleViewSet,
     SystemConfigView,
+    PlatformStorageOverviewView,
 )
 from apps.core.views.system import BeatHealView, DatabaseHaToggleView, RouteFallbackView
 from ..views.addons import AddonViewSet, service_addons_unified
@@ -202,6 +205,9 @@ urlpatterns = [
     path('system/beat-heal/', BeatHealView.as_view(), name='beat-heal'),
     path('system/route-fallback/', RouteFallbackView.as_view(), name='route-fallback'),
     path('system/security-status/', SecurityStatusView.as_view(), name='security-status'),
+    path('system/security-events/', SecurityEventsView.as_view(), name='security-events'),
+    path('system/security-analysis/', SecurityAnalysisView.as_view(), name='security-analysis'),
+    path('system/storage-overview/', PlatformStorageOverviewView.as_view(), name='platform-storage-overview'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
     path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),
     path('platform/resources/', PlatformResourcesView.as_view(), name='platform-resources'),

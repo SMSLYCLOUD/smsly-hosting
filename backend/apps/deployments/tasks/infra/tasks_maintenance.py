@@ -33,7 +33,7 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
     Valid flags: --clear, --update, --refresh, --gc, --clear-build-cache, --docker-recovery
     """
     if command_flag not in ['--clear', '--update', '--update-frontend', '--refresh',
-                             '--gc', '--clear-build-cache', '--docker-recovery']:
+                             '--gc', '--clear-build-cache', '--prune-images', '--clean-logs', '--docker-recovery']:
         logger.error(f"Invalid maintenance command: {command_flag}")
         return {"status": "error", "reason": "invalid_command", "message": "Invalid maintenance command."}
 
@@ -96,6 +96,36 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
             return {
                 "status": "success",
                 "message": "Build cache cleanup completed.",
+            }
+
+        elif command_flag == '--prune-images':
+            reclaimed_mb = 0
+            try:
+                import docker
+                client = docker.from_env(timeout=30)
+                res = client.api.prune_images(filters={'dangling': True})
+                reclaimed_mb = (res.get('SpaceReclaimed') or 0) // (1024 * 1024)
+            except Exception as exc:
+                logger.warning("Image pruning failed: %s", exc)
+                return {
+                    "status": "error",
+                    "message": f"Image pruning failed: {exc}",
+                }
+            return {
+                "status": "success",
+                "message": f"Dangling Docker images pruned. Reclaimed {reclaimed_mb} MB.",
+            }
+
+        elif command_flag == '--clean-logs':
+            from apps.deployments.models import Deployment
+            threshold = timezone.now() - timedelta(days=14)
+            updated = Deployment.objects.filter(
+                created_at__lt=threshold,
+                status__in=[Deployment.Status.ACTIVE, Deployment.Status.FAILED, Deployment.Status.CANCELLED, Deployment.Status.INACTIVE]
+            ).exclude(build_logs="").update(build_logs="[Logs archived / cleared during maintenance]")
+            return {
+                "status": "success",
+                "message": f"Cleaned build logs for {updated} historical deployment(s) older than 14 days.",
             }
 
         elif command_flag == '--docker-recovery':

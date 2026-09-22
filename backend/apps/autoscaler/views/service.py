@@ -204,20 +204,46 @@ class ScalingViewSet(viewsets.GenericViewSet):
             return Response({'error': '?id=UUID required'}, status=400)
         if request.user.is_superuser:
             replica = get_object_or_404(
-                ServiceReplica, id=replica_id, status='RUNNING',
+                ServiceReplica, id=replica_id, status__in=['RUNNING', 'SPAWNING', 'DRAINING', 'DESTROYING'],
             )
         else:
             replica = get_object_or_404(
                 ServiceReplica,
                 get_team_q_filter(request.user, prefix='service__', request=request),
-                id=replica_id, status='RUNNING',
+                id=replica_id, status__in=['RUNNING', 'SPAWNING', 'DRAINING', 'DESTROYING'],
             )
         spawner = SpawningService()
         try:
             spawner.destroy(replica)
-            return Response({'status': 'destroyed'})
+            return Response({'status': 'destroyed', 'replica_id': str(replica.id)})
         finally:
             spawner.cleanup()
+
+    @action(detail=True, methods=['post'])
+    def scale_down(self, request, pk=None):
+        """Manually scale down a service by 1 replica (or by ?count=N)."""
+        if request.user.is_superuser:
+            service = get_object_or_404(Service, id=pk)
+        else:
+            service = get_object_or_404(
+                Service, get_team_q_filter(request.user, request=request), id=pk
+            )
+        try:
+            count = int(request.query_params.get('count', 1) or request.data.get('count', 1))
+        except (ValueError, TypeError):
+            count = 1
+        count = max(1, min(count, 10))
+
+        from apps.autoscaler.engine.decision import Recommendation
+        from apps.autoscaler.engine.reconciler import Reconciler
+
+        rec = Recommendation(
+            action='scale_down',
+            scale_down_by=count,
+            reason='Manual scale down via API',
+        )
+        result = Reconciler(service).apply(rec)
+        return Response(result.to_dict())
 
     @action(detail=True, methods=['post'])
     def apply_vpa(self, request, pk=None):

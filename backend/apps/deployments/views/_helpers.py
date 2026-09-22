@@ -198,6 +198,18 @@ MAINTENANCE_ACTIONS = {
         "queued_message": "Proxy sync queued. Caddy will reload from the latest routing config shortly.",
         "lock_ttl": 600,
     },
+    "prune_images": {
+        "flag": "--prune-images",
+        "label": "Prune Dangling Docker Images",
+        "queued_message": "Dangling image cleanup queued.",
+        "lock_ttl": 600,
+    },
+    "clean_logs": {
+        "flag": "--clean-logs",
+        "label": "Clean Historical Build Logs",
+        "queued_message": "Log cleanup queued.",
+        "lock_ttl": 600,
+    },
     "update": {
         "flag": "--update",
         "label": "Update platform",
