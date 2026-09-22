@@ -214,17 +214,33 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        service.project = project
-        service.save(update_fields=['project', 'updated_at'])
+        from apps.deployments.services.project_membership import (
+            move_service_to_project,
+        )
+        # Shared move path (FK move, addon relink, mTLS inheritance,
+        # audit) — identical to the service-side move-project action.
+        try:
+            move_result = move_service_to_project(
+                service, project,
+                actor_username=request.user.get_username(),
+            )
+        except ValueError as exc:
+            return Response(
+                {'error': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         logger.info(
             'Moved service %s (%s) into project %s (%s)',
             service.name, service.id, project.name, project.id,
         )
         return Response({
-            'status': 'ok',
+            'status': move_result.get('status', 'ok'),
             'service_id': str(service.id),
             'project_id': str(project.id),
+            'from_project': move_result.get('from_project'),
+            'mtls': move_result.get('mtls'),
+            'message': 'Redeploy to apply network, registry and mTLS changes.',
         })
 
     @action(detail=True, methods=['post'], url_path='remove-service')
@@ -287,6 +303,20 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Same inheritance as every other move path (mTLS trust/sidecar
+        # posture of the replacement project). Best-effort: the atomic
+        # move above already succeeded.
+        mtls_result: dict = {}
+        try:
+            from apps.deployments.services.project_membership import (
+                apply_project_membership,
+            )
+            service.refresh_from_db()
+            mtls_result = apply_project_membership(service) or {}
+        except Exception as exc:
+            logger.debug("Move inheritance skipped for %s: %s",
+                         service.name, exc)
+
         logger.info(
             'Moved service %s (%s) from project %s (%s) to replacement %s',
             service.name, service.id, project.name, project.id, replacement_project_id,
@@ -294,8 +324,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
         return Response({
             'status': 'ok',
             'service_id': str(service.id),
-            'project_id': str(project.id),
+            'project_id': str(replacement_project_id),
             'replacement_project_id': str(replacement_project_id),
+            'mtls': mtls_result,
+            'message': 'Redeploy to apply network, registry and mTLS changes.',
         })
 
     @action(detail=True, methods=['get', 'post'], url_path='registry')

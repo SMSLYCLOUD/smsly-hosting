@@ -94,9 +94,26 @@ def verify_postgres_url(url, timeout=15):
         return False
 
 
-def sync_addon_env_vars(addon):
-    """Refresh the ADDON-source env vars from the current connection URL."""
+def sync_addon_env_vars(addon, old_url=""):
+    """Refresh the ADDON-source env vars from the current connection URL.
+
+    Three passes, all gated on ``source == 'ADDON'`` (USER-managed values
+    are never touched):
+    1. Derived keys from ``parsed_credentials`` (HOST/PORT/USER/...).
+    2. Exact-match sweep: any ADDON var still holding the pre-migration
+       URL (DATABASE_URL and friends) is repointed at the new backend.
+       Without this the app keeps dialling the dropped database with
+       dead credentials (2026-09-22 post-migration auth failures).
+    3. Canonical key refresh: the provision-time key for the addon type
+       (ENV_KEY_MAP, e.g. DATABASE_URL for POSTGRES) is synced when the
+       provision created it.
+    Per-object save() throughout: ``value`` is encrypted at rest, so a
+    queryset ``update()`` would store undecryptable plaintext.
+    """
     from apps.deployments.models import EnvironmentVariable
+    new_url = str(getattr(addon, 'connection_url', '') or '').strip()
+    if not new_url:
+        return
     try:
         creds = addon.parsed_credentials or {}
     except Exception:
@@ -111,6 +128,27 @@ def sync_addon_env_vars(addon):
                 'source': 'ADDON',
             },
         )
+    if old_url:
+        stale = EnvironmentVariable.objects.filter(
+            service=addon.service, source='ADDON', value=old_url,
+        )
+        for var in stale:
+            var.value = new_url
+            var.save(update_fields=['value', 'updated_at'])
+            logger.info("Migration env sync: repointed %s at new backend",
+                        var.key)
+    try:
+        from apps.addons.services.addon_provisioner import AddonProvisioner
+        env_key = AddonProvisioner.ENV_KEY_MAP.get(addon.addon_type)
+    except Exception:
+        env_key = None
+    if env_key:
+        for var in EnvironmentVariable.objects.filter(
+            service=addon.service, key=env_key, source='ADDON',
+        ):
+            if var.value != new_url:
+                var.value = new_url
+                var.save(update_fields=['value', 'updated_at'])
 
 
 def _service_container_names(service) -> list[str]:
@@ -247,6 +285,33 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
         raise ValueError("Could not determine the addon network alias from its URL.")
     container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
 
+    # Credential preservation: the target backend is created with the
+    # SOURCE's username/password (and alias), so every existing copy of
+    # the credentials keeps working and dump/restore role ownership
+    # lines resolve. Only the database name changes, and only on shared
+    # targets: the source DB is still live on the same server, so the
+    # target stages under a deterministic temp name (retry-convergent —
+    # leftovers are dropped before restore). Container targets get a
+    # fresh cluster, so the original db name is reused verbatim and the
+    # final URL is byte-identical to the old one.
+    from urllib.parse import quote as _quote
+    old_user = str(old_parts.get('username') or '')
+    old_password = str(old_parts.get('password') or '')
+    old_db = str(old_parts.get('database') or '')
+    old_port = str(old_parts.get('port') or '5432')
+    if not old_user or not old_password or not old_db:
+        raise ValueError(
+            "Addon connection URL is missing auth details (user/password/"
+            "database) — reprovision it first; migration cannot preserve "
+            "credentials it cannot read.")
+    staging_db = old_db
+    if target_mode == 'shared':
+        staging_db = f"{old_db[:40]}__mig_{str(addon.id).replace('-', '')[:8]}"
+    staging_url = (
+        f"postgresql://{_quote(old_user, safe='')}:{_quote(old_password, safe='')}"
+        f"@{alias}:{old_port}/{staging_db}"
+    )
+
     logger.info("Migrating addon %s (%s -> %s)", addon.id, old_mode or 'default', target_mode)
 
     # 0. Write quiesce: stop the owning service's containers BEFORE the
@@ -269,9 +334,14 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
     stripped_nets = []
     source_cleanup_warning = ''
     try:
-        # 2. Flip the row and provision a fresh target (new creds).
+        # 2. Flip the row and provision the target. The row keeps
+        # credential-bearing URL shape (same user/password/alias — only
+        # the db name differs on shared targets), so both provision
+        # paths converge on the ORIGINAL auth details instead of fresh
+        # random ones: container recreates reuse the persisted URL, and
+        # shared logical-DB creation reuses user/db/password from it.
         addon.provision_mode = target_mode
-        addon.connection_url = ''
+        addon.connection_url = staging_url
         addon.save(update_fields=['provision_mode', 'connection_url', 'updated_at'])
         _cid, new_url = addon_provisioner.provision_dispatch(addon)
         if not new_url:
@@ -283,7 +353,18 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
         if target_mode == 'container':
             new_container_created = True
 
-        # 3. Restore the dump into the target.
+        # 3. Restore the dump into the target. On shared targets the
+        # staging DB may hold a previous attempt's partial data (same
+        # deterministic name) — drop it first so restore starts clean.
+        # Role is untouched (shared with the live source).
+        if target_mode == 'shared':
+            try:
+                from apps.addons.services.shared_postgres import (
+                    drop_database_only,
+                )
+                drop_database_only(staging_db)
+            except Exception as exc:
+                logger.debug("Migration staging cleanup skipped: %s", exc)
         if not addon_provisioner.restore_backup(addon, dump_path):
             raise RuntimeError("Restore into the migration target failed.")
         # 4. Verify before touching the source: direct dial first, then
@@ -313,7 +394,7 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
                                    "remove it manually to clear the duplicate network alias.")
 
         # 6. Point app env at the new credentials.
-        sync_addon_env_vars(addon)
+        sync_addon_env_vars(addon, old_url=old_url)
         # 7. Final liveness re-check on the new backend, then drop the
         #    source LAST. A drop failure here is a warning (orphaned
         #    source), never a rollback — rolling back after the drop
@@ -326,6 +407,12 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
             if not _verify_target_via_exec(exec_container, new_url):
                 raise RuntimeError("Target lost liveness after env sync — aborting before source drop.")
         if target_mode == 'container':
+            # A dedicated container dials direct — clear any pooled flag
+            # left over from the shared era (pooler-aware readers would
+            # otherwise misroute it). Shared targets get the flag
+            # re-evaluated by the nested provision itself.
+            addon.pooler_routed = False
+            addon.save(update_fields=['pooler_routed', 'updated_at'])
             try:
                 drop_logical_db(str(old_parts.get('username') or ''),
                                 str(old_parts.get('database') or ''))
@@ -383,6 +470,16 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
                         logger.error("Migration rollback alias strip failed (%s): %s", net, res['error'])
         if new_container_created:
             _run(['docker', 'rm', '-f', container_name], timeout=90)
+        if target_mode == 'shared' and staging_db != old_db:
+            # Remove our own staging database so retries start clean.
+            # Role untouched — still owns the live source.
+            try:
+                from apps.addons.services.shared_postgres import (
+                    drop_database_only,
+                )
+                drop_database_only(staging_db)
+            except Exception as exc:
+                logger.debug("Migration staging rollback cleanup skipped: %s", exc)
         if stopped_containers:
             _start_service_containers(stopped_containers)
         raise

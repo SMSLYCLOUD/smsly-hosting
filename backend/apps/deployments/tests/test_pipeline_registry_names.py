@@ -40,15 +40,38 @@ class LocalRegistryNamingTests(TestCase):
                 "smsly/myapp:abc1234",
             )
 
-    def test_non_local_deployment_stays_bare(self):
+    def test_non_local_deployment_falls_back_to_bare_off_mesh(self):
+        # Mesh unreachable (mocked socket failure) → legacy bare names.
         dep = SimpleNamespace()
         with patch(
             "apps.deployments.utils.is_deployment_local", return_value=False,
-        ):
+        ), patch("socket.create_connection",
+                 side_effect=OSError("no route")):
             self.assertEqual(
                 _with_local_registry("smsly/myapp:abc1234", dep),
                 "smsly/myapp:abc1234",
             )
+
+    def test_non_local_deployment_uses_mesh_when_reachable(self):
+        import apps.deployments.services.pipeline.build as build_mod
+        dep = SimpleNamespace()
+        # Reset the process cache so the probe actually runs.
+        build_mod._MESH_OK_HOST = None
+        try:
+            with patch(
+                "apps.deployments.utils.is_deployment_local",
+                return_value=False,
+            ), patch("socket.create_connection"), patch(
+                "apps.deployments.services.provisioner.helpers."
+                "server_config._get_master_mesh_ip",
+                return_value="10.100.0.1",
+            ):
+                self.assertEqual(
+                    _with_local_registry("smsly/myapp:abc1234", dep),
+                    "10.100.0.1:5000/smsly/myapp:abc1234",
+                )
+        finally:
+            build_mod._MESH_OK_HOST = None
 
     def test_local_deployment_gets_qualified(self):
         dep = SimpleNamespace()

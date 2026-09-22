@@ -631,6 +631,22 @@ def ensure_logical_db(db_user: str, db_name: str, password: str) -> None:
     _psql(db_name, "CREATE EXTENSION IF NOT EXISTS vector;")
 
 
+def drop_database_only(db_name: str) -> None:
+    """Terminate backends and drop ONE database. Idempotent.
+
+    Unlike :func:`drop_logical_db` this never touches roles — used when
+    the owning role must survive (migration staging databases share the
+    source's role).
+    """
+    if db_name:
+        _psql(
+            "postgres",
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname={_lit(db_name)} AND pid <> pg_backend_pid();",
+        )
+        _psql("postgres", f"DROP DATABASE IF EXISTS {_quote_ident(db_name)};")
+
+
 def drop_logical_db(db_user: str, db_name: str) -> None:
     """Terminate backends, drop database + role. Idempotent."""
     if db_name:

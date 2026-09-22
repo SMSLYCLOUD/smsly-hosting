@@ -115,6 +115,19 @@ def recover_corrupt_docker_state(self, deployment_id: str = ""):
         return {"status": "skipped", "reason": "inflight_builds",
                 "inflight": inflight or 0}
 
+    # Fail closed on degraded cache: FallbackRedisCache drops to
+    # process-local LocMemCache when Redis is down, so cooldowns and
+    # heartbeats stop excluding across worker processes. Pruning in that
+    # state risks concurrent recoveries (and the in-flight check above
+    # read a healthy DB but an unshared cooldown). Wait for Redis back.
+    try:
+        from django.core.cache import cache as _django_cache
+        if bool(getattr(_django_cache, "is_degraded", False)):
+            logger.warning("Corruption recovery deferred (cache degraded)")
+            return {"status": "skipped", "reason": "cache_degraded"}
+    except Exception:
+        pass
+
     results = perform_docker_recovery(deployment_id=deployment_id)
 
     # Set cooldown

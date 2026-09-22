@@ -1,6 +1,6 @@
 "use client"
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { servicesApi, serversApi, Service, Deployment, EnvVar, ManagedServer } from '@/lib/api';
+import { servicesApi, serversApi, projectsApi, Service, Deployment, EnvVar, ManagedServer, Project } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useParams, useSearchParams, notFound } from 'next/navigation';
 import { getWsUrl } from '@/lib/websocket';
@@ -79,6 +79,10 @@ export default function ServiceDetailPage() {
     const [telegramChatId, setTelegramChatId] = useState('');
     const [whatsappTo, setWhatsappTo] = useState('');
     const [servers, setServers] = useState<ManagedServer[]>([]);
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [movePickerOpen, setMovePickerOpen] = useState(false);
+    const [moveTarget, setMoveTarget] = useState('');
+    const [moving, setMoving] = useState(false);
     const [targetServerId, setTargetServerId] = useState<string>(
       service?.server_id ?? '',
     );
@@ -250,6 +254,29 @@ export default function ServiceDetailPage() {
             console.error(err);
             toast({ title: 'Restart failed', description: 'Could not trigger restart.', variant: 'destructive' });
             setRedeploying(false);
+        }
+    };
+
+    const handleMoveProject = async () => {
+        if (!service || !moveTarget || moveTarget === service.project) return;
+        const targetName = projects.find(p => p.id === moveTarget)?.name || 'the selected project';
+        if (!await confirm({
+            title: 'Move service to another project?',
+            message: `"${service.name}" will inherit ${targetName}'s network, registry, shared addons and mTLS posture. Redeploy afterwards to apply. Continue?`,
+            confirmText: 'Move Service',
+        })) return;
+        try {
+            setMoving(true);
+            const res = await servicesApi.moveProject(service.id, moveTarget);
+            toast({ title: 'Service moved', description: res.message || `Moved to ${targetName}. Redeploy to apply.` });
+            const s = await servicesApi.get(service.id);
+            setService(s);
+            setMovePickerOpen(false);
+        } catch (err: any) {
+            console.error(err);
+            toast({ title: 'Move failed', description: err?.response?.data?.error || 'Could not move service.', variant: 'destructive' });
+        } finally {
+            setMoving(false);
         }
     };
 
@@ -515,7 +542,7 @@ export default function ServiceDetailPage() {
                     {/* Project */}
                     {service.project && (
                         <div className="col-span-1 md:col-span-4 bg-gradient-to-r from-emerald-500/5 to-transparent border border-emerald-500/10 p-6 rounded-xl shadow-sm">
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between gap-4 flex-wrap">
                                 <div className="flex items-center gap-4">
                                     <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-2xl">
                                         {service.project_emoji || <FolderKanban className="w-6 h-6 text-emerald-500" />}
@@ -530,6 +557,54 @@ export default function ServiceDetailPage() {
                                             <Globe className="w-3.5 h-3.5 text-emerald-500" />
                                         </a>
                                     </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    {!movePickerOpen ? (
+                                        <button
+                                            onClick={async () => {
+                                                setMovePickerOpen(true);
+                                                if (projects.length === 0) {
+                                                    try {
+                                                        const list = await projectsApi.list();
+                                                        setProjects(Array.isArray(list) ? list : []);
+                                                    } catch { /* ignore */ }
+                                                }
+                                                setMoveTarget(service.project || '');
+                                            }}
+                                            className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted/50 transition-colors"
+                                        >
+                                            Move
+                                        </button>
+                                    ) : (
+                                        <>
+                                            <select
+                                                value={moveTarget}
+                                                onChange={(e) => setMoveTarget(e.target.value)}
+                                                className="text-xs px-2 py-1.5 rounded-md bg-background border border-border max-w-[220px]"
+                                            >
+                                                {projects
+                                                    .filter(p => p.id !== service.project)
+                                                    .map(p => (
+                                                        <option key={p.id} value={p.id}>
+                                                            {p.name}
+                                                        </option>
+                                                    ))}
+                                            </select>
+                                            <button
+                                                onClick={handleMoveProject}
+                                                disabled={moving || !moveTarget || moveTarget === service.project}
+                                                className="text-xs px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 font-medium hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
+                                            >
+                                                {moving ? 'Moving???' : 'Confirm'}
+                                            </button>
+                                            <button
+                                                onClick={() => setMovePickerOpen(false)}
+                                                className="text-xs px-2 py-1.5 rounded-md text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         </div>

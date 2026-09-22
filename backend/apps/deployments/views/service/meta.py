@@ -7,7 +7,11 @@ from rest_framework import permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.teams.permissions import assert_can_write
+
 from ...models import Deployment, Service
+from ...models.audit import AuditLog
+from ...models.core import Project
 from ...serializers import DeploymentTimelineSerializer
 
 logger = logging.getLogger(__name__)
@@ -16,6 +20,67 @@ logger = logging.getLogger(__name__)
 class MetaActionsMixin:
     """MetaActions actions for the viewset."""
 
+
+    @action(detail=True, methods=['post'], url_path='move-project')
+    def move_project(self, request, pk=None):
+        """Move a service between projects, inheriting the target's identity.
+
+        POST /api/v1/services/{id}/move-project/
+        Body: { "project_id": "<uuid>" } (required — services must always
+        belong to a project; pass the default project's id to ungroup)
+
+        The service keeps its addons, env vars and deployments; its addons'
+        project link follows it for consistency. mTLS trust/sidecar posture
+        is normalized to the destination project (ecosystem vs platform).
+        Network, registry chain and shared-addon URLs resolve from the new
+        project automatically at the next deploy — redeploy to apply.
+        """
+        from ...services.project_membership import move_service_to_project
+
+        service = self.get_object()
+        assert_can_write(request.user, service)
+        raw_target = request.data.get('project_id', None)
+        if not raw_target:
+            return Response(
+                {'error': 'project_id is required. Services must always '
+                          'belong to a project — pass the default project '
+                          'id to ungroup this service.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            target = Project.objects.get(id=raw_target)
+        except (Project.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {'error': 'Target project not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        assert_can_write(
+            request.user, target, action='move service into')
+        try:
+            result = move_service_to_project(
+                service, target,
+                actor_username=request.user.get_username(),
+            )
+        except ValueError as exc:
+            return Response(
+                {'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        if result.get("status") == "no_change":
+            return Response({
+                'status': 'no_change',
+                'message': f'{service.name} is already in {target.name}.',
+                'project_id': str(target.id),
+            })
+        return Response({
+            'status': 'ok',
+            'service_id': str(service.id),
+            'from_project': result.get("from_project"),
+            'to_project': result.get("to_project"),
+            'mtls': result.get("mtls"),
+            'message': (
+                f'{service.name} moved to {target.name}. '
+                'Redeploy to apply network, registry and mTLS changes.'
+            ),
+        })
 
     @action(detail=True, methods=['get'])
     def timeline(self, request, pk=None):
