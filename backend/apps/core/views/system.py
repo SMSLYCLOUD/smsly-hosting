@@ -466,12 +466,28 @@ class SystemConfigView(GenericAPIView):
         def _find_container(svc_name):
             # Prefer the shortest matching name: e.g. 'socket-proxy' must
             # match smsly-hosting-socket-proxy-1, not the longer
-            # smsly-hosting-traefik-socket-proxy-1.
-            best = None
+            # smsly-hosting-traefik-socket-proxy-1. Platform-owned names
+            # (smsly-hosting-*) win over tenant containers first: without
+            # this, 'backend' matches tenant smsly-backend instead of
+            # smsly-hosting-backend-1 and the status page reports the
+            # wrong container.
+            platform_hits, other_hits = [], []
             for container_name, info in running_map.items():
                 if _match_container_name(container_name, svc_name):
+                    if svc_name == 'db' and container_name not in ('db',) and not container_name.startswith('smsly-hosting-db'):
+                        # 'db' is a legacy key: anything ending -db (e.g.
+                        # appsec-db) would match. Only the platform db
+                        # counts; otherwise the SQL probe below decides.
+                        continue
+                    (platform_hits if container_name.startswith('smsly-hosting-')
+                     else other_hits).append((container_name, info))
+            best = None
+            for hits in (platform_hits, other_hits):
+                for container_name, info in hits:
                     if best is None or len(container_name) < len(best[0]):
                         best = (container_name, info)
+                if best is not None:
+                    break
             return best[1] if best else None
 
         # ── Service health probes ─────────────────────────────────
