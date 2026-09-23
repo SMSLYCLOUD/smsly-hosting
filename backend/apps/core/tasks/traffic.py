@@ -11,6 +11,7 @@ import requests
 from celery import shared_task
 
 from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_STANDARD
+from apps.core.tasks.coalesce import skip_if_recent
 from django.db import IntegrityError
 from django.db.models import F
 
@@ -206,6 +207,7 @@ def _extract_log_fields(entry: dict) -> tuple[str, str, str, int]:
 # Task 1: Collect Traefik / Caddy access log entries
 # ---------------------------------------------------------------------------
 @shared_task(bind=True, ignore_result=True, max_retries=2, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+@skip_if_recent("coalesce:traefik-logs", TASK_TIME_LIMIT_STANDARD[0])
 def collect_traefik_logs(self) -> None:
     """Tail Traefik / Caddy access.log (JSON format), map RequestHost -> Service,
     and upsert ServiceTrafficLog rows. Runs every ~15 seconds."""
@@ -326,6 +328,7 @@ def _resolve_via_ipapi(session_get, ip: str) -> tuple[str, dict | None]:
 
 
 @shared_task(bind=True, ignore_result=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+@skip_if_recent("coalesce:traffic-geo", TASK_TIME_LIMIT_STANDARD[0])
 def resolve_traffic_geolocations(self) -> None:
     """Batch-resolve unresolved IPs via ipwho.is (HTTPS), falling back to
     ip-api.com (HTTP). Rate-limited (~1.4s between lookups).

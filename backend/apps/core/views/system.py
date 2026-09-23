@@ -171,6 +171,10 @@ class SystemConfigView(GenericAPIView):
             'BUILD_CACHE_MAX_AGE_HOURS': max(1, int(os.environ.get('BUILD_CACHE_MAX_AGE_HOURS', 24))),
             'REGISTRY_TAG_RETENTION_DAYS': max(1, int(os.environ.get('REGISTRY_TAG_RETENTION_DAYS', 7))),
             'REGISTRY_TAG_DELETES_PER_CYCLE': 25,
+
+            # Worker fleet live status: desired (DB) vs live (running
+            # containers), pending restarts, queue coverage, beat cadences.
+            **self._get_worker_fleet_status(),
         })
 
     # Field mapping: API key → (PlatformConfig field, type)
@@ -181,6 +185,16 @@ class SystemConfigView(GenericAPIView):
         'SCALE_COOLDOWN_MIN': ('scale_cooldown_min', int),
         'NODE_SCORER_MIN_SCORE': ('node_scorer_min_score', int),
         'NODE_MIN_FREE_RAM_PCT': ('node_min_free_ram_pct', int),
+        # Worker fleet concurrency (applied at worker (re)start)
+        'CELERY_MAIN_MAX': ('celery_main_max', int),
+        'CELERY_MAIN_MIN': ('celery_main_min', int),
+        'CELERY_FAST_MAX': ('celery_fast_max', int),
+        'CELERY_FAST_MIN': ('celery_fast_min', int),
+        'CELERY_DEPLOY_MAX': ('celery_deploy_max', int),
+        'CELERY_DEPLOY_MIN': ('celery_deploy_min', int),
+        # Beat cadences (applied at beat restart)
+        'MESH_HEALTH_INTERVAL': ('mesh_health_interval', int),
+        'REPLICATION_HEALTH_INTERVAL': ('replication_health_interval', int),
         # Email
         'SMTP_HOST': ('smtp_host', str),
         'SMTP_PORT': ('smtp_port', int),
@@ -278,6 +292,143 @@ class SystemConfigView(GenericAPIView):
             'updated': changed,
             **self._get_platform_config(),
         })
+
+    # ── Worker fleet live status (performance control plane) ──────────
+    # Desired concurrency lives in PlatformConfig (CELERY_*_MAX/MIN plus
+    # MESH/REPLICATION_HEALTH_INTERVAL — already exposed above via
+    # _get_platform_config). What this adds:
+    # - CELERY_LIVE: the --autoscale each worker container actually
+    #   started with (docker inspect of the container Cmd, fail-open).
+    # - CELERY_PENDING_RESTART: per-worker desired-vs-live mismatch.
+    #   entrypoint.sh only rewrites --autoscale at (re)start, so a
+    #   mismatch means "saved, restart workers to take effect".
+    # - CELERY_QUEUE_COVERAGE: burst queues with min 0 must stay covered
+    #   by the main worker's CELERY_QUEUES, else work stalls while burst
+    #   workers sleep.
+    # - BEAT_EFFECTIVE / BEAT_PENDING_RESTART: cadences resolve DB → env
+    #   → literal at beat import; a DB-vs-running mismatch needs a beat
+    #   restart to take effect.
+    _FLEET_CONTAINERS = {
+        'main': 'smsly-hosting-celery-1',
+        'fast': 'smsly-hosting-celery-fast-1',
+        'deploy': 'smsly-hosting-celery-deploy-1',
+    }
+
+    @staticmethod
+    def _parse_autoscale_arg(args):
+        """Pull '--autoscale=MAX,MIN' (or '--autoscale MAX,MIN') out of a
+        container Cmd list. Returns the 'MAX,MIN' string or None."""
+        if not args:
+            return None
+        for i, token in enumerate(args):
+            text = str(token or '')
+            if text.startswith('--autoscale='):
+                return text.split('=', 1)[1].strip() or None
+            if text == '--autoscale' and i + 1 < len(args):
+                return str(args[i + 1] or '').strip() or None
+        return None
+
+    def _get_container_autoscale(self, name):
+        """Live --autoscale of a running worker container, or None when
+        the daemon is unreachable (fail-open: unknown, not an error)."""
+        try:
+            import docker
+
+            container = docker.from_env(timeout=5).containers.get(name)
+            attrs = container.attrs or {}
+            cmd = attrs.get('Args') or (attrs.get('Config') or {}).get('Cmd') or []
+            return self._parse_autoscale_arg(cmd)
+        except Exception as exc:
+            logger.debug("Fleet live probe failed for %s: %s", name, exc)
+            return None
+
+    @staticmethod
+    def _coverage_warnings(main_queues, fast_min, deploy_min):
+        """Warn for burst queues that no running worker would drain.
+
+        Pure helper (unit-tested): a burst worker with min 0 sleeps when
+        idle, so its queue must appear in the main worker's CELERY_QUEUES.
+        """
+        warnings = []
+        queues = {q.strip() for q in (main_queues or '').split(',') if q.strip()}
+        if int(fast_min or 0) == 0 and 'fast' not in queues:
+            warnings.append(
+                "fast queue uncovered: fast worker min is 0 and the main "
+                "worker does not listen on 'fast' (CELERY_QUEUES). "
+                "Heartbeat tasks would stall while the fast worker sleeps."
+            )
+        if int(deploy_min or 0) == 0 and 'deploy' not in queues:
+            warnings.append(
+                "deploy queue uncovered: deploy worker min is 0 and the "
+                "main worker does not listen on 'deploy' (CELERY_QUEUES). "
+                "Deploys would stall while the deploy worker sleeps."
+            )
+        return warnings
+
+    def _get_worker_fleet_status(self):
+        pc, _ = PlatformConfig.objects.get_or_create(pk=1)
+        desired = {}
+        live = {}
+        pending = {}
+        for role in ('main', 'fast', 'deploy'):
+            max_v = getattr(pc, f'celery_{role}_max', None)
+            min_v = getattr(pc, f'celery_{role}_min', None)
+            try:
+                desired[role] = f"{int(max_v)},{int(min_v)}"
+            except (TypeError, ValueError):
+                desired[role] = None
+            live_v = self._get_container_autoscale(self._FLEET_CONTAINERS[role])
+            live[role] = live_v
+            pending[role] = bool(desired[role] and live_v and desired[role] != live_v)
+        pending['any'] = any(pending.get(r) for r in ('main', 'fast', 'deploy'))
+        main_queues = os.environ.get('CELERY_QUEUES', 'celery,fast,deploy')
+        try:
+            coverage = {
+                'main_queues': [q for q in main_queues.split(',') if q.strip()],
+                'warnings': self._coverage_warnings(
+                    main_queues, pc.celery_fast_min, pc.celery_deploy_min),
+            }
+        except Exception as exc:
+            logger.debug("Fleet coverage check failed: %s", exc)
+            coverage = {'main_queues': [], 'warnings': []}
+        try:
+            mesh_desired = int(pc.mesh_health_interval or 120)
+        except (TypeError, ValueError):
+            mesh_desired = 120
+        try:
+            repl_desired = int(pc.replication_health_interval or 60)
+        except (TypeError, ValueError):
+            repl_desired = 60
+        beat_effective = {'mesh_health_interval': None, 'replication_health_interval': None}
+        try:
+            from celery import current_app
+
+            schedule = (current_app.conf.beat_schedule or {})
+            mesh_entry = schedule.get('mesh-health-check-every-60s') or {}
+            repl_entry = schedule.get('replication-health-every-30s') or {}
+            if mesh_entry.get('schedule') is not None:
+                beat_effective['mesh_health_interval'] = int(float(mesh_entry['schedule']))
+            if repl_entry.get('schedule') is not None:
+                beat_effective['replication_health_interval'] = int(float(repl_entry['schedule']))
+        except Exception as exc:
+            logger.debug("Beat effective probe failed: %s", exc)
+        beat_desired = {
+            'mesh_health_interval': mesh_desired,
+            'replication_health_interval': repl_desired,
+        }
+        beat_pending = any(
+            beat_effective[k] is not None and beat_effective[k] != beat_desired[k]
+            for k in beat_desired
+        )
+        return {
+            'CELERY_DESIRED': desired,
+            'CELERY_LIVE': live,
+            'CELERY_PENDING_RESTART': pending,
+            'CELERY_QUEUE_COVERAGE': coverage,
+            'BEAT_DESIRED': beat_desired,
+            'BEAT_EFFECTIVE': beat_effective,
+            'BEAT_PENDING_RESTART': beat_pending,
+        }
 
     def _get_storage_metrics(self):
         """Fetch server root partition storage metrics using psutil or shutil."""
@@ -681,7 +832,7 @@ class SystemConfigView(GenericAPIView):
         action_spec = MAINTENANCE_ACTIONS.get(action)
         if not action_spec:
             return Response(
-                {"error": "Invalid maintenance action specified. Use clear, update, refresh, registry_gc, build_cache, or docker_recovery."},
+                {"error": "Invalid maintenance action specified. Use clear, update, refresh, registry_gc, build_cache, docker_recovery, restart_workers, or restart_beat."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

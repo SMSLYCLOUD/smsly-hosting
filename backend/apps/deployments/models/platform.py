@@ -511,6 +511,40 @@ class PlatformConfig(models.Model):
         default=20,
         help_text="Minimum free RAM percentage on a node before refusing to spawn a replica")
 
+    # ── Celery Worker Fleet (performance control plane) ─────────────────
+    # Desired prefork concurrency (autoscale max,min) per worker. Applied
+    # at worker (re)start by entrypoint.sh, which rewrites --autoscale
+    # from these values (DB first, host env second, compose default
+    # last). min=0 is allowed and encouraged for burst workers: with
+    # autoscale min 0 the worker keeps only its parent process and
+    # sleeps — children spawn on queue pressure and exit when idle.
+    # Burst queues with min 0 MUST stay covered by the main worker
+    # (CELERY_QUEUES includes fast+deploy); the API warns otherwise.
+    celery_main_max = models.PositiveIntegerField(
+        default=4,
+        help_text="Main worker max concurrency (drains all queues it listens on)")
+    celery_main_min = models.PositiveIntegerField(
+        default=0,
+        help_text="Main worker min concurrency (0 = sleep when idle)")
+    celery_fast_max = models.PositiveIntegerField(
+        default=2,
+        help_text="Fast worker max concurrency (heartbeats + light I/O scans)")
+    celery_fast_min = models.PositiveIntegerField(
+        default=1,
+        help_text="Fast worker min concurrency (0 allowed only if the main worker covers the fast queue)")
+    celery_deploy_max = models.PositiveIntegerField(
+        default=3,
+        help_text="Deploy worker max concurrency (builds serialize on the fleet lock; extra children serve quick tasks)")
+    celery_deploy_min = models.PositiveIntegerField(
+        default=0,
+        help_text="Deploy worker min concurrency (0 = sleep when idle; main worker drains the queue)")
+    mesh_health_interval = models.PositiveIntegerField(
+        default=120,
+        help_text="WireGuard mesh health check cadence in seconds (topology freshness only; liveness stays on heartbeats)")
+    replication_health_interval = models.PositiveIntegerField(
+        default=60,
+        help_text="Replication lag check cadence in seconds (gauge resolution; failover stays on the 30s addon watchdog)")
+
     # ── Device Trust (Beta) ────────────────────────────────────────────
     enforce_device_trust = models.BooleanField(
         default=False,

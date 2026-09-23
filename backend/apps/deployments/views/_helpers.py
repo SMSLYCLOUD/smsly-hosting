@@ -216,6 +216,18 @@ MAINTENANCE_ACTIONS = {
         "queued_message": "Platform update queued. The host updater will pull and rebuild shortly.",
         "lock_ttl": 1800,
     },
+    "restart_workers": {
+        "flag": "--restart-workers",
+        "label": "Restart Celery workers (apply concurrency)",
+        "queued_message": "Worker restart queued. Desired concurrency applies at (re)start.",
+        "lock_ttl": 600,
+    },
+    "restart_beat": {
+        "flag": "--restart-beat",
+        "label": "Restart Celery beat (apply cadences)",
+        "queued_message": "Beat restart queued. Desired cadences apply at restart.",
+        "lock_ttl": 300,
+    },
 }
 
 

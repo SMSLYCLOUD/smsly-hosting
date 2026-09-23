@@ -961,6 +961,84 @@ fi
 echo "Starting: $*"
 
 
+# Celery worker concurrency from the control plane (Settings UI):
+# PlatformConfig (celery_*_max/min) → host env (CELERY_*_AUTOSCALE) →
+# compose default. Rewrites --autoscale on `celery worker` invocations
+# so dashboard values apply at every (re)start — including plain
+# `docker restart`. Best-effort and fail-open: any error leaves "$@"
+# untouched. Never touches beat/gunicorn invocations.
+case " $* " in
+    *" celery "*" worker "*)
+        _role=main
+        case " $* " in
+            *" -Q fast"*|*" -Q=fast"*) _role=fast ;;
+            *" -Q deploy"*|*" -Q=deploy"*) _role=deploy ;;
+        esac
+        export SMSLY_WORKER_ROLE="$_role"
+        _resolved=$(timeout -k 5 30 python3 -c "
+import os
+role = os.environ.get('SMSLY_WORKER_ROLE', 'main')
+defaults = {'main': (4, 0), 'fast': (2, 1), 'deploy': (3, 0)}
+prefix = {'main': 'CELERY', 'fast': 'CELERY_FAST', 'deploy': 'CELERY_DEPLOY'}.get(role, 'CELERY')
+dmax, dmin = defaults.get(role, (4, 0))
+try:
+    import django
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+    django.setup()
+    from apps.deployments.models import PlatformConfig
+    pc = PlatformConfig.load()
+    vmax = getattr(pc, f'celery_{role}_max', None)
+    vmin = getattr(pc, f'celery_{role}_min', None)
+    if vmax is not None and int(vmax) > 0:
+        dmax = int(vmax)
+    if vmin is not None and int(vmin) >= 0:
+        dmin = int(vmin)
+except Exception:
+    pass
+import re
+emax, emin = dmax, dmin
+m = re.match(r'^\s*(\d+)\s*,\s*(\d+)\s*$', os.environ.get(prefix + '_AUTOSCALE', '') or '')
+if m:
+    emax, emin = int(m.group(1)), int(m.group(2))
+emax = max(1, min(emax, 32))
+emin = max(0, min(emin, emax))
+print(f'{emax},{emin}')
+" 2>/dev/null) || _resolved=""
+        unset SMSLY_WORKER_ROLE
+        # Fall back to the compose-provided flags when resolution fails.
+        _resolved=$(printf '%s' "$_resolved" | tr -d '[:space:]')
+        case "$_resolved" in
+            ''|*[!0-9,]*|*,*,*) ;;
+            *)
+                _rebuilt=""
+                _skip_next=0
+                for _a in "$@"; do
+                    if [ "$_skip_next" = "1" ]; then
+                        _skip_next=0
+                        continue
+                    fi
+                    case "$_a" in
+                        --autoscale)
+                            _skip_next=1
+                            continue
+                            ;;
+                        --autoscale=*)
+                            continue
+                            ;;
+                    esac
+                    # Single-quote-escape each arg before eval reassembly.
+                    _q=$(printf '%s' "$_a" | sed "s/'/'\\\\''/g")
+                    _rebuilt="$_rebuilt '$_q'"
+                done
+                # shellcheck disable=SC2086
+                eval "set -- $_rebuilt --autoscale=$_resolved"
+                echo "Worker concurrency ($_role): --autoscale=$_resolved (DB/env/compose resolution)"
+                ;;
+        esac
+        unset _role _resolved _rebuilt _skip_next _a _q
+        ;;
+esac
+
 
 exec "$@"
 

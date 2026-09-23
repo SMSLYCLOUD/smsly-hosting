@@ -8,6 +8,7 @@ from celery import shared_task
 from django.db import models as db_models
 
 from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM
+from apps.core.tasks.coalesce import skip_if_recent
 from apps.deployments.models import Service
 from apps.autoscaler.models.replica import ServiceReplica
 
@@ -23,6 +24,7 @@ AUTOSCALE_BATCH_SIZE = 20
     soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
     time_limit=TASK_TIME_LIMIT_MEDIUM[1],
 )
+@skip_if_recent("coalesce:autoscale-analyze", TASK_TIME_LIMIT_MEDIUM[0])
 def analyze_all_services_task(self) -> dict[str, int]:
     """Periodic task: analyze active services and auto-scale as needed.
 

@@ -38,6 +38,7 @@ import requests
 from celery import shared_task
 
 from apps.deployments.constants import RETRY_DELAY_FAST, TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_STANDARD, TASK_TIME_LIMIT_TRIVIAL
+from apps.core.tasks.coalesce import skip_if_recent
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives, send_mail
@@ -794,6 +795,7 @@ def _fire_alert_rule(rule, service, value: float) -> None:
 
 
 @shared_task(name='apps.notifications.tasks.evaluate_alert_rules_task', soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+@skip_if_recent("coalesce:alert-rules", TASK_TIME_LIMIT_STANDARD[0])
 def evaluate_alert_rules_task() -> dict:
     """
     Evaluate enabled AlertRules against recent ServiceMetric rows.

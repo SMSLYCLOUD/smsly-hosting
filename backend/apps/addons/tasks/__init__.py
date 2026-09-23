@@ -3,6 +3,7 @@ from __future__ import annotations
 from celery import shared_task
 
 from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_STANDARD
+from apps.core.tasks.coalesce import skip_if_recent
 from apps.deployments.models.addons import Addon
 
 from apps.addons.services.alerts import check_alerts
@@ -10,6 +11,7 @@ from apps.addons.services.maintenance import AddonMaintenanceService
 
 
 @shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+@skip_if_recent("coalesce:addon-health", TASK_TIME_LIMIT_STANDARD[0])
 def addon_health_check_all(self) -> None:
     """Run health checks on all active addons."""
     import logging

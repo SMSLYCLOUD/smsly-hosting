@@ -8,6 +8,7 @@ import docker
 from celery import shared_task
 
 from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_STANDARD, TASK_TIME_LIMIT_TRIVIAL
+from apps.core.tasks.coalesce import skip_if_recent
 from decouple import config
 from django.core.cache import cache
 
@@ -132,6 +133,7 @@ def _dispatch_failure_alert(deployment, error_message: str) -> dict[str, Any]:
 
 
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+@skip_if_recent("coalesce:container-scan", TASK_TIME_LIMIT_STANDARD[0])
 def scan_running_containers_logs_task() -> None:
     """
     Periodically scans logs of all active containers for crashing errors.

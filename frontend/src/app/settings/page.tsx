@@ -25,6 +25,7 @@ import { ProvidersTab } from "@/components/settings/ProvidersTab";
 import { AiTab } from "@/components/settings/AiTab";
 import { AuditLogsTab } from "@/components/settings/AuditLogsTab";
 import { PlatformConfigTab } from "@/components/settings/PlatformConfigTab";
+import { PerformanceTab } from "@/components/settings/PerformanceTab";
 import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
 import { GitIntegrationCard } from "@/components/settings/GitIntegrationCard";
 import { WebhookConfigCard } from "@/components/settings/WebhookConfigCard";
@@ -243,6 +244,8 @@ function SettingsContent() {
               <PlatformSettingsTab />
               <Separator />
               <PlatformConfigTab />
+              <Separator />
+              <PerformanceTab />
               <Separator />
               <MtlsTab />
             </div>

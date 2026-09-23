@@ -15,6 +15,7 @@ from apps.deployments.constants import (
     TASK_TIME_LIMIT_QUICK,
     TASK_TIME_LIMIT_STANDARD,
 )
+from apps.core.tasks.coalesce import skip_if_recent
 
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 
@@ -73,6 +74,7 @@ def auto_authenticate_nodes_task():
 
 
 @shared_task(name="apps.deployments.tasks.check_agent_heartbeats_task", soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+@skip_if_recent("coalesce:agent-hb", TASK_TIME_LIMIT_QUICK[0])
 def check_agent_heartbeats_task():
     """
     Periodic task (every 60s) to detect silent agent outages.

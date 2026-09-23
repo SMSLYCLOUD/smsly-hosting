@@ -10,6 +10,7 @@ import random
 from celery import shared_task
 
 from apps.deployments.constants import BUILD_CACHE_MAX_AGE_HOURS, TASK_TIME_LIMIT_STANDARD
+from apps.core.tasks.coalesce import skip_if_recent
 from django.utils import timezone
 
 from apps.deployments.models import (
@@ -112,6 +113,7 @@ def _simulate_stats(service):  # UNUSED
 
 
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+@skip_if_recent("coalesce:collect-metrics", TASK_TIME_LIMIT_STANDARD[0])
 def collect_metrics_task() -> None:
     """
     Collect metrics for all active services with running deployments.

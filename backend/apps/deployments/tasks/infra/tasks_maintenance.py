@@ -26,14 +26,66 @@ from ..remote.update import ThrottledLogAppender  # noqa: F401
 from .tasks_platform_update import platform_update_task
 
 
+# Containers restarted by the performance-tab maintenance actions. Names
+# follow the smsly-hosting compose project convention.
+_WORKER_CONTAINERS = (
+    "smsly-hosting-celery-1",
+    "smsly-hosting-celery-fast-1",
+    "smsly-hosting-celery-deploy-1",
+)
+_BEAT_CONTAINER = "smsly-hosting-celery-beat-1"
+
+
+def _build_in_progress() -> bool:
+    """True when any deployment is BUILDING. Fail-closed: a DB error
+    refuses the restart rather than risk killing an in-flight build."""
+    try:
+        from apps.deployments.models import Deployment
+
+        return Deployment.objects.filter(status=Deployment.Status.BUILDING).exists()
+    except Exception as exc:
+        logger.warning("restart guard: build check failed, refusing: %s", exc)
+        return True
+
+
+def _restart_containers(names) -> dict:
+    """Restart named containers via the Docker API. Best-effort per
+    container; returns {restarted, missing, failed}."""
+    restarted, missing, failed = [], [], {}
+    try:
+        import docker
+
+        client = docker.from_env(timeout=10)
+    except Exception as exc:
+        return {"restarted": restarted, "missing": list(names),
+                "failed": {"client": str(exc)[:200]}}
+    for name in names:
+        try:
+            client.containers.get(name).restart(timeout=30)
+            restarted.append(name)
+        except Exception as exc:
+            try:
+                from docker.errors import NotFound
+
+                if isinstance(exc, NotFound):
+                    missing.append(name)
+                    continue
+            except Exception:
+                pass
+            failed[name] = str(exc)[:200]
+    return {"restarted": restarted, "missing": missing, "failed": failed}
+
+
 @shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], name="apps.deployments.tasks.run_maintenance_task")
 def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
     """
     Run maintenance commands via the Docker API from inside the Celery container.
-    Valid flags: --clear, --update, --refresh, --gc, --clear-build-cache, --docker-recovery
+    Valid flags: --clear, --update, --refresh, --gc, --clear-build-cache, --docker-recovery,
+    --prune-images, --clean-logs, --restart-workers, --restart-beat
     """
     if command_flag not in ['--clear', '--update', '--update-frontend', '--refresh',
-                             '--gc', '--clear-build-cache', '--prune-images', '--clean-logs', '--docker-recovery']:
+                             '--gc', '--clear-build-cache', '--prune-images', '--clean-logs', '--docker-recovery',
+                             '--restart-workers', '--restart-beat']:
         logger.error(f"Invalid maintenance command: {command_flag}")
         return {"status": "error", "reason": "invalid_command", "message": "Invalid maintenance command."}
 
@@ -154,6 +206,61 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
                     f"docker_restart={steps.get('docker_restart')})."
                 ),
                 "details": result,
+            }
+
+        elif command_flag == '--restart-workers':
+            # Desired concurrency (Settings UI) applies at worker (re)start
+            # via entrypoint.sh — this restart is how pending values take
+            # effect. Refused while a build runs: restarting the deploy
+            # worker mid-build kills the build.
+            if _build_in_progress():
+                return {
+                    "status": "error",
+                    "reason": "build_in_progress",
+                    "message": "Refused: a deployment is BUILDING. Retry when no build is running.",
+                }
+            details = _restart_containers(_WORKER_CONTAINERS)
+            if details["failed"] and not details["restarted"]:
+                return {
+                    "status": "error",
+                    "reason": "restart_failed",
+                    "message": f"Worker restart failed: {details['failed']}.",
+                    "details": details,
+                }
+            return {
+                "status": "success",
+                "message": (
+                    "Workers restarted "
+                    f"(restarted={len(details['restarted'])} "
+                    f"missing={len(details['missing'])} "
+                    f"failed={len(details['failed'])}). "
+                    "Desired concurrency now applies."
+                ),
+                "details": details,
+            }
+
+        elif command_flag == '--restart-beat':
+            # Desired cadences apply at beat restart (resolved at import).
+            # Same BUILDING guard: a beat restart pauses periodic dispatch
+            # and must never interleave with an in-flight build.
+            if _build_in_progress():
+                return {
+                    "status": "error",
+                    "reason": "build_in_progress",
+                    "message": "Refused: a deployment is BUILDING. Retry when no build is running.",
+                }
+            details = _restart_containers((_BEAT_CONTAINER,))
+            if details["failed"] and not details["restarted"]:
+                return {
+                    "status": "error",
+                    "reason": "restart_failed",
+                    "message": f"Beat restart failed: {details['failed']}.",
+                    "details": details,
+                }
+            return {
+                "status": "success",
+                "message": "Beat restarted. Desired cadences now apply.",
+                "details": details,
             }
 
         elif command_flag in ['--update', '--update-frontend']:

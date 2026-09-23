@@ -11,6 +11,7 @@ from apps.deployments.constants import (
     TASK_TIME_LIMIT_DATA_SYNC,
     TASK_TIME_LIMIT_STANDARD,
 )
+from apps.core.tasks.coalesce import skip_if_recent
 from apps.deployments.services.task_encryption import decrypt_arg
 
 
@@ -22,6 +23,7 @@ def _bounded_error(exc, limit=2000):
     name="apps.deployments.tasks_replication.check_replication_health_task",
     soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
     time_limit=TASK_TIME_LIMIT_STANDARD[1])
+@skip_if_recent("coalesce:repl-health", TASK_TIME_LIMIT_STANDARD[0])
 def check_replication_health_task():
     """
     Periodic task (every 30s): check WAL replication lag across all meshes.

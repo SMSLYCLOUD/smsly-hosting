@@ -250,6 +250,36 @@ app.conf.task_routes = {
     'apps.deployments.tasks.cicd.tasks_commit_status.update_commit_status': {'queue': 'fast'},
 }
 
+def _beat_interval_seconds(config_field, env_name, default):
+    """Resolve a beat cadence: PlatformConfig (UI) → env → literal default.
+
+    Evaluated once at import (beat/worker start). Never raises — during
+    migrations, CI, or DB outages the literal default stands. Values are
+    clamped to [15, 3600] so a typo can't schedule a hot loop or kill a
+    watchdog silently.
+    """
+    try:
+        from apps.deployments.models import PlatformConfig
+        value = int(getattr(PlatformConfig.load(), config_field, 0) or 0)
+        if value > 0:
+            return max(15, min(value, 3600))
+    except Exception:
+        pass
+    try:
+        import os
+        value = int(os.environ.get(env_name, 0) or 0)
+        if value > 0:
+            return max(15, min(value, 3600))
+    except (TypeError, ValueError):
+        pass
+    return default
+
+
+_MESH_HEALTH_INTERVAL = _beat_interval_seconds(
+    'mesh_health_interval', 'MESH_HEALTH_INTERVAL', 120.0)
+_REPLICATION_HEALTH_INTERVAL = _beat_interval_seconds(
+    'replication_health_interval', 'REPLICATION_HEALTH_INTERVAL', 60.0)
+
 app.conf.beat_schedule = {
     # Collect real Docker stats every 60 seconds
     'collect-metrics-every-60s': {
@@ -475,7 +505,11 @@ app.conf.beat_schedule = {
     # it can mistake a hostname/IP representation difference for an orphan
     # and delete a healthy primary (incident 2026-09-05). Recovery is now
     # manual until the task is redesigned around Sentinel's role/epoch.
-    # Addon HA watchdog: replica health + Postgres auto-failover
+    # Addon HA watchdog: replica health + Postgres auto-failover.
+    # Deliberately still every 30s (2026-09-23 CPU burn-down reviewed
+    # and kept): failover needs 3 consecutive failed probes, so 30s→60s
+    # would push detection from ~90s to ~3min. Availability beats the
+    # small steady cost here.
     'addon-ha-watchdog-every-30s': {
         'task': 'apps.addons.tasks.ha_watchdog.check_addon_ha_task',
         'schedule': 30.0,
@@ -592,11 +626,16 @@ app.conf.beat_schedule = {
         'schedule': 86400.0,  # 24 hours
         'options': {'expires': 86400.0},
     },
-    # WireGuard mesh health check every 60 seconds
+    # WireGuard mesh health (interval resolves DB MESH_HEALTH_INTERVAL
+    # → env → 120s default; restart beat to apply).
+    # Mesh membership changes slowly; agent liveness is still covered by
+    # the 5s heartbeat + 60s agent-heartbeat checks.
+    # NOTE: key name intentionally unchanged — RedBeat persists entries
+    # by name in Redis and would keep firing an orphaned old key.
     'mesh-health-check-every-60s': {
         'task': 'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task',
-        'schedule': 60.0,
-        'options': {'expires': 60.0},
+        'schedule': float(_MESH_HEALTH_INTERVAL),
+        'options': {'expires': float(_MESH_HEALTH_INTERVAL)},
     },
     # Leader election heartbeat every 5 seconds
     'cluster-heartbeat-every-5s': {
@@ -610,11 +649,16 @@ app.conf.beat_schedule = {
         'schedule': 600.0,
         'options': {'expires': 600.0},
     },
-    # Replication health check every 30 seconds
+    # Replication health (interval resolves DB REPLICATION_HEALTH_INTERVAL
+    # → env → 60s default; restart beat to apply). Lag resolution is
+    # minute-level — acceptable for a gauge; failover itself stays on the
+    # 30s addon HA watchdog below. NOTE: key name intentionally unchanged
+    # — RedBeat persists entries by name in Redis and would keep firing
+    # an orphaned old key.
     'replication-health-every-30s': {
         'task': 'apps.deployments.tasks_replication.check_replication_health_task',
-        'schedule': 30.0,
-        'options': {'expires': 30.0},
+        'schedule': float(_REPLICATION_HEALTH_INTERVAL),
+        'options': {'expires': float(_REPLICATION_HEALTH_INTERVAL)},
     },
     # Daily intelligence report at 06:00 UTC
     'daily-intelligence-report': {

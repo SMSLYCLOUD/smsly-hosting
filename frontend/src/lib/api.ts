@@ -1186,7 +1186,7 @@ export const systemApi = {
     const response = await api.patch('/system/config/', data);
     return response.data;
   },
-  runMaintenance: async (action: 'clear' | 'refresh' | 'update' | 'registry_gc' | 'build_cache' | 'docker_recovery') => {
+  runMaintenance: async (action: 'clear' | 'refresh' | 'update' | 'registry_gc' | 'build_cache' | 'docker_recovery' | 'restart_workers' | 'restart_beat') => {
     const response = await api.post('/system/config/', { action });
     return response.data;
   },

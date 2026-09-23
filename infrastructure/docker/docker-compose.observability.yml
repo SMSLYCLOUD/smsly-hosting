@@ -157,6 +157,12 @@ services:
     security_opt: [no-new-privileges:true, apparmor:docker-default]
     command:
       - --containerd=unix:///var/run/containerd/containerd.sock
+      # NOTE (2026-09-23 CPU burn-down): docker_only drops the raw-cgroup
+      # hierarchy (machine metrics come from node-exporter; container
+      # dashboards use container_* which this keeps), and 30s housekeeping
+      # triples cAdvisor's collection batching vs the 10s default.
+      - --docker_only=true
+      - --housekeeping_interval=30s
     volumes:
       - /:/rootfs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro

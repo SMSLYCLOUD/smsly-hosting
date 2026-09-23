@@ -8,6 +8,7 @@ from django.core.cache import cache
 from django.utils import timezone
 
 from apps.deployments.constants import TASK_TIME_LIMIT_LONG, TASK_TIME_LIMIT_STANDARD
+from apps.core.tasks.coalesce import skip_if_recent
 
 
 def _bounded_error(exc, limit=2000):
@@ -18,6 +19,7 @@ def _bounded_error(exc, limit=2000):
     name="apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task",
     soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
     time_limit=TASK_TIME_LIMIT_STANDARD[1])
+@skip_if_recent("coalesce:mesh-health", TASK_TIME_LIMIT_STANDARD[0])
 def check_mesh_health_task():
     """
     Periodic task that pings all WireGuard peers in all active meshes
