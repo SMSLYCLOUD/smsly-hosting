@@ -50,9 +50,10 @@ export function PerformanceTab() {
   }, []);
 
   useEffect(() => {
+    const outstanding = pollers.current;
     fetchConfig();
     return () => {
-      Object.values(pollers.current).forEach((p) => { if (p) clearInterval(p); });
+      Object.values(outstanding).forEach((p) => { if (p) clearInterval(p); });
     };
   }, [fetchConfig]);
 

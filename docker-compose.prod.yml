@@ -1337,6 +1337,11 @@ services:
       NETWORKS: 1
       VOLUMES: 1
       INFO: 1
+      # NOTE: SYSTEM=1 exposes GET /system/df (disk-usage telemetry) to
+      # backend/workers. The Settings storage overview needs it for the
+      # Docker breakdown; without it the tile degrades to Offline/N/A.
+      # Read-only endpoint; POST/DELETE surface is unchanged.
+      SYSTEM: 1
       VERSION: 1
       EVENTS: 1
       COMMIT: 1
