@@ -25,6 +25,10 @@ def _mock_proc(stdout="", returncode=0, stderr=""):
 
 class SecurityEventsTests(TestCase):
     def setUp(self):
+        from django.core.cache import cache
+        # The events view caches scrapes (90s): flush so each test's
+        # subprocess mocks actually execute instead of hitting a stale entry.
+        cache.clear()
         self.user = User.objects.create_user(username="testsec", password="password123")
         self.factory = APIRequestFactory()
 
@@ -203,6 +207,39 @@ class SecurityEventsTests(TestCase):
                             _stable_id("falco", "line"))
         self.assertNotEqual(_stable_id("oas", "line-a"),
                             _stable_id("oas", "line-b"))
+
+    @patch("apps.core.views.security.subprocess.run")
+    def test_second_identical_request_served_from_cache(self, mock_run):
+        falco_json_line = json.dumps({
+            "time": "2026-09-22T20:00:00Z",
+            "rule": "Terminal shell in container",
+            "priority": "Warning",
+            "output": "shell",
+            "output_fields": {"container.name": "c", "proc.name": "sh"},
+        })
+
+        def _side_effect(cmd, **kwargs):
+            joined = " ".join(cmd)
+            if "logs" in cmd and "smsly-falco" in joined:
+                return _mock_proc(stdout=f"{falco_json_line}\n")
+            return _mock_proc(stdout="", returncode=1)
+
+        mock_run.side_effect = _side_effect
+        view = SecurityEventsView.as_view()
+
+        req1 = self.factory.get("/api/v1/system/security-events/")
+        force_authenticate(req1, user=self.user)
+        resp1 = view(req1)
+        calls_after_first = mock_run.call_count
+        self.assertGreater(calls_after_first, 0)
+
+        req2 = self.factory.get("/api/v1/system/security-events/")
+        force_authenticate(req2, user=self.user)
+        resp2 = view(req2)
+        self.assertEqual(mock_run.call_count, calls_after_first)
+        self.assertEqual(resp2.data["summary"], resp1.data["summary"])
+        self.assertEqual(resp2.data["recent_activities"],
+                         resp1.data["recent_activities"])
 
     @patch("apps.core.views.security.subprocess.run")
     def test_security_analysis_generates_assessment(self, mock_run):

@@ -98,6 +98,11 @@ export default function IntelligencePage() {
   const [securityAnalysis, setSecurityAnalysis] = useState<SecurityAnalysisResponse | null>(null);
   const [securityAnalyzing, setSecurityAnalyzing] = useState(false);
   const [securitySourceFilter, setSecuritySourceFilter] = useState<string>('all');
+  // Source the CURRENTLY LOADED payload was fetched with. Tab clicks
+  // update the highlight immediately but the list keeps matching the
+  // loaded data until the new fetch lands — otherwise every switch
+  // flashes "no events" while the 10-30s re-scrape runs.
+  const [securityEventsSource, setSecurityEventsSource] = useState<string>('all');
   const [securitySeverityFilter, setSecuritySeverityFilter] = useState<string>('all');
   const [securitySearchQuery, setSecuritySearchQuery] = useState('');
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
@@ -199,7 +204,10 @@ export default function IntelligencePage() {
         systemSecurityApi.getEvents(source && source !== 'all' ? source : undefined, 100).catch(() => null),
       ]);
       if (stat) setSecurityStatus(stat);
-      if (evts) setSecurityEvents(evts);
+      if (evts) {
+        setSecurityEvents(evts);
+        setSecurityEventsSource(source && source !== 'all' ? source : 'all');
+      }
       if (!stat && !evts) {
         toast({
           title: 'Security refresh failed',
@@ -426,7 +434,7 @@ export default function IntelligencePage() {
   const diagnosedDeploys = deployments.filter(d => d.ai_diagnosis);
 
   const filteredSecurityEvents = (securityEvents?.recent_activities || []).filter((evt) => {
-    if (securitySourceFilter !== 'all' && evt.source !== securitySourceFilter) {
+    if (securityEventsSource !== 'all' && evt.source !== securityEventsSource) {
       return false;
     }
     if (securitySeverityFilter !== 'all' && evt.severity !== securitySeverityFilter) {

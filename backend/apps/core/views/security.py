@@ -72,6 +72,7 @@ def _as_dict(obj):
 from rest_framework import permissions
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
+from django.core.cache import cache
 from apps.deployments.views._helpers import EmptySerializer
 class SecurityStatusView(GenericAPIView):
     """
@@ -542,6 +543,18 @@ class SecurityEventsView(GenericAPIView):
         limit = min(int(request.query_params.get("limit", 100)), 300)
         source_filter = request.query_params.get("source", "").lower().strip()
 
+        # Short cache: every tab switch re-requests the same scrape
+        # (docker logs, cscli, loki — 10-30s). Without it each click shows
+        # an empty list while the re-scrape runs (stale data + new filter
+        # match nothing). Fail-open: any cache error rescrapes.
+        cache_key = f"smsly:sec-events:{source_filter or 'all'}:{limit}"
+        try:
+            cached = cache.get(cache_key)
+        except Exception:
+            cached = None
+        if isinstance(cached, dict):
+            return Response(cached)
+
         falco_events = []
         crowdsec_decisions = []
         crowdsec_alerts = []
@@ -967,7 +980,7 @@ class SecurityEventsView(GenericAPIView):
             deduped = [a for a in deduped if a["source"] == source_filter]
         final_activities = deduped[:limit]
 
-        return Response({
+        payload = {
             "summary": {
                 "total_events": total_events,
                 "falco_alerts_count": per_source.get("falco", 0),
@@ -986,7 +999,12 @@ class SecurityEventsView(GenericAPIView):
             "auditd_events": auditd_events[:20],
             "trivy_findings": trivy_findings[:30],
             "recent_activities": final_activities,
-        })
+        }
+        try:
+            cache.set(cache_key, payload, 90)
+        except Exception:
+            pass
+        return Response(payload)
 
 
 class SecurityAnalysisView(GenericAPIView):
