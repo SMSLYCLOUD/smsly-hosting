@@ -789,10 +789,9 @@ class SecurityEventsView(GenericAPIView):
                     "severity": sev_raw,
                     "service": (ev.get("eventSource") or {}).get("serviceName", ""),
                 })
-                # Policy lifecycle lines are noise; only verdict/stack
-                # lines and non-info severities enter the activity feed.
-                if sev_raw in ("info", "low"):
-                    continue
+                # Every agent line enters the feed (info/low as INFO) so the
+                # WAF tab shows telemetry instead of reading empty while
+                # the pill counts lines — the severity filter hides INFO.
                 activities.append({
                     "id": _stable_id("oas", line),
                     "source": "openappsec",
@@ -943,11 +942,9 @@ class SecurityEventsView(GenericAPIView):
         except Exception as exc:
             logger.debug("Trivy findings fetch skipped: %s", exc)
 
-        # Filter by source if requested
-        if source_filter:
-            activities = [a for a in activities if a["source"] == source_filter]
-
-        # Deduplicate & Sort descending by timestamp
+        # Deduplicate & Sort descending by timestamp (on the FULL set —
+        # pills below describe this global overview, the source filter
+        # only narrows the listed page so other pills never collapse).
         seen_ids = set()
         deduped = []
         for a in activities:
@@ -963,11 +960,16 @@ class SecurityEventsView(GenericAPIView):
         per_source: dict = {}
         for a in deduped:
             per_source[a["source"]] = per_source.get(a["source"], 0) + 1
+        total_events = len(deduped)
+
+        # Filter by source if requested (list only — pills stay global).
+        if source_filter:
+            deduped = [a for a in deduped if a["source"] == source_filter]
         final_activities = deduped[:limit]
 
         return Response({
             "summary": {
-                "total_events": len(deduped),
+                "total_events": total_events,
                 "falco_alerts_count": per_source.get("falco", 0),
                 "crowdsec_bans_count": per_source.get("crowdsec", 0),
                 "crowdsec_alerts_count": len(crowdsec_alerts),
