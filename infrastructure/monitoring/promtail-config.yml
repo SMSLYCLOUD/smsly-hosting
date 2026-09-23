@@ -99,8 +99,27 @@ scrape_configs:
           source: timestamp
           format: '2006-01-02 15:04:05,000'
 
-  # Traefik access log collection (JSON format)
-  - job_name: traefik-access
+  # Host security posture snapshots (lib/host_security.sh via cron).
+  # UFW/auditd are invisible from inside containers; this static scrape
+  # is the only channel. Lines are JSON: {ts, ufw_active, auditd_active,
+  # fail2ban_jails}. The staff security-events view queries
+  # {job="host-security"} directly.
+  - job_name: host-security
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: host-security
+          __path__: /var/log/host-security.log
+    pipeline_stages:
+      - json:
+          expressions:
+            ts: ts
+      - timestamp:
+          source: ts
+          format: RFC3339
+
+  # Traefik access log collection (JSON format)  - job_name: traefik-access
     static_configs:
       - targets:
           - localhost

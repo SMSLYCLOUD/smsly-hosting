@@ -723,7 +723,7 @@ services:
     # Needed to bind :53 while dropping everything else.
     cap_add:
       - NET_BIND_SERVICE
-    image: coredns/coredns:1.12.2
+    image: coredns/coredns:1.14.5
     command: -conf /etc/coredns/Corefile
     restart: unless-stopped
     ports:
@@ -1769,6 +1769,11 @@ services:
       - appsec_logs:/var/log/nano_agent
       - ./infrastructure/openappsec/localconfig:/ext/appsec:z
     command: /cp-nano-agent
+    ports:
+      # Shadow envoy lives in this network namespace (see appsec-envoy
+      # network_mode below), so its published port must live here.
+      # Loopback-only, never public. Cutover flips these to 80/443.
+      - "${OPENAPPSEC_SHADOW_BIND:-127.0.0.1}:${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}:8081"
     networks:
       - smsly-net
     labels:
@@ -1794,14 +1799,14 @@ services:
     volumes:
       - ./infrastructure/openappsec/envoy.yaml:/envoy.yaml:ro,z
     command: -c /envoy.yaml
-    ports:
-      # Shadow only — loopback, never public. Cutover flips these to 80/443.
-      # NOTE: 8081 is taken by Traefik's loopback binding — shadow lives on 18081.
-      - "${OPENAPPSEC_SHADOW_BIND:-127.0.0.1}:${OPENAPPSEC_SHADOW_HTTP_PORT:-18081}:8081"
+    # Share the agent network namespace: the attachment keepalive and
+    # registration channels are loopback-bound inside the agent netns
+    # (verified 2026-09-23: every agent listener on 127.0.0.1, no shared
+    # socket or SHM segment across containers). ports/networks are
+    # ignored in this mode and live on appsec-agent instead.
+    network_mode: "service:appsec-agent"
     depends_on:
       - appsec-agent
-    networks:
-      - smsly-net
     labels:
       - managed_by=smsly-hosting
     deploy:

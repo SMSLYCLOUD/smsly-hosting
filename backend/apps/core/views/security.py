@@ -68,6 +68,26 @@ def _as_dict(obj):
     return {}
 
 
+def _host_security_latest():
+    """Latest host posture snapshot from Loki {job="host-security"}.
+
+    Written by lib/host_security.sh on the host (ufw/auditd are
+    invisible from inside containers). Returns {} when unavailable.
+    """
+    try:
+        entries = _loki_range('{job="host-security"}', limit=3, hours=2)
+        for _ts, line in entries:
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(data, dict) and ("ufw_active" in data or "auditd_active" in data):
+                return data
+    except Exception as exc:
+        logger.debug("host-security Loki query skipped: %s", exc)
+    return {}
+
+
 
 from rest_framework import permissions
 from rest_framework.generics import GenericAPIView
@@ -380,15 +400,25 @@ class SecurityStatusView(GenericAPIView):
                     pass
 
         # ── UFW ─────────────────────────────────────────────────────
+        # Prefer host truth from Loki (lib/host_security.sh); the local
+        # `ufw` probe only works on full host installs.
         ufw = {"active": False}
         try:
-            ufw_result = subprocess.run(
-                ["ufw", "status"],
-                capture_output=True, text=True, timeout=5,
-            )
-            ufw["active"] = "Status: active" in (ufw_result.stdout or "")
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            ufw["active"] = False
+            _hs = _host_security_latest()
+        except Exception:
+            _hs = {}
+        if isinstance(_hs, dict) and "ufw_active" in _hs:
+            ufw["active"] = bool(_hs.get("ufw_active"))
+            ufw["source"] = "host-security"
+        else:
+            try:
+                ufw_result = subprocess.run(
+                    ["ufw", "status"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                ufw["active"] = "Status: active" in (ufw_result.stdout or "")
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                ufw["active"] = False
 
         # ── fail2ban ────────────────────────────────────────────────
         # fail2ban-client and /var/log/fail2ban.log exist only on full
@@ -431,15 +461,25 @@ class SecurityStatusView(GenericAPIView):
                 pass
 
         # ── auditd ──────────────────────────────────────────────────
+        # Same host-truth preference as UFW above.
         auditd = {"active": False}
         try:
-            audit_result = subprocess.run(
-                ["systemctl", "is-active", "auditd"],
-                capture_output=True, text=True, timeout=5,
-            )
-            auditd["active"] = (audit_result.stdout or "").strip() == "active"
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            auditd["active"] = False
+            _hs2 = _host_security_latest() if not ufw.get("source") else None
+        except Exception:
+            _hs2 = None
+        _hs_audit = _hs if isinstance(_hs, dict) and "auditd_active" in _hs else _hs2
+        if isinstance(_hs_audit, dict) and "auditd_active" in _hs_audit:
+            auditd["active"] = bool(_hs_audit.get("auditd_active"))
+            auditd["source"] = "host-security"
+        else:
+            try:
+                audit_result = subprocess.run(
+                    ["systemctl", "is-active", "auditd"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                auditd["active"] = (audit_result.stdout or "").strip() == "active"
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                auditd["active"] = False
 
         # ── Docker socket proxy ─────────────────────────────────────
         socket_proxy = {"enabled": False}
@@ -920,6 +960,42 @@ class SecurityEventsView(GenericAPIView):
             except Exception as exc:
                 logger.debug("Auditd log parse skipped: %s", exc)
 
+        # ── 5b. Host posture (UFW/auditd/fail2ban via Loki) ────────
+        # Same {job="host-security"} feed the status view uses. Emits one
+        # activity per snapshot so posture changes appear in the stream.
+        host_checks = []
+        try:
+            for _ts, _line in _loki_range('{job="host-security"}', limit=6, hours=24):
+                try:
+                    _h = json.loads(_line)
+                except Exception:
+                    continue
+                if not isinstance(_h, dict):
+                    continue
+                host_checks.append(_h)
+                if len(host_checks) >= 3:
+                    break
+            for _h in host_checks:
+                _hts = _h.get("ts") or datetime.now(timezone.utc).isoformat()
+                for _name, _label in (("ufw_active", "UFW firewall"),
+                                      ("auditd_active", "auditd")):
+                    if _name not in _h:
+                        continue
+                    _on = bool(_h.get(_name))
+                    activities.append({
+                        "id": f"host-{_name}-{_hts}",
+                        "source": "auditd" if "auditd" in _name else "host",
+                        "type": "posture",
+                        "severity": "INFO" if _on else "WARNING",
+                        "title": f"{_label} {'active' if _on else 'INACTIVE'} (host)",
+                        "details": "Reported by host-security snapshot",
+                        "target": "host",
+                        "timestamp": _hts,
+                        "raw": _h,
+                    })
+        except Exception as exc:
+            logger.debug("host-security events skipped: %s", exc)
+
         # ── 6. Trivy Vulnerability Scan Findings ──────────────────
         try:
             from apps.deployments.models import Deployment
@@ -998,6 +1074,7 @@ class SecurityEventsView(GenericAPIView):
             "openappsec_events": openappsec_events[:30],
             "auditd_events": auditd_events[:20],
             "trivy_findings": trivy_findings[:30],
+            "host_checks": host_checks[:3],
             "recent_activities": final_activities,
         }
         try:
