@@ -704,6 +704,47 @@ services:
       resources:
         limits:
           memory: ${REGISTRY_MEMORY_LIMIT:-1G}
+  coredns:
+    # Mesh DNS for the WireGuard mesh (apps.deployments.services.mesh_dns
+    # writes Corefile + mesh.hosts into the coredns_config volume; the
+    # `hosts` plugin re-reads the zone on change — no restart needed).
+    # Reachable two ways:
+    #   - mesh peers: ${COREDNS_MESH_BIND_IP:-10.100.0.1}:53 (never the
+    #     public interface — the zone maps internal topology). Same mesh-IP
+    #     bind guard as the registry (platform-env.sh parks it when wg0
+    #     is absent so compose never dies on "cannot assign address").
+    #   - containers on smsly-net: `coredns` via Docker DNS (for
+    #     health checks / service queries).
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    # Needed to bind :53 while dropping everything else.
+    cap_add:
+      - NET_BIND_SERVICE
+    image: coredns/coredns:1.12.2
+    command: -conf /etc/coredns/Corefile
+    restart: unless-stopped
+    ports:
+    - "${COREDNS_MESH_BIND_IP:-10.100.0.1}:53:53"
+    - "${COREDNS_MESH_BIND_IP:-10.100.0.1}:53:53/udp"
+    volumes:
+      - coredns_config:/etc/coredns:ro,z
+    healthcheck:
+      # coredns image is scratch-based (no shell). The restart policy
+      # handles crashes; the :8080 health endpoint is scraped by the
+      # platform from inside the container network.
+      test: ["NONE"]
+      disable: true
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+      - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${COREDNS_MEMORY_LIMIT:-64M}
   docker-mirror:
     profiles:
       - build-cache
@@ -846,6 +887,7 @@ services:
     - static_volume:/app/staticfiles
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - coredns_config:/coredns-config
     - traefik_dynamic:/traefik-dynamic
     # SECURITY: install.sh is baked into the Docker image. The host bind
     # mount was overriding it with a stale copy, causing provisioning
@@ -972,6 +1014,10 @@ services:
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+    # NOTE: the main worker drains the deploy queue (CELERY_QUEUES), so any
+    # deploy it picks up runs the Sign stage here — it needs the same
+    # cosign key mount as celery-deploy, or signing silently skips.
+    - /opt/smsly-hosting/cosign-keys:/opt/smsly-hosting/cosign-keys:z
     - backups_data:/app/backups
     - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
@@ -1242,6 +1288,7 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - coredns_config:/coredns-config
     - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
@@ -2380,6 +2427,12 @@ volumes:
       type: none
       o: bind
       device: /opt/smsly-hosting/caddy-config
+  coredns_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/smsly-hosting/coredns-config
   traefik_dynamic:
     driver: local
     driver_opts:
