@@ -168,7 +168,7 @@ class CleanupBuildCacheTaskTests(SimpleTestCase):
         client.api.prune_builds.return_value = {"SpaceReclaimed": 3 * 1024 * 1024}
         mock_client_fn.return_value = client
         outcome = cleanup_build_cache_task(prune_all=True)
-        client.api.prune_builds.assert_called_once_with(filters={})
+        client.api.prune_builds.assert_called_once_with(all=True)
         self.assertEqual(outcome, {"reclaimed_mb": 3})
 
     @patch("apps.core.tasks.metrics._get_docker_client")

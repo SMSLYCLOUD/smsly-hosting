@@ -178,8 +178,13 @@ def cleanup_build_cache_task(prune_all=False) -> dict:
     except (TypeError, ValueError):
         max_age_hours = BUILD_CACHE_MAX_AGE_HOURS
     try:
-        filters = {} if prune_all else {'until': f'{max_age_hours}h'}
-        result = client.api.prune_builds(filters=filters)
+        if prune_all:
+            # all=True: drop ALL unused cache, not just dangling records.
+            # Without it the daemon reports 0 reclaimed while df shows GBs
+            # reclaimable (2026-09-23: 15GB, reclaimed 0).
+            result = client.api.prune_builds(all=True)
+        else:
+            result = client.api.prune_builds(filters={'until': f'{max_age_hours}h'})
         reclaimed = (result.get('SpaceReclaimed') or 0) // (1024 * 1024)
         logger.info("Build cache cleanup (all=%s): reclaimed %d MB",
                     prune_all, reclaimed)
