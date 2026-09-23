@@ -159,18 +159,18 @@ def collect_metrics_task() -> None:
 
 
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
-def cleanup_build_cache_task() -> None:
+def cleanup_build_cache_task(prune_all=False) -> dict:
     """Clean up Docker build cache to free disk space.
 
-    Drops cache older than BUILD_CACHE_MAX_AGE_HOURS (default 24h,
-    tunable via env of the same name). Per-build pruning in
-    builders.prune_stale_build_cache enforces the same cap, so this
-    daily pass only catches what builds missed.
+    Daily beat passes prune only cache older than BUILD_CACHE_MAX_AGE_HOURS
+    (default 24h). An explicit operator click passes ``prune_all=True`` and
+    drops everything unused — the confirm dialog already warns next builds
+    take longer. Returns the reclaimed megabytes (0 when Docker is down).
     """
     client = _get_docker_client()
     if not client:
         logger.info("Docker unavailable, skipping build cache cleanup")
-        return
+        return {"reclaimed_mb": 0}
 
     try:
         max_age_hours = max(1, int(os.environ.get(
@@ -178,11 +178,15 @@ def cleanup_build_cache_task() -> None:
     except (TypeError, ValueError):
         max_age_hours = BUILD_CACHE_MAX_AGE_HOURS
     try:
-        result = client.api.prune_builds(filters={'until': f'{max_age_hours}h'})
-        reclaimed = result.get('SpaceReclaimed', 0) // (1024 * 1024)
-        logger.info("Build cache cleanup: reclaimed %d MB", reclaimed)
+        filters = {} if prune_all else {'until': f'{max_age_hours}h'}
+        result = client.api.prune_builds(filters=filters)
+        reclaimed = (result.get('SpaceReclaimed') or 0) // (1024 * 1024)
+        logger.info("Build cache cleanup (all=%s): reclaimed %d MB",
+                    prune_all, reclaimed)
+        return {"reclaimed_mb": reclaimed}
     except Exception as e:
         logger.warning("Build cache cleanup failed: %s", e)
+        return {"reclaimed_mb": 0}
 
 
 def _check_metric_thresholds(service, stats, now):

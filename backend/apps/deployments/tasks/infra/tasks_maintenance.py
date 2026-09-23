@@ -144,10 +144,19 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
         elif command_flag == '--clear-build-cache':
             from apps.core.tasks.metrics import cleanup_build_cache_task
 
-            cleanup_build_cache_task()
+            # Explicit operator click prunes ALL unused cache (the daily
+            # beat pass keeps the 24h age cap). Fresh post-rebuild cache is
+            # all <24h old, so the capped prune would free 0 bytes and read
+            # as "success but nothing happened".
+            outcome = cleanup_build_cache_task(prune_all=True) or {}
+            reclaimed = (outcome.get("reclaimed_mb", 0)
+                         if isinstance(outcome, dict) else 0)
             return {
                 "status": "success",
-                "message": "Build cache cleanup completed.",
+                "message": (
+                    "Build cache pruned. Reclaimed "
+                    f"{reclaimed} MB (next builds may take longer)."
+                ),
             }
 
         elif command_flag == '--prune-images':
@@ -309,6 +318,13 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
     finally:
         if lock_key:
             cache.delete(lock_key)
+        # Storage/volume state changed (or was attempted) — drop the cached
+        # docker df so the Settings overview refresh shows fresh numbers
+        # instead of the pre-action snapshot for up to 10 minutes.
+        try:
+            cache.delete("smsly:storage:df:v1")
+        except Exception:
+            pass
 
 
 

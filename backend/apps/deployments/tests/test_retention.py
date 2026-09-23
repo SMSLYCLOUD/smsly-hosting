@@ -160,6 +160,25 @@ class CleanupBuildCacheTaskTests(SimpleTestCase):
         cleanup_build_cache_task()
         client.api.prune_builds.assert_called_once_with(filters={"until": "24h"})
 
+    @patch("apps.core.tasks.metrics._get_docker_client")
+    def test_prune_all_drops_age_filter_and_reports_mb(self, mock_client_fn):
+        from apps.core.tasks.metrics import cleanup_build_cache_task
+
+        client = MagicMock()
+        client.api.prune_builds.return_value = {"SpaceReclaimed": 3 * 1024 * 1024}
+        mock_client_fn.return_value = client
+        outcome = cleanup_build_cache_task(prune_all=True)
+        client.api.prune_builds.assert_called_once_with(filters={})
+        self.assertEqual(outcome, {"reclaimed_mb": 3})
+
+    @patch("apps.core.tasks.metrics._get_docker_client")
+    def test_no_client_returns_zero(self, mock_client_fn):
+        from apps.core.tasks.metrics import cleanup_build_cache_task
+
+        mock_client_fn.return_value = None
+        self.assertEqual(cleanup_build_cache_task(prune_all=True),
+                         {"reclaimed_mb": 0})
+
 
 class BuildImageRefreshHookTests(SimpleTestCase):
     @patch("apps.deployments.services.builders.prune_stale_build_cache")
