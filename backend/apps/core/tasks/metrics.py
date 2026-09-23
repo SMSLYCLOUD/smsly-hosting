@@ -20,11 +20,11 @@ from apps.deployments.models import (
 from apps.autoscaler.models.metrics import ServiceMetric
 
 
-def _get_docker_client():
+def _get_docker_client(timeout=5):
     """Get Docker client, return None if unavailable."""
     try:
         from apps.cloud.docker_client import get_docker_client
-        return get_docker_client(timeout=5)
+        return get_docker_client(timeout=timeout)
     except Exception as e:
         logger.debug("Docker SDK unavailable: %s", e)
         return None
@@ -167,7 +167,10 @@ def cleanup_build_cache_task(prune_all=False) -> dict:
     drops everything unused — the confirm dialog already warns next builds
     take longer. Returns the reclaimed megabytes (0 when Docker is down).
     """
-    client = _get_docker_client()
+    # Builder prune scans 100+ cache records on this daemon (took >5s and
+    # timed out at the default — the task then reported success with 0 MB).
+    # Dedicated long-timeout client; fits inside the STANDARD time limits.
+    client = _get_docker_client(timeout=120)
     if not client:
         logger.info("Docker unavailable, skipping build cache cleanup")
         return {"reclaimed_mb": 0}
