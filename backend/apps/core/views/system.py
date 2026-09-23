@@ -1346,16 +1346,17 @@ class PlatformStorageOverviewView(GenericAPIView):
 
         try:
             import docker
-            # NOTE: df takes ~5s on this daemon (100+ build-cache entries)
-            # plus socket-proxy variance — the old 3s timeout always failed
-            # here and the tile read Offline/N/A. Cached briefly so repeat
-            # page loads don't pay full latency (fail-open throughout).
-            client = docker.from_env(timeout=15)
+            # NOTE: df takes ~5s idle and 10s+ while builds hammer the
+            # daemon (seen live 2026-09-23: tile flipped Offline/N/A on a
+            # busy daemon). Generous timeout plus a 10-min cache so the
+            # tile only reads Offline when df never succeeds.
+            # (fail-open throughout; timestamp shows data age).
+            client = docker.from_env(timeout=25)
             df = cache.get("smsly:storage:df:v1")
             if df is None:
                 df = client.df()
                 try:
-                    cache.set("smsly:storage:df:v1", df, 180)
+                    cache.set("smsly:storage:df:v1", df, 600)
                 except Exception:
                     pass
             docker_info["available"] = True
