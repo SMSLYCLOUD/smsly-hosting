@@ -130,3 +130,32 @@ class SecurityStatusWiringTests(TestCase):
         data = self._get().data
         self.assertIn("first_strike_active", data["crowdsec"])
         self.assertTrue(data["crowdsec"]["first_strike_active"])
+
+    @patch("apps.core.views.security.subprocess.run")
+    def test_apparmor_falls_back_to_daemon_security_options(self, mock_run):
+        # Inside the backend container aa-status is absent (rc 127) even
+        # when the host enforces profiles — the daemon's SecurityOptions
+        # is the reliable signal (2026-09-23: 117 loaded, UI said Off).
+        def _run(cmd, **kwargs):
+            if cmd[:2] == ["aa-status", "--enabled"]:
+                raise FileNotFoundError("aa-status")
+            if cmd[:2] == ["docker", "info"]:
+                return _resp('["name=apparmor","name=seccomp,profile=builtin"]\n')
+            return _run_map()(cmd, **kwargs)
+        mock_run.side_effect = _run
+        data = self._get().data
+        self.assertTrue(data["apparmor"]["enabled"])
+        self.assertTrue(data["seccomp"]["enabled"])
+
+    @patch("apps.core.views.security.subprocess.run")
+    def test_apparmor_off_when_daemon_lacks_it(self, mock_run):
+        def _run(cmd, **kwargs):
+            if cmd[:2] == ["aa-status", "--enabled"]:
+                raise FileNotFoundError("aa-status")
+            if cmd[:2] == ["docker", "info"]:
+                return _resp('["name=seccomp,profile=builtin"]\n')
+            return _run_map()(cmd, **kwargs)
+        mock_run.side_effect = _run
+        data = self._get().data
+        self.assertFalse(data["apparmor"]["enabled"])
+        self.assertTrue(data["seccomp"]["enabled"])

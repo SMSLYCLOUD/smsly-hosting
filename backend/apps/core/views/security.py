@@ -141,14 +141,22 @@ class SecurityStatusView(GenericAPIView):
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             apparmor["enabled"] = False
 
-        # ── seccomp ─────────────────────────────────────────────────
+        # ── seccomp (+ AppArmor fallback) ───────────────────────────
+        # One `docker info` serves both: aa-status is absent inside the
+        # backend container (rc 127) even when the host enforces 100+
+        # profiles, so the daemon's SecurityOptions is the reliable
+        # in-container signal (2026-09-23: host had 117 loaded incl.
+        # docker-default with 23 enforcing, UI still said Off).
         seccomp = {"enabled": False}
         try:
             seccomp_result = subprocess.run(
                 ["docker", "info", "--format", "{{json .SecurityOptions}}"],
                 capture_output=True, text=True, timeout=10,
             )
-            seccomp["enabled"] = "seccomp" in (seccomp_result.stdout or "")
+            sec_opts = seccomp_result.stdout or ""
+            seccomp["enabled"] = "seccomp" in sec_opts
+            if not apparmor["enabled"] and "apparmor" in sec_opts:
+                apparmor["enabled"] = True
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             seccomp["enabled"] = False
 
