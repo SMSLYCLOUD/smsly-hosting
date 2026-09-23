@@ -89,6 +89,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.ai.tasks_code_intelligence  # noqa: F401  # deep_scan_and_verify_task
     import apps.deployments.tasks.infra.tasks_health  # noqa: F401  # check_agent_heartbeats_task
     import apps.deployments.tasks.infra.tasks_maintenance  # noqa: F401  # run_maintenance, registry_gc, reconcile_network_isolation_task
+    import apps.deployments.tasks.infra.tasks_waf  # noqa: F401  # sync_waf_policy_task
     import apps.deployments.tasks.edge_shield_watchdog  # noqa: F401  # BGP/DNS hijack symptom detection
     import apps.deployments.tasks.recover_stale_ecosystem_plans  # noqa: F401  # ghost-plan unblocker (429 lockout fix)
     import apps.deployments.tasks.recover_stalled_deployments  # noqa: F401  # ghost-worker deployment sweeper
@@ -636,6 +637,14 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task',
         'schedule': float(_MESH_HEALTH_INTERVAL),
         'options': {'expires': float(_MESH_HEALTH_INTERVAL)},
+    },
+    # WAF policy converge every 5 minutes: Settings (PlatformConfig
+    # .openappsec_mode) is the desired state, the agent's
+    # local_policy.yaml the live state - rewrite + restart only on drift.
+    'waf-policy-sync-every-5min': {
+        'task': 'apps.deployments.tasks.infra.tasks_waf.sync_waf_policy_task',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Leader election heartbeat every 5 seconds
     'cluster-heartbeat-every-5s': {
