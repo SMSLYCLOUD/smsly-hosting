@@ -200,12 +200,19 @@ export default function IntelligencePage() {
       ]);
       if (stat) setSecurityStatus(stat);
       if (evts) setSecurityEvents(evts);
+      if (!stat && !evts) {
+        toast({
+          title: 'Security refresh failed',
+          description: 'Could not reach the security APIs. Showing last loaded data.',
+          variant: 'destructive',
+        });
+      }
     } catch (err) {
       console.error('Failed to refresh security data:', err);
     } finally {
       setSecurityLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   const handleRunSecurityAnalysis = async () => {
     setSecurityAnalyzing(true);

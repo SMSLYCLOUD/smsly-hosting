@@ -100,6 +100,77 @@ class SecurityEventsTests(TestCase):
         self.assertEqual(resp.data["summary"]["fail2ban_banned_count"], 0)
 
     @patch("apps.core.views.security.subprocess.run")
+    def test_pills_match_feed_not_raw_collections(self, mock_run):
+        # WAF pill must count feed activities, not raw agent lines: 3
+        # info-only agent lines yield waf_events_count 0 (previously the
+        # pill counted raw lines while the feed excluded them).
+        agent_lines = "\n".join(json.dumps({
+            "eventTime": "2026-09-22T20:00:00Z",
+            "eventName": "policy loaded",
+            "eventSeverity": "info",
+        }) for _ in range(3))
+
+        def _side_effect(cmd, **kwargs):
+            joined = " ".join(cmd)
+            if "logs" in cmd and "smsly-appsec-agent" in joined:
+                return _mock_proc(stdout=agent_lines + "\n")
+            return _mock_proc(stdout="", returncode=1)
+
+        mock_run.side_effect = _side_effect
+
+        req = self.factory.get("/api/v1/system/security-events/")
+        force_authenticate(req, user=self.user)
+        resp = SecurityEventsView.as_view()(req)
+
+        self.assertEqual(resp.status_code, 200)
+        summary = resp.data["summary"]
+        self.assertEqual(summary["waf_events_count"], 0)
+        self.assertEqual(summary["total_events"],
+                         len(resp.data["recent_activities"]))
+        self.assertFalse(any(a["source"] == "openappsec"
+                             for a in resp.data["recent_activities"]))
+
+    @patch("apps.core.views.security.subprocess.run")
+    def test_source_filter_limits_feed_and_total(self, mock_run):
+        falco_json_line = json.dumps({
+            "time": "2026-09-22T20:00:00Z",
+            "rule": "Terminal shell in container",
+            "priority": "Warning",
+            "output": "shell",
+            "output_fields": {"container.name": "c", "proc.name": "sh"},
+        })
+
+        def _side_effect(cmd, **kwargs):
+            joined = " ".join(cmd)
+            if "logs" in cmd and "smsly-falco" in joined:
+                return _mock_proc(stdout=f"{falco_json_line}\n")
+            return _mock_proc(stdout="", returncode=1)
+
+        mock_run.side_effect = _side_effect
+
+        req = self.factory.get("/api/v1/system/security-events/",
+                               {"source": "falco"})
+        force_authenticate(req, user=self.user)
+        resp = SecurityEventsView.as_view()(req)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["recent_activities"])
+        self.assertTrue(all(a["source"] == "falco"
+                            for a in resp.data["recent_activities"]))
+        self.assertEqual(resp.data["summary"]["total_events"],
+                         len(resp.data["recent_activities"]))
+
+    def test_stable_ids_are_deterministic(self):
+        from apps.core.views.security import _stable_id
+
+        self.assertEqual(_stable_id("oas", "line"),
+                         _stable_id("oas", "line"))
+        self.assertNotEqual(_stable_id("oas", "line"),
+                            _stable_id("falco", "line"))
+        self.assertNotEqual(_stable_id("oas", "line-a"),
+                            _stable_id("oas", "line-b"))
+
+    @patch("apps.core.views.security.subprocess.run")
     def test_security_analysis_generates_assessment(self, mock_run):
         mock_run.side_effect = FileNotFoundError("tool not installed")
 

@@ -1,4 +1,5 @@
 """security views."""
+import hashlib
 import json
 import logging
 import os
@@ -8,6 +9,18 @@ import urllib.parse
 import urllib.request
 
 logger = logging.getLogger(__name__)
+
+
+def _stable_id(prefix, line) -> str:
+    """Deterministic activity id (sha1 of the source line).
+
+    The previous ``abs(hash(line))`` changed on every worker restart
+    (Python salts hash()) so each refresh remounted the whole feed and
+    collapsed expanded rows. Same input line always yields the same id,
+    which also makes cross-pass dedupe meaningful.
+    """
+    digest = hashlib.sha1(str(line or "").encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}-{digest}"
 
 
 def _loki_url() -> str:
@@ -557,7 +570,7 @@ class SecurityEventsView(GenericAPIView):
                             "HIGH" if f_pri in ("ERROR", "WARNING") else "WARNING"
                         )
                         falco_events.append({
-                            "id": f"falco-{abs(hash(line))}",
+                            "id": _stable_id("falco", line),
                             "timestamp": f_time,
                             "rule": f_rule,
                             "priority": f_pri,
@@ -568,7 +581,7 @@ class SecurityEventsView(GenericAPIView):
                             "raw": ev,
                         })
                         activities.append({
-                            "id": f"falco-{abs(hash(line))}",
+                            "id": _stable_id("falco", line),
                             "source": "falco",
                             "type": "runtime_alert",
                             "severity": sev,
@@ -582,7 +595,7 @@ class SecurityEventsView(GenericAPIView):
                         pass
                 elif "Initialization issues during scap_init" in line:
                     activities.append({
-                        "id": f"falco-err-{abs(hash(line))}",
+                        "id": _stable_id("falco-err", line),
                         "source": "falco",
                         "type": "error",
                         "severity": "CRITICAL",
@@ -725,7 +738,7 @@ class SecurityEventsView(GenericAPIView):
                             "ip": l_ip,
                         })
                         activities.append({
-                            "id": f"f2b-log-{abs(hash(line))}",
+                            "id": _stable_id("f2b-log", line),
                             "source": "fail2ban",
                             "type": l_action.lower().replace(" ", "_"),
                             "severity": "INFO" if "unban" in l_action.lower() else "HIGH",
@@ -773,7 +786,7 @@ class SecurityEventsView(GenericAPIView):
                 if sev_raw in ("info", "low"):
                     continue
                 activities.append({
-                    "id": f"oas-{abs(hash(line))}",
+                    "id": _stable_id("oas", line),
                     "source": "openappsec",
                     "type": "waf_verdict",
                     "severity": sev,
@@ -793,10 +806,10 @@ class SecurityEventsView(GenericAPIView):
                 )
                 envoy_raw = (envoy_proc.stdout or "") + (envoy_proc.stderr or "")
                 for line in envoy_raw.splitlines():
-                    if any(k in line.lower() for k in ("verict", "blocked", "drop", "attack", "waf", "threat")):
+                    if any(k in line.lower() for k in ("verdict", "blocked", "drop", "attack", "waf", "threat")):
                         openappsec_events.append({"message": line.strip()})
                         activities.append({
-                            "id": f"oas-{abs(hash(line))}",
+                            "id": _stable_id("oas", line),
                             "source": "openappsec",
                             "type": "waf_verdict",
                             "severity": "HIGH" if ("drop" in line.lower() or "blocked" in line.lower()) else "WARNING",
@@ -830,7 +843,7 @@ class SecurityEventsView(GenericAPIView):
                         "action": l_action, "ip": l_ip,
                     })
                 activities.append({
-                    "id": f"f2b-loki-{abs(hash(line))}",
+                    "id": _stable_id("f2b-loki", line),
                     "source": "fail2ban",
                     "type": l_action.lower().replace(" ", "_"),
                     "severity": "INFO" if "unban" in l_action.lower() else "HIGH",
@@ -874,7 +887,7 @@ class SecurityEventsView(GenericAPIView):
                     if any(k in line for k in ("docker-exec", "priv-esc", "smsly-secrets", "smsly-config", "identity")):
                         auditd_events.append({"raw": line.strip()})
                         activities.append({
-                            "id": f"auditd-{abs(hash(line))}",
+                            "id": _stable_id("auditd", line),
                             "source": "auditd",
                             "type": "audit_probe",
                             "severity": "WARNING",
@@ -935,17 +948,24 @@ class SecurityEventsView(GenericAPIView):
                 deduped.append(a)
 
         deduped.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+        # Pills must describe the feed, not the raw collections: every pill
+        # is a count over this same deduped pre-limit list (previously the
+        # WAF pill counted raw agent lines including info noise while the
+        # feed excluded them, and Total was the page size after [:limit]).
+        per_source: dict = {}
+        for a in deduped:
+            per_source[a["source"]] = per_source.get(a["source"], 0) + 1
         final_activities = deduped[:limit]
 
         return Response({
             "summary": {
-                "total_events": len(final_activities),
-                "falco_alerts_count": len(falco_events),
-                "crowdsec_bans_count": len(crowdsec_decisions),
+                "total_events": len(deduped),
+                "falco_alerts_count": per_source.get("falco", 0),
+                "crowdsec_bans_count": per_source.get("crowdsec", 0),
                 "crowdsec_alerts_count": len(crowdsec_alerts),
-                "fail2ban_banned_count": sum(j.get("currently_banned", 0) for j in fail2ban_jails.values()),
-                "waf_events_count": len(openappsec_events),
-                "trivy_cves_count": len(trivy_findings),
+                "fail2ban_banned_count": per_source.get("fail2ban", 0),
+                "waf_events_count": per_source.get("openappsec", 0),
+                "trivy_cves_count": per_source.get("trivy", 0),
             },
             "falco_events": falco_events[:50],
             "crowdsec_decisions": crowdsec_decisions,
