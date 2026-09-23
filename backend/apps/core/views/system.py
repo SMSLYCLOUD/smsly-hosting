@@ -1346,8 +1346,18 @@ class PlatformStorageOverviewView(GenericAPIView):
 
         try:
             import docker
-            client = docker.from_env(timeout=3)
-            df = client.df()
+            # NOTE: df takes ~5s on this daemon (100+ build-cache entries)
+            # plus socket-proxy variance — the old 3s timeout always failed
+            # here and the tile read Offline/N/A. Cached briefly so repeat
+            # page loads don't pay full latency (fail-open throughout).
+            client = docker.from_env(timeout=15)
+            df = cache.get("smsly:storage:df:v1")
+            if df is None:
+                df = client.df()
+                try:
+                    cache.set("smsly:storage:df:v1", df, 180)
+                except Exception:
+                    pass
             docker_info["available"] = True
 
             imgs = df.get("Images") or []
