@@ -53,7 +53,11 @@ POSTGRES_TUNING_FLAGS = [
     "-c", f"max_connections={SHARED_MAX_CONNECTIONS}",
     "-c", f"superuser_reserved_connections={SHARED_RESERVED_CONNECTIONS}",
 ]
-ROLE_CONNECTION_LIMIT = 10
+ROLE_CONNECTION_LIMIT = 32  # per-tenant role cap: tenants pool (8) + direct
+# entrypoint/migration/shell connections + blue/green overlap, with
+# headroom. Must stay comfortably above the tenants pool size or PG
+# refuses server connections and the pooler ban-flaps (observed live at
+# limit 10). 9 tenants x 32 worst case fits max_connections=400.
 ROLE_STATEMENT_TIMEOUT = "30s"
 
 # Streaming standby for the shared instance (one replica covers all
