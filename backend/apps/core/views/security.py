@@ -1,8 +1,58 @@
 """security views."""
+import json
 import logging
+import os
 import subprocess
+import time
+import urllib.parse
+import urllib.request
 
 logger = logging.getLogger(__name__)
+
+
+def _loki_url() -> str:
+    return os.environ.get("LOKI_URL", "http://smsly-loki:3100").rstrip("/")
+
+
+def _loki_range(query: str, limit: int = 100, hours: int = 24,
+                timeout: int = 6) -> list:
+    """Query Loki query_range; return [(ts_ns, line)] newest-first.
+
+    Fail-soft: any error (DNS, connection, timeout, bad JSON) returns [].
+    The backend runs on the monitoring network (smsly-net) so the
+    smsly-loki service name resolves; elsewhere this degrades to [].
+    """
+    try:
+        end_ns = time.time_ns()
+        start_ns = end_ns - int(hours * 3600 * 1e9)
+        params = urllib.parse.urlencode({
+            "query": query, "start": str(start_ns), "end": str(end_ns),
+            "limit": limit, "direction": "backward",
+        })
+        req = urllib.request.Request(f"{_loki_url()}/loki/api/v1/query_range?{params}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        out = []
+        for stream in data.get("data", {}).get("result", []):
+            for ts, line in stream.get("values", []):
+                out.append((ts, line))
+        return out
+    except Exception as exc:
+        logger.debug("Loki query %r failed: %s", query, exc)
+        return []
+
+
+def _as_dict(obj):
+    """CrowdSec service returns dataclasses; tests/older code use dicts."""
+    if isinstance(obj, dict):
+        return obj
+    try:
+        from dataclasses import asdict, is_dataclass
+        if is_dataclass(obj):
+            return asdict(obj)
+    except Exception:
+        pass
+    return {}
 
 
 
@@ -100,6 +150,8 @@ class SecurityStatusView(GenericAPIView):
             "driver": "unknown", "events_detected": 0,
             "restarts": 0, "capturing": None,
         }
+        # events_detected is populated from Loki below (count of falco
+        # log lines in 24h); stays 0 when Loki is unreachable.
         try:
             ps_result = subprocess.run(
                 ["docker", "ps", "--filter", f"name={falco['container']}",
@@ -152,6 +204,11 @@ class SecurityStatusView(GenericAPIView):
                     capture_output=True, text=True, timeout=5,
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
+            try:
+                falco["events_detected"] = len(
+                    _loki_range('{container_name="smsly-falco"}', limit=5000))
+            except Exception:
                 pass
 
         # ── CrowdSec ────────────────────────────────────────────────
@@ -312,6 +369,9 @@ class SecurityStatusView(GenericAPIView):
             ufw["active"] = False
 
         # ── fail2ban ────────────────────────────────────────────────
+        # fail2ban-client and /var/log/fail2ban.log exist only on full
+        # host installs; inside the platform container Loki is the
+        # source of truth (promtail ships the host log as job=fail2ban).
         fail2ban = {"active": False, "jails": []}
         try:
             f2b_result = subprocess.run(
@@ -332,6 +392,20 @@ class SecurityStatusView(GenericAPIView):
                         jails_str = line.split(":", 1)[1].strip()
                         fail2ban["jails"] = [j.strip() for j in jails_str.split(",") if j.strip()]
             except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
+        if not fail2ban["active"]:
+            # Fallback: recent Ban/Unban lines in Loki mean the daemon
+            # is alive on the host even though the client is absent here.
+            try:
+                import re as _f2b_re
+                _seen_jails = set()
+                for _ts, _line in _loki_range('{job="fail2ban"}', limit=40, hours=1):
+                    mm = _f2b_re.search(r"\[(\S+)\] (Ban|Unban)", _line)
+                    if mm:
+                        fail2ban["active"] = True
+                        _seen_jails.add(mm.group(1))
+                fail2ban["jails"] = sorted(_seen_jails)
+            except Exception:
                 pass
 
         # ── auditd ──────────────────────────────────────────────────
@@ -529,7 +603,8 @@ class SecurityEventsView(GenericAPIView):
             raw_alerts = cs_svc.get_alerts(limit=50) or []
 
             for d in raw_decisions:
-                ip_val = d.get("value") or "unknown"
+                d = _as_dict(d)
+                ip_val = d.get("value") or d.get("source_ip") or "unknown"
                 scen = d.get("scenario") or "manual/unknown"
                 act = d.get("type") or "ban"
                 ts = d.get("created_at") or datetime.now(timezone.utc).isoformat()
@@ -555,9 +630,13 @@ class SecurityEventsView(GenericAPIView):
                 })
 
             for a in raw_alerts:
-                src_ip = a.get("source_ip") or "unknown"
+                a = _as_dict(a)
+                src_ip = a.get("source_ip") or a.get("source") or "unknown"
+                if not isinstance(src_ip, str) or not src_ip:
+                    evts = a.get("events") or []
+                    src_ip = (evts[0].get("source") if evts and isinstance(evts[0], dict) else "") or "unknown"
                 scen = a.get("scenario") or "attack"
-                country = a.get("source_country") or ""
+                country = a.get("source_country") or a.get("country") or ""
                 ts = a.get("created_at") or datetime.now(timezone.utc).isoformat()
                 crowdsec_alerts.append({
                     "id": str(a.get("id", "")),
@@ -582,6 +661,7 @@ class SecurityEventsView(GenericAPIView):
 
         # ── 3. Fail2ban Jails & Bans ──────────────────────────────
         jails = ["sshd", "recidive", "caddy-auth", "caddy-dos"]
+        client_reported_jails = set()
         for jail in jails:
             try:
                 f2b_res = subprocess.run(
@@ -612,6 +692,7 @@ class SecurityEventsView(GenericAPIView):
                         "total_banned": t_banned,
                         "banned_ips": banned_ips,
                     }
+                    client_reported_jails.add(jail)
                     for bip in banned_ips:
                         activities.append({
                             "id": f"f2b-{jail}-{bip}",
@@ -658,28 +739,131 @@ class SecurityEventsView(GenericAPIView):
                 logger.debug("Fail2ban log parse skipped: %s", exc)
 
         # ── 4. open-appsec WAF Logs ───────────────────────────────
+        # Primary source is the AGENT (smsly-appsec-agent): it emits one
+        # JSON threat/policy event per line (eventTime/eventName/
+        # eventSeverity). The envoy attachment only logs keepalive noise,
+        # so scraping it yielded zero WAF events. Envoy keyword grep is
+        # kept as a fallback when the agent has no recent lines.
         try:
-            envoy_proc = subprocess.run(
-                ["docker", "logs", "--tail", "60", "smsly-appsec-envoy"],
+            agent_proc = subprocess.run(
+                ["docker", "logs", "--tail", "80", "smsly-appsec-agent"],
                 capture_output=True, text=True, timeout=8,
             )
-            envoy_raw = (envoy_proc.stdout or "") + (envoy_proc.stderr or "")
-            for line in envoy_raw.splitlines():
-                if any(k in line.lower() for k in ("verict", "blocked", "drop", "attack", "waf", "threat")):
-                    openappsec_events.append({"message": line.strip()})
-                    activities.append({
-                        "id": f"oas-{abs(hash(line))}",
-                        "source": "openappsec",
-                        "type": "waf_verdict",
-                        "severity": "HIGH" if ("drop" in line.lower() or "blocked" in line.lower()) else "WARNING",
-                        "title": "open-appsec WAF Security Event",
-                        "details": line.strip()[:200],
-                        "target": "reverse-proxy",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "raw": {"log": line.strip()},
-                    })
+            agent_raw = (agent_proc.stdout or "") + (agent_proc.stderr or "")
+            for line in agent_raw.splitlines():
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+                name = ev.get("eventName") or "open-appsec event"
+                sev_raw = (ev.get("eventSeverity") or "info").lower()
+                sev = "HIGH" if sev_raw in ("critical", "high") else (
+                    "WARNING" if sev_raw in ("medium", "warning") else "INFO")
+                openappsec_events.append({
+                    "time": ev.get("eventTime"),
+                    "name": name,
+                    "severity": sev_raw,
+                    "service": (ev.get("eventSource") or {}).get("serviceName", ""),
+                })
+                # Policy lifecycle lines are noise; only verdict/stack
+                # lines and non-info severities enter the activity feed.
+                if sev_raw in ("info", "low"):
+                    continue
+                activities.append({
+                    "id": f"oas-{abs(hash(line))}",
+                    "source": "openappsec",
+                    "type": "waf_verdict",
+                    "severity": sev,
+                    "title": f"open-appsec: {name}",
+                    "details": str(ev.get("eventType") or "")[:200],
+                    "target": (ev.get("eventSource") or {}).get("serviceName", "waf"),
+                    "timestamp": ev.get("eventTime") or datetime.now(timezone.utc).isoformat(),
+                    "raw": ev,
+                })
         except Exception as exc:
-            logger.debug("open-appsec events fetch skipped: %s", exc)
+            logger.debug("open-appsec agent events fetch skipped: %s", exc)
+        if not openappsec_events:
+            try:
+                envoy_proc = subprocess.run(
+                    ["docker", "logs", "--tail", "60", "smsly-appsec-envoy"],
+                    capture_output=True, text=True, timeout=8,
+                )
+                envoy_raw = (envoy_proc.stdout or "") + (envoy_proc.stderr or "")
+                for line in envoy_raw.splitlines():
+                    if any(k in line.lower() for k in ("verict", "blocked", "drop", "attack", "waf", "threat")):
+                        openappsec_events.append({"message": line.strip()})
+                        activities.append({
+                            "id": f"oas-{abs(hash(line))}",
+                            "source": "openappsec",
+                            "type": "waf_verdict",
+                            "severity": "HIGH" if ("drop" in line.lower() or "blocked" in line.lower()) else "WARNING",
+                            "title": "open-appsec WAF Security Event",
+                            "details": line.strip()[:200],
+                            "target": "reverse-proxy",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "raw": {"log": line.strip()},
+                        })
+            except Exception as exc:
+                logger.debug("open-appsec envoy events fetch skipped: %s", exc)
+
+        # Loki {job="fail2ban"} — the durable source. fail2ban-client and
+        # /var/log/fail2ban.log only exist on full host installs; inside
+        # the platform container (and once promtail ships the host log)
+        # Loki is the source that actually has data. Entries merge into
+        # fail2ban_jails so the UI shows bans even without the client.
+        try:
+            f2b_re = re.compile(
+                r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*\[(\S+)\] (Ban|Restore Ban|Unban) (\S+)")
+            for _ts, line in _loki_range('{job="fail2ban"}', limit=120):
+                m = f2b_re.search(line)
+                if not m:
+                    continue
+                l_time, l_jail, l_action, l_ip = m.groups()
+                if not any(e.get("ip") == l_ip and e.get("jail") == l_jail
+                           and e.get("action") == l_action
+                           for e in fail2ban_events):
+                    fail2ban_events.append({
+                        "timestamp": l_time, "jail": l_jail,
+                        "action": l_action, "ip": l_ip,
+                    })
+                activities.append({
+                    "id": f"f2b-loki-{abs(hash(line))}",
+                    "source": "fail2ban",
+                    "type": l_action.lower().replace(" ", "_"),
+                    "severity": "INFO" if "unban" in l_action.lower() else "HIGH",
+                    "title": f"Fail2ban {l_action}: {l_ip}",
+                    "details": f"Jail: {l_jail}",
+                    "target": l_ip,
+                    "timestamp": l_time,
+                    "raw": {"line": line.strip()[:220]},
+                })
+            # Recompute per-jail active bans from the merged event window —
+            # but only for jails the fail2ban-client did NOT report (client
+            # data is authoritative where available; the log window here
+            # is capped and would otherwise shrink real counts).
+            for e in fail2ban_events:
+                jail = e.get("jail") or "unknown"
+                if jail in client_reported_jails:
+                    continue
+                entry = fail2ban_jails.setdefault(jail, {
+                    "currently_banned": 0, "total_banned": 0, "banned_ips": []})
+                if e.get("action") in ("Ban", "Restore Ban"):
+                    if e.get("ip") not in entry["banned_ips"]:
+                        entry["banned_ips"].append(e.get("ip"))
+                else:
+                    if e.get("ip") in entry["banned_ips"]:
+                        entry["banned_ips"].remove(e.get("ip"))
+            for jail, entry in fail2ban_jails.items():
+                if jail in client_reported_jails:
+                    continue
+                entry["currently_banned"] = len(entry.get("banned_ips", []))
+                entry["total_banned"] = max(
+                    entry.get("total_banned", 0), len(entry.get("banned_ips", [])))
+        except Exception as exc:
+            logger.debug("Fail2ban Loki query skipped: %s", exc)
 
         # ── 5. Auditd Security Trails ─────────────────────────────
         if os.path.exists("/var/log/audit/audit.log"):

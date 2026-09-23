@@ -78,6 +78,27 @@ scrape_configs:
           selector: '{container=""}'
           action: drop
 
+  # Host fail2ban log (ban/unban actions per jail). Promtail already
+  # mounts /var/log read-only; the staff security-infra view queries
+  # {job="fail2ban"} from Loki. Fail2ban itself runs on the host
+  # (not in Docker), so docker_sd can never see it — static scrape only.
+  - job_name: fail2ban
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: fail2ban
+          __path__: /var/log/fail2ban.log
+    pipeline_stages:
+      - regex:
+          expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+) \S+ \[(?P<jail>[^\]]+)\] (?P<action>Ban|Unban) (?P<ip>\S+)'
+      - labels:
+          jail:
+          action:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05,000'
+
   # Traefik access log collection (JSON format)
   - job_name: traefik-access
     static_configs:
