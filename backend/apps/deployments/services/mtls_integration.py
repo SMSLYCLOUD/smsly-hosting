@@ -216,16 +216,19 @@ def get_mtls_volumes(service=None) -> list:
 
     Returns list of (host_volume, container_path, mode) tuples for the
     service's own trust domain (platform or ecosystem agent volumes).
+    The svids dir is read-write: workloads fetch their own SVID files
+    via `spire-agent api fetch x509 -write` (the agent never writes
+    files itself). The socket stays read-only.
     """
     if service is None:
         return [
             (ECOSYSTEM_SPIRE_SOCKET_HOST_PATH, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
-            (ECOSYSTEM_SPIRE_SVIDS_HOST_PATH, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
+            (ECOSYSTEM_SPIRE_SVIDS_HOST_PATH, SPIRE_SVIDS_CONTAINER_PATH, "rw"),
         ]
     socket_vol, svids_vol = _spire_volume_names(service)
     return [
         (socket_vol, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
-        (svids_vol, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
+        (svids_vol, SPIRE_SVIDS_CONTAINER_PATH, "rw"),
     ]
 
 
@@ -237,7 +240,7 @@ def get_mtls_docker_run_args(service) -> str:
     socket_vol, svids_vol = _spire_volume_names(service)
     args = (
         f"-v {socket_vol}:{SPIRE_SOCKET_CONTAINER_PATH}:ro "
-        f"-v {svids_vol}:{SPIRE_SVIDS_CONTAINER_PATH}:ro "
+        f"-v {svids_vol}:{SPIRE_SVIDS_CONTAINER_PATH}:rw "
     )
     return args
 
@@ -250,7 +253,7 @@ def get_mtls_docker_run_volumes(service) -> dict:
     socket_vol, svids_vol = _spire_volume_names(service)
     return {
         socket_vol: {"bind": SPIRE_SOCKET_CONTAINER_PATH, "mode": "ro"},
-        svids_vol: {"bind": SPIRE_SVIDS_CONTAINER_PATH, "mode": "ro"},
+        svids_vol: {"bind": SPIRE_SVIDS_CONTAINER_PATH, "mode": "rw"},
     }
 
 
