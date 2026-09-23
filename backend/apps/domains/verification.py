@@ -50,6 +50,51 @@ class DnsVerificationResult:
     matched_by: str = ""
 
 
+def ensure_verification_token(domain_obj) -> str:
+    """Return the row's HTTP-proof token, creating one on first use.
+
+    Called by the verify tasks (never by the pure DNS check itself).
+    Fail-open: returns "" when the row cannot be updated.
+    """
+    import secrets
+    token = str(getattr(domain_obj, "verification_token", "") or "").strip()
+    if not token:
+        token = secrets.token_urlsafe(32)
+        try:
+            domain_obj.verification_token = token
+            domain_obj.save(update_fields=["verification_token"])
+        except Exception:
+            pass
+    return token or ""
+
+
+def verify_http_proof(domain_obj, timeout: float = 10) -> tuple:
+    """Fetch the row's challenge token over the PUBLIC edge.
+
+    Works grey AND orange-proxied (and through apex CNAME flattening),
+    where DNS-quorum is structurally blind: Cloudflare serves edge IPs
+    / NoAnswer instead of the chain. Strength equals DNS proof — only
+    whoever steers the hostname at us can complete it — plus path proof
+    that traffic actually arrives. Returns (ok, detail).
+    """
+    host = _clean_hostname(getattr(domain_obj, "domain_name", "") or "")
+    token = str(getattr(domain_obj, "verification_token", "") or "").strip()
+    if not host or not token:
+        return False, "no token"
+    try:
+        import requests
+        resp = requests.get(
+            f"http://{host}/.well-known/smsly-verify/{token}",
+            timeout=timeout, allow_redirects=True,
+            headers={"User-Agent": "smsly-domain-verify/1.0"},
+        )
+    except Exception as exc:
+        return False, f"fetch failed: {exc!s}"[:160]
+    if resp.status_code == 200 and (resp.text or "").strip() == token:
+        return True, "served token over public edge"
+    return False, f"HTTP {resp.status_code}"
+
+
 def _clean_hostname(value: str) -> str:
     """Return a normalized hostname-ish value, or an empty string."""
     raw = str(value or "").strip().lower().rstrip(".")
@@ -278,6 +323,18 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
             matched_by=f"{first_match} (verified via {agreeing}/{len(PUBLIC_VERIFICATION_RESOLVERS)} resolvers)",
         )
 
+    # HTTP-proof fallback (orange-compatible): DNS quorum above cannot see
+    # through Cloudflare proxying or apex CNAME flattening. Fetching the
+    # row's token over the public edge proves the same control.
+    http_ok, http_detail = verify_http_proof(domain_obj)
+    if http_ok:
+        return DnsVerificationResult(
+            verified=True,
+            expected=expected,
+            actual=f"HTTP proof: {http_detail}",
+            matched_by=f"HTTP proof ({http_detail})",
+        )
+
     if agreeing == 1:
         return DnsVerificationResult(
             verified=False,
@@ -294,5 +351,5 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
         verified=False,
         expected=expected,
         actual=actual,
-        error=f"Expected {expected} but got {actual} (checked via {len(PUBLIC_VERIFICATION_RESOLVERS)} independent resolvers).",
+        error=f"Expected {expected} but got {actual} (checked via {len(PUBLIC_VERIFICATION_RESOLVERS)} independent resolvers; HTTP proof: {http_detail}).",
     )

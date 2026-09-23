@@ -32,6 +32,8 @@ def verify_dns_and_provision_ssl_task(self, domain_id):
         domain.save(update_fields=["status"])
 
     config = PlatformConfig.load()
+    from apps.domains.verification import ensure_verification_token
+    ensure_verification_token(domain)
     result = verify_custom_domain_dns(domain, config)
     domain.dns_expected = result.expected
     domain.dns_actual = result.actual

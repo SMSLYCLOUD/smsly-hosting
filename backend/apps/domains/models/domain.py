@@ -31,6 +31,12 @@ class Domain(models.Model):
     verified = models.BooleanField(default=False)  # type: ignore[var-annotated]
     ssl_active = models.BooleanField(default=False)  # type: ignore[var-annotated]
 
+    verification_token = models.CharField(  # type: ignore[var-annotated]
+        max_length=64, blank=True, default="",
+        help_text="Random per-domain HTTP-proof challenge token (auto-created). "
+                  "Served at /.well-known/smsly-verify/<token> for "
+                  "orange-compatible verification behind Cloudflare proxying.")
+
     issued_at = models.DateTimeField(blank=True, null=True)  # type: ignore[var-annotated]
     expires_at = models.DateTimeField(blank=True, null=True)  # type: ignore[var-annotated]
 

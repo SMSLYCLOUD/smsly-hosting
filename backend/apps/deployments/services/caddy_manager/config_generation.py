@@ -2031,6 +2031,22 @@ def generate_caddyfile(config) -> str:
     # (_wildcard_site_on). See the flag definition for why these must
     # never disagree (silent dead 301s, 2026-09-12).
     wildcard_base = domain if _wildcard_site_on else ""
+    # HTTP-proof domain verification (orange-compatible): serve per-domain
+    # challenge tokens on :80 for ANY host, proxied to the backend lookup.
+    # Narrow path only — ACME http-01 and every other path are unaffected
+    # (exact-host sites still win for their own hosts). Tokens are
+    # unguessable per-domain secrets; unknown tokens 404. Host is rewritten
+    # to localhost so Django ALLOWED_HOSTS (strict by design) never blocks
+    # a pending custom hostname.
+    sections.append(
+        """:80 {
+    handle /.well-known/smsly-verify/* {
+        reverse_proxy backend:8000 {
+            header_up Host localhost
+        }
+    }
+}"""
+    )
     service_blocks = _get_service_domain_blocks(wildcard_domain=wildcard_base)
     sections.extend(service_blocks)
 

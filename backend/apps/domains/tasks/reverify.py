@@ -51,6 +51,8 @@ def reverify_custom_domains_task(self):
 
     for domain in candidates:
         try:
+            from apps.domains.verification import ensure_verification_token
+            ensure_verification_token(domain)
             result = verify_custom_domain_dns(domain, config)
         except Exception as exc:
             logger.warning(

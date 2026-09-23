@@ -11,6 +11,7 @@ from drf_spectacular.views import (
 )
 
 from config.health import health_check, health_check_verbose, liveness_check, readiness_check
+from apps.domains.views.challenge import domain_challenge
 
 
 def bootstrap_view(request, token):
@@ -250,6 +251,13 @@ urlpatterns = [
     path('health/ready', readiness_check, name='health-readiness'),
     path('health/verbose', health_check_verbose, name='health-verbose'),
     path('healthz', health_check, name='healthz-check'),
+
+    # HTTP-proof custom-domain verification (orange-compatible): serves the
+    # row's per-domain token for ANY host. Caddy's :80 catch-all proxies
+    # here with Host rewritten to localhost (ALLOWED_HOSTS stays strict).
+    # Unknown tokens 404; no auth by design (same exposure as ACME HTTP-01).
+    path('.well-known/smsly-verify/<str:token>/', domain_challenge,
+         name='domain-challenge'),
     path('', include('django_prometheus.urls')),
 
     # ─── Frontend compatibility aliases (MUST come before the broad
