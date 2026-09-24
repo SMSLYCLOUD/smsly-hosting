@@ -736,14 +736,28 @@ class DomainActionsMixin:
         if domain_obj:
             return domain_obj.service
 
-        # Check host_aliases on other services
-        alias_conflict = (
-            Service.objects
-            .exclude(id=service.id)
-            .filter(host_aliases__contains=[{"host": domain}])
-            .only("id", "name")
-            .first()
-        )
+        # Check host_aliases on other services. Portable Python-side match:
+        # the JSON ``contains`` lookup needs Postgres and explodes on
+        # SQLite, so compare normalized hosts in code (service counts are
+        # small; correctness beats query elegance here).
+        normalized = str(domain or "").strip().lower()
+        alias_conflict = None
+        if normalized:
+            for other in (
+                Service.objects
+                .exclude(id=service.id)
+                .only("id", "name", "host_aliases")
+                .iterator()
+            ):
+                for entry in (other.host_aliases or []):
+                    if not isinstance(entry, dict):
+                        continue
+                    if str(entry.get("host") or "").strip().lower() == normalized:
+                        alias_conflict = other
+                        break
+                if alias_conflict is not None:
+                    break
+
         if alias_conflict:
             return alias_conflict
 

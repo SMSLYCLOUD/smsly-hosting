@@ -15,6 +15,8 @@ FAST_THROTTLE_RATES = {
     "anon": "200/hour",
     "user": "5000/hour",
     "caddy_ask": "1000/min",
+    "deployments": "10000/minute",
+    "deployment_burst": "1000/minute",
 }
 
 REST_FRAMEWORK_LOOSE = {
@@ -22,8 +24,8 @@ REST_FRAMEWORK_LOOSE = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 100,
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "apps.deployments.models.api_token.APITokenAuthentication",
-        "apps.deployments.models.api_token.RemoteSyncHMACAuthentication",
+        "apps.core.models.api_token.APITokenAuthentication",
+        "apps.core.models.api_token.RemoteSyncHMACAuthentication",
         "rest_framework.authentication.TokenAuthentication",
         "apps.core.auth.CsrfExemptSessionAuthentication",
     ],
@@ -78,8 +80,8 @@ class AuditLogDomainBackupTest(TestCase):
         return f"/api/v1/services/{self.service.id}/verify-domain/"
 
     def test_add_domain_writes_audit_log(self):
-        with patch("apps.deployments.views.ServiceViewSet._sync_caddy") as mock_sync, \
-             patch("apps.deployments.views._normalize_request_domain",
+        with patch("apps.deployments.views.service.domains.DomainActionsMixin._sync_caddy") as mock_sync, \
+             patch("apps.deployments.views.service.domains._normalize_request_domain",
                    side_effect=lambda v: (v, None)):
             mock_sync.return_value = {"ok": True, "message": ""}
             response = self.client.post(
@@ -94,8 +96,8 @@ class AuditLogDomainBackupTest(TestCase):
         self.assertEqual(log.metadata["service_id"], str(self.service.id))
 
     def test_delete_domain_writes_audit_log(self):
-        with patch("apps.deployments.views.ServiceViewSet._sync_caddy") as mock_sync, \
-             patch("apps.deployments.views._normalize_request_domain",
+        with patch("apps.deployments.views.service.domains.DomainActionsMixin._sync_caddy") as mock_sync, \
+             patch("apps.deployments.views.service.domains._normalize_request_domain",
                    side_effect=lambda v: (v, None)):
             mock_sync.return_value = {"ok": True, "message": ""}
             self.client.post(
@@ -114,8 +116,8 @@ class AuditLogDomainBackupTest(TestCase):
         self.assertEqual(log.metadata["domain"], "auditdel.example.com")
 
     def test_verify_domain_writes_audit_log(self):
-        with patch("apps.deployments.views.ServiceViewSet._sync_caddy") as mock_sync, \
-             patch("apps.deployments.views._normalize_request_domain",
+        with patch("apps.deployments.views.service.domains.DomainActionsMixin._sync_caddy") as mock_sync, \
+             patch("apps.deployments.views.service.domains._normalize_request_domain",
                    side_effect=lambda v: (v, None)), \
              patch("apps.domains.verification.verify_custom_domain_dns") as mock_verify:
             mock_sync.return_value = {"ok": True, "message": ""}

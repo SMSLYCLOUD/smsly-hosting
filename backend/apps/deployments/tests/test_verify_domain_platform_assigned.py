@@ -23,6 +23,8 @@ TEST_CACHES = {
 FAST_THROTTLE_RATES = {
     "anon": "1000/hour",
     "user": "10000/hour",
+    "deployments": "10000/minute",
+    "deployment_burst": "1000/minute",
     "caddy_ask": "1000/min",
 }
 
@@ -31,8 +33,8 @@ REST_FRAMEWORK_LOOSE = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 100,
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "apps.deployments.models.api_token.APITokenAuthentication",
-        "apps.deployments.models.api_token.RemoteSyncHMACAuthentication",
+        "apps.core.models.api_token.APITokenAuthentication",
+        "apps.core.models.api_token.RemoteSyncHMACAuthentication",
         "rest_framework.authentication.TokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],

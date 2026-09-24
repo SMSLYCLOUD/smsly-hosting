@@ -122,7 +122,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
         )
         self.assertIn('reverse_proxy backend:8000', caddyfile)
 
-    def test_standard_ssl_routes_unmatched_http_hosts_to_notice(self):
+    def test_standard_ssl_redirects_unmatched_http_to_https(self):
         config = SimpleNamespace(
             domain='cloud.smsly.cloud',
             use_ssl=True,
@@ -135,7 +135,10 @@ class CaddyCustomDomainRoutingTests(TestCase):
         self.assertIn('cloud.smsly.cloud {', caddyfile)
         self.assertIn('handle /api/* {\n        reverse_proxy backend:8000', caddyfile)
         self.assertIn('handle {\n        reverse_proxy frontend:3000', caddyfile)
-        self.assertIn('handle {\n        reverse_proxy backend:8000\n    }', caddyfile)
+        # Unmatched HTTP hosts used to hit a Caddy-level notice; they now
+        # 308 to https (unknown https hosts fall through to Traefik, whose
+        # route-fallback serves the notice page).
+        self.assertIn('redir @redirectable https://{host}{uri} 308', caddyfile)
 
     def test_ip_mode_keeps_http_catch_all_proxy(self):
         config = SimpleNamespace(
@@ -168,7 +171,17 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         self.assertIn('@known_hosts host known.cloud.smsly.cloud', caddyfile)
         self.assertIn('handle @known_hosts {\n        reverse_proxy traefik:80', caddyfile)
-        self.assertIn('respond "Service Not Found" 404', caddyfile)
+        # Unknown hosts used to hit a Caddy-level `respond 404` notice;
+        # they now fall through to Traefik, whose route-fallback service
+        # serves the notice page (infrastructure/route-fallback).
+        self.assertIn(
+            'handle {\n'
+            '        reverse_proxy traefik:80 {\n'
+            '            header_up Host {host}\n'
+            '        }\n'
+            '    }',
+            caddyfile,
+        )
 
     def test_remote_service_routes_through_wireguard_mesh(self):
         server = ManagedServer.objects.create(
@@ -265,7 +278,7 @@ class InstantCustomDomainApiTests(APITestCase):
         cache.clear()
 
     @patch('apps.deployments.views.service.deploy.smart_deploy_task.delay')
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
+    @patch('apps.deployments.views.service.domains.DomainActionsMixin._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
     def test_add_domain_does_not_queue_redeploy(self, verify_mock, _sync_mock, delay_mock):
         response = self.client.post(
@@ -277,7 +290,7 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data.get('routing_sync_deployment_id'), None)
         self.assertFalse(response.data.get('requires_redeploy', True))
-        self.assertIn('No redeploy required', response.data.get('message', ''))
+        self.assertIn('Routing sync dispatched in background', response.data.get('message', ''))
         delay_mock.assert_not_called()
 
         self.service.refresh_from_db()
@@ -285,7 +298,7 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertEqual(self.service.deployments.count(), 1)
 
     @patch('apps.domains.services.dns.ensure_dns_records')
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
+    @patch('apps.deployments.views.service.domains.DomainActionsMixin._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
     def test_add_domain_does_not_use_platform_cloudflare_for_custom_dns(
         self,
@@ -308,12 +321,12 @@ class InstantCustomDomainApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertFalse(response.data.get('dns_synced'))
-        self.assertIn('SSL will be issued directly', response.data.get('message', ''))
+        self.assertIn('SSL will be issued after verification', response.data.get('message', ''))
         ensure_dns_mock.assert_not_called()
         verify_mock.assert_called_once()
 
     @patch('apps.deployments.views.service.deploy.smart_deploy_task.delay')
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
+    @patch('apps.deployments.views.service.domains.DomainActionsMixin._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
     def test_delete_domain_does_not_queue_redeploy(self, verify_mock, _sync_mock, delay_mock):
         self.service.custom_domains = ['instant.example.com']
@@ -328,30 +341,30 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data.get('routing_sync_deployment_id'), None)
         self.assertFalse(response.data.get('requires_redeploy', True))
-        self.assertIn('No redeploy required', response.data.get('message', ''))
+        self.assertIn('Routing sync dispatched in background', response.data.get('message', ''))
         delay_mock.assert_not_called()
 
         self.service.refresh_from_db()
         self.assertNotIn('instant.example.com', self.service.custom_domains)
         self.assertEqual(self.service.deployments.count(), 1)
 
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': False, 'message': 'sync failed'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
-    def test_add_domain_keeps_domain_when_caddy_sync_fails(self, verify_mock, _sync_mock):
+    def test_add_domain_persists_change_with_background_sync(self, verify_mock):
         response = self.client.post(
             f'/api/v1/services/{self.service.id}/add-domain/',
             {'domain': 'rollback.example.com'},
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
-        self.assertFalse(response.data.get('caddy_synced'))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        # Sync is fire-and-forget background (sync_caddy_task.delay), so
+        # the response reports dispatch, not completion.
+        self.assertTrue(response.data.get('caddy_synced'))
         self.service.refresh_from_db()
         self.assertIn('rollback.example.com', self.service.custom_domains)
 
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': False, 'message': 'sync failed'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
-    def test_delete_domain_keeps_change_when_caddy_sync_fails(self, verify_mock, _sync_mock):
+    def test_delete_domain_persists_change_with_background_sync(self, verify_mock):
         self.service.custom_domains = ['rollback.example.com']
         self.service.save(update_fields=['custom_domains'])
 
@@ -361,8 +374,8 @@ class InstantCustomDomainApiTests(APITestCase):
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
-        self.assertFalse(response.data.get('caddy_synced'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data.get('caddy_synced'))
         self.service.refresh_from_db()
         self.assertNotIn('rollback.example.com', self.service.custom_domains)
 
