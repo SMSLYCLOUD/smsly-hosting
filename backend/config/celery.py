@@ -209,6 +209,7 @@ app.conf.task_routes = {
     'apps.autoscaler.tasks.autoscaler_collect_stats': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.infra.tasks_mesh_dns.sync_mesh_dns_task': {'queue': 'deploy'},
     'apps.deployments.tasks_replication.deploy_replication_task': {'queue': 'deploy'},
     'apps.deployments.tasks_replication.manual_failover_task': {'queue': 'deploy'},
     'apps.deployments.tasks_cron.trigger_cron_job': {'queue': 'deploy'},
@@ -638,9 +639,16 @@ app.conf.beat_schedule = {
         'schedule': float(_MESH_HEALTH_INTERVAL),
         'options': {'expires': float(_MESH_HEALTH_INTERVAL)},
     },
+    # Mesh DNS zone reconcile every 5 minutes (catches peer changes that
+    # raced the enqueue in add/remove_peer_from_mesh).
+    'mesh-dns-sync-every-5min': {
+        'task': 'apps.deployments.tasks.infra.tasks_mesh_dns.sync_mesh_dns_task',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
     # WAF policy converge every 5 minutes: Settings (PlatformConfig
     # .openappsec_mode) is the desired state, the agent's
-    # local_policy.yaml the live state - rewrite + restart only on drift.
+    # local_policy.yaml the live state — rewrite + restart only on drift.
     'waf-policy-sync-every-5min': {
         'task': 'apps.deployments.tasks.infra.tasks_waf.sync_waf_policy_task',
         'schedule': 300.0,

@@ -45,6 +45,17 @@ interface Server {
     status: string;
 }
 
+interface DnsRecord {
+    name: string;
+    ip: string;
+}
+
+interface DnsZone {
+    domain: string;
+    records: DnsRecord[];
+    count: number;
+}
+
 export default function NetworkPage() {
     const { toast } = useToast();
     const [meshes, setMeshes] = useState<MeshNetwork[]>([]);
@@ -60,7 +71,9 @@ export default function NetworkPage() {
     const [newMeshSubnet, setNewMeshSubnet] = useState('10.100.0.0/24');
     const [selectedServerId, setSelectedServerId] = useState('');
 
-    const [activeTab, setActiveTab] = useState<'vpn' | 'scoped'>('vpn');
+    const [activeTab, setActiveTab] = useState<'vpn' | 'scoped' | 'dns'>('vpn');
+    const [dnsZone, setDnsZone] = useState<DnsZone | null>(null);
+    const [syncingDns, setSyncingDns] = useState(false);
     const [scopedNetworks, setScopedNetworks] = useState<any[]>([]);
     const [showCreateScopedForm, setShowCreateScopedForm] = useState(false);
     const [newScopedName, setNewScopedName] = useState('smsly-net-isolated');
@@ -76,9 +89,20 @@ export default function NetworkPage() {
                 api.get('/servers/'),
                 networkScopesApi.list().catch(() => []),
             ]);
-            setMeshes(Array.isArray(meshRes.data) ? meshRes.data : meshRes.data.results || []);
+            const meshList: MeshNetwork[] = Array.isArray(meshRes.data) ? meshRes.data : meshRes.data.results || [];
+            setMeshes(meshList);
             setServers(Array.isArray(serverRes.data) ? serverRes.data : serverRes.data.results || []);
             setScopedNetworks(Array.isArray(scopedRes) ? scopedRes : scopedRes?.results || []);
+            // Mesh DNS zone (read-only render from the default mesh's peers).
+            const defaultMesh = meshList.find(m => m.name === 'default') || meshList[0];
+            if (defaultMesh) {
+                try {
+                    const zoneRes = await api.get(`/mesh/${defaultMesh.id}/dns-zone/`);
+                    setDnsZone(zoneRes.data);
+                } catch {
+                    console.error('Failed to load mesh DNS zone');
+                }
+            }
         } catch (err) {
             console.error('Failed to load mesh data:', err);
         } finally {
@@ -190,6 +214,24 @@ export default function NetworkPage() {
             toast({ title: 'Error', description: 'Health check failed', variant: 'destructive' });
         } finally {
             setCheckingHealth(null);
+        }
+    };
+
+    const syncDnsZone = async () => {
+        const defaultMesh = meshes.find(m => m.name === 'default') || meshes[0];
+        if (!defaultMesh) {
+            toast({ title: 'Error', description: 'No mesh network to sync DNS for', variant: 'destructive' });
+            return;
+        }
+        setSyncingDns(true);
+        try {
+            const res = await api.post(`/mesh/${defaultMesh.id}/sync-dns/`);
+            setDnsZone({ domain: res.data.domain, records: res.data.records || [], count: res.data.count || 0 });
+            toast({ title: 'Zone Sync Queued', description: `CoreDNS zone rewrite queued (${res.data.count || 0} records).` });
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.error || 'DNS sync failed', variant: 'destructive' });
+        } finally {
+            setSyncingDns(false);
         }
     };
 
@@ -308,6 +350,16 @@ export default function NetworkPage() {
                             }`}
                         >
                             Scoped Networks (Docker Bridges)
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('dns')}
+                            className={`pb-2 px-4 font-medium text-sm transition-colors border-b-2 ${
+                                activeTab === 'dns'
+                                    ? 'border-purple-500 text-foreground'
+                                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                            Mesh DNS (CoreDNS)
                         </button>
                     </div>
 
@@ -624,6 +676,65 @@ export default function NetworkPage() {
                                     ))}
                                 </div>
                             )}
+                        </div>
+                    )}
+                    {activeTab === 'dns' && (
+                        <div className="space-y-6">
+                            <div className="bg-card border border-border rounded-xl p-6">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div>
+                                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                                            <Globe className="text-purple-500" size={18} />
+                                            Mesh DNS Zone
+                                            {dnsZone && (
+                                                <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-500/10 text-purple-500 border border-purple-500/20">
+                                                    {dnsZone.count} records
+                                                </span>
+                                            )}
+                                        </h2>
+                                        <p className="text-sm text-muted-foreground mt-1">
+                                            {dnsZone ? (
+                                                <>Names served by CoreDNS on the master for <code className="font-mono">*.{dnsZone.domain}</code> over wg0.</>
+                                            ) : (
+                                                <>Loading zone…</>
+                                            )}
+                                        </p>
+                                    </div>
+                                    <Button onClick={syncDnsZone} disabled={syncingDns || meshes.length === 0} variant="outline">
+                                        {syncingDns ? <Loader2 size={14} className="animate-spin mr-2" /> : <RefreshCw size={14} className="mr-2" />}
+                                        Sync Zone
+                                    </Button>
+                                </div>
+                                {!dnsZone || dnsZone.records.length === 0 ? (
+                                    <div className="text-center py-12">
+                                        <Globe className="mx-auto text-muted-foreground mb-3" size={32} />
+                                        <h3 className="text-base font-semibold">No mesh DNS records yet</h3>
+                                        <p className="text-sm text-muted-foreground mt-1">Add peers to the default mesh and the zone renders automatically.</p>
+                                    </div>
+                                ) : (
+                                    <div className="rounded-lg border border-border overflow-hidden">
+                                        <table className="w-full text-sm">
+                                            <thead>
+                                                <tr className="bg-muted/50 text-left">
+                                                    <th className="px-4 py-2 font-medium text-muted-foreground">Hostname</th>
+                                                    <th className="px-4 py-2 font-medium text-muted-foreground">Mesh IP</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {dnsZone.records.map((rec) => (
+                                                    <tr key={rec.name} className="border-t border-border">
+                                                        <td className="px-4 py-2 font-mono">{rec.name}</td>
+                                                        <td className="px-4 py-2 font-mono text-muted-foreground">{rec.ip}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                                <p className="text-xs text-muted-foreground mt-4">
+                                    Change the zone in Settings → Platform → Mesh DNS. Node hosts resolve these names via the master&apos;s CoreDNS (per-link wg0 resolver, configured at install).
+                                </p>
+                            </div>
                         </div>
                     )}
                 </div>

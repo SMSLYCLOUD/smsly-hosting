@@ -981,6 +981,7 @@ get_redis_service() {
 
 ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+    local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
     local builds_dir="/opt/smsly-hosting/builds"
     local prometheus_targets_dir="/opt/smsly-hosting/prometheus-targets"
@@ -988,12 +989,13 @@ ensure_infrastructure_permissions() {
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
     mkdir -p "$caddy_config_dir"
+    mkdir -p "$coredns_config_dir"
     mkdir -p "$staticfiles_dir"
     mkdir -p "$builds_dir"
     mkdir -p "$prometheus_targets_dir"
 
     _chown_owner="1000:1000"
-    for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
+    for _dir in "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
             if ! chown -R "$_chown_owner" "$_dir"; then
                 echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner (see error above)${NC}"
@@ -1001,8 +1003,9 @@ ensure_infrastructure_permissions() {
         fi
     done
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + || true
+    find "$coredns_config_dir" -type d -exec chmod 2775 {} + || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + || true
     find "$builds_dir" -type d -exec chmod 2775 {} + || true
     find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
@@ -1010,6 +1013,8 @@ ensure_infrastructure_permissions() {
 
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
+    [ -f "$coredns_config_dir/Corefile" ] && chmod 664 "$coredns_config_dir/Corefile" || true
+    [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
         _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
@@ -2738,6 +2743,7 @@ get_redis_service() {
 
 ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+    local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
     local builds_dir="/opt/smsly-hosting/builds"
     local prometheus_targets_dir="/opt/smsly-hosting/prometheus-targets"
@@ -2745,12 +2751,13 @@ ensure_infrastructure_permissions() {
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
     mkdir -p "$caddy_config_dir"
+    mkdir -p "$coredns_config_dir"
     mkdir -p "$staticfiles_dir"
     mkdir -p "$builds_dir"
     mkdir -p "$prometheus_targets_dir"
 
     _chown_owner="1000:1000"
-    for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
+    for _dir in "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
             if ! chown -R "$_chown_owner" "$_dir"; then
                 echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner (see error above)${NC}"
@@ -2758,8 +2765,9 @@ ensure_infrastructure_permissions() {
         fi
     done
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + || true
+    find "$coredns_config_dir" -type d -exec chmod 2775 {} + || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + || true
     find "$builds_dir" -type d -exec chmod 2775 {} + || true
     find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
@@ -2767,6 +2775,8 @@ ensure_infrastructure_permissions() {
 
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
+    [ -f "$coredns_config_dir/Corefile" ] && chmod 664 "$coredns_config_dir/Corefile" || true
+    [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
         _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
@@ -3719,6 +3729,14 @@ _harden_ufw_bootstrap() {
             ufw status verbose | grep -q "5000/tcp.*ALLOW" \
                 || ufw allow in on wg0 to any port 5000 proto tcp \
                 || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
+            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
+            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
+            # keeps "5353/5355"-style ports from matching, and the wg0
+            # scope keeps global 53 rules from suppressing the mesh one.
+            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 53 \
+                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
         fi
         if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
             local _nip
@@ -3762,6 +3780,10 @@ _harden_ufw_bootstrap() {
     if ip link show wg0 >/dev/null 2>&1; then
         ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
+        # mesh-only scoping as the registry above, never world-open.
+        ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
         local _nip
@@ -7897,6 +7919,17 @@ print(",".join(out))
         env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
     fi
+    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
+    # The compose default (10.100.0.1) only exists when the WireGuard mesh
+    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
+    # single-host installs (nothing else listens on 127.0.0.2:53 —
+    # systemd-resolved uses 127.0.0.53 only).
+    local _cd_mesh=""
+    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
+    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
+        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
+    fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
     # template - DOMAIN/USE_SSL/PUBLIC_IP/FRONTEND_APP_URL missing breaks
@@ -8910,6 +8943,17 @@ print(",".join(out))
     if { [ -z "$_rt_mesh" ] || [ "$_rt_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
         env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
+    fi
+    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
+    # The compose default (10.100.0.1) only exists when the WireGuard mesh
+    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
+    # single-host installs (nothing else listens on 127.0.0.2:53 —
+    # systemd-resolved uses 127.0.0.53 only).
+    local _cd_mesh=""
+    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
+    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
+        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
     fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
@@ -10296,6 +10340,14 @@ _harden_ufw_bootstrap() {
             ufw status verbose | grep -q "5000/tcp.*ALLOW" \
                 || ufw allow in on wg0 to any port 5000 proto tcp \
                 || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
+            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
+            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
+            # keeps "5353/5355"-style ports from matching, and the wg0
+            # scope keeps global 53 rules from suppressing the mesh one.
+            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 53 \
+                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
         fi
         if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
             local _nip
@@ -10339,6 +10391,10 @@ _harden_ufw_bootstrap() {
     if ip link show wg0 >/dev/null 2>&1; then
         ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
+        # mesh-only scoping as the registry above, never world-open.
+        ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
         local _nip
@@ -11937,6 +11993,14 @@ _harden_ufw_bootstrap() {
             ufw status verbose | grep -q "5000/tcp.*ALLOW" \
                 || ufw allow in on wg0 to any port 5000 proto tcp \
                 || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
+            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
+            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
+            # keeps "5353/5355"-style ports from matching, and the wg0
+            # scope keeps global 53 rules from suppressing the mesh one.
+            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 53 \
+                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
         fi
         if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
             local _nip
@@ -11980,6 +12044,10 @@ _harden_ufw_bootstrap() {
     if ip link show wg0 >/dev/null 2>&1; then
         ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
+        # mesh-only scoping as the registry above, never world-open.
+        ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
         local _nip
@@ -15020,6 +15088,7 @@ get_redis_service() {
 
 ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+    local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
     local builds_dir="/opt/smsly-hosting/builds"
     local prometheus_targets_dir="/opt/smsly-hosting/prometheus-targets"
@@ -15027,12 +15096,13 @@ ensure_infrastructure_permissions() {
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
     mkdir -p "$caddy_config_dir"
+    mkdir -p "$coredns_config_dir"
     mkdir -p "$staticfiles_dir"
     mkdir -p "$builds_dir"
     mkdir -p "$prometheus_targets_dir"
 
     _chown_owner="1000:1000"
-    for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
+    for _dir in "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
             if ! chown -R "$_chown_owner" "$_dir"; then
                 echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner (see error above)${NC}"
@@ -15040,8 +15110,9 @@ ensure_infrastructure_permissions() {
         fi
     done
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + || true
+    find "$coredns_config_dir" -type d -exec chmod 2775 {} + || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + || true
     find "$builds_dir" -type d -exec chmod 2775 {} + || true
     find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
@@ -15049,6 +15120,8 @@ ensure_infrastructure_permissions() {
 
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
+    [ -f "$coredns_config_dir/Corefile" ] && chmod 664 "$coredns_config_dir/Corefile" || true
+    [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
         _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
@@ -17113,6 +17186,17 @@ print(",".join(out))
         env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
     fi
+    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
+    # The compose default (10.100.0.1) only exists when the WireGuard mesh
+    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
+    # single-host installs (nothing else listens on 127.0.0.2:53 —
+    # systemd-resolved uses 127.0.0.53 only).
+    local _cd_mesh=""
+    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
+    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
+        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
+    fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
     # template - DOMAIN/USE_SSL/PUBLIC_IP/FRONTEND_APP_URL missing breaks
@@ -18117,6 +18201,7 @@ get_redis_service() {
 
 ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+    local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
     local builds_dir="/opt/smsly-hosting/builds"
     local prometheus_targets_dir="/opt/smsly-hosting/prometheus-targets"
@@ -18124,12 +18209,13 @@ ensure_infrastructure_permissions() {
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
     mkdir -p "$caddy_config_dir"
+    mkdir -p "$coredns_config_dir"
     mkdir -p "$staticfiles_dir"
     mkdir -p "$builds_dir"
     mkdir -p "$prometheus_targets_dir"
 
     _chown_owner="1000:1000"
-    for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
+    for _dir in "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
             if ! chown -R "$_chown_owner" "$_dir"; then
                 echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner (see error above)${NC}"
@@ -18137,8 +18223,9 @@ ensure_infrastructure_permissions() {
         fi
     done
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + || true
+    find "$coredns_config_dir" -type d -exec chmod 2775 {} + || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + || true
     find "$builds_dir" -type d -exec chmod 2775 {} + || true
     find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
@@ -18146,6 +18233,8 @@ ensure_infrastructure_permissions() {
 
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
+    [ -f "$coredns_config_dir/Corefile" ] && chmod 664 "$coredns_config_dir/Corefile" || true
+    [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
         _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
@@ -19950,6 +20039,7 @@ get_redis_service() {
 
 ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+    local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
     local builds_dir="/opt/smsly-hosting/builds"
     local prometheus_targets_dir="/opt/smsly-hosting/prometheus-targets"
@@ -19957,12 +20047,13 @@ ensure_infrastructure_permissions() {
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
     mkdir -p "$caddy_config_dir"
+    mkdir -p "$coredns_config_dir"
     mkdir -p "$staticfiles_dir"
     mkdir -p "$builds_dir"
     mkdir -p "$prometheus_targets_dir"
 
     _chown_owner="1000:1000"
-    for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
+    for _dir in "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
             if ! chown -R "$_chown_owner" "$_dir"; then
                 echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner (see error above)${NC}"
@@ -19970,8 +20061,9 @@ ensure_infrastructure_permissions() {
         fi
     done
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + || true
+    find "$coredns_config_dir" -type d -exec chmod 2775 {} + || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + || true
     find "$builds_dir" -type d -exec chmod 2775 {} + || true
     find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
@@ -19979,6 +20071,8 @@ ensure_infrastructure_permissions() {
 
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
+    [ -f "$coredns_config_dir/Corefile" ] && chmod 664 "$coredns_config_dir/Corefile" || true
+    [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
         _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
@@ -22157,6 +22251,44 @@ fi
 echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
 set_checkpoint "requirements_checked"
 # --- end lib/fresh_preflight.sh ---
+# --- lib/mesh_dns.sh ---
+# Mesh DNS resolver — point node hosts at the master's CoreDNS over wg0.
+#
+# The master serves `*.mesh.internal` (MESH_DNS_DOMAIN) from its coredns
+# container on the mesh IP (default 10.100.0.1:53). Nodes configure a
+# per-link resolver on wg0 so those names resolve WITHOUT touching the
+# host's global DNS path (`~domain` = routing-only in systemd-resolved).
+configure_mesh_dns_resolver() {
+    # Master serves the zone itself (coredns container + mesh bind); lite
+    # agents address the master explicitly and need no resolver change.
+    if ! is_node_mode; then
+        return 0
+    fi
+    local mesh_domain="${MESH_DNS_DOMAIN:-mesh.internal}"
+    local dns_ip="${MASTER_MESH_IP:-10.100.0.1}"
+
+    if ! ip link show wg0 >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠ Mesh DNS resolver skipped — wg0 not present (CoreDNS names will resolve once the mesh is up; re-run install --resume or configure manually)${NC}"
+        return 0
+    fi
+
+    if command -v resolvectl >/dev/null 2>&1; then
+        if resolvectl dns wg0 "$dns_ip" && resolvectl domain wg0 "~${mesh_domain}"; then
+            echo -e "${GREEN}  ✓ Mesh DNS: *.${mesh_domain} → ${dns_ip} via wg0${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ resolvectl mesh DNS config failed — set manually: resolvectl dns wg0 ${dns_ip}; resolvectl domain wg0 ~${mesh_domain}${NC}"
+        fi
+        return 0
+    fi
+
+    # No systemd-resolved: do NOT rewrite the global /etc/resolv.conf —
+    # that would reroute all host DNS through the mesh. Print the manual
+    # step instead (operator decision).
+    echo -e "${YELLOW}  ⚠ resolvectl not found — cannot scope mesh DNS to wg0.${NC}"
+    echo -e "${YELLOW}    Add the master's CoreDNS to your resolver for *.${mesh_domain} (e.g. dnsmasq server=/.${mesh_domain}/${dns_ip}), or install systemd-resolved.${NC}"
+    return 0
+}
+# --- end lib/mesh_dns.sh ---
 # --- lib/fresh_deps.sh ---
 # -----------------------------------------------------------------------------
 # 2. Dependency Management & cleanup
@@ -22475,6 +22607,14 @@ _harden_ufw_bootstrap() {
             ufw status verbose | grep -q "5000/tcp.*ALLOW" \
                 || ufw allow in on wg0 to any port 5000 proto tcp \
                 || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
+            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
+            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
+            # keeps "5353/5355"-style ports from matching, and the wg0
+            # scope keeps global 53 rules from suppressing the mesh one.
+            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 53 \
+                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
         fi
         if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
             local _nip
@@ -22518,6 +22658,10 @@ _harden_ufw_bootstrap() {
     if ip link show wg0 >/dev/null 2>&1; then
         ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
+        # mesh-only scoping as the registry above, never world-open.
+        ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
         local _nip
@@ -23762,6 +23906,12 @@ WGCONF
             if declare -F wg_ensure_listening >/dev/null 2>&1; then wg_ensure_listening "$wg_iface" "$mesh_ip" || true; fi
         else
             echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"
+        fi
+        # Point the node host at the master's CoreDNS for *.mesh.internal
+        # (per-link wg0 resolver; global DNS is untouched). Best-effort:
+        # install continues even if the resolver cannot be configured.
+        if declare -F configure_mesh_dns_resolver >/dev/null 2>&1; then
+            configure_mesh_dns_resolver || true
         fi
         return 0
     fi
@@ -25258,14 +25408,15 @@ fi
 _reg_bind_ok=true
 for _reg_entry in "REGISTRY_BIND_IP:${REGISTRY_BIND_IP:-127.0.0.1}" \
     "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}" \
-    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}"; do
+    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}" \
+    "COREDNS_MESH_BIND_IP:${COREDNS_MESH_BIND_IP:-10.100.0.1}"; do
     _reg_var="${_reg_entry%%:*}"
     _reg_ip="${_reg_entry#*:}"
     if echo "$_reg_ip" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         continue
     fi
     if ! _registry_bind_ip_is_local "$_reg_ip" 2>/dev/null; then
-        echo -e "${RED}  ✗ ${_reg_var}=${_reg_ip} is not assigned to this host — registry :5000 bind would fail.${NC}"
+        echo -e "${RED}  ✗ ${_reg_var}=${_reg_ip} is not assigned to this host — the compose port bind would fail.${NC}"
         _reg_bind_ok=false
     fi
 done
@@ -25280,6 +25431,30 @@ unset _reg_bind_ok _reg_entry _reg_var _reg_ip
 ensure_infrastructure_permissions
 # Pre-create caddy bind-mount directories (needed by compose volume driver)
 mkdir -p "$INSTALL_DIR/caddy-config" "$INSTALL_DIR/caddy-logs"
+# Pre-create the CoreDNS mesh-DNS dir + a safety seed (SEED files are
+# replaced by the backend mesh-DNS sync within seconds of startup). A
+# missing dir breaks the coredns_config bind-mount the same way
+# caddy-config/traefik-dynamic break theirs.
+mkdir -p "$INSTALL_DIR/coredns-config"
+if [ ! -f "$INSTALL_DIR/coredns-config/Corefile" ]; then
+    cat > "$INSTALL_DIR/coredns-config/Corefile" <<'CORESEED'
+.:53 {
+    errors
+    hosts /etc/coredns/mesh.hosts mesh.internal {
+        ttl 30
+        reload 5s
+        fallthrough
+    }
+    forward . /etc/resolv.conf
+    cache 30
+    loop
+    reload
+}
+CORESEED
+fi
+if [ ! -f "$INSTALL_DIR/coredns-config/mesh.hosts" ]; then
+    printf '# Seeded by install — replaced by the backend mesh-DNS sync.\n' > "$INSTALL_DIR/coredns-config/mesh.hosts"
+fi
 # Pre-create the Traefik dynamic-config dir (canary WRR files). The
 # traefik_dynamic volume bind-mounts it; a missing dir breaks the mount.
 # If the dir was missing when the volume was first created, the volume
@@ -26631,6 +26806,7 @@ get_redis_service() {
 
 ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+    local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
     local builds_dir="/opt/smsly-hosting/builds"
     local prometheus_targets_dir="/opt/smsly-hosting/prometheus-targets"
@@ -26638,12 +26814,13 @@ ensure_infrastructure_permissions() {
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
     mkdir -p "$caddy_config_dir"
+    mkdir -p "$coredns_config_dir"
     mkdir -p "$staticfiles_dir"
     mkdir -p "$builds_dir"
     mkdir -p "$prometheus_targets_dir"
 
     _chown_owner="1000:1000"
-    for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
+    for _dir in "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
             if ! chown -R "$_chown_owner" "$_dir"; then
                 echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner (see error above)${NC}"
@@ -26651,8 +26828,9 @@ ensure_infrastructure_permissions() {
         fi
     done
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + || true
+    find "$coredns_config_dir" -type d -exec chmod 2775 {} + || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + || true
     find "$builds_dir" -type d -exec chmod 2775 {} + || true
     find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
@@ -26660,6 +26838,8 @@ ensure_infrastructure_permissions() {
 
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
+    [ -f "$coredns_config_dir/Corefile" ] && chmod 664 "$coredns_config_dir/Corefile" || true
+    [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
         _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
@@ -28723,6 +28903,17 @@ print(",".join(out))
     if { [ -z "$_rt_mesh" ] || [ "$_rt_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
         env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
+    fi
+    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
+    # The compose default (10.100.0.1) only exists when the WireGuard mesh
+    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
+    # single-host installs (nothing else listens on 127.0.0.2:53 —
+    # systemd-resolved uses 127.0.0.53 only).
+    local _cd_mesh=""
+    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
+    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
+        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
     fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full

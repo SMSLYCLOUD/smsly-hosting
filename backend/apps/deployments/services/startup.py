@@ -92,6 +92,16 @@ def _sync_caddy_once(delay: float = 3.0):
             logger.info("Startup: Triggered auto-authentication task for nodes.")
         except Exception as e:
             logger.warning("Startup: Failed to trigger auto-auth task: %s", e)
+
+        # 3. Seed the CoreDNS mesh zone (idempotent file write; the hosts
+        # plugin picks it up without a container restart). Master only —
+        # node/agent topologies never pass caddy_disabled_mode to reach us.
+        try:
+            from apps.deployments.services.mesh_dns import apply_mesh_dns
+            dns_result = apply_mesh_dns()
+            logger.info("Startup mesh DNS sync: %s", dns_result.get("message", "ok"))
+        except Exception as exc:
+            logger.warning("Startup mesh DNS sync failed: %s", exc)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Startup background tasks failed: %s", exc)
 

@@ -338,6 +338,7 @@ get_redis_service() {
 
 ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+    local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
     local builds_dir="/opt/smsly-hosting/builds"
     local prometheus_targets_dir="/opt/smsly-hosting/prometheus-targets"
@@ -345,12 +346,13 @@ ensure_infrastructure_permissions() {
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
     mkdir -p "$caddy_config_dir"
+    mkdir -p "$coredns_config_dir"
     mkdir -p "$staticfiles_dir"
     mkdir -p "$builds_dir"
     mkdir -p "$prometheus_targets_dir"
 
     _chown_owner="1000:1000"
-    for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
+    for _dir in "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
             if ! chown -R "$_chown_owner" "$_dir"; then
                 echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner (see error above)${NC}"
@@ -358,8 +360,9 @@ ensure_infrastructure_permissions() {
         fi
     done
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$coredns_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + || true
+    find "$coredns_config_dir" -type d -exec chmod 2775 {} + || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + || true
     find "$builds_dir" -type d -exec chmod 2775 {} + || true
     find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
@@ -367,6 +370,8 @@ ensure_infrastructure_permissions() {
 
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
+    [ -f "$coredns_config_dir/Corefile" ] && chmod 664 "$coredns_config_dir/Corefile" || true
+    [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
         _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"

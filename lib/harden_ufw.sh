@@ -15,6 +15,14 @@ _harden_ufw_bootstrap() {
             ufw status verbose | grep -q "5000/tcp.*ALLOW" \
                 || ufw allow in on wg0 to any port 5000 proto tcp \
                 || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
+            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
+            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
+            # keeps "5353/5355"-style ports from matching, and the wg0
+            # scope keeps global 53 rules from suppressing the mesh one.
+            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 53 \
+                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
         fi
         if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
             local _nip
@@ -58,6 +66,10 @@ _harden_ufw_bootstrap() {
     if ip link show wg0 >/dev/null 2>&1; then
         ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
+        # mesh-only scoping as the registry above, never world-open.
+        ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
         local _nip

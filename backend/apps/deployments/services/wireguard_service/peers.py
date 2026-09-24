@@ -206,6 +206,14 @@ class PeersMixin:
                     mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
                     raise
 
+        # Keep the CoreDNS mesh zone in sync with the new peer (best-effort;
+        # beat-scheduled reconcile also catches anything missed here).
+        try:
+            from apps.deployments.tasks.infra.tasks_mesh_dns import queue_mesh_dns_sync
+            queue_mesh_dns_sync()
+        except Exception as exc:
+            logger.debug("Failed to queue mesh DNS sync after peer add: %s", exc)
+
         return {
             "mesh": str(mesh.id),
             "peer": str(peer.id),
@@ -233,3 +241,10 @@ class PeersMixin:
                 logger.warning(f"Failed to update config on {p}: {e}")
 
         peer.delete()
+
+        # Keep the CoreDNS mesh zone in sync with the removal (best-effort).
+        try:
+            from apps.deployments.tasks.infra.tasks_mesh_dns import queue_mesh_dns_sync
+            queue_mesh_dns_sync()
+        except Exception as exc:
+            logger.debug("Failed to queue mesh DNS sync after peer remove: %s", exc)

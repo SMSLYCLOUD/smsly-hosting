@@ -128,6 +128,8 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
     - deploy        — deploy WG configs to all peers
     - health        — check connectivity between all peers
     - status        — get local WireGuard interface status
+    - dns-zone      — preview the CoreDNS mesh zone (read-only)
+    - sync-dns      — queue a CoreDNS zone rewrite, return the zone
     """
 
     queryset = MeshNetwork.objects.all().prefetch_related("peers")
@@ -338,6 +340,52 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
             "updated_at",
         ])
         return Response(results)
+
+    # ── Mesh DNS zone ──────────────────────────────────────────────
+
+    @action(detail=True, methods=["get"], url_path="dns-zone")
+    def dns_zone(self, request, pk=None):
+        """Preview the CoreDNS mesh zone rendered from this mesh's peers.
+
+        Read-only: renders the current zone without writing files.
+        """
+        self.get_object()
+        try:
+            from apps.deployments.services.mesh_dns import get_mesh_zone_records
+            domain, records = get_mesh_zone_records()
+            return Response({
+                "domain": domain,
+                "records": records,
+                "count": len(records),
+            })
+        except Exception as exc:
+            logger.exception("Mesh DNS zone render failed for %s: %s", pk, exc)
+            return Response(
+                {"error": str(exc)[:2000], "records": [], "count": 0},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=True, methods=["post"], url_path="sync-dns")
+    def sync_dns(self, request, pk=None):
+        """Queue a CoreDNS mesh-zone rewrite and return the rendered zone."""
+        self.get_object()
+        try:
+            from apps.deployments.services.mesh_dns import get_mesh_zone_records
+            from apps.deployments.tasks.infra.tasks_mesh_dns import queue_mesh_dns_sync
+            queue_mesh_dns_sync()
+            domain, records = get_mesh_zone_records()
+            return Response({
+                "queued": True,
+                "domain": domain,
+                "records": records,
+                "count": len(records),
+            })
+        except Exception as exc:
+            logger.exception("Mesh DNS sync queue failed for %s: %s", pk, exc)
+            return Response(
+                {"error": str(exc)[:2000]},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     # ── WireGuard Status ─────────────────────────────────────────────
 

@@ -777,6 +777,45 @@ ensure_tenants_pooler_healthy() {
     log "pgcat-tenants ${state}${health:+ (health: ${health})}"
 }
 
+# ── 17. Mesh DNS (CoreDNS) must serve the mesh zone ──────────────────
+# Nodes resolve *.mesh.internal via the master's coredns container over
+# wg0. Crash-looping coredns (bad Corefile/Corefile seed) or a missing
+# UFW 53 rule silently breaks every mesh hostname with no log noise on
+# the nodes themselves. Alert-only: beats + startup sync own the repair.
+ensure_mesh_dns_serving() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local c="smsly-hosting-coredns-1"
+    timeout -k 5 10 docker inspect "$c" >/dev/null 2>&1 \
+        || { log "coredns absent — skipping mesh DNS check (no mesh stack on this host?)"; return 0; }
+    local state=""
+    state=$(timeout -k 5 10 docker inspect "$c" --format '{{.State.Status}}' 2>/dev/null || echo unknown)
+    if [ "$state" != "running" ]; then
+        log "ALERT: $c is '${state}' — *.mesh.internal names do not resolve on the mesh (check 'docker logs $c')"
+        return 0
+    fi
+    local hosts_file="$INSTALL_DIR/coredns-config/mesh.hosts"
+    if [ -f "$hosts_file" ]; then
+        local records=""
+        records=$(grep -c -v '^#' "$hosts_file" 2>/dev/null || echo 0)
+        log "coredns running ($c), zone has ${records} records"
+    else
+        log "ALERT: $c running but $hosts_file missing — zone never seeded (backend mesh-DNS sync failing?)"
+        return 0
+    fi
+    if timeout -k 5 15 docker logs "$c" --since 60m 2>&1 | grep -a -qiE "failed to (start|load)|plugin.*error|no such file|cannot (open|read)"; then
+        log "ALERT: $c logged startup/load errors in the last hour — inspect 'docker logs $c'"
+        return 0
+    fi
+    # Firewall: wg0 present but port 53 not allowed → nodes cannot query.
+    # ufw shows the rule as bare "53" or "53/tcp"+"53/udp"; the left
+    # boundary keeps 5353/5355-style ports from matching.
+    if ip link show wg0 >/dev/null 2>&1 && command -v ufw >/dev/null 2>&1; then
+        if ! ufw status verbose 2>/dev/null | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)"; then
+            log "ALERT: wg0 exists but UFW has no wg0-scoped port 53 rule — mesh nodes cannot reach CoreDNS (re-run install --resume)"
+        fi
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -799,4 +838,5 @@ ensure_beat_dispatching
 ensure_cosign_key_readable
 ensure_containerd_healthy
 ensure_tenants_pooler_healthy
+ensure_mesh_dns_serving
 log "integrity check complete"

@@ -202,14 +202,15 @@ fi
 _reg_bind_ok=true
 for _reg_entry in "REGISTRY_BIND_IP:${REGISTRY_BIND_IP:-127.0.0.1}" \
     "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}" \
-    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}"; do
+    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}" \
+    "COREDNS_MESH_BIND_IP:${COREDNS_MESH_BIND_IP:-10.100.0.1}"; do
     _reg_var="${_reg_entry%%:*}"
     _reg_ip="${_reg_entry#*:}"
     if echo "$_reg_ip" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         continue
     fi
     if ! _registry_bind_ip_is_local "$_reg_ip" 2>/dev/null; then
-        echo -e "${RED}  ✗ ${_reg_var}=${_reg_ip} is not assigned to this host — registry :5000 bind would fail.${NC}"
+        echo -e "${RED}  ✗ ${_reg_var}=${_reg_ip} is not assigned to this host — the compose port bind would fail.${NC}"
         _reg_bind_ok=false
     fi
 done
@@ -224,6 +225,30 @@ unset _reg_bind_ok _reg_entry _reg_var _reg_ip
 ensure_infrastructure_permissions
 # Pre-create caddy bind-mount directories (needed by compose volume driver)
 mkdir -p "$INSTALL_DIR/caddy-config" "$INSTALL_DIR/caddy-logs"
+# Pre-create the CoreDNS mesh-DNS dir + a safety seed (SEED files are
+# replaced by the backend mesh-DNS sync within seconds of startup). A
+# missing dir breaks the coredns_config bind-mount the same way
+# caddy-config/traefik-dynamic break theirs.
+mkdir -p "$INSTALL_DIR/coredns-config"
+if [ ! -f "$INSTALL_DIR/coredns-config/Corefile" ]; then
+    cat > "$INSTALL_DIR/coredns-config/Corefile" <<'CORESEED'
+.:53 {
+    errors
+    hosts /etc/coredns/mesh.hosts mesh.internal {
+        ttl 30
+        reload 5s
+        fallthrough
+    }
+    forward . /etc/resolv.conf
+    cache 30
+    loop
+    reload
+}
+CORESEED
+fi
+if [ ! -f "$INSTALL_DIR/coredns-config/mesh.hosts" ]; then
+    printf '# Seeded by install — replaced by the backend mesh-DNS sync.\n' > "$INSTALL_DIR/coredns-config/mesh.hosts"
+fi
 # Pre-create the Traefik dynamic-config dir (canary WRR files). The
 # traefik_dynamic volume bind-mounts it; a missing dir breaks the mount.
 # If the dir was missing when the volume was first created, the volume

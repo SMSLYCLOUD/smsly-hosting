@@ -185,6 +185,12 @@ WGCONF
         else
             echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"
         fi
+        # Point the node host at the master's CoreDNS for *.mesh.internal
+        # (per-link wg0 resolver; global DNS is untouched). Best-effort:
+        # install continues even if the resolver cannot be configured.
+        if declare -F configure_mesh_dns_resolver >/dev/null 2>&1; then
+            configure_mesh_dns_resolver || true
+        fi
         return 0
     fi
 

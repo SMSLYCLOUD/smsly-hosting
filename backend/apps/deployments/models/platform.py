@@ -544,6 +544,9 @@ class PlatformConfig(models.Model):
     replication_health_interval = models.PositiveIntegerField(
         default=60,
         help_text="Replication lag check cadence in seconds (gauge resolution; failover stays on the 30s addon watchdog)")
+    mesh_dns_domain = models.CharField(  # type: ignore[var-annotated]
+        max_length=253, blank=True, default='mesh.internal',
+        help_text="DNS zone served by CoreDNS for the WireGuard mesh (e.g. registry.mesh.internal). Empty falls back to MESH_DNS_DOMAIN env, then 'mesh.internal'.")
 
     # ── Device Trust (Beta) ────────────────────────────────────────────
     enforce_device_trust = models.BooleanField(
@@ -933,6 +936,10 @@ class PlatformConfig(models.Model):
         # lib/harden_crowdsec.sh). A missing map entry silently reads
         # as disabled no matter what the UI toggle holds.
         'crowdsec_cf_enabled': ('CROWDSEC_CF_ENABLED', ''),
+        # Mesh DNS zone served by CoreDNS (see services.mesh_dns).
+        # Without this entry the UI-held domain would silently read as
+        # the default no matter what the operator saved.
+        'mesh_dns_domain': ('MESH_DNS_DOMAIN', 'mesh.internal'),
     }
 
     @classmethod

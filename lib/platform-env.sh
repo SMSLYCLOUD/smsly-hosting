@@ -393,6 +393,17 @@ print(",".join(out))
         env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
     fi
+    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
+    # The compose default (10.100.0.1) only exists when the WireGuard mesh
+    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
+    # single-host installs (nothing else listens on 127.0.0.2:53 —
+    # systemd-resolved uses 127.0.0.53 only).
+    local _cd_mesh=""
+    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
+    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
+        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
+    fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
     # template - DOMAIN/USE_SSL/PUBLIC_IP/FRONTEND_APP_URL missing breaks

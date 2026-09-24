@@ -195,6 +195,8 @@ class SystemConfigView(GenericAPIView):
         # Beat cadences (applied at beat restart)
         'MESH_HEALTH_INTERVAL': ('mesh_health_interval', int),
         'REPLICATION_HEALTH_INTERVAL': ('replication_health_interval', int),
+        # Mesh DNS (zone served by CoreDNS; applied on next zone sync)
+        'MESH_DNS_DOMAIN': ('mesh_dns_domain', str),
         # Email
         'SMTP_HOST': ('smtp_host', str),
         'SMTP_PORT': ('smtp_port', int),
@@ -270,6 +272,22 @@ class SystemConfigView(GenericAPIView):
         for api_key, (field, cast_type) in self._PC_FIELDS.items():
             if api_key in data:
                 raw = data[api_key]
+                if api_key == 'MESH_DNS_DOMAIN':
+                    # A blank or malformed zone would break every mesh
+                    # hostname at the next zone sync — reject instead of
+                    # writing (blank means "keep existing", same as secrets).
+                    domain = str(raw or '').strip().lower()
+                    if not domain:
+                        continue
+                    if not re.fullmatch(r'(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', domain):
+                        return Response(
+                            {'error': 'MESH_DNS_DOMAIN is not a valid DNS zone.'},
+                            status=400,
+                        )
+                    setattr(pc, field, domain)
+                    changed.append(api_key)
+                    update_fields.append(field)
+                    continue
                 if api_key in self._PC_SECRET_FIELDS and not str(raw or "").strip():
                     # Blank means "keep existing" — a whole-config PUT from
                     # the UI must never wipe stored secrets with empty

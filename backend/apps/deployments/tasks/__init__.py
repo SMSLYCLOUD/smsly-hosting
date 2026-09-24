@@ -124,6 +124,12 @@ from apps.deployments.tasks.infra.tasks_mesh import (
     deploy_mesh_task,
 )
 
+# ── Re-exports from tasks_mesh_dns ────────────────────────────────
+from apps.deployments.tasks.infra.tasks_mesh_dns import (
+    queue_mesh_dns_sync,
+    sync_mesh_dns_task,
+)
+
 
 # ── Lazy re-exports from tasks_deploy (circular import avoidance) ─
 def __getattr__(name):

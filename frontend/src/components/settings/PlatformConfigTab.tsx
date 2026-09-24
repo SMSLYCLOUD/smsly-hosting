@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
-import { Cloud, Search } from "lucide-react";
+import { Cloud, Search, Globe } from "lucide-react";
 import { systemApi } from "@/lib/api";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 
@@ -111,6 +111,34 @@ export function PlatformConfigTab() {
                     toast({ title: "Saved", description: "Limits config updated." });
                   } catch { toast({ title: "Failed", variant: "destructive" }); }
                 }}>Save Limits</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </ScrollReveal>
+
+      {/* Mesh DNS — slideRight */}
+      <ScrollReveal variant="slideRight" delay={0.17}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Globe className="h-5 w-5 text-sky-500" /> Mesh DNS (CoreDNS)</CardTitle>
+            <CardDescription>DNS zone served for the WireGuard mesh — registry, postgres, redis and per-node names. Applied on the next zone sync.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Mesh DNS Domain</Label>
+                <Input value={config.MESH_DNS_DOMAIN ?? "mesh.internal"} onChange={(e) => setConfig({ ...config, MESH_DNS_DOMAIN: e.target.value })} placeholder="mesh.internal" className="font-mono" />
+                <p className="text-xs text-muted-foreground">Zone for mesh hostnames (e.g. registry.mesh.internal). Nodes resolve it via the master&apos;s CoreDNS over wg0. View live records on the Network page → Mesh DNS tab.</p>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={async () => {
+                  try {
+                    const result = await systemApi.updateConfig({ MESH_DNS_DOMAIN: config.MESH_DNS_DOMAIN });
+                    setConfig(result);
+                    toast({ title: "Saved", description: "Mesh DNS domain updated." });
+                  } catch (err: any) { toast({ title: "Failed", description: err?.response?.data?.error || "Could not save config.", variant: "destructive" }); }
+                }}>Save Mesh DNS</Button>
               </div>
             </div>
           </CardContent>
