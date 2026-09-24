@@ -46,7 +46,7 @@ class BuildxCommandTests(TestCase):
                               read=MagicMock(return_value=dockerfile_text))),
                           __exit__=MagicMock(return_value=False)))):
             # bind the unbound method to our stub
-            build_mod.BuildMixin._build_with_buildx(
+            build_mod.BuildMixin._build_with_buildkit(
                 mixin, context_dir="/tmp/ctx", dockerfile_path="/tmp/ctx/Dockerfile",
                 tag="registry:5000/smsly/a:aaa1111", buildargs={"A": "b"},
                 cache_from=["registry:5000/smsly/a:aaa1111"],
@@ -55,13 +55,16 @@ class BuildxCommandTests(TestCase):
             )
         return mock_run
 
-    def test_buildx_flags_and_secret_mount(self):
+    def test_buildkit_flags_and_secret_mount(self):
         mock_run = self._run_buildx()
         cmd = mock_run.call_args.args[0]
         # A systemd-run resource scope may prefix the command; find docker.
         start = cmd.index('docker')
         cmd = cmd[start:]
-        self.assertEqual(cmd[:4], ["docker", "buildx", "build", "--load"])
+        # Plain CLI: no buildx, no builder selection, no --load flag.
+        self.assertEqual(cmd[:3], ["docker", "build", "--progress=plain"])
+        self.assertNotIn("buildx", cmd)
+        self.assertNotIn("--builder", cmd)
         self.assertIn("--progress=plain", cmd)
         self.assertIn("registry:5000/smsly/a:aaa1111", cmd)
         secret_flags = [cmd[i + 1] for i, a in enumerate(cmd[:-1])
@@ -89,7 +92,7 @@ class BuildxCommandTests(TestCase):
             build_mod, "append_log",
             side_effect=lambda dep, msg: mixin_calls.append(msg),
         ), patch("subprocess.run", return_value=_ok_proc()) as mock_run:
-            build_mod.BuildMixin._build_with_buildx(
+            build_mod.BuildMixin._build_with_buildkit(
                 mixin, context_dir="/tmp/ctx",
                 dockerfile_path="/nonexistent/Dockerfile",
                 tag="t", buildargs={}, cache_from=[],
@@ -111,11 +114,7 @@ class BuildxFallbackTests(TestCase):
         ), patch.object(
             build_mod, "_use_buildx", return_value=True,
         ), patch.object(
-            build_mod, "_ensure_docker_driver_builder", return_value=True,
-        ), patch.object(
-            build_mod, "_buildx_usable", return_value=True,
-        ), patch.object(
-            build_mod.BuildMixin, "_build_with_buildx",
+            build_mod.BuildMixin, "_build_with_buildkit",
             side_effect=buildx_exc,
         ) as mock_bx, patch.object(
             build_mod.BuildMixin, "_build_via_docker_py",
@@ -169,91 +168,44 @@ class BuildxFallbackTests(TestCase):
             self.assertFalse(_is_buildx_infra_error(text), text)
 
 
-class BuilderSelectionTests(TestCase):
-    """The acting user's builder must be an explicit docker-driver one.
+class PlainCliBuildTests(TestCase):
+    """Daemon BuildKit via the plain CLI carries no builder selection.
 
-    Regression (2026-09-24): entrypoint selected smsly-docker as ROOT
-    while workers run as smsly — workers saw a phantom docker-container
-    `default` with no buildkitd, the substring probe passed it, and every
-    build silently fell back to classic (ARG secrets in history).
+    Regression (2026-09-24): a phantom docker-container `default` builder
+    (plus a refused `create --driver docker`) silently downgraded every
+    build to classic. The plain `DOCKER_BUILDKIT=1 docker build` path has
+    no client state to rot: no buildx, no --builder, no --load flag.
     """
 
-    def setUp(self):
-        self._cached = build_mod._BUILDX_USABLE
-        build_mod._BUILDX_USABLE = None
-        self.addCleanup(setattr, build_mod, "_BUILDX_USABLE", self._cached)
-
-    def _proc(self, rc=0, stdout=""):
-        return SimpleNamespace(returncode=rc, stdout=stdout, stderr="")
-
-    def test_probe_accepts_docker_driver(self):
-        from apps.deployments.services.pipeline.build import _buildx_usable
-        out = "Name: smsly-docker\nDriver: docker\n"
-        with patch("shutil.which", return_value="/usr/bin/docker"), \
-                patch("subprocess.run",
-                      return_value=self._proc(0, out)):
-            self.assertTrue(_buildx_usable())
-
-    def test_probe_rejects_docker_container_driver(self):
-        from apps.deployments.services.pipeline.build import _buildx_usable
-        out = "Name: default\nDriver: docker-container\nEndpoint: default\n"
-        with patch("shutil.which", return_value="/usr/bin/docker"), \
-                patch("subprocess.run",
-                      return_value=self._proc(0, out)):
-            self.assertFalse(_buildx_usable())
-
-    def test_ensure_selects_existing_builder(self):
-        from apps.deployments.services.pipeline.build import (
-            _ensure_docker_driver_builder,
-        )
-        calls = []
-
-        def _run(cmd, **kw):
-            calls.append(cmd)
-            if cmd[:3] == ["docker", "buildx", "inspect"]:
-                return self._proc(0, "Name: smsly-docker\n")
-            return self._proc(0, "")
-
-        with patch("subprocess.run", side_effect=_run):
-            self.assertTrue(_ensure_docker_driver_builder())
-        self.assertNotIn(
-            ["docker", "buildx", "create", "--driver", "docker",
-             "--name", "smsly-docker"],
-            calls,
-        )
-        self.assertIn(["docker", "buildx", "use", "smsly-docker"], calls)
-
-    def test_ensure_creates_missing_builder(self):
-        from apps.deployments.services.pipeline.build import (
-            _ensure_docker_driver_builder,
-        )
-
-        def _run(cmd, **kw):
-            if cmd[:3] == ["docker", "buildx", "inspect"]:
-                return self._proc(1, "")
-            return self._proc(0, "")
-
-        with patch("subprocess.run", side_effect=_run) as mock_run:
-            self.assertTrue(_ensure_docker_driver_builder())
-        created = [c.args[0] for c in mock_run.call_args_list]
-        self.assertIn(
-            ["docker", "buildx", "create", "--driver", "docker",
-             "--name", "smsly-docker"],
-            created,
-        )
-
-    def test_ensure_false_when_use_fails(self):
-        from apps.deployments.services.pipeline.build import (
-            _ensure_docker_driver_builder,
-        )
-
-        def _run(cmd, **kw):
-            if cmd[1:3] == ["buildx", "use"]:
-                return self._proc(1, "error")
-            return self._proc(0, "")
-
-        with patch("subprocess.run", side_effect=_run):
-            self.assertFalse(_ensure_docker_driver_builder())
+    def test_plain_cli_has_no_builder_state(self):
+        mixin_calls = []
+        mixin = _mixin()
+        with patch.object(
+            build_mod, "append_log",
+            side_effect=lambda dep, msg: mixin_calls.append(msg),
+        ), patch("subprocess.run",
+                 return_value=_ok_proc()) as mock_run, \
+                patch("builtins.open",
+                      MagicMock(return_value=MagicMock(
+                          __enter__=MagicMock(return_value=MagicMock(
+                              read=MagicMock(return_value="FROM x\n"))),
+                          __exit__=MagicMock(return_value=False)))):
+            build_mod.BuildMixin._build_with_buildkit(
+                mixin, context_dir="/tmp/ctx",
+                dockerfile_path="/tmp/ctx/Dockerfile",
+                tag="registry:5000/smsly/a:aaa1111", buildargs={"A": "b"},
+                cache_from=["registry:5000/smsly/a:aaa1111"],
+                secrets={"github_token": "sekret"},
+            )
+        cmd = mock_run.call_args.args[0]
+        start = cmd.index('docker')
+        cmd = cmd[start:]
+        self.assertEqual(cmd[:3], ["docker", "build", "--progress=plain"])
+        self.assertNotIn("buildx", cmd)
+        self.assertNotIn("--builder", cmd)
+        self.assertNotIn("--load", cmd)
+        env = mock_run.call_args.kwargs.get("env", {})
+        self.assertEqual(env.get("DOCKER_BUILDKIT"), "1")
 
 
 class SecretFileHygieneTests(TestCase):

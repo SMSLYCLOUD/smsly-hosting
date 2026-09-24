@@ -45,12 +45,6 @@ if command -v docker >/dev/null 2>&1; then
         docker buildx create --driver docker --name smsly-docker >/dev/null 2>&1 || true
     fi
     docker buildx use smsly-docker >/dev/null 2>&1 || true
-    # Same selection for the smsly runtime user: workers run as uid 1000
-    # with a different $HOME, so root's selection above is invisible to
-    # them (2026-09-24: workers saw a phantom docker-container `default`
-    # with no buildkitd and every build silently fell back to classic).
-    # Belt and suspenders — the build path re-selects per build anyway.
-    su -s /bin/sh -c 'docker buildx inspect smsly-docker >/dev/null 2>&1 || docker buildx create --driver docker --name smsly-docker >/dev/null 2>&1; docker buildx use smsly-docker >/dev/null 2>&1' smsly || true
 fi
 
 

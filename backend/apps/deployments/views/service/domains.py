@@ -194,9 +194,27 @@ class DomainActionsMixin:
             })
 
         from apps.domains.models import Domain, DomainStatus
-        from apps.domains.verification import verify_custom_domain_dns
+        from apps.domains.verification import (
+            ensure_verification_token,
+            verify_custom_domain_dns,
+        )
 
         domain_obj = Domain.objects.filter(service=service, domain_name=domain).first()
+        if domain_obj is None:
+            # UI-first verification for a custom without a tracking row:
+            # create it so the HTTP-proof token persists and the challenge
+            # endpoint can serve it (otherwise orange/proxied domains can
+            # never verify from this path).
+            try:
+                domain_obj = Domain.objects.create(
+                    domain_name=domain, service=service,
+                    status=DomainStatus.PENDING,
+                )
+            except Exception:
+                domain_obj = Domain.objects.filter(
+                    service=service, domain_name=domain).first()
+        if domain_obj is not None:
+            ensure_verification_token(domain_obj)
         transient_domain = domain_obj or Domain(domain_name=domain, service=service)
         old_status = domain_obj.status if domain_obj else DomainStatus.PENDING
         result = verify_custom_domain_dns(transient_domain, PlatformConfig.load())
@@ -273,7 +291,8 @@ class DomainActionsMixin:
                 if is_valid
                 else (
                     f'DNS not configured. Add {result.expected}. '
-                    'Use DNS-only records so direct SSL can be issued.'
+                    'Grey (DNS-only) records verify by DNS; proxied '
+                    'records verify automatically over HTTP within minutes.'
                 )
             ),
         })

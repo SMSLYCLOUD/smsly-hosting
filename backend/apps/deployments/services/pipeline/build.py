@@ -36,11 +36,12 @@ BUILD_FAIL_TAIL_CHARS = 8000
 
 # ── Build engine selection ──────────────────────────────────────────
 # SMSLY_DOCKER_BUILDER=classic forces the legacy docker-py path.
-# Default (anything else) tries `docker buildx build` first — real
-# BuildKit: cache mounts, --secret mounts, registry cache — and falls
-# back to classic only on infrastructure-class failures (missing CLI,
-# daemon unreachable, no builder). Dockerfile errors never fall back:
-# retrying them classically just burns a second full build.
+# Default (anything else) builds with daemon-embedded BuildKit via the
+# plain `docker` CLI (`DOCKER_BUILDKIT=1 docker build`) — deliberately
+# NOT `docker buildx build`: buildx builder selection is per-user client
+# state that rotted silently (2026-09-24), while the plain CLI has no
+# selection to rot. Falls back to classic only on infrastructure-class
+# failures (missing CLI, daemon unreachable, no builder).
 _BUILDX_INFRA_RE = re.compile(
     r"no such file or directory.*\bdocker\b"
     r"|\bdocker\b.*command not found|command not found.*\bdocker\b"
@@ -52,10 +53,6 @@ _BUILDX_INFRA_RE = re.compile(
     r"|no builder|unknown driver|failed to dial|buildkitd",
     re.IGNORECASE,
 )
-
-# Cached per worker process: CLI presence + default-driver probe.
-_BUILDX_USABLE: bool | None = None
-
 
 def _use_buildx() -> bool:
     """Build engine selector. Env SMSLY_DOCKER_BUILDER=classic opts out."""
@@ -116,76 +113,6 @@ def _remove_ephemeral_builder(name: str) -> None:
 def _is_buildx_infra_error(text: str) -> bool:
     """True when a buildx failure is environmental (fallback may help)."""
     return bool(_BUILDX_INFRA_RE.search(str(text or "")))
-
-
-def _buildx_usable() -> bool:
-    """CLI present + SELECTED builder on the docker driver (read-only probe,
-    never mutates shared builder state). Cached per process."""
-    global _BUILDX_USABLE
-    if _BUILDX_USABLE is not None:
-        return _BUILDX_USABLE
-    usable = False
-    try:
-        if shutil.which("docker") is None:
-            usable = False
-        else:
-            probe = subprocess.run(
-                ["docker", "buildx", "inspect"],
-                capture_output=True, text=True, timeout=15,
-            )
-            # Exact line match: a substring test accepts
-            # "Driver: docker-container" (2026-09-24: phantom builder with
-            # no buildkitd silently disabled BuildKit on every build).
-            usable = (
-                probe.returncode == 0
-                and re.search(r"(?m)^Driver:\s+docker\s*$",
-                              probe.stdout or "") is not None
-            )
-    except Exception as exc:
-        logger.debug("buildx usability probe failed: %s", exc)
-        usable = False
-    _BUILDX_USABLE = usable
-    return usable
-
-
-def _ensure_docker_driver_builder() -> bool:
-    """Select the smsly-docker builder in THIS process's user context.
-
-    Root-cause fix (2026-09-24): entrypoint selects smsly-docker as ROOT,
-    but workers run as smsly (uid 1000, different $HOME) where the current
-    builder was a phantom docker-container `default` with no buildkitd —
-    every build silently fell back to classic (ARG secrets in history).
-    Selecting here (cheap no-op when already selected) makes the acting
-    user's builder explicit on every build instead of ambient. Concurrent
-    builds racing create/use converge on the same value harmlessly.
-    """
-    global _BUILDX_USABLE
-    try:
-        inspect = subprocess.run(
-            ["docker", "buildx", "inspect", "smsly-docker"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if inspect.returncode != 0:
-            create = subprocess.run(
-                ["docker", "buildx", "create", "--driver", "docker",
-                 "--name", "smsly-docker"],
-                capture_output=True, text=True, timeout=60,
-            )
-            if create.returncode != 0:
-                logger.debug("builder create failed: %s",
-                             (create.stderr or "")[:150])
-                return False
-        use = subprocess.run(
-            ["docker", "buildx", "use", "smsly-docker"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if use.returncode != 0:
-            return False
-        _BUILDX_USABLE = None  # selection changed — force a fresh probe
-        return True
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
-        logger.debug("builder ensure failed: %s", exc)
-        return False
 
 
 def _stage_secret_files(secrets: dict | None) -> tuple[list, list]:
@@ -768,7 +695,7 @@ class BuildMixin:
     def _build_with_docker(self, context_dir: str, dockerfile_path: str):
         """Execute Docker build, BuildKit-first with classic fallback.
 
-        Prefers `docker buildx build` (real BuildKit: cache mounts,
+        Prefers daemon-embedded BuildKit via the plain CLI (cache mounts,
         --secret mounts, registry cache) via `_build_with_docker_engine`,
         which falls back to the docker-py Engine-API path
         (`_build_via_docker_py`) only on infrastructure-class failures.
@@ -944,18 +871,21 @@ class BuildMixin:
         cache_from: list,
         build_secrets: dict,
     ):
-        """Buildx-first dispatcher with classic fallback.
+        """BuildKit dispatcher with classic fallback.
 
-        Tries real BuildKit (cache mounts, secret mounts, registry cache)
-        unless SMSLY_DOCKER_BUILDER=classic. Falls back to the legacy
-        Engine-API path only on infrastructure-class failures (missing
-        CLI, unreachable daemon, no builder). Dockerfile errors and
-        timeouts raise immediately — retrying those on a second engine
-        just burns another full build.
+        Tries daemon-embedded BuildKit via the plain CLI (cache mounts,
+        secret mounts, registry cache) unless SMSLY_DOCKER_BUILDER=classic.
+        The plain CLI carries no builder selection, so there is no client
+        state to rot (the 2026-09-24 outage: phantom docker-container
+        builder + refused create silently downgraded every build).
+        Falls back to the legacy Engine-API path only on
+        infrastructure-class failures (missing CLI, unreachable daemon).
+        Dockerfile errors and timeouts raise immediately — retrying those
+        on a second engine just burns another full build.
         """
-        if _use_buildx() and _ensure_docker_driver_builder() and _buildx_usable():
+        if _use_buildx():
             try:
-                return self._build_with_buildx(
+                return self._build_with_buildkit(
                     context_dir=context_dir,
                     dockerfile_path=dockerfile_path,
                     tag=image_name,
@@ -1019,7 +949,7 @@ class BuildMixin:
             return ""
         return "\n[docker daemon build-output tail]\n" + redacted + "\n"
 
-    def _build_with_buildx(
+    def _build_with_buildkit(
         self,
         context_dir: str,
         dockerfile_path: str,
@@ -1028,13 +958,17 @@ class BuildMixin:
         cache_from: list,
         secrets: dict[str, str] | None = None,
     ):
-        """Build via `docker buildx build` (real BuildKit, docker driver).
+        """Build with daemon-embedded BuildKit (no buildx client state).
 
-        Activates Dockerfile cache mounts, genuine --secret mounts, and
-        registry layer caching (--cache-from + inline). Single attempt —
-        the caller falls back to classic on infrastructure-class errors
-        only; Dockerfile errors raise immediately (retrying them on
-        another engine just burns a second full build).
+        Uses plain ``DOCKER_BUILDKIT=1 docker build``: cache mounts,
+        genuine --secret mounts, and registry layer caching all work, but
+        NOTHING depends on buildx builder selection — the 2026-09-24
+        outage was a phantom docker-container `default` builder (plus a
+        refused `create --driver docker`) silently downgrading every
+        build to classic. Single attempt — the caller falls back to
+        classic on infrastructure-class errors only; Dockerfile errors
+        raise immediately (retrying them on another engine just burns a
+        second full build).
         """
         from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
         from apps.deployments.services.builders import (
@@ -1070,16 +1004,25 @@ class BuildMixin:
                     "Ephemeral builder unavailable — falling back to default driver.\n",
                 )
         try:
-            # Container-driver (ephemeral) builders cannot --load; output
-            # to the daemon instead. Default driver keeps --load.
-            load_flag = ["--output", "type=docker"] if builder_name else ["--load"]
-            cmd = [
-                "docker", "buildx", "build",
-                *load_flag, "--progress=plain",
-                "-t", tag, "-f", dockerfile_rel,
-            ]
             if builder_name:
-                cmd += ["--builder", builder_name]
+                # Ephemeral containment (opt-in): a dedicated
+                # docker-container builder needs the buildx CLI.
+                load_flag = ["--output", "type=docker"]
+                cmd = [
+                    "docker", "buildx", "build",
+                    *load_flag, "--progress=plain",
+                    "-t", tag, "-f", dockerfile_rel,
+                    "--builder", builder_name,
+                ]
+            else:
+                # Default path: daemon BuildKit via the plain CLI. No
+                # builder selection, no --load/--output flags (plain
+                # `docker build` loads into the daemon by default).
+                cmd = [
+                    "docker", "build",
+                    "--progress=plain",
+                    "-t", tag, "-f", dockerfile_rel,
+                ]
             for k, v in (buildargs or {}).items():
                 cmd += ["--build-arg", f"{k}={v}"]
             for sid, spath in zip(secret_ids, secret_files):
@@ -1118,12 +1061,14 @@ class BuildMixin:
                 f"Building with BuildKit ({os.path.basename(dockerfile_path)})...\n",
             )
             try:
+                build_env = dict(os.environ)
+                build_env["DOCKER_BUILDKIT"] = "1"
                 proc = subprocess.run(
                     cmd, capture_output=True, text=True,
-                    timeout=timeout_s, cwd=context_dir,
+                    timeout=timeout_s, cwd=context_dir, env=build_env,
                 )
             except FileNotFoundError as exc:
-                raise RuntimeError(f"docker CLI not found for buildx: {exc}") from exc
+                raise RuntimeError(f"docker CLI not found for build: {exc}") from exc
             tail = ((proc.stdout or "")[-20000:] + (proc.stderr or "")[-4000:])
             redacted = redact_values(tail, self.secret_values)
             if redacted.strip():
