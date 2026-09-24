@@ -37,7 +37,8 @@ class Finding39ProvisionerShlexQuoteTests(SimpleTestCase):
         self.assertIn(f"PIPE={shlex.quote(pipe_value)}", rendered)
 
     def test_install_args_str_uses_shlex_quote(self):
-        source = inspect.getsource(provisioner)
+        import apps.deployments.services.provisioner.core.provision_server as ps_mod
+        source = inspect.getsource(ps_mod)
         self.assertIn("install_args_str = \" \".join(shlex.quote(arg) for arg in install_args)", source)
 
     def test_shell_env_assignments_skips_none_values(self):

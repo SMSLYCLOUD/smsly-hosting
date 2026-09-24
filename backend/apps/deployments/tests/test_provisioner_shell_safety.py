@@ -19,9 +19,13 @@ from apps.deployments.services import provisioner
 
 class ProvisionerShellSafetyTests(SimpleTestCase):
     def test_no_subprocess_shell_true_in_provisioner_module(self):
-        """Static check: there is no ``shell=True`` in the module."""
-        src = inspect.getsource(provisioner)
-        self.assertNotIn("shell=True", src)
+        """Static check: there is no ``shell=True`` in the provisioner
+        implementation modules (the package __init__ only re-exports)."""
+        import apps.deployments.services.provisioner.core.provision_server as ps_mod
+        import apps.deployments.services.provisioner.helpers.firewall as fw_mod
+        for mod in (ps_mod, fw_mod):
+            src = inspect.getsource(mod)
+            self.assertNotIn("shell=True", src)
 
     def test_harden_master_firewall_passes_ip_as_list_argv(self):
         """Each subprocess.run in _harden_master_firewall uses a list
@@ -29,8 +33,10 @@ class ProvisionerShellSafetyTests(SimpleTestCase):
         that goes through a shell."""
         import ast
 
-        import apps.deployments.services.provisioner as p
-        tree = ast.parse(inspect.getsource(p._harden_master_firewall))
+        from apps.deployments.services.provisioner.helpers import (
+            _harden_master_firewall,
+        )
+        tree = ast.parse(inspect.getsource(_harden_master_firewall))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 func = node.func

@@ -24,6 +24,13 @@ _FALLBACK_WARNED = False
 
 DOCKER_LABELS_PORT = int(os.environ.get("DOCKER_LABELS_PORT", "9234"))
 
+# SSH exec timeouts for node deploys (seconds). exec_command defaults to
+# no deadline — one stuck `docker pull` would hang the caller (including
+# the 31-minute provision task) forever.
+SSH_TIMEOUT_QUICK = 30    # inspect / mkdir / rm / reload
+SSH_TIMEOUT_RUN = 180     # docker run / create
+SSH_TIMEOUT_PULL = 300    # docker pull (large layers on slow links)
+
 
 def _ensure_target_dir_writable() -> bool:
     """Try to make TARGETS_DIR writable. Falls back to a temp directory."""
@@ -183,6 +190,7 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False) -> bool:
             out, _err, _code = client.exec_command(
                 "docker inspect smsly-docker-labels --format='{{.State.Status}}' 2>/dev/null",
                 raise_on_error=False,
+                timeout=SSH_TIMEOUT_QUICK,
             )
             existing_status = out.strip()
             if existing_status == "running":
@@ -196,12 +204,12 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False) -> bool:
         tmp.close()
 
         remote_path = "/opt/smsly-hosting/docker-labels-exporter.py"
-        client.exec_command("mkdir -p /opt/smsly-hosting")
+        client.exec_command("mkdir -p /opt/smsly-hosting", timeout=SSH_TIMEOUT_QUICK)
         client.upload_file(tmp.name, remote_path)
 
         # 2. Remove any stale container and pull image
-        client.exec_command("docker rm -f smsly-docker-labels 2>/dev/null")
-        client.exec_command("docker pull python:3.12-alpine 2>/dev/null", raise_on_error=False)
+        client.exec_command("docker rm -f smsly-docker-labels 2>/dev/null", timeout=SSH_TIMEOUT_QUICK)
+        client.exec_command("docker pull python:3.12-alpine 2>/dev/null", raise_on_error=False, timeout=SSH_TIMEOUT_PULL)
 
         # 4. Run the exporter container.
         # Bind to 0.0.0.0 — the WireGuard mesh provides encryption and Docker
@@ -216,7 +224,7 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False) -> bool:
             f"-v {remote_path}:/app/exporter.py:ro "
             f"python:3.12-alpine python3 -u /app/exporter.py"
         )
-        _out, err, exit_code = client.exec_command(cmd, raise_on_error=False)
+        _out, err, exit_code = client.exec_command(cmd, raise_on_error=False, timeout=SSH_TIMEOUT_RUN)
         if exit_code != 0:
             error = err.strip()
             logger.error("Failed to start docker-labels on %s: %s", server.name, error)
@@ -267,6 +275,7 @@ def deploy_cadvisor_on_node(server, force: bool = False) -> bool:
             f"gcr.io/cadvisor/cadvisor:v0.49.1 "
             f"--containerd=unix:///var/run/containerd/containerd.sock",
             raise_on_error=False,
+            timeout=SSH_TIMEOUT_RUN,
         )
         logger.info("Deployed cAdvisor on %s", server.name)
         return True
@@ -297,6 +306,7 @@ def deploy_node_exporter_on_node(server, force: bool = False) -> bool:
             f"--path.procfs=/host/proc --path.rootfs=/rootfs --path.sysfs=/host/sys "
             f"--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",
             raise_on_error=False,
+            timeout=SSH_TIMEOUT_RUN,
         )
         logger.info("Deployed Node Exporter on %s", server.name)
         return True
@@ -360,13 +370,14 @@ def deploy_promtail_on_node(server, force: bool = False) -> bool:
 
         remote_dir = "/opt/smsly-hosting"
         remote_config = f"{remote_dir}/promtail-config.yml"
-        client.exec_command(f"mkdir -p {remote_dir}")
+        client.exec_command(f"mkdir -p {remote_dir}", timeout=SSH_TIMEOUT_QUICK)
         client.upload_file(tmp.name, remote_config)
 
         # 1. Check if container exists — if so, reload or recreate
         out, _err, _code = client.exec_command(
             "docker inspect smsly-promtail --format='{{.State.Status}}' 2>/dev/null",
             raise_on_error=False,
+            timeout=SSH_TIMEOUT_QUICK,
         )
         if out.strip() == "running":
             if not force:
@@ -375,14 +386,15 @@ def deploy_promtail_on_node(server, force: bool = False) -> bool:
                     "docker exec smsly-promtail kill -HUP 1 2>/dev/null || "
                     "docker restart smsly-promtail 2>/dev/null",
                     raise_on_error=False,
+                    timeout=SSH_TIMEOUT_QUICK,
                 )
                 logger.info("Promtail config updated + reloaded on %s", server.name)
                 return True
             # Force: remove and recreate from scratch
-            client.exec_command("docker rm -f smsly-promtail 2>/dev/null")
+            client.exec_command("docker rm -f smsly-promtail 2>/dev/null", timeout=SSH_TIMEOUT_QUICK)
 
         # 2. Container doesn't exist — create it
-        client.exec_command("docker pull grafana/promtail:2.9.3 2>/dev/null", raise_on_error=False)
+        client.exec_command("docker pull grafana/promtail:2.9.3 2>/dev/null", raise_on_error=False, timeout=SSH_TIMEOUT_PULL)
 
         cmd = (
             f"docker run -d --name smsly-promtail --restart unless-stopped "
@@ -394,7 +406,7 @@ def deploy_promtail_on_node(server, force: bool = False) -> bool:
             f"grafana/promtail:2.9.3 "
             f"-config.file=/etc/promtail/config.yml"
         )
-        _out, err, exit_code = client.exec_command(cmd, raise_on_error=False)
+        _out, err, exit_code = client.exec_command(cmd, raise_on_error=False, timeout=SSH_TIMEOUT_RUN)
         if exit_code != 0:
             error = err.strip()
             logger.error("Failed to start Promtail on %s: %s", server.name, error)

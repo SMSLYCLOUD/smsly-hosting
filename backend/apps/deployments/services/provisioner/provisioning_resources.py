@@ -1,6 +1,5 @@
 """Resource tracking and rollback for provisioning."""
 
-import contextlib
 import io
 import logging
 import os
@@ -19,6 +18,8 @@ class _ProvisioningResources:
     def __init__(self, server: ManagedServer):
         self.server = server
         self._db_users: list[str] = []
+        self._preexisting_db_users: set[str] = set()
+        self._cred_snapshot: dict[str, str] | None = None
         self._firewall_rules: list[tuple[str, str]] = []
         self._dns_domains: list[str] = []
         self._iptables_port5000_ips: list[str] = []
@@ -27,6 +28,24 @@ class _ProvisioningResources:
 
     def track_db_user(self, username: str):
         self._db_users.append(username)
+
+    def mark_db_user_preexisting(self, username: str):
+        """Mark a DB role as NOT created by this run: rollback must never
+        DROP it. A failed re-provision of a healthy node must not take
+        down the currently-online node's database access."""
+        self._preexisting_db_users.add(username)
+
+    def snapshot_credentials(self, gateway_secret: str = "", node_db_password: str = ""):
+        """Snapshot live credential fields BEFORE provisioning mutates them.
+
+        Rollback restores these instead of blanking, so a failed
+        re-provision preserves the working credential set. First-run
+        snapshots are "" — restoring "" matches the old blank behavior.
+        """
+        self._cred_snapshot = {
+            "gateway_secret": gateway_secret or "",
+            "node_db_password": node_db_password or "",
+        }
 
     def track_firewall_rule(self, node_ip: str, port: str):
         self._firewall_rules.append((node_ip, port))
@@ -44,8 +63,28 @@ class _ProvisioningResources:
         self._wg_peer_id = peer_id
 
     def rollback(self):
+        _attempted_drop = False
         for username in self._db_users:
+            if username in self._preexisting_db_users:
+                _append_log(
+                    self.server,
+                    f"🧹 Keeping pre-existing DB user (not created by this run): {username}",
+                )
+                continue
             self._drop_db_user(username)
+            _attempted_drop = True
+        if _attempted_drop:
+            # The role this run created is gone (or the drop was
+            # attempted): the pending-creation marker is stale. Clear it
+            # so the stale sweeper does not try to drop it again. Left
+            # untouched when every tracked user preexisted.
+            try:
+                _meta = dict(getattr(self.server, "provider_metadata", None) or {})
+                if _meta.pop("node_db_user_pending", None) is not None:
+                    self.server.provider_metadata = _meta
+                    self.server.save(update_fields=["provider_metadata", "updated_at"])
+            except Exception as exc:
+                logger.debug("Rollback: failed to clear node_db_user_pending marker: %s", exc)
         for node_ip, port in self._firewall_rules:
             self._remove_firewall_rule(node_ip, port)
         for ip in self._iptables_port5000_ips:
@@ -77,10 +116,19 @@ class _ProvisioningResources:
             elif self._ssh_key_added and self.server.ssh_key:
                 self.server.ssh_key = ""
                 update_fields.append("ssh_key")
-            if getattr(self.server, "node_db_password", None):
+            snap = self._cred_snapshot or {}
+            if "node_db_password" in snap:
+                if (self.server.node_db_password or "") != snap["node_db_password"]:
+                    self.server.node_db_password = snap["node_db_password"]
+                    update_fields.append("node_db_password")
+            elif getattr(self.server, "node_db_password", None):
                 self.server.node_db_password = ""
                 update_fields.append("node_db_password")
-            if self.server.gateway_secret:
+            if "gateway_secret" in snap:
+                if str(self.server.gateway_secret or "") != snap["gateway_secret"]:
+                    self.server.gateway_secret = snap["gateway_secret"]
+                    update_fields.append("gateway_secret")
+            elif self.server.gateway_secret:
                 self.server.gateway_secret = ""
                 update_fields.append("gateway_secret")
             if update_fields:

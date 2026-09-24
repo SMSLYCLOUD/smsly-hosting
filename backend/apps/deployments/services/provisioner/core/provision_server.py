@@ -5,9 +5,9 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import secrets
 import shlex
-import subprocess
 import time
 
 import requests
@@ -23,14 +23,13 @@ from ..helpers import (
     PROVISION_TIMEOUT_SECONDS,
     _append_log,
     _build_local_source_bundle,
+    _docker_login_all,
     _env_bool,
     _get_master_mesh_ip,
     _load_install_script,
     _node_queue_name,
     _prepare_remote_install_lock,
-    _registry_login_commands,
     _schedule_remote_reboot,
-    _shell_env_assignments,
     _verify_agent_db_connectivity,
     build_agent_lite_install_env,
     server_connection_mode,
@@ -43,8 +42,13 @@ from ..provisioning_resources import _ProvisioningResources
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_PROVISION[0], time_limit=TASK_TIME_LIMIT_PROVISION[1], name="apps.deployments.services.provisioner.provision_server")
+@shared_task(bind=True, max_retries=0, soft_time_limit=TASK_TIME_LIMIT_PROVISION[0], time_limit=TASK_TIME_LIMIT_PROVISION[1], name="apps.deployments.services.provisioner.provision_server")
 def provision_server(self, server_id: str, skip_reboot: bool = False):
+    # max_retries=0 is deliberate (not an omission): this 30-minute task
+    # is not idempotent, so broker-level retries must never re-run it —
+    # failures mark FAILED and the operator retries explicitly via
+    # retry-provision (which supports --resume). The default would imply
+    # at-least-once semantics that do not hold here.
     try:
         with transaction.atomic():
             server = ManagedServer.objects.select_for_update().get(id=server_id)
@@ -68,7 +72,13 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 )
                 return
             server.provision_status = ManagedServer.ProvisionStatus.PROVISIONING
-            server.provision_logs = ""
+            # Preserve prior attempt logs (append separator, keep tail) so
+            # a retry does not destroy forensics for the failure it retries.
+            prior_logs = server.provision_logs or ""
+            kept_tail = prior_logs[-50000:] if len(prior_logs) > 50000 else prior_logs
+            server.provision_logs = (
+                (kept_tail + "\n--- Re-provision started ---\n") if kept_tail else ""
+            )
             server.save(
                 update_fields=["provision_status", "provision_logs", "updated_at"]
             )
@@ -79,17 +89,33 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
     _append_log(server, "🚀 Starting Grid provisioning...")
     _append_log(server, f"📡 Connecting to {server.ssh_user}@{server.host}:{server.ssh_port}")
 
+    # B4 snapshot: rollback must only clear/drop credentials THIS run
+    # created. A failed re-provision of a healthy node must never nuke
+    # the live credential set (previously: unconditional blank + DROP).
+    resources = _ProvisioningResources(server)
+    from ..helpers.database import node_db_user_preexists
+    _snap_gateway_secret = str(server.gateway_secret or "")
+    _snap_node_db_password = str(getattr(server, "node_db_password", "") or "")
+    _node_db_username = f"node_agent_{str(server.id).split('-')[0]}"
+    _node_db_preexisted = node_db_user_preexists(_node_db_username)
+    resources.snapshot_credentials(
+        gateway_secret=_snap_gateway_secret,
+        node_db_password=_snap_node_db_password,
+    )
+    if _node_db_preexisted:
+        resources.mark_db_user_preexisting(_node_db_username)
+
     from ..helpers import (
         _get_ssh_client,
         _harden_master_firewall,
         _harden_node_ssh,
         _clear_ssh_password_after_success,
+        _clear_ssh_key_backup_after_success,
         _restrict_ssh_key_to_master_ip,
     )
 
     ssh = None
     local_bundle_path = None
-    resources = _ProvisioningResources(server)
     provision_start_time = time.monotonic()
     try:
         prefer_local_bundle = str(
@@ -282,8 +308,10 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 install_env["MEDIA_REPO_URL"] = str(repo_url)
                 install_args.extend(["--repo-url", str(repo_url)])
             if repo_token:
+                # Env-only: install.sh reads MEDIA_REPO_TOKEN from the
+                # environment (never a --repo-token flag — it would be
+                # ignored AND leak the secret in `ps` argv).
                 install_env["MEDIA_REPO_TOKEN"] = str(repo_token)
-                install_args.extend(["--repo-token", str(repo_token)])
         elif install_mode == "node":
             install_args.append("--mode=node")
             install_env["COMPOSE_FILE"] = "infrastructure/docker/docker-compose.node.yml"
@@ -343,8 +371,31 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             install_env["SMSLY_INSTALL_WORKDIR"] = "/tmp/smsly-hosting-src"
 
         install_args_str = " ".join(shlex.quote(arg) for arg in install_args)
+        # Secrets travel via a root-only env file, never argv: env-prefix
+        # assignments (KEY='value' bash ...) are visible to anyone on the
+        # node via `ps` for the whole 5-15 minute installer run.
+        remote_env_path = "/tmp/smsly-install.env"
+        _env_file_lines = []
+        for _env_key, _env_val in install_env.items():
+            if _env_val is None:
+                continue
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(_env_key)):
+                continue
+            _escaped = str(_env_val).replace("'", "'\"'\"'")
+            _env_file_lines.append(f"{_env_key}='{_escaped}'")
+        sftp_env = ssh.open_sftp()
+        try:
+            _remote_env = sftp_env.open(remote_env_path, "w")
+            try:
+                _remote_env.write("\n".join(_env_file_lines) + "\n")
+                _remote_env.flush()
+            finally:
+                _remote_env.close()
+            sftp_env.chmod(remote_env_path, 0o600)
+        finally:
+            sftp_env.close()
         cmd = (
-            f"{run_prefix}{_shell_env_assignments(install_env)} "
+            f"{run_prefix}set -a; . {remote_env_path}; set +a; "
             f"bash /tmp/smsly-install.sh {install_args_str} 2>&1"
         )
 
@@ -415,24 +466,21 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         with contextlib.suppress(Exception):
             ssh.exec_command(
-                "shred -u /tmp/smsly-install.sh /tmp/smsly-hosting-src.tar.gz "
+                "shred -u /tmp/smsly-install.sh /tmp/smsly-install.env "
+                "/tmp/smsly-hosting-src.tar.gz "
                 "/tmp/smsly-hosting-src 2>/dev/null || "
-                "rm -rf /tmp/smsly-install.sh /tmp/smsly-hosting-src.tar.gz /tmp/smsly-hosting-src"
+                "rm -rf /tmp/smsly-install.sh /tmp/smsly-install.env "
+                "/tmp/smsly-hosting-src.tar.gz /tmp/smsly-hosting-src"
             )
 
-        registry_cmds = _registry_login_commands(server)
-        if registry_cmds and registry_cmds != "true":
-            _append_log(server, "🔑 Logging into configured registries on node...")
-            try:
-                stdin, stdout, stderr = ssh.exec_command(registry_cmds, timeout=60)
-                reg_exit = stdout.channel.recv_exit_status()
-                if reg_exit == 0:
-                    _append_log(server, "✅ Docker login succeeded for all configured registries")
-                else:
-                    reg_err = stderr.read().decode("utf-8", errors="replace").strip()[:500]
-                    _append_log(server, f"⚠️ Registry docker-login had non-zero exit ({reg_exit}): {reg_err}")
-            except Exception as exc:
-                _append_log(server, f"⚠️ Registry docker-login command failed: {exc}")
+        # Registry logins: passwords travel over the encrypted SSH channel
+        # (stdin), never interpolated into remote argv (`ps`-visible).
+        _append_log(server, "🔑 Logging into configured registries on node...")
+        try:
+            _docker_login_all(ssh, server)
+            _append_log(server, "✅ Registry login pass completed")
+        except Exception as exc:
+            _append_log(server, f"⚠️ Registry docker-login command failed: {exc}")
 
         _append_log(server, "[cred] Reading credentials from server...")
 
@@ -565,7 +613,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             _append_log(server, f"Warning: could not read remote gateway secret: {secret_exc}")
 
         if not api_token and remote_gateway_secret:
-            from .tls_verify import (
+            from apps.deployments.services.tls_verify import (
                 _check_pin_after_handshake,
                 resolve_tls_verify_for_url,
             )
@@ -628,7 +676,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 )
 
         if not api_token and admin_user and admin_password:
-            from .tls_verify import (
+            from apps.deployments.services.tls_verify import (
                 _check_pin_after_handshake,
                 resolve_tls_verify_for_url,
             )
@@ -745,7 +793,6 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         wg_ip = getattr(server, "wg_address", None) or ""
         if wg_ip:
-            import contextlib as _ctx
             import subprocess as _sp
             try:
                 import ipaddress as _ipa
@@ -793,6 +840,14 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             update_fields.append("wg_address")
         server.provision_status = ManagedServer.ProvisionStatus.DONE
         server.status = ManagedServer.Status.ONLINE
+        try:
+            _meta = dict(server.provider_metadata or {})
+            if _meta.pop("node_db_user_pending", None) is not None:
+                server.provider_metadata = _meta
+                if "provider_metadata" not in update_fields:
+                    update_fields.append("provider_metadata")
+        except Exception:
+            pass
         server.save(update_fields=update_fields)
 
         _append_log(server, "✅ Grid provisioning complete!")
@@ -803,7 +858,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             try:
                 ssh_password = str(server.ssh_password or "").strip()
                 if ssh_password:
-                    from .tls_verify import (
+                    from apps.deployments.services.tls_verify import (
                         _check_pin_after_handshake,
                         resolve_tls_verify_for_url,
                     )
@@ -874,6 +929,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         # Clear SSH password now that provisioning succeeded (key-only auth)
         _clear_ssh_password_after_success(server)
+        # Drop the stashed operator key backup — it exists for FAILURE
+        # rollback only; on success the record holds the generated key.
+        _clear_ssh_key_backup_after_success(server)
 
         if not skip_reboot and _env_bool("SMSLY_PROVISION_REBOOT_ON_SUCCESS", default=True):
             _append_log(server, "Scheduling remote reboot after successful provisioning.")
@@ -921,6 +979,14 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 os.remove(local_bundle_path)
         try:
             if ssh is not None:
+                # The secrets env file must not survive EITHER path: on
+                # failure the installer never reaches its own shred step.
+                with contextlib.suppress(Exception):
+                    ssh.exec_command(
+                        "shred -u /tmp/smsly-install.env 2>/dev/null || "
+                        "rm -f /tmp/smsly-install.env",
+                        timeout=15,
+                    )
                 ssh.close()
         except Exception as exc:
             logger.debug("Failed to close SSH connection during cleanup: %s", exc)

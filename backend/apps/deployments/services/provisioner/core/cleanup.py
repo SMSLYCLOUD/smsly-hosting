@@ -20,9 +20,13 @@ def _rollback_stale_provisioning(server: ManagedServer) -> None:
     """
     metadata = server.provider_metadata or {}
 
-    # 1. Drop the DB user if one was created
+    # 1. Drop the DB user ONLY if an unfinished run created it
+    # (node_db_user_pending marker). A dead re-provision of a live node
+    # leaves no marker — the role preexisted — so the live role is
+    # preserved. Dropping unconditionally here once killed healthy nodes
+    # whose re-provision worker died mid-run.
     node_db_user = metadata.get("node_db_user")
-    if node_db_user:
+    if node_db_user and metadata.get("node_db_user_pending"):
         _drop_db_user(node_db_user)
         try:
             from apps.deployments.services.provisioner.helpers.database import (
@@ -31,6 +35,11 @@ def _rollback_stale_provisioning(server: ManagedServer) -> None:
             _rerender_pgcat_config()
         except Exception as exc:
             logger.debug("Rollback: pgcat re-render skipped for %s: %s", server.name, exc)
+    elif node_db_user:
+        _append_log(
+            server,
+            f"🧹 Keeping pre-existing DB user (no unfinished creation): {node_db_user}",
+        )
 
     # 2. Remove iptables rules for the node's public IP
     host = getattr(server, "host", "") or ""
@@ -130,18 +139,20 @@ def _rollback_stale_provisioning(server: ManagedServer) -> None:
             pass
     if _meta.pop("node_db_user", None) is not None:
         _meta_changed = True
+    if _meta.pop("node_db_user_pending", None) is not None:
+        _meta_changed = True
     if _meta_changed:
         try:
             server.provider_metadata = _meta
             update_fields.append("provider_metadata")
         except Exception:
             pass
-    if getattr(server, "node_db_password", None):
-        server.node_db_password = ""
-        update_fields.append("node_db_password")
-    if server.gateway_secret:
-        server.gateway_secret = ""
-        update_fields.append("gateway_secret")
+    # NOTE: node_db_password / gateway_secret are deliberately NOT blanked
+    # here. The sweeper cannot know whether the record matches the live
+    # node (dead re-provision) or a dead first run (retry reuses the
+    # stored password to recreate the role). Blanking destroys forensics
+    # and breaks retry reuse; same-run rollback (which has a snapshot)
+    # remains the only path that clears these fields.
     if update_fields:
         update_fields.append("updated_at")
         try:

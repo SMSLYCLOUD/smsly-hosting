@@ -281,6 +281,10 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"is_lite_agent": "Contradictory flags: use node_type='agent-lite' for lite agents, or set is_lite_agent to false."}
             )
+        if data.get("node_type") == "media" and data.get("is_lite_agent"):
+            raise serializers.ValidationError(
+                {"is_lite_agent": "Contradictory flags: media nodes are bare-metal installs and cannot be lite agents."}
+            )
         return data
 
 

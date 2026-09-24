@@ -39,10 +39,15 @@ def _harden_master_firewall(server: ManagedServer) -> str:
                     capture_output=True, timeout=5,
                 )
 
-    subprocess.run(
-        ["iptables", "-N", "DOCKER-USER"],
-        capture_output=True, timeout=5,
-    )
+    try:
+        subprocess.run(
+            ["iptables", "-N", "DOCKER-USER"],
+            capture_output=True, timeout=5,
+        )
+    except Exception as exc:
+        # Missing iptables (or no privileges) must not kill provisioning:
+        # the -C check below already degrades to a warning in that case.
+        logger.debug("Could not ensure DOCKER-USER chain (non-fatal): %s", exc)
 
     try:
         check = subprocess.run(

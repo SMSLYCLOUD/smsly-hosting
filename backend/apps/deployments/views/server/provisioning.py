@@ -342,6 +342,12 @@ class ProvisioningMixin:
 
         if validated.get("node_type") == "node":
             validated["is_lite_agent"] = False
+        elif validated.get("node_type") == "agent-lite":
+            # node_type is the UI-facing selector; the flag drives
+            # server_install_mode. Normalize so the two cannot disagree
+            # (previously agent-lite + flag False silently provisioned
+            # a full "node" instead).
+            validated["is_lite_agent"] = True
 
         generated_public_key = None
         if auth_method == "generated":

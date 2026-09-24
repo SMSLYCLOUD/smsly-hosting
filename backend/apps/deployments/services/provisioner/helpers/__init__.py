@@ -8,6 +8,8 @@ from .env import (
     _url_username,
 )
 from .ssh import (
+    _clear_ssh_key_backup_after_success,
+    _clear_ssh_password_after_success,
     _get_ssh_client,
     _harden_node_ssh,
     _restrict_ssh_key_to_master_ip,
@@ -41,6 +43,8 @@ from .media_repo import (
     stage_media_repo_for_node,
 )
 from .registry import (
+    _docker_login_all,
+    _registry_credential_list,
     _registry_login_commands,
 )
 from .database import (
@@ -48,12 +52,16 @@ from .database import (
     _rerender_pgcat_config,
     _restart_pgcat,
     _verify_agent_db_connectivity,
+    node_db_user_preexists,
 )
 
 __all__ = [
     "PROVISION_TIMEOUT_SECONDS",
     "_append_log",
     "_build_local_source_bundle",
+    "_clear_ssh_key_backup_after_success",
+    "_clear_ssh_password_after_success",
+    "_docker_login_all",
     "_env_bool",
     "_env_int",
     "_get_master_mesh_ip",
@@ -67,6 +75,7 @@ __all__ = [
     "_node_queue_name",
     "_prepare_remote_install_lock",
     "_provision_node_db_credentials",
+    "_registry_credential_list",
     "_registry_login_commands",
     "_rerender_pgcat_config",
     "_restrict_ssh_key_to_master_ip",
@@ -78,6 +87,7 @@ __all__ = [
     "_url_username",
     "_verify_agent_db_connectivity",
     "build_agent_lite_install_env",
+    "node_db_user_preexists",
     "resolve_media_repo_url",
     "stage_media_application_repos",
     "server_connection_mode",

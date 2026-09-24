@@ -240,6 +240,24 @@ def _clear_ssh_password_after_success(server: ManagedServer) -> None:
         _append_log(server, "🔒 SSH password cleared from record (key-only auth)")
 
 
+def _clear_ssh_key_backup_after_success(server: ManagedServer) -> None:
+    """Delete the stashed operator key backup after a successful run.
+
+    The backup exists so rollback can restore the operator's original
+    key after a FAILURE. Once provisioning succeeds the record holds
+    the generated restricted key and the backup is stale key material
+    that must not accumulate in provider_metadata.
+    """
+    try:
+        _meta = dict(getattr(server, "provider_metadata", None) or {})
+        if _meta.pop("ssh_key_backup", None) is not None:
+            server.provider_metadata = _meta
+            server.save(update_fields=["provider_metadata", "updated_at"])
+            _append_log(server, "🔒 Stale operator key backup cleared from record")
+    except Exception as exc:
+        logger.debug("Failed to clear ssh_key_backup: %s", exc)
+
+
 def _schedule_remote_reboot(ssh, server: ManagedServer, reason: str) -> bool:
     command = (
         "if [ \"$(id -u)\" -eq 0 ]; then "
