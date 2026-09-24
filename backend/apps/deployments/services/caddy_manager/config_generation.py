@@ -504,6 +504,15 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         lines.append("    tls {")
                         lines.append("        on_demand")
                         lines.append("    }")
+                        # Challenge handle BEFORE the apex redirect: the
+                        # verifier fetches over http (308 to https) and the
+                        # www host must answer the token itself, not bounce
+                        # to the apex (which has a different row/token).
+                        lines.append("    handle /.well-known/smsly-verify/* {")
+                        lines.append("        reverse_proxy backend:8000 {")
+                        lines.append("            header_up Host localhost")
+                        lines.append("        }")
+                        lines.append("    }")
                         lines.append(f"        redir https://{_apex}{{uri}} 301")
                         lines.append("}")
                         blocks.append("\n".join(lines))
@@ -516,6 +525,16 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     ))
                     lines.append("    tls {")
                     lines.append("        on_demand")
+                    lines.append("    }")
+                    # Per-domain challenge handle: Caddy routes Host-based
+                    # sites (both :80 with auto-https-redir and :443) ahead
+                    # of the generic :80 site, so without this the token
+                    # 308s to https and 404s in the app — breaking
+                    # orange-clouded verification permanently.
+                    lines.append("    handle /.well-known/smsly-verify/* {")
+                    lines.append("        reverse_proxy backend:8000 {")
+                    lines.append("            header_up Host localhost")
+                    lines.append("        }")
                     lines.append("    }")
 
                     upstream_url = _remote_upstream_url_for_service(service)
