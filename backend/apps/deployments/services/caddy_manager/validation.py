@@ -61,10 +61,19 @@ def _known_service_route_domains() -> set[str]:
 
 def _block_reverse_proxies_to_control_plane(block: str) -> list[str]:
     matches = []
+    challenge_depth = 0
+    brace_depth = 0
     for raw_line in str(block or "").splitlines():
         line = raw_line.strip()
+        if "handle /.well-known/smsly-verify/" in line and line.startswith("handle "):
+            challenge_depth = brace_depth + 1
+        brace_depth += line.count("{") - line.count("}")
+        if challenge_depth and brace_depth < challenge_depth:
+            challenge_depth = 0
         if not line.startswith("reverse_proxy "):
             continue
+        if challenge_depth:
+            continue  # path-scoped challenge proxy, not a hijack
         parts = line.split()
         if len(parts) < 2:
             continue

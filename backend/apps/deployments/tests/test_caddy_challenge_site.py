@@ -13,6 +13,9 @@ from django.test import SimpleTestCase, TestCase
 from apps.deployments.services.caddy_manager.config_generation import (
     generate_caddyfile,
 )
+from apps.deployments.services.caddy_manager.validation import (
+    _block_reverse_proxies_to_control_plane,
+)
 
 
 class ChallengeSiteTests(SimpleTestCase):
@@ -72,3 +75,29 @@ class PerDomainChallengeTests(TestCase):
         self.assertLess(handle_at, block.index("reverse_proxy",
                                                handle_at + 1) if "reverse_proxy" in block[handle_at:] else 10**9)
         self.assertIn("header_up Host localhost", block)
+
+
+class ChallengeGuardTests(SimpleTestCase):
+    """The control-plane guard must ignore the path-scoped challenge
+    proxy while still catching real hijacks."""
+
+    def test_challenge_handle_not_flagged(self):
+        block = """example.com {
+    tls {
+        on_demand
+    }
+    handle /.well-known/smsly-verify/* {
+        reverse_proxy backend:8000 {
+            header_up Host localhost
+        }
+    }
+    reverse_proxy traefik:80
+}"""
+        self.assertEqual(_block_reverse_proxies_to_control_plane(block), [])
+
+    def test_unscoped_control_plane_proxy_still_flagged(self):
+        block = """example.com {
+    reverse_proxy backend:8000
+}"""
+        flagged = _block_reverse_proxies_to_control_plane(block)
+        self.assertEqual(len(flagged), 1)
