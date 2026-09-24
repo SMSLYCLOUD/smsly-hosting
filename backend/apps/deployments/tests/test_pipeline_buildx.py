@@ -111,6 +111,8 @@ class BuildxFallbackTests(TestCase):
         ), patch.object(
             build_mod, "_use_buildx", return_value=True,
         ), patch.object(
+            build_mod, "_ensure_docker_driver_builder", return_value=True,
+        ), patch.object(
             build_mod, "_buildx_usable", return_value=True,
         ), patch.object(
             build_mod.BuildMixin, "_build_with_buildx",
@@ -165,6 +167,93 @@ class BuildxFallbackTests(TestCase):
                      "failed to export layer: CreateDiff",
                      "executor failed running [/bin/sh]"):
             self.assertFalse(_is_buildx_infra_error(text), text)
+
+
+class BuilderSelectionTests(TestCase):
+    """The acting user's builder must be an explicit docker-driver one.
+
+    Regression (2026-09-24): entrypoint selected smsly-docker as ROOT
+    while workers run as smsly — workers saw a phantom docker-container
+    `default` with no buildkitd, the substring probe passed it, and every
+    build silently fell back to classic (ARG secrets in history).
+    """
+
+    def setUp(self):
+        self._cached = build_mod._BUILDX_USABLE
+        build_mod._BUILDX_USABLE = None
+        self.addCleanup(setattr, build_mod, "_BUILDX_USABLE", self._cached)
+
+    def _proc(self, rc=0, stdout=""):
+        return SimpleNamespace(returncode=rc, stdout=stdout, stderr="")
+
+    def test_probe_accepts_docker_driver(self):
+        from apps.deployments.services.pipeline.build import _buildx_usable
+        out = "Name: smsly-docker\nDriver: docker\n"
+        with patch("shutil.which", return_value="/usr/bin/docker"), \
+                patch("subprocess.run",
+                      return_value=self._proc(0, out)):
+            self.assertTrue(_buildx_usable())
+
+    def test_probe_rejects_docker_container_driver(self):
+        from apps.deployments.services.pipeline.build import _buildx_usable
+        out = "Name: default\nDriver: docker-container\nEndpoint: default\n"
+        with patch("shutil.which", return_value="/usr/bin/docker"), \
+                patch("subprocess.run",
+                      return_value=self._proc(0, out)):
+            self.assertFalse(_buildx_usable())
+
+    def test_ensure_selects_existing_builder(self):
+        from apps.deployments.services.pipeline.build import (
+            _ensure_docker_driver_builder,
+        )
+        calls = []
+
+        def _run(cmd, **kw):
+            calls.append(cmd)
+            if cmd[:3] == ["docker", "buildx", "inspect"]:
+                return self._proc(0, "Name: smsly-docker\n")
+            return self._proc(0, "")
+
+        with patch("subprocess.run", side_effect=_run):
+            self.assertTrue(_ensure_docker_driver_builder())
+        self.assertNotIn(
+            ["docker", "buildx", "create", "--driver", "docker",
+             "--name", "smsly-docker"],
+            calls,
+        )
+        self.assertIn(["docker", "buildx", "use", "smsly-docker"], calls)
+
+    def test_ensure_creates_missing_builder(self):
+        from apps.deployments.services.pipeline.build import (
+            _ensure_docker_driver_builder,
+        )
+
+        def _run(cmd, **kw):
+            if cmd[:3] == ["docker", "buildx", "inspect"]:
+                return self._proc(1, "")
+            return self._proc(0, "")
+
+        with patch("subprocess.run", side_effect=_run) as mock_run:
+            self.assertTrue(_ensure_docker_driver_builder())
+        created = [c.args[0] for c in mock_run.call_args_list]
+        self.assertIn(
+            ["docker", "buildx", "create", "--driver", "docker",
+             "--name", "smsly-docker"],
+            created,
+        )
+
+    def test_ensure_false_when_use_fails(self):
+        from apps.deployments.services.pipeline.build import (
+            _ensure_docker_driver_builder,
+        )
+
+        def _run(cmd, **kw):
+            if cmd[1:3] == ["buildx", "use"]:
+                return self._proc(1, "error")
+            return self._proc(0, "")
+
+        with patch("subprocess.run", side_effect=_run):
+            self.assertFalse(_ensure_docker_driver_builder())
 
 
 class SecretFileHygieneTests(TestCase):

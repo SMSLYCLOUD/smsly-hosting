@@ -119,7 +119,7 @@ def _is_buildx_infra_error(text: str) -> bool:
 
 
 def _buildx_usable() -> bool:
-    """CLI present + default builder on the docker driver (read-only probe,
+    """CLI present + SELECTED builder on the docker driver (read-only probe,
     never mutates shared builder state). Cached per process."""
     global _BUILDX_USABLE
     if _BUILDX_USABLE is not None:
@@ -133,12 +133,59 @@ def _buildx_usable() -> bool:
                 ["docker", "buildx", "inspect"],
                 capture_output=True, text=True, timeout=15,
             )
-            usable = probe.returncode == 0 and "Driver: docker" in (probe.stdout or "")
+            # Exact line match: a substring test accepts
+            # "Driver: docker-container" (2026-09-24: phantom builder with
+            # no buildkitd silently disabled BuildKit on every build).
+            usable = (
+                probe.returncode == 0
+                and re.search(r"(?m)^Driver:\s+docker\s*$",
+                              probe.stdout or "") is not None
+            )
     except Exception as exc:
         logger.debug("buildx usability probe failed: %s", exc)
         usable = False
     _BUILDX_USABLE = usable
     return usable
+
+
+def _ensure_docker_driver_builder() -> bool:
+    """Select the smsly-docker builder in THIS process's user context.
+
+    Root-cause fix (2026-09-24): entrypoint selects smsly-docker as ROOT,
+    but workers run as smsly (uid 1000, different $HOME) where the current
+    builder was a phantom docker-container `default` with no buildkitd —
+    every build silently fell back to classic (ARG secrets in history).
+    Selecting here (cheap no-op when already selected) makes the acting
+    user's builder explicit on every build instead of ambient. Concurrent
+    builds racing create/use converge on the same value harmlessly.
+    """
+    global _BUILDX_USABLE
+    try:
+        inspect = subprocess.run(
+            ["docker", "buildx", "inspect", "smsly-docker"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if inspect.returncode != 0:
+            create = subprocess.run(
+                ["docker", "buildx", "create", "--driver", "docker",
+                 "--name", "smsly-docker"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if create.returncode != 0:
+                logger.debug("builder create failed: %s",
+                             (create.stderr or "")[:150])
+                return False
+        use = subprocess.run(
+            ["docker", "buildx", "use", "smsly-docker"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if use.returncode != 0:
+            return False
+        _BUILDX_USABLE = None  # selection changed — force a fresh probe
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug("builder ensure failed: %s", exc)
+        return False
 
 
 def _stage_secret_files(secrets: dict | None) -> tuple[list, list]:
@@ -906,7 +953,7 @@ class BuildMixin:
         timeouts raise immediately — retrying those on a second engine
         just burns another full build.
         """
-        if _use_buildx() and _buildx_usable():
+        if _use_buildx() and _ensure_docker_driver_builder() and _buildx_usable():
             try:
                 return self._build_with_buildx(
                     context_dir=context_dir,
