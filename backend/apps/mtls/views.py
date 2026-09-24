@@ -159,9 +159,12 @@ def ensure_ecosystem_spire() -> str:
         agent_container=ECOSYSTEM_SPIRE_AGENT_CONTAINER,
         server_container=ECOSYSTEM_SPIRE_SERVER_CONTAINER,
         agent_conf_path="/opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf",
-        data_volume="smsly-spire_spire-ecosystem-agent-data",
-        socket_volume="smsly-spire_spire-ecosystem-agent-socket",
-        svids_volume="smsly-spire_spire-ecosystem-agent-svids",
+        # Live volumes (created by install.sh under -p smsly-hosting).
+        # smsly-spire_* names are empty decoys — using them detaches the
+        # agent socket/svids from every workload with zero errors.
+        data_volume="smsly-hosting_spire-ecosystem-agent-data",
+        socket_volume="smsly-hosting_spire-ecosystem-agent-socket",
+        svids_volume="smsly-hosting_spire-ecosystem-agent-svids",
     )
     return agent if str(agent).startswith("error") else "ready"
 
@@ -448,9 +451,10 @@ def mtls_spire_deploy(request):
                 agent_container=ECOSYSTEM_SPIRE_AGENT_CONTAINER,
                 server_container=ECOSYSTEM_SPIRE_SERVER_CONTAINER,
                 agent_conf_path="/opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf",
-                data_volume="smsly-spire_spire-ecosystem-agent-data",
-                socket_volume="smsly-spire_spire-ecosystem-agent-socket",
-                svids_volume="smsly-spire_spire-ecosystem-agent-svids",
+                # Live volumes — see note at ensure_ecosystem_spire above.
+                data_volume="smsly-hosting_spire-ecosystem-agent-data",
+                socket_volume="smsly-hosting_spire-ecosystem-agent-socket",
+                svids_volume="smsly-hosting_spire-ecosystem-agent-svids",
             )
             results["ecosystem_agent"] = agent_result
             if str(agent_result).startswith("error"):

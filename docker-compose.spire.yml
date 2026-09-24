@@ -265,8 +265,17 @@ volumes:
   spire-agent-svids:
   spire-ecosystem-server-data:
   spire-ecosystem-agent-data:
+  # Pinned to the live smsly-hosting_* volumes (created by install.sh's
+  # docker run, which is how the agent actually runs). Bare names would
+  # resolve to per-project decoys (smsly-spire_* under -p smsly-spire),
+  # silently detaching the agent socket/svids from every workload
+  # (2026-09: identity mounted an empty socket decoy, no SVIDs issued).
   spire-ecosystem-agent-socket:
+    external: true
+    name: smsly-hosting_spire-ecosystem-agent-socket
   spire-ecosystem-agent-svids:
+    external: true
+    name: smsly-hosting_spire-ecosystem-agent-svids
 
 networks:
   smsly-net:
