@@ -1,20 +1,7 @@
-# Silence gVisor ptrace noise from containerd-shim/runsc
-- rule: Silence gVisor ptrace
-  desc: Silence noisy ptrace from gVisor runtime
-  condition: >
-    evt.type=ptrace and proc.pname=containerd-shim
-  output: "gVisor ptrace (silenced)"
-  priority: DEBUG
-  enabled: true
-
-# Silence systemd reading PAM files
-- rule: Silence systemd PAM reads
-  desc: Silence noisy sensitive file reads from systemd
-  condition: >
-    evt.type=openat and fd.name startswith /etc/pam.d and proc.exepath=/usr/lib/systemd/systemd-executor
-  output: "systemd PAM read (silenced)"
-  priority: DEBUG
-  enabled: true
+# NOTE: the "Silence ..." DEBUG rules that lived here were removed —
+# a DEBUG rule does not suppress the stock WARNING, it only adds a
+# second log line. Suppression is done via the stock-rule override
+# below (same rule name wins).
 
 # Benign host auth reads by systemd's executor (service startups read
 # /etc/shadow and /etc/pam.d/* via /usr/lib/systemd/systemd-executor).
