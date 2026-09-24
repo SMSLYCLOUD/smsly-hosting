@@ -119,7 +119,8 @@ scrape_configs:
           source: ts
           format: RFC3339
 
-  # Traefik access log collection (JSON format)  - job_name: traefik-access
+  # Traefik access log collection (JSON format)
+  - job_name: traefik-access
     static_configs:
       - targets:
           - localhost
