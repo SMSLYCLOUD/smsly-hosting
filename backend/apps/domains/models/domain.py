@@ -42,6 +42,10 @@ class Domain(models.Model):
 
     checked_at = models.DateTimeField(blank=True, null=True)  # type: ignore[var-annotated]
     ssl_fail_count = models.IntegerField(default=0)  # type: ignore[var-annotated]
+    # Consecutive reverify failures. Demotion requires >= 3 in a row so a
+    # single transient (resolver blip, slow token serve) cannot take down
+    # a live custom domain the way the trulay.co demotion did.
+    verify_fail_count = models.IntegerField(default=0)  # type: ignore[var-annotated]
 
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]

@@ -46,12 +46,14 @@ def verify_dns_and_provision_ssl_task(self, domain_id):
         )
         domain.last_error = None
         domain.verified = True
+        domain.verify_fail_count = 0
         domain.save(update_fields=[
             "status",
             "dns_expected",
             "dns_actual",
             "last_error",
             "verified",
+            "verify_fail_count",
         ])
 
         if old_status not in ROUTABLE_STATUSES:

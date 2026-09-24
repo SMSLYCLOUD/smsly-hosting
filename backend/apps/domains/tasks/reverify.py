@@ -63,9 +63,26 @@ def reverify_custom_domains_task(self):
 
         if result.verified:
             verified_ok.append(domain.domain_name)
+            if (domain.verify_fail_count or 0) != 0:
+                domain.verify_fail_count = 0
+                domain.save(update_fields=["verify_fail_count", "updated_at"])
             continue
 
-        # Demote — DNS no longer points at the platform.
+        # Demote only after consecutive failures — a single transient
+        # (resolver blip, slow token serve) must not take down a live
+        # custom domain. Counter resets on any successful pass above.
+        fails = (domain.verify_fail_count or 0) + 1
+        domain.verify_fail_count = fails
+        if fails < 3:
+            domain.last_error = (
+                f"Re-verification failed ({fails}/3): {result.error or result.actual}"
+            )
+            domain.save(update_fields=["verify_fail_count", "last_error", "updated_at"])
+            logger.warning(
+                "reverify: %s failed %d/3 — keeping current status (%s)",
+                domain.domain_name, fails, domain.status,
+            )
+            continue
         domain.verified = False
         domain.ssl_active = False
         domain.status = DomainStatus.DNS_PENDING
@@ -73,7 +90,8 @@ def reverify_custom_domains_task(self):
             f"Continuous re-verification failed: {result.error or result.actual}"
         )
         domain.save(update_fields=[
-            "verified", "ssl_active", "status", "last_error", "updated_at",
+            "verified", "ssl_active", "status", "last_error",
+            "verify_fail_count", "updated_at",
         ])
         demoted.append(domain.domain_name)
         logger.warning(
