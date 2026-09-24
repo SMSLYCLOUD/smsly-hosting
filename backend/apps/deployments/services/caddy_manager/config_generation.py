@@ -1949,9 +1949,23 @@ def generate_caddyfile(config) -> str:
         not host localhost
         not host 127.0.0.1
         not host *.local
+        not path /.well-known/smsly-verify/*
         header_regexp host .+
     }
     redir @redirectable https://{host}{uri} 308
+
+    # HTTP-proof domain verification (orange-compatible): per-domain
+    # challenge tokens for ANY host. Must live in THIS :80 site (Caddy
+    # rejects duplicate :80 sites as ambiguous) and be excluded from the
+    # https redirect above (directive order runs redir before handles).
+    # Tokens are unguessable per-domain secrets; unknown tokens 404. Host
+    # is rewritten to localhost so Django ALLOWED_HOSTS (strict by
+    # design) never blocks a pending custom hostname.
+    handle /.well-known/smsly-verify/* {
+        reverse_proxy backend:8000 {
+            header_up Host localhost
+        }
+    }
 
     handle /api/* {
         reverse_proxy backend:8000
@@ -1995,6 +2009,13 @@ def generate_caddyfile(config) -> str:
     elif not domain:
         sections.append(
             """:80 {
+    # HTTP-proof domain verification challenge (see the use_ssl branch
+    # above). First so the catch-all below never swallows it.
+    handle /.well-known/smsly-verify/* {
+        reverse_proxy backend:8000 {
+            header_up Host localhost
+        }
+    }
     handle /api/* {
         reverse_proxy backend:8000
     }
@@ -2031,22 +2052,6 @@ def generate_caddyfile(config) -> str:
     # (_wildcard_site_on). See the flag definition for why these must
     # never disagree (silent dead 301s, 2026-09-12).
     wildcard_base = domain if _wildcard_site_on else ""
-    # HTTP-proof domain verification (orange-compatible): serve per-domain
-    # challenge tokens on :80 for ANY host, proxied to the backend lookup.
-    # Narrow path only — ACME http-01 and every other path are unaffected
-    # (exact-host sites still win for their own hosts). Tokens are
-    # unguessable per-domain secrets; unknown tokens 404. Host is rewritten
-    # to localhost so Django ALLOWED_HOSTS (strict by design) never blocks
-    # a pending custom hostname.
-    sections.append(
-        """:80 {
-    handle /.well-known/smsly-verify/* {
-        reverse_proxy backend:8000 {
-            header_up Host localhost
-        }
-    }
-}"""
-    )
     service_blocks = _get_service_domain_blocks(wildcard_domain=wildcard_base)
     sections.extend(service_blocks)
 
