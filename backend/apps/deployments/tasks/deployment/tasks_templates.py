@@ -3,6 +3,7 @@ import logging
 logger = logging.getLogger(__name__)
 import json
 import os
+import re
 import secrets
 import subprocess
 from urllib.parse import urlparse
@@ -30,6 +31,103 @@ from apps.deployments.utils import (
 )
 
 from ..ai.ollama import _ensure_shared_ollama_cpp, _pull_ollama_models_into_shared
+
+
+_TEMPLATE_UNSAFE_PREFIXES = (
+    # Host-escape / kernel interfaces: never auto-mount, even as named
+    # volumes (defense-in-depth; Docker would refuse most of these
+    # anyway, but fail closed here with a clear log instead).
+    "/var/run/docker.sock", "/proc", "/sys", "/dev",
+    "/boot", "/var/run",
+)
+_TEMPLATE_NEVER_MOUNTS = (
+    # Sensitive identity files: harmless as named volumes (no host
+    # access), refused anyway — no legitimate fixture needs them,
+    # and their presence in a fixture would warrant human review.
+    "/etc/passwd", "/etc/shadow", "/etc/group", "/etc/sudoers",
+    "/etc/sudoers.d", "/etc/ssh",
+)
+
+
+def _classify_template_volume(raw_vol) -> tuple[str, str]:
+    """Classify one fixture volume entry.
+
+    Returns ("named", container_path) when the entry should become a
+    Docker named volume, or ("skip", reason) otherwise. Pure function
+    (no DB) so the whole fixture catalog can be audited in tests.
+
+    Security model: auto-creation NEVER honors explicit bind specs
+    (``host:container[:mode]``) — those could graft host paths like
+    docker.sock into the container. Named volumes live entirely
+    inside Docker's storage; the container path is just a mountpoint
+    in the container's own namespace, never a host directory.
+    """
+    import posixpath as _posixpath
+
+    vol_path = ""
+    if isinstance(raw_vol, dict):
+        vol_path = str(raw_vol.get('path') or raw_vol.get('mount_path') or '')
+    else:
+        vol_path = str(raw_vol or '')
+    vol_path = vol_path.strip()
+    if ".." in vol_path.split("/"):
+        return ("skip", f"path traversal in {vol_path!r}")
+    if ':' in vol_path:
+        return ("skip", f"explicit bind spec {vol_path!r} is never auto-mounted")
+    if not vol_path.startswith('/') or vol_path == '/':
+        return ("skip", f"not an absolute container path: {vol_path!r}")
+    norm = _posixpath.normpath(vol_path)
+    if ".." in norm.split("/"):
+        return ("skip", f"path traversal in {vol_path!r}")
+    if norm == "/":
+        return ("skip", f"refusing filesystem root {vol_path!r}")
+    for bad in _TEMPLATE_UNSAFE_PREFIXES:
+        if norm == bad or norm.startswith(bad.rstrip("/") + "/"):
+            return ("skip", f"host-privileged path {vol_path!r}")
+    if norm in _TEMPLATE_NEVER_MOUNTS or any(
+        norm == never or norm.startswith(never.rstrip("/") + "/")
+        for never in _TEMPLATE_NEVER_MOUNTS
+    ):
+        return ("skip", f"sensitive identity path {vol_path!r}")
+    return ("named", norm)
+
+
+def _ensure_template_volumes(service, template: dict | None) -> dict:
+    """Create Volume rows for a template's writable paths.
+
+    Returns {"created": [(name, path)], "skipped": [(raw, reason)]}.
+    Idempotent (get_or_create on service+mount_path).
+    """
+    from apps.deployments.models import Volume
+
+    result: dict = {"created": [], "skipped": []}
+    if not template:
+        return result
+    for raw_vol in template.get('volumes') or []:
+        action, payload = _classify_template_volume(raw_vol)
+        if action == "skip":
+            logger.info(
+                "Template %s volume skipped: %s",
+                template.get('id'), payload,
+            )
+            result["skipped"].append((raw_vol, payload))
+            continue
+        vol_name = re.sub(
+            r'[^a-z0-9]+', '-',
+            f"{service.name}{payload}".lower(),
+        ).strip('-')[:63]
+        _vol_obj, _vol_created = Volume.objects.get_or_create(
+            service=service,
+            mount_path=payload,
+            defaults={'name': vol_name or f"{service.name}-data"},
+        )
+        if _vol_created:
+            logger.info(
+                "Template volume mounted: %s -> %s",
+                _vol_obj.name, payload,
+            )
+            result["created"].append((_vol_obj.name, payload))
+    return result
 
 
 def _record_template_failure(service, template_id: str, exc: Exception) -> None:
@@ -437,6 +535,25 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 
 
         provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
+
+        # Template-declared writable paths (e.g. PocketBase /pb_data).
+        # The deploy runs with a read-only rootfs, so without a mounted
+        # volume these images crash-loop on first write (mkdir: read-only
+        # file system). The fixture field existed but nothing consumed
+        # it — every template with volumes was broken the same way.
+        #
+        # Templates are platform-authored (in-repo fixture), NOT tenant
+        # input. Auto-creation only ever makes Docker NAMED volumes
+        # (isolated daemon storage — never host directories); explicit
+        # bind specs and host-privileged paths are refused (see
+        # _classify_template_volume).
+        _vol_result = _ensure_template_volumes(service, template)
+        if _vol_result["created"]:
+            logger.info(
+                "Template %s: %d volume(s) ensured for service %s",
+                (template or {}).get('id'), len(_vol_result["created"]),
+                service.name,
+            )
 
         # ── Shared Ollama CPP Orchestration ─────────────────────────────────
         # Intelligently manages a single Ollama CPP instance per project.

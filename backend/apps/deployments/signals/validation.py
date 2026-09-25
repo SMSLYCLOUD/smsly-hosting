@@ -24,6 +24,41 @@ _VOLUME_MOUNT_PATH_ALLOWED_PREFIXES = (
     "/home/smsly/",
     "/mnt/",
     "/opt/app/",
+    # Platform template fixtures (apps/deployments/fixtures/templates.json):
+    # vetted app-data roots the one-click deployer auto-mounts as Docker
+    # NAMED volumes (isolated daemon storage — never host directories,
+    # so these grant no host access; the tenant-facing serializer
+    # allow-list stays narrower on purpose). Kept in sync by
+    # test_template_volumes.TemplateFixtureAuditTests, which fails CI
+    # if any fixture path stops satisfying this list.
+    "/pb_data/",
+    "/app/",
+    "/config/",
+    "/directus/",
+    "/home/",
+    "/logs/",
+    "/mattermost/",
+    "/meili_data/",
+    "/metabase-data/",
+    "/opt/focalboard/",
+    "/opt/sonarqube/",
+    "/prometheus/",
+    "/root/.ollama/",
+    "/usr/",
+    "/var/jenkins_home/",
+    "/var/lib/cassandra/",
+    "/var/lib/clickhouse/",
+    "/var/lib/ghost/",
+    "/var/lib/grafana/",
+    "/var/lib/influxdb2/",
+    "/var/lib/mysql/",
+    "/var/lib/postgresql/",
+    "/var/lib/registry/",
+    "/var/log/gitlab/",
+    "/var/opt/gitlab/",
+    "/var/www/",
+    "/vault/data/",
+    "/etc/gitlab/",
 )
 
 
