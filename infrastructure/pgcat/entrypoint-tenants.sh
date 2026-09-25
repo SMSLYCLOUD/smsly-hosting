@@ -14,4 +14,4 @@ echo "pgbouncer-tenants: waiting for backend-rendered config at $CONFIG..."
 while [ ! -s "$CONFIG" ]; do sleep 5; done
 
 echo "pgbouncer-tenants: starting..."
-exec pgbouncer "$CONFIG"
+exec /opt/pgbouncer/pgbouncer "$CONFIG"

@@ -7,12 +7,9 @@
 # unchanged (install.sh, monitors, aliases, docs all key off them).
 FROM pgbouncer/pgbouncer:1.24.1
 
-USER root
-# netcat for the TCP healthcheck (image is minimal).
-RUN apk add --no-cache netcat-openbsd && \
-    pgbouncer --version
-
+# Image already ships netcat (/usr/bin/nc) for the TCP healthcheck and
+# runs as the postgres user. Binary lives outside PATH.
 COPY entrypoint-tenants.sh /entrypoint-tenants.sh
-RUN chmod +x /entrypoint-tenants.sh
+RUN chmod +x /entrypoint-tenants.sh && /opt/pgbouncer/pgbouncer --version
 
 ENTRYPOINT ["/entrypoint-tenants.sh"]
