@@ -671,7 +671,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             if not key_upper:
                 continue
             cleaned = sanitize_env_value(value, key=key_upper, allow_empty=True)
-            if cleaned is None or is_placeholder(cleaned):
+            if cleaned is None or is_placeholder(cleaned, key_upper):
                 logger.warning(
                     "[ENV-SANITIZE] Dropping bulk placeholder value for %s",
                     key_upper,

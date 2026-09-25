@@ -32,6 +32,7 @@ from apps.deployments.models import EnvironmentVariable, Service
 from apps.deployments.utils.env_sanitizer import (
     sanitize_env_value,
     is_placeholder,
+    looks_like_llm_prose,
     looks_wildcard_host,
 )
 
@@ -71,6 +72,7 @@ class Command(BaseCommand):
         changed = 0
         dropped = 0
         wildcard_fixed = 0
+        prose_fixed = 0
         samples: list[tuple[str, str, str, str]] = []  # (svc, key, old, new)
 
         # Iterate in chunks to keep memory bounded
@@ -98,12 +100,14 @@ class Command(BaseCommand):
                     "CORS_ALLOWED_ORIGINS", "CORS_ORIGINS", "CORS_DEV_ORIGINS",
                     "ALLOWED_ORIGINS",
                 )
-                is_placeholder_value = is_placeholder(original) or is_placeholder(cleaned)
+                is_placeholder_value = is_placeholder(original, ev.key) or is_placeholder(cleaned, ev.key)
 
                 if is_wildcard:
                     wildcard_fixed += 1
                 if is_placeholder_value and not cleaned:
                     dropped += 1
+                if looks_like_llm_prose(original, ev.key):
+                    prose_fixed += 1
 
                 if not quiet and len(samples) < 40:
                     samples.append(
@@ -131,6 +135,9 @@ class Command(BaseCommand):
         )
         self.stdout.write(
             f"  placeholders dropped/blanked: {dropped}"
+        )
+        self.stdout.write(
+            f"  llm-prose values neutralized: {prose_fixed}"
         )
         if not apply and changed:
             self.stdout.write(self.style.WARNING(

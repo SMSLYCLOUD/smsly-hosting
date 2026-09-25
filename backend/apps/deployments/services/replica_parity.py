@@ -69,7 +69,7 @@ def sanitize_db_env(db_env: dict) -> dict:
         if cleaned is None:
             continue
         try:
-            if is_placeholder(cleaned):
+            if is_placeholder(cleaned, key):
                 continue
         except Exception:
             pass

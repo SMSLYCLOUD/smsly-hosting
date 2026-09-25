@@ -56,6 +56,31 @@ _MOCK_PATTERNS: Final[tuple[str, ...]] = (
     "localhost:8080", "127.0.0.1:8080",
 )
 
+# ---------------------------------------------------------------------------
+# 1b. Free-form LLM prose saved as a value (chain-of-thought leakage).
+# Observed live: AI_DISABLED_PROVIDERS held a 600-char deliberation
+# ("list? Could be empty list []? Since it's likely a JSON array?...").
+# Env values are tokens/URLs/CSVs — never essays. Detection is
+# deliberately conservative (length-gated + question/deliberation
+# signals) so long URLs, JSON blobs, and PEM blocks never trip it.
+# ---------------------------------------------------------------------------
+_PROSE_MIN_LEN: Final[int] = 100
+# Deliberation markers matched as case-insensitive substrings. Chosen to
+# avoid vocabulary that appears in machine values (versions, paths).
+_PROSE_MARKERS: Final[tuple[str, ...]] = (
+    "could be", "maybe", "not sure", "not certain", "likely ",
+    "probably", "i think", "we'll", "let's", "should we",
+    "in other words", "for example", "hmm",
+)
+# Keys whose values are legitimately human text (prompts, copy). The
+# prose check is skipped for these — a system prompt may contain "?"
+# without being leakage.
+_PROSE_EXEMPT_KEY_RES: Final[tuple[str, ...]] = (
+    "PROMPT", "TEMPLATE", "INSTRUCTION", "DESCRIPTION", "MESSAGE",
+    "NOTE", "TEXT", "BIO", "ABOUT", "SYSTEM", "COPY", "GREETING",
+)
+_QUESTION_RE = re.compile(r"\?\s")
+
 _UNRESOLVED_PORT_RE = re.compile(r":PORT(?:\b|/|$)", re.IGNORECASE)
 
 
@@ -137,7 +162,7 @@ def _default_for_key(key: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-def is_placeholder(value: str | None) -> bool:
+def is_placeholder(value: str | None, key: str | None = None) -> bool:
     """True if *value* is a literal placeholder / template token that should
     never reach a container."""
     if value is None:
@@ -155,7 +180,33 @@ def is_placeholder(value: str | None) -> bool:
     # <placeholder> wrappers
     if v.startswith("<") and v.endswith(">") and " " not in v and "/" not in v:
         return True
+    # LLM chain-of-thought saved as the value (never a real env value).
+    # Key-aware: prompt-ish keys legitimately hold human text.
+    if looks_like_llm_prose(v, key=key):
+        return True
     return False
+
+
+def looks_like_llm_prose(value: str | None, key: str | None = None) -> bool:
+    """True if *value* reads like LLM chain-of-thought, not an env value.
+
+    Signals: a question mark followed by whitespace (real query strings
+    like ``?a=1&b=2`` never have spaces), or 2+ deliberation markers,
+    always gated on length so long URLs / JSON / PEM blocks pass through.
+    Prompt-ish keys are exempt (their values are legitimately prose).
+    """
+    if not value:
+        return False
+    if key and any(rx in key.upper() for rx in _PROSE_EXEMPT_KEY_RES):
+        return False
+    v = value.strip()
+    if len(v) < _PROSE_MIN_LEN:
+        return False
+    if _QUESTION_RE.search(v):
+        return True
+    low = v.lower()
+    hits = sum(1 for m in _PROSE_MARKERS if m in low)
+    return hits >= 2
 
 
 def looks_wildcard_host(value: str | None) -> bool:
@@ -277,6 +328,14 @@ def sanitize_env_value(
     # 5. Collapse newlines (would break .env file format)
     if _NEWLINE_RE.search(v):
         v = _NEWLINE_RE.sub(" ", v).strip()
+
+    # 5b. LLM prose can never be a container value — treat like a
+    # placeholder (key-aware: prompt keys are exempt).
+    if looks_like_llm_prose(v, key=key):
+        default = _default_for_key(key or "")
+        if default is not None:
+            return default
+        return "" if allow_empty else None
 
     # 6. Literal placeholder
     # URL templates such as http://service:PORT are not runnable env

@@ -14,6 +14,7 @@ from apps.deployments.utils.env_sanitizer import (
     sanitize_env_value,
     sanitize_for_env_file,
     is_placeholder,
+    looks_like_llm_prose,
     looks_wildcard_host,
 )
 
@@ -398,3 +399,53 @@ class WildcardTests(SimpleTestCase):
     def test_explicit_host_not_wildcard(self):
         self.assertFalse(looks_wildcard_host("api.example.com"))
         self.assertFalse(looks_wildcard_host("*.example.com"))  # subdomain wildcard is a different question
+
+
+class LlmProseTests(SimpleTestCase):
+    # Live leak 2026-09-25: AI_DISABLED_PROVIDERS held a 600-char
+    # deliberation ("list? Could be empty list []? Since it's likely...").
+    PROSE = (
+        "list? Could be empty list []? Since it's likely a JSON array? "
+        "The var likely expects a comma-separated list? Not sure. We'll set "
+        "empty string? But we need to decide type. Since other similar vars "
+        "like AI_MODELS is likely a list. We'll set \"\" (empty string) or "
+        "maybe null? But we must output a value. Could set empty string. "
+        "However we need to consider that the variable may be used as a "
+        "comma-separated list. Setting empty string means none disabled."
+    )
+
+    def test_prose_detected(self):
+        self.assertTrue(looks_like_llm_prose(self.PROSE, key="AI_DISABLED_PROVIDERS"))
+
+    def test_prose_sanitizes_to_empty(self):
+        self.assertEqual(
+            sanitize_env_value(self.PROSE, key="AI_DISABLED_PROVIDERS"), "")
+
+    def test_prose_is_placeholder(self):
+        self.assertTrue(is_placeholder(self.PROSE, key="AI_DISABLED_PROVIDERS"))
+
+    def test_short_values_never_prose(self):
+        self.assertFalse(looks_like_llm_prose("short? maybe", key="FOO"))
+        self.assertFalse(looks_like_llm_prose("what?", key="FOO"))
+
+    def test_url_with_query_not_prose(self):
+        url = ("https://hooks.example.com/x?" + "a=1&" * 20)[:150]
+        self.assertFalse(looks_like_llm_prose(url, key="WEBHOOK_URL"))
+        self.assertEqual(sanitize_env_value(url, key="WEBHOOK_URL"), url)
+
+    def test_json_blob_not_prose(self):
+        blob = '{"providers": ["a", "b", "c"], "retry": {"times": 3, "backoff": "exp"}, "x": "' + "y" * 120 + '"}'
+        self.assertFalse(looks_like_llm_prose(blob, key="AI_CONFIG"))
+        self.assertEqual(sanitize_env_value(blob, key="AI_CONFIG"), blob)
+
+    def test_csv_list_not_prose(self):
+        csv = ",".join(f"provider-{i}" for i in range(30))
+        self.assertFalse(looks_like_llm_prose(csv, key="AI_MODELS"))
+        self.assertEqual(sanitize_env_value(csv, key="AI_MODELS"), csv)
+
+    def test_prompt_key_exempt(self):
+        prompt = ("You are a helpful assistant. Could you answer concisely? "
+                  "If not sure, say so. " * 4)
+        self.assertFalse(looks_like_llm_prose(prompt, key="SYSTEM_PROMPT"))
+        self.assertEqual(
+            sanitize_env_value(prompt, key="SYSTEM_PROMPT"), prompt.strip())
