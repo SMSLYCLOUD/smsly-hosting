@@ -141,7 +141,7 @@ services:
       - ../pgbackrest/pgbackrest.conf:/etc/pgbackrest.conf:ro
       - pgbackrest-repo:/var/lib/pgbackrest
       - smsly-shared-postgres-data:/mnt/pgdata-shared:ro
-      - smsly-hosting_postgres-primary-data:/mnt/pgdata-platform:ro
+      - smsly-hosting-postgres-data:/mnt/pgdata-platform:ro
     networks:
       - smsly-net
     # Idle supervisor: cron execs backup commands; keep-alive only.
@@ -386,6 +386,13 @@ volumes:
   promtail-positions:
   alertmanager-data:
   pgbackrest-repo:
+  # Live data volumes (external: owned by other stacks, never managed here).
+  smsly-shared-postgres-data:
+    external: true
+    name: smsly-shared-postgres-data
+  smsly-hosting-postgres-data:
+    external: true
+    name: smsly-hosting_postgres-primary-data
 
 networks:
   smsly-net:
