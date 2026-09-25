@@ -62,7 +62,7 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM python:3.14-slim AS runtime
+FROM python:3.12-slim AS runtime
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -107,7 +107,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends \
     ca-certificates curl wget bash \
     gcc git libpq-dev postgresql-client \
-    supervisor gettext-base gnupg libstdc++6
+    supervisor gettext-base gnupg libcap2-bin libstdc++6
 
 # --- Optional: Docker CLI + buildx + nixpacks + trivy + cosign (for runtime container provisioning & security scanning) ---
 RUN if [ "$INSTALL_BUILD_DEPS" = "true" ]; then \
