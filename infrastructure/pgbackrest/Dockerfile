@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends \
     pgbackrest postgresql-client-16 postgresql-16 \
     && rm -rf /var/lib/apt/lists/* \
-    && pgbackrest version && pg_basebackup --version && pg_verifybackup --version
+    && pgbackrest version && pg_basebackup --version && /usr/lib/postgresql/16/bin/pg_verifybackup --version
 
 # Idle supervisor: cron execs into this container.
 CMD ["sh", "-c", "while true; do sleep 86400; done"]
