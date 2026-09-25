@@ -3,16 +3,12 @@
 Engine: PgBouncer (migrated 2026-09-25 from a pinned pgcat fork that
 could not complete SASL — ``Unsupported authentication mechanism: 10``
 on every new server connection against SCRAM-only servers, with
-ban/unban churn on top).
-
-Container/service/volume names intentionally still say ``pgcat``:
-renaming would touch install.sh, monitors, aliases, and docs for zero
-functional gain. Only the engine + config format changed.
+ban/unban churn on top; renamed to pgbouncer-tenants 2026-09-26).
 
 The platform pgcat fronts the control-plane database. Shared tenant
 databases (one logical DB per addon on ``smsly-shared-postgres``) sit
-behind their own pooler (``pgcat-tenants`` container serving
-``pgbouncer.ini``, config in the ``pgcat_tenants_config`` volume) so
+behind their own pooler (``pgbouncer-tenants`` container serving
+``pgbouncer.ini``, config in the ``pgbouncer_tenants_config`` volume) so
 app connection storms pool instead of hitting Postgres directly.
 
 Gated by ``PlatformConfig.tenant_pooling_enabled`` (default ON) with
@@ -39,11 +35,9 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
-TENANTS_CONTAINER_MARK = 'pgcat-tenants'
-# Stale pgcat artifact (left in the volume, ignored by pgbouncer).
-TENANTS_TOML_PATH = '/etc/pgcat/pgcat.toml'
-TENANTS_INI_PATH = '/etc/pgcat/pgbouncer.ini'
-TENANTS_USERLIST_PATH = '/etc/pgcat/userlist.txt'
+TENANTS_CONTAINER_MARK = 'pgbouncer-tenants'
+TENANTS_INI_PATH = '/etc/pgbouncer/pgbouncer.ini'
+TENANTS_USERLIST_PATH = '/etc/pgbouncer/userlist.txt'
 TENANT_POOL_SIZE = 8
 # Hard ceiling on SERVER connections per pool. This is what lets tenant
 # count grow unbounded: server-side sockets stay <=
@@ -219,6 +213,13 @@ def render_tenants_config(pools):
         'server_connect_timeout = 15',
         'query_timeout = 0',
         'ignore_startup_parameters = extra',
+        # Protocol-level prepared statements in transaction mode
+        # (PgBouncer >= 1.21). Django/psycopg3 binds server-side by
+        # default — without this, pooled tenants hit "prepared statement
+        # does not exist" intermittently. Community consensus (2026
+        # pooler comparisons) keeps PgBouncer as the default pick with
+        # this explicitly enabled rather than relying on the default.
+        'max_prepared_statements = 100',
         '',
     ]
     ul = [f'"{user}" "{password}"' for user, password in users]
@@ -252,7 +253,8 @@ def validate_rendered_config(ini_content, userlist_content=""):
                     f"tenants render: pool line without server cap: {s[:80]!r}")
     for key in ('listen_port = 5432', 'auth_type = scram-sha-256',
                 f'auth_file = {TENANTS_USERLIST_PATH}',
-                'pool_mode = transaction'):
+                'pool_mode = transaction',
+                'max_prepared_statements = 100'):
         if key not in ini_content:
             raise RuntimeError(f"tenants render missing {key!r}")
     seen_users = set()
@@ -331,7 +333,7 @@ def push_tenants_config():
     container = tenants_container_name()
     if container is None:
         return {'ok': False, 'pools': len(pools),
-                'error': 'pgcat-tenants container not found (compose service missing?).'}
+                'error': 'pgbouncer-tenants container not found (compose service missing?).'}
     if not container_running(container):
         start = _run(['docker', 'start', container], timeout=60)
         if start.get('error'):
@@ -349,6 +351,15 @@ def push_tenants_config():
     if res.get('error'):
         return {'ok': False, 'pools': len(pools),
                 'error': f'userlist write failed: {res["error"]}'}
+    # Online reload first: SIGHUP re-reads databases/users/passwords
+    # WITHOUT dropping pooled connections. A restart (old behavior)
+    # blips every tenant on each provision/rotate. Restart only if the
+    # reload signal itself fails.
+    hup = _run(['docker', 'exec', container, 'kill', '-HUP', '1'], timeout=30)
+    if not hup.get('error'):
+        return {'ok': True, 'pools': len(pools), 'changed': True, 'restarted': False}
+    logger.warning("tenant pooler: HUP reload failed, restarting: %s",
+                   hup.get('error'))
     restart = _run(['docker', 'restart', container], timeout=90)
     if restart.get('error'):
         return {'ok': False, 'pools': len(pools),
@@ -382,7 +393,7 @@ def attach_pooler_alias(network, alias):
     """Join the pooler to ``network`` with DNS ``alias`` (idempotent)."""
     container = tenants_container_name()
     if container is None:
-        raise RuntimeError('pgcat-tenants container not found.')
+        raise RuntimeError('pgbouncer-tenants container not found.')
     from apps.addons.services.shared_postgres import _endpoint_aliases, _run as _sp_run
     current = _endpoint_aliases(container, network)
     if alias in current:

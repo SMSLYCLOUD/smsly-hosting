@@ -388,7 +388,7 @@ class PlatformConfig(models.Model):
                   "(auto-generated on first use).")
     tenant_pooling_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
-        help_text="Route NEW shared Postgres addons through the pgcat-tenants "
+        help_text="Route NEW shared Postgres addons through the pgbouncer-tenants "
                   "pooler instead of direct connections. Existing shared "
                   "addons keep dialling the server directly (sticky).")
     ecosystem_max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]

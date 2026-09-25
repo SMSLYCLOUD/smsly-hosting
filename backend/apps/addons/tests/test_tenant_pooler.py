@@ -141,12 +141,30 @@ class PushTests(TestCase):
         restart_calls = [c for c in runner.call_args_list if 'restart' in str(c)]
         self.assertEqual(restart_calls, [])
 
-    def test_write_and_restart_when_changed(self):
+    def test_write_and_reload_when_changed(self):
+        # Online HUP reload: config changes apply without dropping
+        # pooled connections (no container restart).
         result, writer, runner = self._push('stale ini', 'stale userlist')
         self.assertTrue(result['ok'])
         self.assertTrue(result['changed'])
-        self.assertTrue(result['restarted'])
+        self.assertFalse(result['restarted'])
         self.assertEqual(writer.call_count, 2)
+        hup_calls = [c for c in runner.call_args_list if 'HUP' in str(c)]
+        self.assertEqual(len(hup_calls), 1)
+
+    def test_restart_when_hup_fails(self):
+        with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
+             mock.patch.object(tp, 'container_running', return_value=True), \
+             mock.patch.object(tp, '_read_remote_file', return_value='stale'), \
+             mock.patch.object(tp, '_write_remote_file', return_value={}), \
+             mock.patch.object(tp, '_run',
+                               side_effect=[{'error': 'no kill'}, {}]) as runner:
+            result = tp.push_tenants_config()
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['changed'])
+        self.assertTrue(result['restarted'])
+        restart_calls = [c for c in runner.call_args_list if 'restart' in str(c)]
+        self.assertEqual(len(restart_calls), 1)
 
     def test_missing_container(self):
         with mock.patch.object(tp, 'tenants_container_name', return_value=None):

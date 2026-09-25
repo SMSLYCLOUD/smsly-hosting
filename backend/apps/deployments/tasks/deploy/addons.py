@@ -19,7 +19,7 @@ def _shared_backend_container(addon) -> tuple[str, str]:
 
     Shared addons are logical databases — there is no per-addon container.
     Returns (container_name, kind) where kind is human-readable for errors.
-    Pooler-routed addons resolve to the pgcat-tenants pooler (which carries
+    Pooler-routed addons resolve to the pgbouncer-tenants pooler (which carries
     the alias); all others resolve to the shared Postgres server.
     """
     from apps.addons.services.shared_postgres import SHARED_CONTAINER

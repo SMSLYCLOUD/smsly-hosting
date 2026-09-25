@@ -235,7 +235,7 @@ def _find_pgcat_container() -> str | None:
             except NotFound:
                 continue
         # Fallback: scan for any container with 'pgcat' in its name.
-        # NEVER match the tenants pooler (pgcat-tenants): rendering the
+        # NEVER match the tenants pooler (*-tenants): rendering the
         # platform config into it poisoned its volume with a config it
         # cannot serve, crash-looping it until manual repair (2026-09-20).
         for c in client.containers.list():

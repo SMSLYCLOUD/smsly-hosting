@@ -26,7 +26,7 @@ def provision_addon_task(self, addon_id: str) -> None:
         addon.status = Addon.Status.ACTIVE
         addon.coolify_uuid = cid
         addon.save()
-        # Tenant pooler: a new shared pool must appear in pgcat-tenants
+        # Tenant pooler: a new shared pool must appear in pgbouncer-tenants
         # before the app spawns (best-effort; no-op without the container).
         try:
             if addon.addon_type == 'POSTGRES' and getattr(addon, 'provision_mode', '') == 'shared':

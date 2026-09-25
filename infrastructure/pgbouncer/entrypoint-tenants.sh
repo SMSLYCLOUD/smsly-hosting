@@ -1,12 +1,12 @@
 #!/bin/sh
 set -e
 
-# pgcat-tenants (PgBouncer engine): pool shared logical databases behind
-# stable aliases. The backend renders /etc/pgcat/pgbouncer.ini +
-# /etc/pgcat/userlist.txt (named volume pgcat_tenants_config) and pushes
+# pgbouncer-tenants: pool shared logical databases behind stable aliases.
+# The backend renders /etc/pgbouncer/pgbouncer.ini +
+# /etc/pgbouncer/userlist.txt (named volume pgbouncer_tenants_config) and pushes
 # them on every shared provision/delete/rotate. We wait for the first
 # push instead of booting with an empty config.
-CONFIG="/etc/pgcat/pgbouncer.ini"
+CONFIG="/etc/pgbouncer/pgbouncer.ini"
 
 echo "pgbouncer-tenants: waiting for backend-rendered config at $CONFIG..."
 # -s (non-empty), not -f: an empty file makes pgbouncer exit immediately

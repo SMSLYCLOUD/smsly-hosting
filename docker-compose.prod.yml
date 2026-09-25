@@ -116,7 +116,7 @@ services:
       - apparmor:docker-default
     build:
       context: ./infrastructure/pgcat
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.pgcat
     restart: unless-stopped
     environment:
       POSTGRES_HOST: ${PGCAT_DB_HOST:-postgres-primary}
@@ -145,26 +145,25 @@ services:
         limits:
           memory: ${PGCAT_MEMORY_LIMIT:-256M}
           cpus: "0.50"
-  # ── Tenant pooler (per-shared-DB pools, backend-rendered config) ──────────
+  # ── Tenants pooler (PgBouncer engine, per-shared-DB pools) ──────────
   # Serves shared logical databases behind their stable app aliases when
   # tenant pooling is enabled (PlatformConfig.tenant_pooling_enabled,
-  # default off). The backend pushes /etc/pgcat/pgbouncer.ini +
-  # /etc/pgcat/userlist.txt into the pgcat_tenants_config volume on every
-  # shared provision/delete/rotate; the entrypoint waits for the first
-  # push. No host ports: reachable only on container networks via
-  # per-tenant aliases attached by the backend.
-  # Engine is PgBouncer (migrated 2026-09-25; names kept stable).
-  pgcat-tenants:
+  # default off). The backend pushes /etc/pgbouncer/pgbouncer.ini +
+  # /etc/pgbouncer/userlist.txt into the pgbouncer_tenants_config volume
+  # on every shared provision/delete/rotate; the entrypoint waits for
+  # the first push. No host ports: reachable only on container networks
+  # via per-tenant aliases attached by the backend.
+  pgbouncer-tenants:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
     build:
-      context: ./infrastructure/pgcat
+      context: ./infrastructure/pgbouncer
       dockerfile: Dockerfile
     entrypoint: ["/entrypoint-tenants.sh"]
     restart: unless-stopped
     volumes:
-      - pgcat_tenants_config:/etc/pgcat
+      - pgbouncer_tenants_config:/etc/pgbouncer
     networks:
       - smsly-net
     labels:
@@ -176,7 +175,7 @@ services:
       # so per-tenant aliases dial it.
       test:
       - CMD-SHELL
-      - sh -c "test ! -s /etc/pgcat/pgbouncer.ini || nc -z 127.0.0.1 5432"
+      - sh -c "test ! -s /etc/pgbouncer/pgbouncer.ini || nc -z 127.0.0.1 5432"
       interval: 30s
       timeout: 10s
       retries: 3
@@ -184,7 +183,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${PGCAT_TENANTS_MEMORY_LIMIT:-256M}
+          memory: ${PGBOUNCER_TENANTS_MEMORY_LIMIT:-256M}
           cpus: "0.50"
   # ── Patroni HA (auto-failover via etcd DCS) ──────────────────────────────
   # Profile: "patroni" — only started with --profile patroni
@@ -2464,7 +2463,7 @@ volumes:
   caddy_logs: null
   node_logs: null
   # Tenant pooler config (backend-rendered pgcat.toml for shared logical DBs)
-  pgcat_tenants_config: null
+  pgbouncer_tenants_config: null
   crowdsec_data: null
   crowdsec_config: null
   

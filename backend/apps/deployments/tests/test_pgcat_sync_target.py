@@ -3,8 +3,8 @@
 
 Regression: _find_pgcat_container's fallback matched any name containing
 'pgcat' — while the platform pooler was restarting, a replica sync
-rendered the platform config into pgcat-tenants' volume, crash-looping
-it until manual repair.
+rendered the platform config into the tenants pooler's volume,
+crash-looping it until manual repair.
 """
 from unittest.mock import MagicMock, patch
 
@@ -33,13 +33,13 @@ class FindPgcatContainerTests(SimpleTestCase):
 
     def test_exact_platform_name_wins(self):
         from apps.deployments.services import database_replica_service as svc
-        client = self._client(["smsly-hosting-pgcat-1", "smsly-hosting-pgcat-tenants-1"])
+        client = self._client(["smsly-hosting-pgcat-1", "smsly-hosting-pgbouncer-tenants-1"])
         with patch("docker.DockerClient", return_value=client):
             self.assertEqual(svc._find_pgcat_container(), "smsly-hosting-pgcat-1")
 
     def test_fallback_skips_tenants_pooler(self):
         from apps.deployments.services import database_replica_service as svc
-        client = self._client(["smsly-hosting-pgcat-tenants-1"])
+        client = self._client(["smsly-hosting-pgbouncer-tenants-1"])
         with patch("docker.DockerClient", return_value=client):
             self.assertIsNone(svc._find_pgcat_container())
 

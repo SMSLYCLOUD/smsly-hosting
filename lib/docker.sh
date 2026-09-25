@@ -751,16 +751,16 @@ refresh_runtime_services() {
             timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" || echo -e "${YELLOW}    ⚠ App services restart failed${NC}"
     fi
 
-    # Tenant pooler (pgcat-tenants): converge WITHOUT --force-recreate —
+    # Tenant pooler (pgbouncer-tenants): converge WITHOUT --force-recreate —
     # recreating it on every update would drop all pooled tenant
     # connections. Plain `up -d` still creates it when missing (e.g. hosts
     # that predate the service) and recreates it when its image changed.
-    if ! is_node_mode && docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "pgcat-tenants"; then
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat-tenants || echo -e "${YELLOW}    ⚠ pgcat-tenants converge failed (non-fatal)${NC}"
+    if ! is_node_mode && docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "pgbouncer-tenants"; then
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --no-deps pgbouncer-tenants || echo -e "${YELLOW}    ⚠ pgbouncer-tenants converge failed (non-fatal)${NC}"
     fi
 
     ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-tenants-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-pgbouncer-tenants-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-beat-1"

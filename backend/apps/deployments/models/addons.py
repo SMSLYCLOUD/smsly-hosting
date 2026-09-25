@@ -171,7 +171,7 @@ class Addon(TimeStampedModel):
                                     help_text="UUID of the database in Coolify")
     pooler_routed = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
-        help_text="Shared POSTGRES addon dials through the pgcat-tenants "
+        help_text="Shared POSTGRES addon dials through the pgbouncer-tenants "
                   "pooler (set at provision/migration time; sticky — "
                   "toggling tenant_pooling_enabled never moves it back).")
 

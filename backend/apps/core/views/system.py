@@ -593,7 +593,7 @@ class SystemConfigView(GenericAPIView):
         KNOWN_SERVICES = [
             'backend', 'frontend', 'celery', 'celery-beat', 'celery-fast', 'celery-deploy',
             'db', 'db-replica', 'postgres-primary', 'postgres-replica', 'pgcat',
-            'pgcat-tenants', 'shared-postgres', 'shared-postgres-replica',
+            'pgbouncer-tenants', 'shared-postgres', 'shared-postgres-replica',
             'pgbouncer', 'pgbouncer-readonly',
             'redis', 'redis-primary', 'redis-replica',
             'redis-sentinel-1', 'redis-sentinel-2', 'redis-sentinel-3',
@@ -716,7 +716,7 @@ class SystemConfigView(GenericAPIView):
         TCP_PROBES = {
             'rabbitmq': ('smsly-hosting-rabbitmq-1', 5672),
             'pgcat': ('smsly-hosting-pgcat-1', 6432),
-            'pgcat-tenants': ('smsly-hosting-pgcat-tenants-1', 5432),
+            'pgbouncer-tenants': ('smsly-hosting-pgbouncer-tenants-1', 5432),
             'shared-postgres': ('smsly-shared-postgres', 5432),
         }
 

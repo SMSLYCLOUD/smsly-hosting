@@ -3,8 +3,8 @@
 # The pinned pgcat fork could not complete SASL ("Unsupported
 # authentication mechanism: 10" on every new server connection against
 # SCRAM-only servers, plus ban/unban churn). PgBouncer speaks SCRAM
-# properly on both sides. Container/service/volume names intentionally
-# unchanged (install.sh, monitors, aliases, docs all key off them).
+# properly on both sides. Renamed to pgbouncer-tenants 2026-09-26
+# (service, container, volume, config paths).
 FROM pgbouncer/pgbouncer:1.24.1
 
 USER root

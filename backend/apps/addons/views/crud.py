@@ -462,7 +462,7 @@ class AddonViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='shared-pooler-status')
     def shared_pooler_status(self, request):
-        """pgcat-tenants pooler state + rendered pools (no passwords). Superuser only."""
+        """pgbouncer-tenants pooler state + rendered pools (no passwords). Superuser only."""
         if not request.user.is_superuser:
             return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
         from ..services.tenant_pooler import pooler_status

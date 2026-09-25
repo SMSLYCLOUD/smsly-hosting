@@ -359,7 +359,7 @@ class AddonProvisioner:
                 # No per-addon container: attach the app-facing alias to the
                 # shared server — or to the pooler for addons provisioned
                 # pooled (sticky flag; falls back to direct when the pooler
-                # container is absent, e.g. compose predates pgcat-tenants).
+                # container is absent, e.g. compose predates pgbouncer-tenants).
                 try:
                     from .shared_postgres import attach_alias as _shared_attach
                     from .tenant_pooler import tenants_container_name
