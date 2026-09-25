@@ -128,6 +128,36 @@ services:
         limits:
           memory: ${POSTGRES_EXPORTER_MEMORY_LIMIT:-128M}
 
+  # Postgres backup sidecar (pgBackRest). Local stanzas read the
+  # read-only data mounts; control connections use the pgbackrest role
+  # (PGPASSWORD from .env). Weekly full + daily diff via host cron.
+  pgbackrest:
+    image: pgbackrest/pgbackrest:2.55.1
+    container_name: smsly-pgbackrest
+    restart: unless-stopped
+    environment:
+      - PGPASSWORD=${PGBACKREST_PASSWORD:-}
+    volumes:
+      - ../pgbackrest/pgbackrest.conf:/etc/pgbackrest.conf:ro
+      - pgbackrest-repo:/var/lib/pgbackrest
+      - smsly-shared-postgres-data:/mnt/pgdata-shared:ro
+      - smsly-hosting_postgres-primary-data:/mnt/pgdata-platform:ro
+    networks:
+      - smsly-net
+    # Idle supervisor: cron execs backup commands; keep-alive only.
+    command: sh -c "while true; do sleep 86400; done"
+    healthcheck:
+      test: ["CMD-SHELL", "pgbackrest --version || exit 1"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${PGBACKREST_MEMORY_LIMIT:-256M}
+
   # Prometheus - Metrics collection
   prometheus:
     image: prom/prometheus:v2.48.0
@@ -355,6 +385,7 @@ volumes:
   grafana-data:
   promtail-positions:
   alertmanager-data:
+  pgbackrest-repo:
 
 networks:
   smsly-net:
