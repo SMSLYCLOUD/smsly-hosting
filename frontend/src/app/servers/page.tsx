@@ -2097,7 +2097,7 @@ function ProvisioningLogPanel({
                     </p>
                     {server.mesh_dns_names && server.mesh_dns_names.length > 0 && (
                         <p className="text-[10px] text-cyan-500/80 mt-1.5 font-mono">
-                            Mesh DNS (CoreDNS, no ports needed): {server.mesh_dns_names.join(', ')}
+                            Mesh DNS (CoreDNS, no ports needed): {(server.mesh_dns_names || []).join(', ')}
                         </p>
                     )}
                 </div>

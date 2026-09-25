@@ -1575,6 +1575,9 @@ export interface ManagedServer {
   // Node domain
   node_number?: number | null;
   node_domain?: string | null;
+  // Mesh DNS names (CoreDNS zone records for this server, e.g.
+  // grid1.mesh.internal). Read-only, rendered by the backend.
+  mesh_dns_names?: string[];
 }
 
 const proxiedRequestConfig = (): AxiosRequestConfigProxy => ({ _isProxied: true });
