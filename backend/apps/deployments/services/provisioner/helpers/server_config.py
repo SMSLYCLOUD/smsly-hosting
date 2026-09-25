@@ -90,6 +90,23 @@ def _get_master_wg_pubkey() -> str:
                 return f.read().strip()
     except Exception as exc:
         logger.debug("Failed to read WireGuard public key from file: %s", exc)
+    # Container-safe fallback: the backend container has no /etc/wireguard,
+    # but the mesh's local peer row carries the same key (verified against
+    # the live host interface). Without this, self-provision tokens carry
+    # an empty master_wg_pubkey and node handshakes fail.
+    try:
+        from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+        mesh = MeshNetwork.objects.filter(
+            name="default", is_active=True,
+        ).first()
+        if mesh:
+            local = WireGuardPeer.objects.filter(
+                mesh=mesh, is_local=True, is_active=True,
+            ).exclude(public_key="").first()
+            if local and local.public_key:
+                return str(local.public_key).strip()
+    except Exception as exc:
+        logger.debug("Failed to read master WG pubkey from DB: %s", exc)
     try:
         result = subprocess.run(
             ["cat", "/etc/wireguard/public.key"],
