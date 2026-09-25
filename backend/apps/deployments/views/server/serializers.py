@@ -12,6 +12,11 @@ from ...models.servers import ManagedServer
 logger = logging.getLogger(__name__)
 class ManagedServerSerializer(serializers.ModelSerializer):
     has_ssh_credentials = serializers.SerializerMethodField()
+    # Mesh DNS names for this server (gridN/node-name labels under the
+    # mesh zone, e.g. grid1.mesh.internal). Pure computation, no DB
+    # queries — safe for list views. Consumed by the Servers page so
+    # operators address nodes by name instead of raw mesh IPs.
+    mesh_dns_names = serializers.SerializerMethodField()
     # SECURITY (Batch G cont): whether a TLS cert SHA-256 pin
     # is configured. We never return the pin itself — only a
     # boolean — so the serializer is safe to surface in the
@@ -20,6 +25,29 @@ class ManagedServerSerializer(serializers.ModelSerializer):
 
     def get_has_ssh_credentials(self, obj):
         return bool(str(obj.ssh_password or '').strip() or str(obj.ssh_key or '').strip())
+
+    def get_mesh_dns_names(self, obj):
+        try:
+            from apps.deployments.services.mesh_dns import (
+                _sanitize_label,
+                mesh_dns_domain,
+            )
+            domain = mesh_dns_domain()
+            names: list[str] = []
+            if getattr(obj, "is_primary", False):
+                names.append(f"master.{domain}")
+            node_number = getattr(obj, "node_number", None)
+            if node_number:
+                names.append(f"grid{node_number}.{domain}")
+            label = _sanitize_label(str(getattr(obj, "name", "") or ""))
+            if label:
+                candidate = f"{label}.{domain}"
+                if candidate not in names:
+                    names.append(candidate)
+            return names
+        except Exception:
+            logger.debug("mesh_dns_names render failed", exc_info=True)
+            return []
 
     class Meta:
         model = ManagedServer
@@ -45,7 +73,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             # so operators can see whether a pin is configured
             # without leaking the pin value itself.
             "verify_tls", "tls_cert_sha256_set",
-            "node_number", "node_domain",
+            "node_number", "node_domain", "mesh_dns_names",
         ]
         read_only_fields = [
             "id", "status", "last_health_check", "server_version",
@@ -54,7 +82,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "node_type", "node_components",
             "agent_ready", "last_agent_heartbeat_at", "agent_runtime_info",
             "tls_cert_sha256_set",
-            "node_number", "node_domain",
+            "node_number", "node_domain", "mesh_dns_names",
         ]
 
     def get_tls_cert_sha256_set(self, obj):

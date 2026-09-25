@@ -1659,6 +1659,14 @@ function ServerCard({
                                     wg: {server.wg_address}
                                 </span>
                             )}
+                            {server.mesh_dns_names && server.mesh_dns_names.length > 0 && (
+                                <span
+                                    className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-500 font-mono"
+                                    title={`Mesh DNS (CoreDNS): ${(server.mesh_dns_names || []).join(', ')}`}
+                                >
+                                    dns: {server.mesh_dns_names[0]}
+                                </span>
+                            )}
                             {server.node_components?.observability && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-medium">
                                     Observability
@@ -2087,6 +2095,11 @@ function ProvisioningLogPanel({
                     <p className="text-[10px] text-blue-500/70 mt-2">
                         This A record was auto-created via Cloudflare. Services deployed to this node will be accessible at <span className="font-semibold text-blue-400">myservice.{server.node_domain}</span>
                     </p>
+                    {server.mesh_dns_names && server.mesh_dns_names.length > 0 && (
+                        <p className="text-[10px] text-cyan-500/80 mt-1.5 font-mono">
+                            Mesh DNS (CoreDNS, no ports needed): {server.mesh_dns_names.join(', ')}
+                        </p>
+                    )}
                 </div>
             )}
 
