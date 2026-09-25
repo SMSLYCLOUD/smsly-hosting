@@ -1,0 +1,43 @@
+groups:
+  - name: postgres
+    interval: 30s
+    rules:
+      - alert: PostgresExporterDown
+        expr: up{job=~"postgres-shared|postgres-platform"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Postgres exporter {{ $labels.job }} is down"
+          description: "Database metrics stopped flowing — check the exporter container and DB auth"
+
+      - alert: PostgresConnectionsHigh
+        expr: sum by (job) (pg_stat_activity_count) / 400 > 0.8
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Postgres {{ $labels.job }} above 80% of max_connections"
+          description: "Add pool caps or shard tenants before FATALs return"
+
+      - alert: PostgresReplicationLag
+        expr: pg_replication_lag_seconds > 30
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Postgres replica lag {{ $value }}s on {{ $labels.job }}"
+          description: "Standby is falling behind — failover safety degrading"
+
+      - alert: PostgresTenantDBLarge
+        expr: pg_database_size_bytes{datname!~"postgres|template.*"} > 10737418240
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Tenant database {{ $labels.datname }} over 10G on {{ $labels.job }}"
+          description: "Candidate for migration to a dedicated instance"
+
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Postgres {{ $labels.job }} unreachable from exporter"
+          description: "Database is down or credentials broken — investigate immediately"

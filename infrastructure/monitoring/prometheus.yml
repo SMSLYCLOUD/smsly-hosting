@@ -46,6 +46,17 @@ scrape_configs:
   #     static_configs:
   #       - targets: ['pgcat:9930']
 
+  # Postgres exporters (tenant shared + platform primary), 30s cadence
+  # like the other high-cardinality jobs.
+  - job_name: 'postgres-shared'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['smsly-postgres-exporter-shared:9187']
+  - job_name: 'postgres-platform'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['smsly-postgres-exporter-platform:9187']
+
   # System container metrics via cAdvisor (local + remote nodes)
   # NOTE: 30s (not the 15s global) — cAdvisor/node are the highest-
   # cardinality jobs on the box; 15s doubled ingest CPU for no alerting

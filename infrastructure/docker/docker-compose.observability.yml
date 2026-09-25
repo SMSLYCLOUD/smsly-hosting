@@ -77,6 +77,57 @@ services:
     depends_on:
       - loki
 
+  # Postgres exporters (tenant shared + platform primary).
+  # DSN password comes from POSTGRES_EXPORTER_PASSWORD in .env (generated
+  # once, role smsly_monitor with pg_monitor grant, CONNECTION LIMIT 3).
+  # One exporter per server: per-database size/connection series carry a
+  # server label so shared-tenant growth pages before it hurts neighbors.
+  postgres-exporter-shared:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: smsly-postgres-exporter-shared
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD}@smsly-shared-postgres:5432/postgres?sslmode=disable
+      - PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
+      - PG_EXPORTER_EXCLUDE_DATABASES=template0,template1
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9187/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_EXPORTER_MEMORY_LIMIT:-128M}
+
+  postgres-exporter-platform:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: smsly-postgres-exporter-platform
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD}@smsly-postgres-primary:5432/postgres?sslmode=disable
+      - PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
+      - PG_EXPORTER_EXCLUDE_DATABASES=template0,template1
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9187/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_EXPORTER_MEMORY_LIMIT:-128M}
+
   # Prometheus - Metrics collection
   prometheus:
     image: prom/prometheus:v2.48.0
