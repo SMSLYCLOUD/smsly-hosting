@@ -3100,11 +3100,12 @@ export const projectRegistryApi = {
 };
 
 export const networkScopesApi = {
-  list: async () => {
-    const res = (await api.get('/network-scopes/')).data;
+  list: async (params?: { scope_type?: string; object_id?: string }) => {
+    const res = (await api.get('/network-scopes/', { params })).data;
     return Array.isArray(res) ? res : (res?.results || res || []);
   },
   create: async (data: Record<string, unknown>) => (await api.post('/network-scopes/', data)).data,
+  update: async (id: string, data: Record<string, unknown>) => (await api.patch(`/network-scopes/${id}/`, data)).data,
   delete: async (id: string) => (await api.delete(`/network-scopes/${id}/`)).data,
 };
 

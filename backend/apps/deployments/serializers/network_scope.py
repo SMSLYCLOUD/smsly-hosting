@@ -11,6 +11,11 @@ from apps.deployments.models.network_scope import ScopedNetwork
 class ScopedNetworkSerializer(serializers.ModelSerializer):
     scope_type = serializers.CharField(source="content_type.model", read_only=True)
     scope_name = serializers.SerializerMethodField()
+    # Effective Docker network name after inheritance/defaults
+    # (explicit name, derived smsly-net-<id8> for isolated rows,
+    # or global smsly-net). The UI shows this so operators see
+    # what will actually be created, not just the stored fields.
+    effective_name = serializers.SerializerMethodField()
     scope_type_input = serializers.ChoiceField(
         choices=["organization", "team", "project"],
         write_only=True,
@@ -36,11 +41,12 @@ class ScopedNetworkSerializer(serializers.ModelSerializer):
             "subnet",
             "allow_public_traefik",
             "allowed_egress_networks",
+            "effective_name",
             "is_active",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "scope_type", "scope_name", "created_at", "updated_at"]
+        read_only_fields = ["id", "scope_type", "scope_name", "effective_name", "created_at", "updated_at"]
         extra_kwargs = {
             "content_type": {"required": False},
             "object_id": {"required": False},
@@ -48,6 +54,12 @@ class ScopedNetworkSerializer(serializers.ModelSerializer):
 
     def get_scope_name(self, obj) -> str:
         return str(obj.scope) if obj.scope else "(orphaned)"
+
+    def get_effective_name(self, obj) -> str:
+        try:
+            return ScopedNetwork.resolve_network_name(obj.scope)
+        except Exception:
+            return str(obj.network_name or "smsly-net")
 
     def create(self, validated_data):
         scope_type_val = validated_data.pop("scope_type_input", None) or self.initial_data.get("scope_type")

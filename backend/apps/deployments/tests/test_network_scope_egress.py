@@ -32,7 +32,7 @@ After the fix:
 
 from unittest.mock import MagicMock, patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from apps.deployments.services.network_scope import (
     _get_bridge_interface_name,
@@ -178,8 +178,9 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         )
 
         scripts = _scripts(mock_run)
-        # 1 list + DROP + 2 CIDR RETURNs + metadata DROP + DNS RETURN.
-        self.assertEqual(len(scripts), 6)
+        # 1 list + DROP + 2 CIDR RETURNs + metadata DROP + same-bridge
+        # RETURN + ESTABLISHED RETURN + DNS RETURN.
+        self.assertEqual(len(scripts), 8)
 
         # 1. DROP first
         self.assertIn("DROP", scripts[1])
@@ -189,13 +190,18 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         self.assertIn("10.0.0.0/8", scripts[2])
         self.assertIn("RETURN", scripts[3])
         self.assertIn("192.168.0.0/16", scripts[3])
-        # 4. DROP cloud metadata
-        self.assertIn("DROP", scripts[4])
-        self.assertIn("169.254.169.254/32", scripts[4])
-        # 5. DNS RETURN last
+        # 4. Same-bridge RETURN (addon traffic without Docker chains)
+        self.assertIn("RETURN", scripts[4])
+        # 5. ESTABLISHED,RELATED RETURN (reply packets)
         self.assertIn("RETURN", scripts[5])
-        self.assertIn("--dport", scripts[5])
-        self.assertIn("53", scripts[5])
+        self.assertIn("ESTABLISHED", scripts[5])
+        # 6. DROP cloud metadata
+        self.assertIn("DROP", scripts[6])
+        self.assertIn("169.254.169.254/32", scripts[6])
+        # 7. DNS RETURN last
+        self.assertIn("RETURN", scripts[7])
+        self.assertIn("--dport", scripts[7])
+        self.assertIn("53", scripts[7])
 
         # No DROP can appear AFTER a DNS RETURN (would shadow it).
         drop_index = next(i for i, s in enumerate(scripts) if "DROP" in s and "169.254" not in s)
@@ -219,9 +225,10 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         )
 
         # Should issue list + DROP + RETURN 10.0.0.0/8 + DROP metadata
-        # + RETURN DNS — five shim calls.
+        # + same-bridge RETURN + ESTABLISHED RETURN + RETURN DNS
+        # — seven shim calls.
         scripts = _scripts(mock_run)
-        self.assertEqual(len(scripts), 5)
+        self.assertEqual(len(scripts), 7)
         # No rule should target the invalid entries.
         for script in scripts:
             self.assertNotIn("not-a-cidr", script)
@@ -438,3 +445,80 @@ class EnsureScopedNetworkEdgeTests(SimpleTestCase):
 
         self.assertEqual(ensure_scoped_network({"name": "smsly-net-abc123"}), "smsly-net-abc123")
         net.connect.assert_not_called()
+
+
+class ScopedNetworkViewsetReconcileTests(TestCase):
+    """Scope edits must converge host firewall state, not just the row.
+
+    Before the fix, narrowing allowed_egress_networks only ADDed rules
+    (apply is additive with an idempotency gate), so a UI lockdown
+    reported restricted while stale RETURNs stayed live.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.admin = User.objects.create_user(
+            username="scope_admin", password="123", is_staff=True,
+            is_superuser=True,
+        )
+        from apps.deployments.models.core import Project
+        self.project = Project.objects.create(name="Scope Proj", owner=self.admin)
+        from django.contrib.contenttypes.models import ContentType
+        self.project_ct = ContentType.objects.get_for_model(Project)
+        from rest_framework.test import APIClient
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.admin)
+
+    def _create_scope(self, egress):
+        from apps.deployments.models.network_scope import ScopedNetwork
+        return ScopedNetwork.objects.create(
+            content_type=self.project_ct,
+            object_id=self.project.id,
+            network_name="test-br-reconcile",
+            allowed_egress_networks=egress,
+        )
+
+    def test_update_narrowing_clears_then_reapplies(self):
+        from unittest.mock import call
+        row = self._create_scope(["0.0.0.0/0"])
+        parent = MagicMock()
+        with patch(
+            "apps.deployments.services.network_scope.clear_scoped_rules",
+            parent.clear,
+        ), patch(
+            "apps.deployments.services.network_scope.apply_egress_restrictions",
+            parent.apply,
+        ):
+            resp = self.client.patch(
+                f"/api/v1/network-scopes/{row.id}/",
+                {"allowed_egress_networks": ["10.0.0.0/8"]},
+                format="json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        parent.assert_has_calls([
+            call.clear("test-br-reconcile"),
+            call.apply("test-br-reconcile", ["10.0.0.0/8"]),
+        ])
+
+    def test_create_applies_rules(self):
+        with patch(
+            "apps.deployments.services.network_scope.clear_scoped_rules",
+        ) as mock_clear, patch(
+            "apps.deployments.services.network_scope.apply_egress_restrictions",
+        ) as mock_apply:
+            resp = self.client.post(
+                "/api/v1/network-scopes/",
+                {
+                    "scope_type_input": "project",
+                    "scope_id": str(self.project.id),
+                    "content_type": self.project_ct.id,
+                    "object_id": str(self.project.id),
+                    "network_name": "test-br-created",
+                    "allowed_egress_networks": ["10.0.0.0/8"],
+                },
+                format="json",
+            )
+        self.assertEqual(resp.status_code, 201)
+        mock_clear.assert_called_once_with("test-br-created")
+        mock_apply.assert_called_once_with("test-br-created", ["10.0.0.0/8"])

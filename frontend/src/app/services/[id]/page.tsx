@@ -17,6 +17,7 @@ import { AdvancedTab } from '@/components/settings/AdvancedTab';
 import { EnvVarsTab } from '@/components/settings/EnvVarsTab';
 import { AIInsightsTab } from '@/components/settings/AIInsightsTab';
 import { DomainsTab } from '@/components/settings/DomainsTab';
+import { NetworkTab } from '@/components/settings/NetworkTab';
 import { ServiceMtlsTab } from '@/components/settings/ServiceMtlsTab';
 import { DeploymentsTab } from '@/components/settings/DeploymentsTab';
 import { MetricsTab } from '@/components/metrics/MetricsTab';
@@ -1118,6 +1119,12 @@ export default function ServiceDetailPage() {
             {activeTab === 'topology' && (
                 <div className="animate-in fade-in slide-in-from-bottom-4">
                     <TopologyView serviceId={service.id} embed={true} />
+                </div>
+            )}
+
+            {activeTab === 'network' && (
+                <div className="animate-in fade-in slide-in-from-bottom-4">
+                    <NetworkTab projectId={service.project} />
                 </div>
             )}
 

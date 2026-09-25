@@ -476,6 +476,14 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
                 "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
                 "-d", cidr, "-j", "RETURN",
             ])
+        # Same-bridge + ESTABLISHED returns (restricted mode only — the
+        # unrestricted branch above already emits its own). Previously
+        # restricted bridges relied on Docker's own chains for addon
+        # traffic and reply packets — fragile, and a wiped Docker chain
+        # silently broke same-bridge addons with no platform rule to
+        # fall back on.
+        _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", bridge_iface, "-j", "RETURN"])
+        _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "RETURN"])
 
     # 3. Always DROP cloud metadata service (169.254.169.254/32) to prevent IAM theft.
     _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-d", "169.254.169.254/32", "-j", "DROP"])
