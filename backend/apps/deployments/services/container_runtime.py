@@ -99,6 +99,41 @@ def is_sandboxed_runtime(runtime: str | None) -> bool:
     return runtime in ("kata-runtime", "runsc")
 
 
+def sandbox_dns_servers() -> list[str]:
+    """Explicit DNS resolvers for sandboxed (gVisor/Kata) containers.
+
+    Sandboxed runtimes handle the loopback range inside the sandbox,
+    so Docker's embedded DNS at 127.0.0.11 is unreachable from them
+    (zero packets ever leave the sandbox for it) — every hostname
+    lookup fails, including addon and internet names. The platform
+    works around addon names via /etc/hosts injection, but general
+    DNS needs real resolvers passed as container ``dns=``.
+
+    Order: master CoreDNS mesh IP first (serves mesh.internal names
+    AND forwards upstream), then public fallbacks. Env override
+    SMSLY_RUNSC_DNS (comma-separated) wins when set.
+    """
+    override = os.environ.get("SMSLY_RUNSC_DNS", "").strip()
+    if override:
+        return [part.strip() for part in override.split(",") if part.strip()]
+
+    servers: list[str] = []
+    try:
+        from apps.deployments.models.mesh import MeshNetwork
+
+        mesh = MeshNetwork.objects.filter(name="default", is_active=True).first()
+        if mesh is not None:
+            local_peer = (
+                mesh.peers.filter(is_local=True, is_active=True).first()
+            )
+            if local_peer is not None and local_peer.wg_address:
+                servers.append(str(local_peer.wg_address))
+    except Exception as exc:
+        logger.debug("sandbox DNS: mesh IP lookup failed: %s", exc)
+    servers.extend(["8.8.8.8", "1.1.1.1"])
+    return servers
+
+
 def get_runtime_for_container(
     service_name: str = "",
     runtime_preference: str | None = None,

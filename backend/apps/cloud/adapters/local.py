@@ -1165,6 +1165,28 @@ class LocalAdapter(BaseCloudAdapter):
             except Exception as exc:
                 logger.warning("Failed to resolve addon IPs for gVisor extra_hosts: %s", exc)
 
+        from apps.deployments.services.container_runtime import (
+            is_sandboxed_runtime,
+            sandbox_dns_servers,
+        )
+        if container_runtime and is_sandboxed_runtime(container_runtime):
+            # Sandboxed runtimes (gVisor/Kata) swallow 127.0.0.11
+            # in-sandbox, so Docker embedded DNS is dead and every
+            # external lookup fails (e.g. OTP mail providers). Pass
+            # explicit resolvers instead: master CoreDNS first (mesh
+            # names + upstream forward), public fallbacks after.
+            try:
+                _dns_servers = sandbox_dns_servers()
+            except Exception as exc:
+                logger.debug("Sandbox DNS resolver lookup failed: %s", exc)
+                _dns_servers = ["8.8.8.8", "1.1.1.1"]
+            if _dns_servers:
+                create_kwargs["dns"] = _dns_servers
+                logger.info(
+                    "Sandboxed runtime %s: explicit DNS resolvers %s",
+                    container_runtime, _dns_servers,
+                )
+
         new_container = self.docker_client.containers.create(**create_kwargs)
         new_container.start()
         logger.info(
