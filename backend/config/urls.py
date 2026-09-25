@@ -73,7 +73,16 @@ def bootstrap_view(request, token):
     master_wg_pubkey = payload_data.get("master_wg_pubkey", "")
     master_wg_endpoint = payload_data.get("master_wg_endpoint", "")
 
-    master_url = os.environ.get("PUBLIC_URL", "https://grid.smsly.cloud")
+    master_url = os.environ.get("PUBLIC_URL", "")
+    if not master_url:
+        try:
+            from apps.deployments.models.core import PlatformConfig as _PC
+            _dom = (_PC.get_config_value("domain") or "").strip()
+            if _dom:
+                master_url = f"https://{_dom}"
+        except Exception:
+            pass
+    master_url = master_url or "https://grid.smsly.cloud"
     master_ip = os.environ.get("PUBLIC_IP", "")
 
     if not gateway_secret:

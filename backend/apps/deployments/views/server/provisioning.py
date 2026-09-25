@@ -90,7 +90,11 @@ class ProvisioningMixin:
         from apps.deployments.services.wireguard_service import WireGuardService
 
         config = PlatformConfig.load()
-        base_domain = getattr(config, "server_domain", "") or "grid.smsly.cloud"
+        base_domain = (
+            getattr(config, "server_domain", "")
+            or getattr(config, "domain", "")
+            or "grid.smsly.cloud"
+        )
         server_ip = getattr(config, "server_ip", "") or os.environ.get("PUBLIC_IP", "")
 
         # ── 1+2+3+4. Assign node_number, compute node_domain, create the
