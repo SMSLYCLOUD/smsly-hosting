@@ -131,6 +131,11 @@ services:
   # Postgres backup sidecar (pgBackRest). Local stanzas read the
   # read-only data mounts; control connections use the pgbackrest role
   # (PGPASSWORD from .env). Weekly full + daily diff via host cron.
+  # Postgres backup sidecar. pg_basebackup over TCP with the
+  # pgbackrest replication role (no SSH, no server changes): weekly
+  # full instance backups per server. Per-tenant granularity comes
+  # from the existing pg_dump addon path. WAL/PITR needs an archive
+  # mount on the DB containers — scheduled for primary maintenance.
   pgbackrest:
     build:
       context: ../pgbackrest
@@ -140,10 +145,7 @@ services:
     environment:
       - PGPASSWORD=${PGBACKREST_PASSWORD:-}
     volumes:
-      - ../pgbackrest/pgbackrest.conf:/etc/pgbackrest.conf:ro
       - pgbackrest-repo:/var/lib/pgbackrest
-      - smsly-shared-postgres-data:/mnt/pgdata-shared:ro
-      - smsly-hosting-postgres-data:/mnt/pgdata-platform:ro
     networks:
       - smsly-net
     # Idle supervisor: cron execs backup commands; keep-alive only.
