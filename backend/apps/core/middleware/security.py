@@ -95,9 +95,10 @@ class SecurityMiddleware:
         # the ManagedServer-specific gateway_secret. Do not make them also
         # satisfy the master-wide GATEWAY_SECRET here: that would reject a
         # correctly signed per-node request before AgentMixin can verify it.
+        # The mesh-dns-zone pull uses the same per-server HMAC scheme.
         if (
             path.startswith('/api/v1/servers/')
-            and path.endswith(('/agent-ready/', '/agent-heartbeat/'))
+            and path.endswith(('/agent-ready/', '/agent-heartbeat/', '/mesh-dns-zone/'))
         ):
             return False
 

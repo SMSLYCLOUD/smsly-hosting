@@ -123,6 +123,10 @@ def bootstrap_view(request, token):
         env_lines.append(_env_line("NODE_DOMAIN", node_domain))
     if wg_address:
         env_lines.append(_env_line("WG_ADDRESS", wg_address))
+    if install_mode == "node" and wg_address:
+        # Node CoreDNS replica binds the mesh IP only (never public):
+        # compose fails fast with a clear message when this is unset.
+        env_lines.append(_env_line("NODE_MESH_BIND_IP", wg_address))
     if wg_private_key:
         env_lines.append(_env_line("WG_PRIVATE_KEY", wg_private_key))
     if master_wg_pubkey:
@@ -193,6 +197,31 @@ def bootstrap_view(request, token):
 
     env_block = "\n".join(env_lines)
 
+    # Node CoreDNS replica seed: render the CURRENT mesh zone so the
+    # installer can write zone files before compose up (works with the
+    # already-minted token — wg_address is in the payload). Refresh
+    # afterwards comes from the 5-min cron (same payload mechanism).
+    # Empty on render failure: installer warns, cron backfills.
+    import base64 as _b64mod
+    zone_hosts_b64 = ""
+    zone_corefile_b64 = ""
+    if install_mode == "node":
+        try:
+            from apps.deployments.services.mesh_dns import (
+                build_corefile as _build_corefile,
+                build_mesh_hosts as _build_mesh_hosts,
+            )
+            _hosts_content, _record_count = _build_mesh_hosts()
+            if _record_count > 0:
+                zone_hosts_b64 = _b64mod.b64encode(
+                    _hosts_content.encode()
+                ).decode()
+                zone_corefile_b64 = _b64mod.b64encode(
+                    _build_corefile().encode()
+                ).decode()
+        except Exception:
+            pass
+
     script = f"""#!/bin/bash
 set -euo pipefail
 
@@ -229,6 +258,21 @@ cat > .env << 'ENVEOF'
 ENVEOF
 
 chmod 600 .env 2>/dev/null || true
+# Node CoreDNS replica seed (full nodes only): zone files must exist
+# BEFORE compose up mounts ./coredns-config (a missing bind source
+# would poison the mount). Refresh via cron; CoreDNS auto-reloads.
+if [ -n "{zone_hosts_b64}" ]; then
+  mkdir -p infrastructure/docker/coredns-config
+  echo "{zone_hosts_b64}" | base64 -d > infrastructure/docker/coredns-config/mesh.hosts
+  echo "{zone_corefile_b64}" | base64 -d > infrastructure/docker/coredns-config/Corefile
+  chmod 644 infrastructure/docker/coredns-config/mesh.hosts infrastructure/docker/coredns-config/Corefile
+  echo "Mesh DNS zone seeded."
+else
+  echo "WARNING: mesh zone seed unavailable — first cron sync will backfill."
+fi
+if ! grep -q 'smsly-mesh-dns-sync' /etc/crontab 2>/dev/null; then
+  echo '*/5 * * * * root [ -x /opt/smsly-hosting/scripts/sync-node-mesh-dns.sh ] && /opt/smsly-hosting/scripts/sync-node-mesh-dns.sh >>/var/log/smsly-mesh-dns.log 2>&1 || true # smsly-mesh-dns-sync' >> /etc/crontab 2>/dev/null || echo "WARNING: could not install mesh-dns cron."
+fi
 echo ""
 echo "=== Starting installer in background... ==="
 echo "The installation will continue even if your SSH connection drops."

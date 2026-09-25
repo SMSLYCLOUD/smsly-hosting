@@ -386,6 +386,42 @@ services:
           memory: ${CADDY_MEMORY_LIMIT:-128M}
 
   # ============================================================
+  # CoreDNS (mesh DNS replica — same zone as the master)
+  # Serves mesh.internal names (master, registry, gridN...) to node
+  # workloads from the node's own mesh IP. Zone files ship in
+  # ./coredns-config/ (written by the bootstrap script, refreshed
+  # every 5 min by scripts/sync-node-mesh-dns.sh cron); the CoreDNS
+  # `hosts` plugin re-reads them on change — no restart needed.
+  # Bound to NODE_MESH_BIND_IP only: the zone maps internal
+  # topology and must never listen on the public interface.
+  # ============================================================
+  coredns:
+    image: coredns/coredns:1.14.5
+    command: -conf /etc/coredns/Corefile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    ports:
+      - "${NODE_MESH_BIND_IP:?NODE_MESH_BIND_IP is required (set by bootstrap from the node's mesh address)}:53:53"
+      - "${NODE_MESH_BIND_IP:?NODE_MESH_BIND_IP is required (set by bootstrap from the node's mesh address)}:53:53/udp"
+    volumes:
+      - ./coredns-config:/etc/coredns:ro
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["NONE"]
+      disable: true
+    deploy:
+      resources:
+        limits:
+          memory: ${COREDNS_MEMORY_LIMIT:-64M}
+
+  # ============================================================
   # OPTIONAL: CrowdSec (Threat Intelligence — NODE_CROWDSEC=1)
   # ============================================================
 

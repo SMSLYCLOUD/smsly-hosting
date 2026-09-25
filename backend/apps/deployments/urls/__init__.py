@@ -291,6 +291,12 @@ urlpatterns = [
         ManagedServerViewSet.as_view({'post': 'agent_heartbeat'}),
         name='server-agent-heartbeat',
     ),
+    # Node CoreDNS replica zone pull (HMAC auth via gateway_secret).
+    path(
+        'servers/<uuid:pk>/mesh-dns-zone/',
+        ManagedServerViewSet.as_view({'get': 'mesh_dns_zone'}),
+        name='server-mesh-dns-zone',
+    ),
     path('deployments/remote-trigger/', RemoteTriggerView.as_view(), name='deployment-remote-trigger'),
     # Docker Registry token auth
     path('registry/auth/', registry_token, name='registry-token'),
