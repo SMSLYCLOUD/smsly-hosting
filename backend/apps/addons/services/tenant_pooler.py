@@ -151,13 +151,25 @@ def render_tenants_config(pools):
         '[databases]',
     ]
     users = []
+    seen_db_keys = set()
     for pool in pools:
         alias = _check_pool_token('alias', pool['alias'])
         user = _check_pool_token('user', pool['user'])
         db = _check_pool_token('database', pool['db'])
         password = _check_password(user, pool.get('password') or '')
-        ini.append(
-            f'{alias} = host={SHARED_CONTAINER} port=5432 dbname={db}')
+        # PgBouncer routes by DATABASE name, but provisioned URLs carry
+        # the pool ALIAS as host with the real dbname as database
+        # (postgresql://user:pw@ALIAS/db). Register both keys so the
+        # URL works unchanged from the pgcat era.
+        keys = [alias] if alias == db else [alias, db]
+        for key in keys:
+            if key in seen_db_keys:
+                raise RuntimeError(
+                    f"tenants render: duplicate pool key {key!r} "
+                    "(two pools resolve to the same database name)")
+            seen_db_keys.add(key)
+            ini.append(
+                f'{key} = host={SHARED_CONTAINER} port=5432 dbname={db}')
         users.append((user, password))
     ini += [
         '',

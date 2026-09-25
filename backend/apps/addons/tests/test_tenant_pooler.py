@@ -21,8 +21,18 @@ class RenderTests(TestCase):
             'alias': 'postgres-acme', 'user': 'u1', 'db': 'd1', 'password': 'pw1',
         }])
         self.assertIn('postgres-acme = host=smsly-shared-postgres port=5432 dbname=d1', ini)
+        # PgBouncer routes by database name: the dbname key keeps the
+        # provisioned URL form (alias host + real dbname) working.
+        self.assertIn('d1 = host=smsly-shared-postgres port=5432 dbname=d1', ini)
         self.assertIn('pool_mode = transaction', ini)
         self.assertIn('"u1" "pw1"', userlist)
+
+    def test_render_rejects_duplicate_db_keys(self):
+        with self.assertRaises(RuntimeError):
+            _render([
+                {'alias': 'a1', 'user': 'u1', 'db': 'd', 'password': 'p1'},
+                {'alias': 'a2', 'user': 'u2', 'db': 'd', 'password': 'p2'},
+            ])
 
     def test_render_has_pooler_required_keys(self):
         """PgBouncer must see listen/auth/pool keys or it exits on startup."""
