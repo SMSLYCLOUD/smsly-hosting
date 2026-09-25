@@ -2237,13 +2237,17 @@ class AddonProvisioner:
         raise RuntimeError(f"{container_name} health check timed out after {timeout}s")
 
     def deprovision(self, container_id: str,
-                    container_name: str | None = None) -> bool:
+                    container_name: str | None = None,
+                    retain_volume: bool = False) -> bool:
         """
         Remove an addon container and its volumes.
 
         Args:
             container_id: Container ID or name
             container_name: Optional container name for volume cleanup
+            retain_volume: when True, stop+remove the container but KEEP
+                the ``<name>-data`` volume (soft-delete retention; the
+                purge task removes it after the window).
         """
         try:
             # Stop and remove container
@@ -2251,13 +2255,18 @@ class AddonProvisioner:
                            capture_output=True, timeout=60)
             subprocess.run(['docker', 'rm', container_id], capture_output=True, timeout=60)
 
-            # Remove associated volume if container_name provided
-            if container_name:
+            # Remove associated volume if container_name provided,
+            # unless retention was requested.
+            if container_name and not retain_volume:
                 subprocess.run(
                     ['docker', 'volume', 'rm', f'{container_name}-data'],
                     capture_output=True,
                     timeout=60,
                 )
+            elif container_name and retain_volume:
+                logger.info(
+                    "Retaining data volume for %s (soft-delete window)",
+                    container_name)
 
             logger.info(f"Deprovisioned addon container: {container_id}")
             return True
@@ -2298,7 +2307,8 @@ class AddonProvisioner:
             return False
 
     def deprovision_dispatch(self, container_id: str, addon,
-                             container_name: str | None = None) -> bool:
+                             container_name: str | None = None,
+                             retain_volume: bool = False) -> bool:
         """
         De-provision an addon from the correct host (master or full-stack node).
         """
@@ -2306,7 +2316,8 @@ class AddonProvisioner:
         if (server and not server.is_primary
                 and not getattr(server, 'is_lite_agent', False)):
             return self.deprovision_remote(container_id, server, container_name)
-        return self.deprovision(container_id, container_name)
+        return self.deprovision(container_id, container_name,
+                                retain_volume=retain_volume)
 
     def get_status(self, container_id: str) -> dict:
         """Get the status of an addon container."""

@@ -615,9 +615,18 @@ class AddonViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def deprovision(self, request, pk=None):
-        """Delete addon container and remove from service."""
+        """Delete addon container and remove from service.
+
+        Requires typed confirmation: body.confirmation must equal the
+        addon name. Destructive actions stay explicit even for staff.
+        """
         addon = self.get_object()
         assert_can_delete(self.request.user, addon.service)
+        confirmation = str((request.data or {}).get('confirmation', '')).strip()
+        if confirmation != addon.name:
+            return Response(
+                {'error': 'Confirmation required: send {"confirmation": "<addon-name>"} to deprovision.'},
+                status=status.HTTP_400_BAD_REQUEST)
         from ..tasks.crud import deprovision_addon_task
         ok, _ = _guard_delay(deprovision_addon_task, addon_id=str(addon.id))
         if not ok:

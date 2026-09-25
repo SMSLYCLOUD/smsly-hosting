@@ -101,9 +101,21 @@ def provision_addon_task(self, addon_id: str) -> None:
 
 @shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.deprovision_addon_task")
 def deprovision_addon_task(self, addon_id: str) -> None:
-    """Delete addon container (or logical database for shared addons)."""
+    """Delete addon container (or logical database for shared addons).
+
+    Safety order: snapshot first (best-effort, never blocks), then
+    destroy, then retain the data volume for the purge window instead
+    of removing it. A deprovision must never be a data-loss event.
+    """
+    from django.utils import timezone
     try:
         addon = Addon.objects.get(id=addon_id)
+        try:
+            addon_provisioner.create_backup(addon)
+            logger.info("Pre-deprovision snapshot taken for addon %s", addon_id)
+        except Exception as snap_exc:
+            logger.warning("Pre-deprovision snapshot failed for addon %s: %s",
+                           addon_id, snap_exc)
         if getattr(addon, 'provision_mode', '') == 'shared' and addon.addon_type == 'POSTGRES':
             # Logical database: DROP role+db, never touch containers.
             from urllib.parse import urlparse as _urlparse
@@ -120,13 +132,67 @@ def deprovision_addon_task(self, addon_id: str) -> None:
                 logger.debug("tenant pooler push skipped for addon %s: %s", addon_id, _pool_exc)
         elif addon.coolify_uuid:
             container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-            addon_provisioner.deprovision_dispatch(addon.coolify_uuid, addon, container_name)
+            addon_provisioner.deprovision_dispatch(
+                addon.coolify_uuid, addon, container_name, retain_volume=True)
+            addon.retired_volume = f"{container_name}-data"
         addon.status = Addon.Status.DELETED
-        addon.save()
+        addon.deleted_at = timezone.now()
+        addon.save(update_fields=['status', 'deleted_at', 'retired_volume', 'updated_at'])
     except Exception as e: # pylint: disable=broad-exception-caught
         logger.error("Deprovision failed: %s", e)
         raise self.retry(exc=e, countdown=30)
 
+
+
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.purge_retired_addon_volumes_task")
+def purge_retired_addon_volumes_task(self) -> None:
+    """Remove retained data volumes past the soft-delete window.
+
+    Runs daily. Only touches addons DELETED longer than
+    ADDON_VOLUME_RETENTION_DAYS ago with a recorded retired_volume.
+    Best-effort per volume — one failure never blocks the rest.
+    """
+    import datetime
+    import subprocess
+    from django.utils import timezone
+    retention_days = 14
+    try:
+        from apps.deployments.models.platform import PlatformConfig
+        retention_days = int(
+            getattr(PlatformConfig.load(), 'addon_volume_retention_days', 14) or 14)
+    except Exception:
+        pass
+    cutoff = timezone.now() - datetime.timedelta(days=retention_days)
+    stale = Addon.objects.filter(
+        status=Addon.Status.DELETED, deleted_at__lt=cutoff,
+    ).exclude(retired_volume='')
+    purged, failed = 0, 0
+    for addon in stale.iterator():
+        vol = (addon.retired_volume or '').strip()
+        if not vol:
+            continue
+        try:
+            proc = subprocess.run(
+                ['docker', 'volume', 'rm', vol],
+                capture_output=True, text=True, timeout=60)
+            if proc.returncode == 0:
+                addon.retired_volume = ''
+                addon.save(update_fields=['retired_volume', 'updated_at'])
+                purged += 1
+            else:
+                # Already gone counts as purged (idempotent).
+                if 'No such volume' in (proc.stderr or ''):
+                    addon.retired_volume = ''
+                    addon.save(update_fields=['retired_volume', 'updated_at'])
+                    purged += 1
+                else:
+                    failed += 1
+                    logger.warning("Purge failed for volume %s: %s",
+                                   vol, (proc.stderr or '')[:200])
+        except Exception as exc:
+            failed += 1
+            logger.warning("Purge failed for volume %s: %s", vol, exc)
+    logger.info("purge_retired_addon_volumes: purged=%d failed=%d", purged, failed)
 
 
 @shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1], name="apps.deployments.tasks.backup_addon_task")

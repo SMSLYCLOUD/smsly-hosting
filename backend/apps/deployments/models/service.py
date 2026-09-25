@@ -466,6 +466,14 @@ class Service(TimeStampedModel):
         help_text="Optional post-boot smoke command run inside green via docker exec "
                   "(e.g. python -c \"import app.main\"). Non-zero exit blocks promotion. "
                   "Blank = off.")
+    seed_command = models.CharField(  # type: ignore[var-annotated]
+        max_length=500, default='', blank=True,
+        help_text="Optional seed command run inside the live container after "
+                  "promotion (e.g. python manage.py seed_core). Best-effort: "
+                  "failure is logged, never fails the deploy. Blank = off.")
+    seed_last_run = models.DateTimeField(  # type: ignore[var-annotated]
+        null=True, blank=True, default=None,
+        help_text="Last time the seed command completed (any exit code).")
     auto_restart = models.BooleanField(  # type: ignore[var-annotated]
         default=True, help_text="Automatically restart unhealthy containers")
     health_webhook_token = models.CharField(  # type: ignore[var-annotated]

@@ -766,6 +766,12 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=3, minute=30),
         'options': {'expires': 3600.0},
     },
+    # Purge soft-deleted addon volumes past the retention window (daily)
+    'purge-retired-addon-volumes-daily': {
+        'task': 'apps.deployments.tasks.purge_retired_addon_volumes_task',
+        'schedule': crontab(hour=4, minute=30),
+        'options': {'expires': 3600.0},
+    },
     # Dispatch due cron jobs every minute
     'check-cron-jobs-every-1m': {
         'task': 'apps.deployments.tasks_cron.check_cron_jobs',

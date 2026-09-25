@@ -89,3 +89,10 @@ def _post_deploy_success(deployment: Deployment, service: Service, log_line_func
                 or getattr(service, "active_runtime_id", "")
             )
             EnvoySidecar.reattach_if_stale(service, live_container_id=live_id)
+    with suppress(Exception):
+        # Post-promotion seed hook: run the service's seed_command once
+        # inside the live container (fresh databases need system rows).
+        # Best-effort by design — a seed failure must never fail a
+        # promotion that is otherwise healthy.
+        from apps.deployments.tasks.deploy import seed as _seed_mod
+        _seed_mod.run_post_promote_seed(deployment, service)

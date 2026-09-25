@@ -294,6 +294,16 @@ class Addon(TimeStampedModel):
     def __str__(self):
         return f"{self.addon_type} for {self.service.name}"
 
+    deleted_at = models.DateTimeField(  # type: ignore[var-annotated]
+        null=True, blank=True, default=None,
+        help_text="When the addon was deprovisioned. Data volume is kept "
+                  "for the retention window (purge task) instead of being "
+                  "removed immediately.")
+    retired_volume = models.CharField(  # type: ignore[var-annotated]
+        max_length=255, blank=True, default="",
+        help_text="Data volume retained at deprovision; removed by the "
+                  "purge task after the retention window.")
+
     class Meta:
         indexes = [
             models.Index(fields=["service", "status"], name="addon_service_status_idx"),
