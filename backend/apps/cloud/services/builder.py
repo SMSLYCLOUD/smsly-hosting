@@ -409,7 +409,18 @@ class NixpacksBuilder:
                 else:
                     source = push_result
                 for line in source:
-                    if '"error"' in str(line):
+                    if isinstance(line, dict):
+                        # docker-py yields decoded dicts: str(dict) uses
+                        # single quotes, so a '"error"' substring test
+                        # NEVER matches and real push errors were silently
+                        # reported as success ("✓ Pushed" for an image the
+                        # registry never received).
+                        if line.get("error"):
+                            push_failed = True
+                            error_msg = str(line.get("error"))
+                            logger.error(f"Registry push failed (SDK): {line}")
+                            break
+                    elif '"error"' in str(line):
                         push_failed = True
                         error_msg = str(line)
                         logger.error(f"Registry push failed (SDK): {line}")

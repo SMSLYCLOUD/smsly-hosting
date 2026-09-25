@@ -19,6 +19,9 @@ class _FakeManager:
     without instantiating the real class (which needs a Deployment)."""
 
     _ensure_docker_driver = PipelineManager._ensure_docker_driver
+    # The method reads the lock off type(self); mirror the real class attr
+    # (re-synced in setUp alongside the PipelineManager reset).
+    _buildx_driver_lock = PipelineManager._buildx_driver_lock
 
 
 class EnsureDockerDriverSafetyTests(SimpleTestCase):
@@ -26,6 +29,7 @@ class EnsureDockerDriverSafetyTests(SimpleTestCase):
         # Reset the class-level lock so a test that crashed mid-call does
         # not poison the next test.
         PipelineManager._buildx_driver_lock = threading.Lock()
+        _FakeManager._buildx_driver_lock = PipelineManager._buildx_driver_lock
 
     def test_already_docker_driver_is_a_noop(self):
         """If the inspector reports 'Driver: docker', the function returns

@@ -50,7 +50,8 @@ _BUILDX_INFRA_RE = re.compile(
     r"|error during connect"
     r"|connection refused"
     r"|permission denied.*(?:docker\.sock|connect)"
-    r"|no builder|unknown driver|failed to dial|buildkitd",
+    r"|no builder|unknown driver|failed to dial|buildkitd"
+    r"|SMSLY_INFRA_NO_BUILD_OUTPUT",
     re.IGNORECASE,
 )
 
@@ -1075,10 +1076,99 @@ class BuildMixin:
                 append_log(self.deployment, redacted[-20000:] + "\n")
             if proc.returncode != 0:
                 raise BuildError(f"Docker build failed: {redacted[-500:]}")
+            # ── Output verification ──────────────────────────────────
+            # Exit 0 is NOT success: with a docker-container builder
+            # (buildx default flapping, ephemeral leftovers) and no
+            # --load/--push, the image stays in the builder's private
+            # cache and never lands in the daemon store — every later
+            # step (push 404, pull 404, "local cache unavailable") then
+            # fails mysteriously. Verify the tag exists; salvage with an
+            # explicit --load rebuild (warm cache: seconds); else raise
+            # infra-class so the dispatcher falls back to the Engine API.
+            if not self._verify_built_tag(tag):
+                append_log(
+                    self.deployment,
+                    f"Build finished but {tag} is missing from the daemon "
+                    f"image store (builder did not load output). Retrying "
+                    f"with explicit --load...\n",
+                )
+                if self._salvage_load(tag, cmd, context_dir, build_env, timeout_s):
+                    append_log(
+                        self.deployment,
+                        f"Salvage --load succeeded: {tag} is now in the daemon store.\n",
+                    )
+                else:
+                    raise RuntimeError(
+                        "SMSLY_INFRA_NO_BUILD_OUTPUT: builder exit 0 but "
+                        f"{tag} not found in daemon image store after "
+                        f"--load salvage; falling back to Engine API build"
+                    )
         finally:
             _cleanup_secret_files(secret_files)
             if builder_name:
                 _remove_ephemeral_builder(builder_name)
+
+    def _verify_built_tag(self, tag: str) -> bool:
+        """True when *tag* exists in the daemon image store."""
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            get_docker_client().images.get(tag)
+            return True
+        except Exception as exc:
+            logger.debug("Built-tag verification miss for %s: %s", tag, exc)
+            return False
+
+    def _salvage_load(
+        self,
+        tag: str,
+        cmd: list,
+        context_dir: str,
+        build_env: dict,
+        timeout_s: int,
+    ) -> bool:
+        """Re-run the build with explicit `--load` via buildx.
+
+        Same args (warm builder cache: usually seconds), `--output
+        type=docker` semantics forced so a docker-container driver
+        loads the result into the daemon store. Returns True when the
+        tag verifies afterwards. Never raises — failure falls through
+        to the Engine-API fallback.
+        """
+        try:
+            import shutil as _shutil
+            if not _shutil.which("docker"):
+                return False
+            load_cmd = ["docker", "buildx", "build", "--load"]
+            for arg in cmd:
+                if arg in ("docker", "build", "buildx", "build"):
+                    continue
+                if arg == "systemd-run" or arg.startswith("-p") or arg in (
+                    "--scope", "--",
+                ):
+                    continue
+                if arg.startswith("MemoryMax=") or arg.startswith("CPUQuota="):
+                    continue
+                load_cmd.append(arg)
+            # Drop a stale --output flag if the ephemeral path set one;
+            # --load and --output are mutually exclusive.
+            while "--output" in load_cmd:
+                _idx = load_cmd.index("--output")
+                del load_cmd[_idx:_idx + 2]
+            proc = subprocess.run(
+                load_cmd, capture_output=True, text=True,
+                timeout=timeout_s, cwd=context_dir, env=build_env,
+            )
+            if proc.returncode != 0:
+                logger.warning(
+                    "Salvage --load rebuild failed (exit %s): %s",
+                    proc.returncode,
+                    (proc.stderr or proc.stdout or "")[-500:],
+                )
+                return False
+            return self._verify_built_tag(tag)
+        except Exception as exc:
+            logger.warning("Salvage --load rebuild failed: %s", exc)
+            return False
 
     def _build_via_docker_py(
         self,

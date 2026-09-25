@@ -40,6 +40,10 @@ class BuildxCommandTests(TestCase):
             build_mod, "append_log",
             side_effect=lambda dep, msg: mixin.append_log_calls.append(msg),
         ), patch("subprocess.run", return_value=_ok_proc()) as mock_run, \
+                patch.object(
+                    build_mod.BuildMixin, "_verify_built_tag",
+                    return_value=True,
+                ), \
                 patch("builtins.open",
                       MagicMock(return_value=MagicMock(
                           __enter__=MagicMock(return_value=MagicMock(
@@ -91,7 +95,11 @@ class BuildxCommandTests(TestCase):
         with patch.object(
             build_mod, "append_log",
             side_effect=lambda dep, msg: mixin_calls.append(msg),
-        ), patch("subprocess.run", return_value=_ok_proc()) as mock_run:
+        ), patch("subprocess.run", return_value=_ok_proc()) as mock_run, \
+                patch.object(
+                    build_mod.BuildMixin, "_verify_built_tag",
+                    return_value=True,
+                ):
             build_mod.BuildMixin._build_with_buildkit(
                 mixin, context_dir="/tmp/ctx",
                 dockerfile_path="/nonexistent/Dockerfile",
@@ -185,6 +193,10 @@ class PlainCliBuildTests(TestCase):
             side_effect=lambda dep, msg: mixin_calls.append(msg),
         ), patch("subprocess.run",
                  return_value=_ok_proc()) as mock_run, \
+                patch.object(
+                    build_mod.BuildMixin, "_verify_built_tag",
+                    return_value=True,
+                ), \
                 patch("builtins.open",
                       MagicMock(return_value=MagicMock(
                           __enter__=MagicMock(return_value=MagicMock(
@@ -206,6 +218,49 @@ class PlainCliBuildTests(TestCase):
         self.assertNotIn("--load", cmd)
         env = mock_run.call_args.kwargs.get("env", {})
         self.assertEqual(env.get("DOCKER_BUILDKIT"), "1")
+
+
+class MissingOutputTests(TestCase):
+    """Exit-0 builds that leave no image in the daemon store (docker-container
+    driver without --load) must salvage via --load, else raise infra-class
+    so the dispatcher falls back to the Engine API (2026-09-25 outage:
+    phantom driver + false '✓ Build successful' + ghost push + pull 404).
+    """
+
+    def _run_missing(self, salvage_ok):
+        mixin = _mixin()
+        with patch.object(
+            build_mod, "append_log",
+            side_effect=lambda dep, msg: mixin.append_log_calls.append(msg),
+        ), patch("subprocess.run", return_value=_ok_proc()), \
+                patch.object(
+                    build_mod.BuildMixin, "_verify_built_tag",
+                    return_value=False,
+                ), \
+                patch.object(
+                    build_mod.BuildMixin, "_salvage_load",
+                    return_value=salvage_ok,
+                ), \
+                patch("builtins.open",
+                      MagicMock(return_value=MagicMock(
+                          __enter__=MagicMock(return_value=MagicMock(
+                              read=MagicMock(return_value="FROM x\n"))),
+                          __exit__=MagicMock(return_value=False)))):
+            build_mod.BuildMixin._build_with_buildkit(
+                mixin, context_dir="/tmp/ctx",
+                dockerfile_path="/tmp/ctx/Dockerfile",
+                tag="registry:5000/smsly/a:aaa1111", buildargs={},
+                cache_from=[], secrets={},
+            )
+
+    def test_salvage_success_returns_normally(self):
+        self._run_missing(salvage_ok=True)  # must not raise
+
+    def test_salvage_failure_raises_infra_class(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_missing(salvage_ok=False)
+        self.assertIn("SMSLY_INFRA_NO_BUILD_OUTPUT", str(ctx.exception))
+        self.assertTrue(_is_buildx_infra_error(str(ctx.exception)))
 
 
 class SecretFileHygieneTests(TestCase):

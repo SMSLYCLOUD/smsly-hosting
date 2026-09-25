@@ -109,6 +109,67 @@ class SigningMixin:
 
     # ── SIGN (runs before push) ─────────────────────────────────────────
 
+    def _resolve_digest_ref(self, ref: str) -> str | None:
+        """Resolve a tag reference to its digest-pinned form.
+
+        cosign 3.x refuses tag refs ("uses a tag, not a digest") — every
+        tag-based sign fails with exit 1. Prefer the daemon's RepoDigests
+        (populated by the push that just ran); fall back to the registry
+        HTTP API. Returns None when the digest cannot be determined.
+        """
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{json .RepoDigests}}", ref],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                import json as _json
+                try:
+                    digests = _json.loads((result.stdout or "").strip() or "[]")
+                except Exception:
+                    digests = []
+                host = (ref.split("/", 1)[0] if "/" in ref else "")
+                for entry in digests:
+                    if isinstance(entry, str) and "@sha256:" in entry:
+                        if not host or entry.startswith(host + "/") or entry.startswith(host):
+                            return entry
+                for entry in digests:
+                    if isinstance(entry, str) and "@sha256:" in entry:
+                        return entry
+        except Exception as exc:
+            logger.debug("RepoDigests lookup failed for %s: %s", ref, exc)
+        # Registry API fallback: Docker-Content-Digest header.
+        try:
+            from urllib.parse import quote as _quote
+            host, _, rest = ref.partition("/")
+            if not rest or "@" in rest:
+                return None
+            name, _, tag = rest.rpartition(":")
+            if not tag:
+                tag = "latest"
+                name = rest
+            scheme = "https://"
+            verify: bool | str = False
+            if not self._is_local_registry():
+                scheme = "https://"
+                verify = True
+            import requests as _requests
+            from requests.auth import HTTPBasicAuth as _BasicAuth
+            reg_user = os.environ.get("REGISTRY_USER", "")
+            reg_pass = os.environ.get("REGISTRY_PASSWORD", "")
+            auth = _BasicAuth(reg_user, reg_pass) if reg_user and reg_pass else None
+            resp = _requests.get(
+                f"{scheme}{host}/v2/{_quote(name, safe='')}/manifests/{_quote(tag, safe='')}",
+                headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"},
+                auth=auth, verify=verify, timeout=15,
+            )
+            digest = (resp.headers.get("Docker-Content-Digest") or "").strip()
+            if resp.status_code == 200 and digest.startswith("sha256:"):
+                return f"{host}/{name}@{digest}"
+        except Exception as exc:
+            logger.debug("Registry digest lookup failed for %s: %s", ref, exc)
+        return None
+
     def _sign_image(self):
         """Sign the local image with Cosign before pushing to registry.
 
@@ -150,6 +211,20 @@ class SigningMixin:
             is_v3_plus = cosign_ver[0] >= 3
 
             if key_available:
+                # cosign 3.x refuses tag refs — resolve the digest the
+                # push just published and sign that. Without a digest
+                # the sign is doomed (exit 1); skip loudly instead.
+                sign_ref = self._resolve_digest_ref(self.image_name)
+                if not sign_ref:
+                    append_log(
+                        self.deployment,
+                        "Cosign signing SKIPPED — could not resolve a digest "
+                        f"for {self.image_name} (cosign 3.x refuses tag refs). "
+                        "The image was still pushed; fix registry reachability "
+                        "or push verification so the digest can be resolved.\n",
+                    )
+                    update_stage(self.deployment, 'Sign', 'skipped')
+                    return
                 # Build base sign command
                 sign_args = [cosign_bin, "sign", "--key", key_path, "--yes"]
 
@@ -169,12 +244,12 @@ class SigningMixin:
                 if reg_user and reg_pass:
                     sign_args += ["--registry-username", reg_user, "--registry-password", reg_pass]
 
-                sign_args.append(self.image_name)
+                sign_args.append(sign_ref)
                 cmd = sign_args
 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=cosign_env)
                 if result.returncode == 0:
-                    append_log(self.deployment, f"Image signed with Cosign (private key, v{cosign_ver[0]}): {self.image_name}\n")
+                    append_log(self.deployment, f"Image signed with Cosign (private key, v{cosign_ver[0]}): {sign_ref}\n")
                 else:
                     append_log(
                         self.deployment,
@@ -209,10 +284,20 @@ class SigningMixin:
                 update_stage(self.deployment, 'Sign', 'skipped')
                 return
             else:
-                cmd = [cosign_bin, "sign", "--yes", self.image_name]
+                sign_ref = self._resolve_digest_ref(self.image_name)
+                if not sign_ref:
+                    append_log(
+                        self.deployment,
+                        "Cosign keyless signing SKIPPED — could not resolve "
+                        f"a digest for {self.image_name} (cosign 3.x refuses "
+                        "tag refs).\n",
+                    )
+                    update_stage(self.deployment, 'Sign', 'skipped')
+                    return
+                cmd = [cosign_bin, "sign", "--yes", sign_ref]
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=cosign_env)
                 if result.returncode == 0:
-                    append_log(self.deployment, f"Image signed with Cosign (keyless/Sigstore): {self.image_name}\n")
+                    append_log(self.deployment, f"Image signed with Cosign (keyless/Sigstore): {sign_ref}\n")
                 else:
                     stderr_msg = (result.stderr or result.stdout or '').strip()[:300]
                     append_log(

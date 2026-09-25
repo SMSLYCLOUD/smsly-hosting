@@ -12,6 +12,8 @@ def _mixin():
         secret_values={},
         append_log_calls=[],
     )
+    # Plain namespace (not a BuildMixin): stub the daemon-store check.
+    mixin._verify_built_tag = lambda tag: True
     return mixin
 
 
@@ -37,12 +39,14 @@ class EphemeralBuilderTests(TestCase):
                 patch.object(build_mod, '_remove_ephemeral_builder') as rm, \
                 patch.object(build_mod, '_build_limits',
                              return_value=(10240, 400, 1800)), \
+                patch.object(build_mod.BuildMixin, '_verify_built_tag',
+                             return_value=True), \
                 patch('builtins.open',
                       MagicMock(return_value=MagicMock(
                           __enter__=MagicMock(return_value=MagicMock(
                               read=MagicMock(return_value='FROM x\n'))),
                           __exit__=MagicMock(return_value=False)))):
-            build_mod.BuildMixin._build_with_buildx(
+            build_mod.BuildMixin._build_with_buildkit(
                 mixin, context_dir='/tmp/ctx', dockerfile_path='/tmp/ctx/Dockerfile',
                 tag='registry:5000/smsly/a:aaa1111', buildargs={},
                 cache_from=[], secrets={},
@@ -54,22 +58,28 @@ class EphemeralBuilderTests(TestCase):
         # Only probe + build calls, no builder create/remove.
         cmds = [c.args[0] for c in mock_run.call_args_list]
         self.assertTrue(any(c[:2] == ['systemd-run', '--version'] for c in cmds))
-        build_cmds = [c for c in cmds if 'buildx' in c]
+        # Plain CLI carries no builder selection and no load/output flags.
+        build_cmds = [c for c in cmds if 'build' in c]
         self.assertEqual(len(build_cmds), 1)
-        self.assertIn('--load', build_cmds[0])
-        self.assertNotIn('--builder', build_cmds[0])
+        flat = ' '.join(a for a in build_cmds[0] if isinstance(a, str))
+        self.assertIn('docker', build_cmds[0])
+        self.assertNotIn('buildx', flat)
+        self.assertNotIn('--builder', flat)
+        self.assertNotIn('--load', flat)
+        self.assertNotIn('--output', flat)
 
     def test_ephemeral_path_uses_builder_and_output(self):
         mock_run, _ = self._run(True)
         cmds = [c.args[0] for c in mock_run.call_args_list]
-        build_cmds = [c for c in cmds if 'buildx' in c]
+        build_cmds = [c for c in cmds if 'build' in c]
         self.assertEqual(len(build_cmds), 1)
-        cmd = build_cmds[0]
-        self.assertIn('--builder', cmd)
-        self.assertIn('smsly-eph-dep-1234', cmd)
-        self.assertIn('--output', cmd)
-        self.assertIn('type=docker', cmd)
-        self.assertNotIn('--load', cmd)
+        flat = ' '.join(a for a in build_cmds[0] if isinstance(a, str))
+        self.assertIn('buildx', flat)
+        self.assertIn('--builder', flat)
+        self.assertIn('smsly-eph-dep-1234', flat)
+        self.assertIn('--output', flat)
+        self.assertIn('type=docker', flat)
+        self.assertNotIn('--load', flat)
 
     def test_create_remove_helpers(self):
         ok = MagicMock(returncode=0, stdout='', stderr='')

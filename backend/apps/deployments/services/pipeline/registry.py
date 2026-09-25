@@ -173,6 +173,16 @@ class RegistryMixin:
 
 
 
+    def _verify_local_tag(self, ref: str) -> bool:
+        """True when *ref* exists in the daemon image store."""
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            get_docker_client().images.get(ref)
+            return True
+        except Exception as exc:
+            logger.debug("Local-tag verification miss for %s: %s", ref, exc)
+            return False
+
     def _push_image(self):
         """Step 3: Push to Registry."""
         # Skip push for DOCKER type when deployment is local: image is
@@ -267,8 +277,32 @@ class RegistryMixin:
             pushed_to_registry = bool(_norm_prefix and remote_tag.startswith(_norm_prefix))
 
             if pushed_to_registry:
-                update_stage(self.deployment, 'Push', 'success')
-                append_log(self.deployment, f"✓ Pushed: {remote_tag}\n")
+                if push_error:
+                    # The tag NAME matches the registry prefix but the push
+                    # itself reported an error (e.g. SDK 404: image missing
+                    # locally) — the registry never received it. Claiming
+                    # success here ("✓ Pushed") sent every later step
+                    # (cosign, pull, deploy) after a ghost image.
+                    if not is_local:
+                        raise SystemError(
+                            f"Image push failed: {redact_values(push_error, self.secret_values)} "
+                            f"Local fallback is not allowed for remote deployments. "
+                            f"Target node requires a working registry to pull {remote_tag}."
+                        )
+                    if not self._verify_local_tag(remote_tag):
+                        raise SystemError(
+                            f"Image push failed ({redact_values(push_error, self.secret_values)[:300]}) "
+                            f"and {remote_tag} is not present locally either."
+                        )
+                    update_stage(self.deployment, 'Push', 'success')
+                    append_log(
+                        self.deployment,
+                        f"⚠ Push failed ({redact_values(push_error, self.secret_values)[:200]}); "
+                        f"using local image: {remote_tag}\n",
+                    )
+                else:
+                    update_stage(self.deployment, 'Push', 'success')
+                    append_log(self.deployment, f"✓ Pushed: {remote_tag}\n")
                 build_safe = log_exhaustive_push_diagnostics(self.deployment, registry_url, remote_tag)
                 if not build_safe:
                     update_stage(self.deployment, 'Push', 'blocked')
@@ -283,6 +317,11 @@ class RegistryMixin:
                     raise SystemError(
                         f"Image push failed: Local fallback is not allowed for remote deployments. "
                         f"Target node requires a working registry to pull {remote_tag}."
+                    )
+                if not self._verify_local_tag(remote_tag):
+                    raise SystemError(
+                        f"Registry push failed and {remote_tag} is not present "
+                        f"in the local image store — nothing to deploy."
                     )
                 update_stage(self.deployment, 'Push', 'success')
                 append_log(
