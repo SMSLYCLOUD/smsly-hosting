@@ -34,6 +34,24 @@ class RenderTests(TestCase):
                 {'alias': 'a2', 'user': 'u2', 'db': 'd', 'password': 'p2'},
             ])
 
+    def test_render_caps_server_connections_per_pool(self):
+        ini, _ = _render([{
+            'alias': 'postgres-acme', 'user': 'u1', 'db': 'd1', 'password': 'pw1',
+        }])
+        self.assertIn('max_db_connections=10', ini)
+
+    def test_render_server_override_and_loopback_rejected(self):
+        ini, _ = _render([{
+            'alias': 'a', 'user': 'u', 'db': 'd', 'password': 'p',
+            'server': 'smsly-shared-postgres-2',
+        }])
+        self.assertIn('host=smsly-shared-postgres-2 ', ini)
+        with self.assertRaises(RuntimeError):
+            _render([{
+                'alias': 'a', 'user': 'u', 'db': 'd', 'password': 'p',
+                'server': '127.0.0.1',
+            }])
+
     def test_render_has_pooler_required_keys(self):
         """PgBouncer must see listen/auth/pool keys or it exits on startup."""
         ini, _ = _render([])

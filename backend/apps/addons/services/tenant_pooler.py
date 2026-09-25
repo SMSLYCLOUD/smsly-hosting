@@ -45,6 +45,13 @@ TENANTS_TOML_PATH = '/etc/pgcat/pgcat.toml'
 TENANTS_INI_PATH = '/etc/pgcat/pgbouncer.ini'
 TENANTS_USERLIST_PATH = '/etc/pgcat/userlist.txt'
 TENANT_POOL_SIZE = 8
+# Hard ceiling on SERVER connections per pool. This is what lets tenant
+# count grow unbounded: server-side sockets stay <=
+# pools * TENANT_MAX_DB_CONNECTIONS no matter how many clients connect.
+# 400 max_connections - headroom fits ~35 pools per shared server; past
+# that, stand up a second shared server and set per-pool `server`
+# (sharding runbook in module docstring) instead of raising this.
+TENANT_MAX_DB_CONNECTIONS = 10
 
 # INI-safe tokens: alias is an INI key, user/db travel inside
 # `key = host=.. dbname=..` values, passwords inside double quotes.
@@ -136,6 +143,21 @@ def _check_password(user, password):
     return password
 
 
+def _check_server(value):
+    """Pool server hostname. Defaults to the shared instance; a future
+    second shared server is adopted per-pool via this key (sharding).
+    Loopback/self names are rejected fail-closed (the 2026-09-21
+    self-dial wedge must never be reintroducible via config)."""
+    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+    server = (value or SHARED_CONTAINER).strip()
+    if not _SAFE_TOKEN.match(server):
+        raise RuntimeError(f"tenants render: unsafe server {value!r}")
+    if server.lower() in ('localhost', '127.0.0.1', '::1', '0.0.0.0'):
+        raise RuntimeError(
+            f"tenants render: server {value!r} would self-dial the pooler")
+    return server
+
+
 def render_tenants_config(pools):
     """Render (pgbouncer.ini, userlist.txt): one transaction pool per alias.
 
@@ -144,8 +166,11 @@ def render_tenants_config(pools):
     and dials the server as that role. ``auth_type =
     scram-sha-256`` with plaintext userlist secrets is what the pgcat
     fork could not do.
+
+    Sharding runbook (past ~35 pools/server): stand up a second shared
+    instance, then set per-pool ``server`` to its container name. Server
+    sockets stay capped per pool regardless of tenant count.
     """
-    from apps.addons.services.shared_postgres import SHARED_CONTAINER
     ini = [
         '; Rendered by platform push_tenants_config — do not edit.',
         '[databases]',
@@ -157,6 +182,7 @@ def render_tenants_config(pools):
         user = _check_pool_token('user', pool['user'])
         db = _check_pool_token('database', pool['db'])
         password = _check_password(user, pool.get('password') or '')
+        server = _check_server(pool.get('server'))
         # PgBouncer routes by DATABASE name, but provisioned URLs carry
         # the pool ALIAS as host with the real dbname as database
         # (postgresql://user:pw@ALIAS/db). Register both keys so the
@@ -169,7 +195,8 @@ def render_tenants_config(pools):
                     "(two pools resolve to the same database name)")
             seen_db_keys.add(key)
             ini.append(
-                f'{key} = host={SHARED_CONTAINER} port=5432 dbname={db}')
+                f'{key} = host={server} port=5432 dbname={db} '
+                f'max_db_connections={TENANT_MAX_DB_CONNECTIONS}')
         users.append((user, password))
     ini += [
         '',
@@ -213,6 +240,16 @@ def validate_rendered_config(ini_content, userlist_content=""):
         if section not in ini_content:
             raise RuntimeError(
                 f"tenants render missing {section} section")
+    in_dbs = False
+    for line in ini_content.splitlines():
+        s = line.strip()
+        if s.startswith('['):
+            in_dbs = (s == '[databases]')
+            continue
+        if in_dbs and s and not s.startswith(';'):
+            if 'max_db_connections=' not in s:
+                raise RuntimeError(
+                    f"tenants render: pool line without server cap: {s[:80]!r}")
     for key in ('listen_port = 5432', 'auth_type = scram-sha-256',
                 f'auth_file = {TENANTS_USERLIST_PATH}',
                 'pool_mode = transaction'):
