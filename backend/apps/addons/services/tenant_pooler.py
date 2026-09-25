@@ -1,10 +1,19 @@
-"""Per-tenant pgcat pooler for shared logical Postgres databases.
+"""Per-tenant pooler for shared logical Postgres databases.
+
+Engine: PgBouncer (migrated 2026-09-25 from a pinned pgcat fork that
+could not complete SASL — ``Unsupported authentication mechanism: 10``
+on every new server connection against SCRAM-only servers, with
+ban/unban churn on top).
+
+Container/service/volume names intentionally still say ``pgcat``:
+renaming would touch install.sh, monitors, aliases, and docs for zero
+functional gain. Only the engine + config format changed.
 
 The platform pgcat fronts the control-plane database. Shared tenant
-databases (one logical DB per addon on ``smsly-shared-postgres``) can
-optionally sit behind their own pooler (``pgcat-tenants`` container, config
-in the ``pgcat_tenants_config`` volume) so app connection storms pool
-instead of hitting Postgres directly.
+databases (one logical DB per addon on ``smsly-shared-postgres``) sit
+behind their own pooler (``pgcat-tenants`` container serving
+``pgbouncer.ini``, config in the ``pgcat_tenants_config`` volume) so
+app connection storms pool instead of hitting Postgres directly.
 
 Gated by ``PlatformConfig.tenant_pooling_enabled`` (default ON) with
 sticky semantics mirroring ``provision_mode``:
@@ -13,15 +22,17 @@ sticky semantics mirroring ``provision_mode``:
 - New shared provisions attach the POOLER alias and get a rendered pool.
 - Disabling the gate only affects future provisions.
 
-The backend pushes the rendered ``pgcat.toml`` on every shared
-provision/delete/rotate and restarts the pooler only when the content
-changed. The pooler entrypoint waits for the first push.
+The backend pushes the rendered ``pgbouncer.ini`` + ``userlist.txt``
+on every shared provision/delete/rotate and restarts the pooler only
+when the content changed. The pooler entrypoint waits for the first
+push.
 """
 from __future__ import annotations
 
 import io
 import logging
 import os
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -29,8 +40,15 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 TENANTS_CONTAINER_MARK = 'pgcat-tenants'
+# Stale pgcat artifact (left in the volume, ignored by pgbouncer).
 TENANTS_TOML_PATH = '/etc/pgcat/pgcat.toml'
+TENANTS_INI_PATH = '/etc/pgcat/pgbouncer.ini'
+TENANTS_USERLIST_PATH = '/etc/pgcat/userlist.txt'
 TENANT_POOL_SIZE = 8
+
+# INI-safe tokens: alias is an INI key, user/db travel inside
+# `key = host=.. dbname=..` values, passwords inside double quotes.
+_SAFE_TOKEN = re.compile(r'^[A-Za-z0-9_.\-]+$')
 
 
 def _run(args, timeout=60):
@@ -100,38 +118,78 @@ def list_tenant_pools(with_passwords=False):
     return pools
 
 
-def _admin_credentials():
-    """Pgcat admin user/pass for the tenants config (same as platform pgcat).
-
-    pgcat refuses to start without them (BadConfig crash-loop, observed
-    live). Sourced from the same env the platform pooler renders from —
-    backend containers receive the full .env file.
-    """
-    import os
-    user = os.environ.get('PGCAT_ADMIN_USERNAME', 'pgcat_admin') or 'pgcat_admin'
-    password = os.environ.get('PGCAT_ADMIN_PASSWORD', '') or ''
-    if not password:
+def _check_pool_token(kind, value):
+    if not value or not _SAFE_TOKEN.match(value):
         raise RuntimeError(
-            'PGCAT_ADMIN_PASSWORD is not set in the backend environment — '
-            'refusing to render a tenants config that would crash-loop the pooler.')
-    return user, password
+            f"tenants render: unsafe {kind} {value!r} "
+            f"(allowed: {_SAFE_TOKEN.pattern})")
+    return value
 
 
-# Keys/tables the pooler binary demands (verified live 2026-09-21 by
-# mounting candidates at /etc/pgcat/pgcat.toml — the only path the
-# binary reads; CLI argv is ignored). Missing any of these crash-loops
-# the pooler with a misleading "missing field" error.
-REQUIRED_GENERAL_KEYS = (
-    'host = "0.0.0.0"',
-    'port = 5432',
-    'pool_size = 15',
-    'pool_mode = "transaction"',
-    'connect_timeout = 5000',
-)
-REQUIRED_TABLES = ('[user]', '[shards.0]', '[query_router]')
+def _check_password(user, password):
+    if not password or '"' in password or '\\' in password or any(
+            ord(c) < 32 for c in password):
+        raise RuntimeError(
+            f"tenants render: unusable password for user {user!r} "
+            "(empty, quote, backslash, or control chars — "
+            "userlist.txt cannot quote them; rotate the credential)")
+    return password
 
 
-def validate_rendered_config(content: str) -> None:
+def render_tenants_config(pools):
+    """Render (pgbouncer.ini, userlist.txt): one transaction pool per alias.
+
+    Client user == server role with the same password (exactly the old
+    pgcat model): PgBouncer authenticates the client against userlist
+    and dials the server as that role. ``auth_type =
+    scram-sha-256`` with plaintext userlist secrets is what the pgcat
+    fork could not do.
+    """
+    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+    ini = [
+        '; Rendered by platform push_tenants_config — do not edit.',
+        '[databases]',
+    ]
+    users = []
+    for pool in pools:
+        alias = _check_pool_token('alias', pool['alias'])
+        user = _check_pool_token('user', pool['user'])
+        db = _check_pool_token('database', pool['db'])
+        password = _check_password(user, pool.get('password') or '')
+        ini.append(
+            f'{alias} = host={SHARED_CONTAINER} port=5432 dbname={db}')
+        users.append((user, password))
+    ini += [
+        '',
+        '[pgbouncer]',
+        'listen_addr = 0.0.0.0',
+        'listen_port = 5432',
+        'auth_type = scram-sha-256',
+        f'auth_file = {TENANTS_USERLIST_PATH}',
+        'pool_mode = transaction',
+        'max_client_conn = 200',
+        f'default_pool_size = {TENANT_POOL_SIZE}',
+        'min_pool_size = 0',
+        'reserve_pool_size = 2',
+        'reserve_pool_timeout = 3',
+        'server_reset_query = DISCARD ALL',
+        'server_check_query = select 1',
+        'server_check_delay = 30',
+        'server_lifetime = 3600',
+        'server_idle_timeout = 600',
+        'server_connect_timeout = 15',
+        'query_timeout = 0',
+        'ignore_startup_parameters = extra',
+        '',
+    ]
+    ul = [f'"{user}" "{password}"' for user, password in users]
+    ini_content = '\n'.join(ini)
+    ul_content = '\n'.join(ul) + ('\n' if ul else '')
+    validate_rendered_config(ini_content, ul_content)
+    return ini_content, ul_content
+
+
+def validate_rendered_config(ini_content, userlist_content=""):
     """Fail closed when the render would crash-loop the pooler.
 
     Raises RuntimeError listing what's missing. Called by
@@ -139,104 +197,37 @@ def validate_rendered_config(content: str) -> None:
     (push_tenants_config treats it as a failed render and leaves the
     running pooler untouched).
     """
-    try:
-        import tomllib
-        tomllib.loads(content)
-    except Exception as exc:
-        raise RuntimeError(f"tenants render is not valid TOML: {exc}")
-    missing = [k for k in REQUIRED_GENERAL_KEYS if k not in content]
-    missing += [t for t in REQUIRED_TABLES if t not in content]
-    if missing:
-        raise RuntimeError(
-            "tenants render missing binary-required entries: "
-            + ", ".join(missing))
+    for section in ('[databases]', '[pgbouncer]'):
+        if section not in ini_content:
+            raise RuntimeError(
+                f"tenants render missing {section} section")
+    for key in ('listen_port = 5432', 'auth_type = scram-sha-256',
+                f'auth_file = {TENANTS_USERLIST_PATH}',
+                'pool_mode = transaction'):
+        if key not in ini_content:
+            raise RuntimeError(f"tenants render missing {key!r}")
+    seen_users = set()
+    for lineno, line in enumerate(
+            (userlist_content or '').splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        m = re.fullmatch(r'"([^"]+)" "([^"]+)"', line)
+        if not m:
+            raise RuntimeError(
+                f"tenants userlist line {lineno} malformed")
+        user, password = m.group(1), m.group(2)
+        if not _SAFE_TOKEN.match(user) or not password:
+            raise RuntimeError(
+                f"tenants userlist line {lineno} has unsafe user/empty password")
+        if user in seen_users:
+            raise RuntimeError(
+                f"tenants userlist duplicates user {user!r}")
+        seen_users.add(user)
 
 
-def render_tenants_config(pools):
-    """Render a pgcat.toml with one transaction pool per tenant alias.
-
-    The [general] block mirrors the keys the pooler binary requires
-    (host/port/pool_size/pool_mode/connect_timeout plus the standard
-    timeouts) — a host-less general is rejected with
-    ``missing field 'host'`` even though the main pooler's own render
-    omits them (verified live 2026-09-21: identical binary, /etc-path
-    mounted config).
-
-    The trailing [user]/[shards]/[query_router] tables mirror the
-    binary's shipped example: without them the parser falls through to
-    ``missing field 'user'`` / ``missing field 'shards'``. They define
-    only the unused example sharding user against the real shared server
-    (fast auth-fail, never loopback — loopback self-dials the pooler and
-    wedges it); tenant traffic uses [pools.*].
-    """
-    from apps.addons.services.shared_postgres import SHARED_CONTAINER
-    admin_user, admin_pass = _admin_credentials()
-    lines = [
-        '[general]',
-        'host = "0.0.0.0"',
-        'port = 5432',
-        'pool_size = 15',
-        'pool_mode = "transaction"',
-        'connect_timeout = 5000',
-        f'admin_username = "{admin_user}"',
-        f'admin_password = "{admin_pass}"',
-        'server_lifetime = 86400000',
-        'idle_timeout = 60000',
-        'dns_cache_enabled = true',
-        'dns_cache_ttl = 30000',
-        'query_parser_enabled = true',
-        'query_parser_read_write_splitting = false',
-        'healthcheck_timeout = 5000',
-        'healthcheck_delay = 30000',
-        'ban_time = 60',
-        '',
-    ]
-    for pool in pools:
-        alias = pool['alias']
-        lines += [
-            f'[pools.{alias}]',
-            'pool_mode = "transaction"',
-            '',
-            f'[pools.{alias}.shards.0]',
-            f'servers = [["{SHARED_CONTAINER}", 5432, "primary"]]',
-            f'database = "{pool["db"]}"',
-            f'[pools.{alias}.users.{pool["user"]}]',
-            f'username = "{pool["user"]}"',
-            f'pool_size = {TENANT_POOL_SIZE}',
-            f'password = "{pool["password"]}"',
-            '',
-        ]
-    # Legacy sharding tables, mirrored from the binary's shipped example.
-    # The parser demands top-level [user]/[shards]/[query_router] even
-    # when all live traffic uses [pools.*] (verified live 2026-09-21:
-    # without them startup fails with missing-field errors). The example
-    # shard MUST NOT point at loopback: that self-dials the pooler's own
-    # 5432 listener, and the 5s-timeout ban storm wedges the whole pooler
-    # (AllServersDown for real pools, incident 2026-09-21). Point it at the
-    # real shared server instead: healthchecks then fail FAST on auth
-    # (unknown dummy role, no such PG user) and stay throttled by ban_time.
-    lines += [
-        '[user]',
-        'name = "tenant_sharding_user"',
-        'password = "tenant_sharding_user"',
-        '',
-        '[shards]',
-        '',
-        '[shards.0]',
-        f'servers = [["{SHARED_CONTAINER}", 5432, "primary"]]',
-        'database = "postgres"',
-        '',
-        '[query_router]',
-        'default_role = "any"',
-        '',
-    ]
-    content = '\n'.join(lines) + '\n'
-    validate_rendered_config(content)
-    return content
-
-
-def _read_remote_toml(container):
-    res = _run(['docker', 'cp', f'{container}:{TENANTS_TOML_PATH}', '-'], timeout=30)
+def _read_remote_file(container, remote_path):
+    res = _run(['docker', 'cp', f'{container}:{remote_path}', '-'], timeout=30)
     if res.get('error') or not res.get('raw'):
         return None
     try:
@@ -252,18 +243,17 @@ def _read_remote_toml(container):
         return None
 
 
-def _write_remote_toml(container, content):
+def _write_remote_file(container, content, remote_path, suffix):
     path = None
     try:
         with tempfile.NamedTemporaryFile(
-                mode='w', suffix='.toml', delete=False, encoding='utf-8') as f:
+                mode='w', suffix=suffix, delete=False, encoding='utf-8') as f:
             f.write(content)
             path = f.name
         # docker cp preserves mode bits but lands root-owned; the pooler
-        # runs as pgcat, so the file must be world-readable (same reason
-        # the fallback editor writes 644).
+        # must read it regardless of runtime user, so 644 explicitly.
         os.chmod(path, 0o644)
-        res = _run(['docker', 'cp', path, f'{container}:{TENANTS_TOML_PATH}'], timeout=60)
+        res = _run(['docker', 'cp', path, f'{container}:{remote_path}'], timeout=60)
         return res
     finally:
         if path:
@@ -276,17 +266,17 @@ def _write_remote_toml(container, content):
 def push_tenants_config():
     """Render + push tenant pools; restart pooler only when changed.
 
-    Never pushes an unrenderable config: a render failure (e.g. missing
-    admin password) returns ok=False and leaves the running pooler
-    untouched — pushing a BadConfig would crash-loop it.
+    Never pushes an unrenderable config: a render failure returns
+    ok=False and leaves the running pooler untouched — pushing a bad
+    pgbouncer.ini would crash-loop it.
     """
     pools = list_tenant_pools(with_passwords=True)
     try:
-        content = render_tenants_config(pools)
+        ini, userlist = render_tenants_config(pools)
     except Exception as exc:
         logger.warning("tenant pooler: render failed, pooler untouched: %s", exc)
         return {'ok': False, 'pools': len(pools), 'error': str(exc)[:300]}
-    if not content.strip():
+    if not ini.strip():
         return {'ok': False, 'pools': len(pools),
                 'error': 'rendered config is empty — pooler untouched.'}
     container = tenants_container_name()
@@ -298,13 +288,18 @@ def push_tenants_config():
         if start.get('error'):
             return {'ok': False, 'pools': len(pools),
                     'error': f'pooler present but could not start: {start["error"]}'}
-    current = _read_remote_toml(container)
-    if current == content:
+    current_ini = _read_remote_file(container, TENANTS_INI_PATH)
+    current_ul = _read_remote_file(container, TENANTS_USERLIST_PATH)
+    if current_ini == ini and current_ul == userlist:
         return {'ok': True, 'pools': len(pools), 'changed': False, 'restarted': False}
-    res = _write_remote_toml(container, content)
+    res = _write_remote_file(container, ini, TENANTS_INI_PATH, '.ini')
     if res.get('error'):
         return {'ok': False, 'pools': len(pools),
                 'error': f'config write failed: {res["error"]}'}
+    res = _write_remote_file(container, userlist, TENANTS_USERLIST_PATH, '.txt')
+    if res.get('error'):
+        return {'ok': False, 'pools': len(pools),
+                'error': f'userlist write failed: {res["error"]}'}
     restart = _run(['docker', 'restart', container], timeout=90)
     if restart.get('error'):
         return {'ok': False, 'pools': len(pools),

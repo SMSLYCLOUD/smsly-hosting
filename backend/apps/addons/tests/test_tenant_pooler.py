@@ -9,56 +9,48 @@ from apps.deployments.models import Addon, Service
 
 User = get_user_model()
 
-ADMIN_ENV = {"PGCAT_ADMIN_USERNAME": "pgcat_admin", "PGCAT_ADMIN_PASSWORD": "test-admin-pw"}
+
+def _render(pools):
+    ini, userlist = tp.render_tenants_config(pools)
+    return ini, userlist
 
 
 class RenderTests(TestCase):
     def test_render_one_pool_per_alias(self):
-        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
-            content = tp.render_tenants_config([{
-                'alias': 'postgres-acme', 'user': 'u1', 'db': 'd1', 'password': 'pw1',
-            }])
-        self.assertIn('[pools.postgres-acme]', content)
-        self.assertIn('pool_mode = "transaction"', content)
-        self.assertIn('database = "d1"', content)
-        self.assertIn('password = "pw1"', content)
-        self.assertIn('smsly-shared-postgres', content)
+        ini, userlist = _render([{
+            'alias': 'postgres-acme', 'user': 'u1', 'db': 'd1', 'password': 'pw1',
+        }])
+        self.assertIn('postgres-acme = host=smsly-shared-postgres port=5432 dbname=d1', ini)
+        self.assertIn('pool_mode = transaction', ini)
+        self.assertIn('"u1" "pw1"', userlist)
 
-    def test_render_general_has_binary_required_keys(self):
-        """The pooler binary rejects a host-less [general] with
-        ``missing field 'host'`` (observed live). The render must
-        always carry the keys the binary demands."""
-        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
-            content = tp.render_tenants_config([])
-        for key in ('host = "0.0.0.0"', 'port = 5432', 'pool_size = 15',
-                    'pool_mode = "transaction"', 'connect_timeout = 5000'):
-            self.assertIn(key, content)
-        # Legacy sharding tables the parser also requires.
-        for key in ('[user]', '[shards.0]', '[query_router]'):
-            self.assertIn(key, content)
+    def test_render_has_pooler_required_keys(self):
+        """PgBouncer must see listen/auth/pool keys or it exits on startup."""
+        ini, _ = _render([])
+        for key in ('listen_addr = 0.0.0.0', 'listen_port = 5432',
+                    'auth_type = scram-sha-256',
+                    'pool_mode = transaction'):
+            self.assertIn(key, ini)
+        self.assertIn('[databases]', ini)
+        self.assertIn('[pgbouncer]', ini)
 
-    def test_render_includes_admin_credentials(self):
-        """pgcat refuses to start without admin_username/admin_password
-        (BadConfig crash-loop, observed live)."""
-        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
-            content = tp.render_tenants_config([])
-        self.assertIn('admin_username = "pgcat_admin"', content)
-        self.assertIn('admin_password = "test-admin-pw"', content)
+    def test_render_needs_no_admin_password(self):
+        """PgBouncer has no admin-account requirement (pgcat did)."""
+        ini, userlist = _render([])
+        tp.validate_rendered_config(ini, userlist)  # must not raise
 
-    def test_render_fails_without_admin_password(self):
-        env = {"PGCAT_ADMIN_USERNAME": "pgcat_admin", "PGCAT_ADMIN_PASSWORD": ""}
-        with mock.patch.dict("os.environ", env, clear=False):
-            with self.assertRaises(RuntimeError):
-                tp.render_tenants_config([])
+    def test_render_rejects_unsafe_tokens(self):
+        with self.assertRaises(RuntimeError):
+            _render([{'alias': 'a/b', 'user': 'u', 'db': 'd', 'password': 'p'}])
+        with self.assertRaises(RuntimeError):
+            _render([{'alias': 'a', 'user': 'u', 'db': 'd', 'password': 'has "quote'}])
 
     def test_render_self_validates_required_schema(self):
-        """render_tenants_config must fail closed (not push BadConfig)
-        when the binary-required keys/tables go missing."""
+        """render_tenants_config must fail closed (not push a bad config)."""
         with self.assertRaises(RuntimeError):
-            tp.validate_rendered_config('[general]\nport = 5432\n')
-        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
-            content = tp.render_tenants_config([])
-        tp.validate_rendered_config(content)  # must not raise
+            tp.validate_rendered_config('[databases]\n')
+        ini, userlist = _render([])
+        tp.validate_rendered_config(ini, userlist)  # must not raise
 
 
 class ListPoolsTests(TestCase):
@@ -101,20 +93,19 @@ class PushTests(TestCase):
             status=Addon.Status.ACTIVE, provision_mode="shared",
             connection_url="postgresql://u1:pw1@postgres-a:5432/d1")
 
-    def _push(self, remote_content):
-        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False), \
-             mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
+    def _push(self, remote_ini, remote_ul):
+        with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
              mock.patch.object(tp, 'container_running', return_value=True), \
-             mock.patch.object(tp, '_read_remote_toml', return_value=remote_content), \
-             mock.patch.object(tp, '_write_remote_toml', return_value={}) as writer, \
+             mock.patch.object(tp, '_read_remote_file',
+                               side_effect=[remote_ini, remote_ul]), \
+             mock.patch.object(tp, '_write_remote_file', return_value={}) as writer, \
              mock.patch.object(tp, '_run', return_value={}) as runner:
             result = tp.push_tenants_config()
         return result, writer, runner
 
     def test_no_restart_when_unchanged(self):
-        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False):
-            content = tp.render_tenants_config(tp.list_tenant_pools(with_passwords=True))
-        result, writer, runner = self._push(content)
+        ini, userlist = _render(tp.list_tenant_pools(with_passwords=True))
+        result, writer, runner = self._push(ini, userlist)
         self.assertTrue(result['ok'])
         self.assertFalse(result['changed'])
         self.assertFalse(result['restarted'])
@@ -123,26 +114,25 @@ class PushTests(TestCase):
         self.assertEqual(restart_calls, [])
 
     def test_write_and_restart_when_changed(self):
-        result, writer, runner = self._push('stale content')
+        result, writer, runner = self._push('stale ini', 'stale userlist')
         self.assertTrue(result['ok'])
         self.assertTrue(result['changed'])
         self.assertTrue(result['restarted'])
-        writer.assert_called_once()
+        self.assertEqual(writer.call_count, 2)
 
     def test_missing_container(self):
-        with mock.patch.dict("os.environ", ADMIN_ENV, clear=False), \
-             mock.patch.object(tp, 'tenants_container_name', return_value=None):
+        with mock.patch.object(tp, 'tenants_container_name', return_value=None):
             result = tp.push_tenants_config()
         self.assertFalse(result['ok'])
         self.assertIn('not found', result['error'])
 
     def test_render_failure_leaves_pooler_untouched(self):
         """A bad render must never push a crash-looping config."""
-        env = {"PGCAT_ADMIN_USERNAME": "pgcat_admin", "PGCAT_ADMIN_PASSWORD": ""}
-        with mock.patch.dict("os.environ", env, clear=False), \
-             mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
-             mock.patch.object(tp, '_write_remote_toml') as writer, \
-             mock.patch.object(tp, '_run', return_value={}) as runner:
+        with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
+             mock.patch.object(tp, '_write_remote_file') as writer, \
+             mock.patch.object(tp, '_run', return_value={}) as runner, \
+             mock.patch.object(tp, 'render_tenants_config',
+                               side_effect=RuntimeError('bad render')):
             result = tp.push_tenants_config()
         self.assertFalse(result['ok'])
         writer.assert_not_called()
