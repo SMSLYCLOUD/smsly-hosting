@@ -1426,12 +1426,23 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     )
 
     if unresolved:
-        message = (
-            "Ecosystem plan contains unresolved or cyclic dependencies: "
-            + ", ".join(unresolved)
+        # Cycles are AI-declared runtime references (frontend needs the
+        # API URL and vice versa), not true build ordering constraints:
+        # service records/URLs are created before any wave runs and
+        # containers retry connections at runtime. Waves are released
+        # strictly sequentially (no graph gating to deadlock), and
+        # _build_dependency_waves already appended these nodes LAST.
+        # Hard-failing here (pre-2026-09-25) killed every ecosystem
+        # whose repos reference each other — i.e. nearly all of them.
+        _cycle_detail = "; ".join(
+            f"{key} waits on {sorted(dependencies.get(key, set()))}"
+            for key in unresolved
         )
-        _fail_plan_record(plan_id, message)
-        return {"error": message, "unresolved_dependency_nodes": unresolved}
+        logger.warning(
+            "Ecosystem plan %s contains dependency cycles; deploying "
+            "%d cyclic service(s) last (best-effort order): %s [%s]",
+            plan_id, len(unresolved), ", ".join(unresolved), _cycle_detail,
+        )
 
     # SEC-ZT-007: Report alias ambiguity + unresolved cycles to user
     alias_warnings = _alias_ambiguity_report(dependencies, entries_by_key)
