@@ -132,7 +132,9 @@ services:
   # read-only data mounts; control connections use the pgbackrest role
   # (PGPASSWORD from .env). Weekly full + daily diff via host cron.
   pgbackrest:
-    image: pgbackrest/pgbackrest:2.55.1
+    build:
+      context: ../pgbackrest
+      dockerfile: Dockerfile
     container_name: smsly-pgbackrest
     restart: unless-stopped
     environment:
