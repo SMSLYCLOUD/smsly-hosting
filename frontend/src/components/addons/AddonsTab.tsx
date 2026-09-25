@@ -86,10 +86,11 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         }
     };
 
-    const handleDeprovision = async (addonId: string) => {
-        if (!await confirm({ title: 'Delete addon?', message: 'This will permanently delete this addon and all its data. Continue?', variant: 'destructive', confirmText: 'Delete' })) return;
+    const handleDeprovision = async (addonId: string, addonName: string) => {
+        const typed = prompt(`Type "${addonName}" to permanently delete this addon and all its data.`);
+        if (typed === null) return;
         try {
-            await addonsApi.deprovision(addonId);
+            await addonsApi.deprovision(addonId, typed);
             fetchAddons();
         } catch (e) {
             console.error('Failed to deprovision:', e);
@@ -482,7 +483,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                 </button>
                                             ) : (
                                                 <button
-                                                    onClick={(e) => { e.stopPropagation(); handleDeprovision(addon.id); }}
+                                                    onClick={(e) => { e.stopPropagation(); handleDeprovision(addon.id, addon.name); }}
                                                     className="flex items-center gap-2 px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/20 transition-colors ml-auto"
                                                 >
                                                     <Trash2 size={12} /> Delete

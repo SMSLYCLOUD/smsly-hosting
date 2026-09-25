@@ -2258,8 +2258,8 @@ export const addonsApi = {
         const res = await api.post(`/addons/${id}/expose/`);
         return res.data;
     },
-    deprovision: async (id: string): Promise<{ status: string; message?: string }> => {
-        const res = await api.post(`/addons/${id}/deprovision/`);
+    deprovision: async (id: string, confirmation?: string): Promise<{ status: string; message?: string }> => {
+        const res = await api.post(`/addons/${id}/deprovision/`, { confirmation: confirmation ?? '' });
         return res.data;
     },
     enableHa: async (id: string, opts?: { placement?: 'local' | 'remote'; server_id?: string }): Promise<AddonHaEnableResponse> => {

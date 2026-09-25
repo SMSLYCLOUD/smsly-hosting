@@ -69,9 +69,10 @@ export default function AddonDetailPage() {
   };
 
   const handleDeprovision = async () => {
-    if (!confirm('Are you sure you want to deprovision this addon? This cannot be undone.')) return;
+    const typed = prompt(`Type "${addon.name}" to confirm deprovisioning. This cannot be undone.`);
+    if (typed === null) return;
     try {
-      await addonsApi.deprovision(addon.id);
+      await addonsApi.deprovision(addon.id, typed);
       toast({ title: 'Deprovisioning started' });
       router.push('/dashboard');
     } catch (e: unknown) {
