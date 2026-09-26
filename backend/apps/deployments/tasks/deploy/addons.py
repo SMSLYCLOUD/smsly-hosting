@@ -161,6 +161,31 @@ def _resolve_addon_ip(addon, client) -> str:
     return ''
 
 
+def _container_network_aliases(container) -> dict[str, set[str]]:
+    """{network: {lowercased aliases}} for a container, with one retry.
+
+    A single daemon read (especially via the socket proxy) can return
+    an empty Networks map for a healthy running container; failing a
+    deploy closed on that one flaky read killed a good marketer deploy
+    (2026-09-26: probe saw addon `[]` while every alias resolved fine).
+    Reload once more before accepting emptiness.
+    """
+    networks: dict[str, set[str]] = {}
+    for _attempt in range(2):
+        try:
+            container.reload()
+        except Exception:
+            pass
+        raw = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+        networks = {
+            net_name: {str(a).lower() for a in ((net_conf or {}).get('Aliases') or [])}
+            for net_name, net_conf in raw.items()
+        }
+        if networks:
+            return networks
+    return networks
+
+
 def _probe_addon_connectivity(service, container_id: str) -> list[str]:
     """Verify addon reachability WITHOUT running code inside the service container.
 
@@ -201,13 +226,11 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
         logger.debug("Addon connectivity probe skipped: Docker client unavailable")
         return errors
 
-    # Snapshot the service container's network attachment once.
+    # Snapshot the service container's network attachment once
+    # (with a retry on empty reads — see _container_network_aliases).
     try:
         service_container = client.containers.get(container_id)
-        service_container.reload()
-        service_networks: set[str] = {
-            name for name in (service_container.attrs.get('NetworkSettings') or {}).get('Networks', {}).keys()
-        }
+        service_networks = set(_container_network_aliases(service_container))
     except docker.errors.NotFound:
         # Service container already gone — nothing to verify against.
         return errors
@@ -266,10 +289,9 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
         # MUST declare the hostname alias on that shared network so Docker
         # DNS resolves it. If the service is on multiple networks, ANY one
         # shared network with the right alias is sufficient.
-        addon_networks: dict[str, set[str]] = {}
-        for net_name, net_conf in (addon_container.attrs.get('NetworkSettings') or {}).get('Networks', {}).items():
-            aliases = set((net_conf or {}).get('Aliases') or [])
-            addon_networks[net_name] = {a.lower() for a in aliases}
+        # (Retry-on-empty inside: a single flaky daemon read must not
+        # fail the deploy.)
+        addon_networks = _container_network_aliases(addon_container)
 
         shared_net = None
         for net in service_networks:

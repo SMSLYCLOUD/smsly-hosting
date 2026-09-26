@@ -28,6 +28,44 @@ def _make_container(status='running', networks=None):
 
 
 @pytest.mark.django_db
+def test_probe_retries_empty_network_read():
+    """A single empty Networks map must not fail the deploy.
+
+    Regression for 2026-09-26: the probe saw addon `[]` on one daemon
+    read (socket-proxy flake) and FAILED a healthy marketer deploy even
+    though every alias resolved fine. One reload retry must recover.
+    """
+    user = get_user_model().objects.create(username="addon-probe-flake")
+    service = Service.objects.create(name="addon-probe-flake", owner=user)
+    Addon.objects.create(
+        service=service,
+        name="redis",
+        addon_type="REDIS",
+        status="ACTIVE",
+        connection_url="redis://redis:6379/0",
+    )
+    svc_container = _make_container(networks={"net1": {}})
+
+    flaky = _make_container(networks={})
+    full = {"net1": {"Aliases": ["redis"]}}
+
+    def _reload_once():
+        flaky.attrs = {'NetworkSettings': {'Networks': full}}
+
+    flaky.reload = MagicMock(side_effect=_reload_once)
+
+    def _get(name):
+        if name == "container-id":
+            return svc_container
+        return flaky
+
+    with patch.object(addons_mod.docker, "from_env") as mock_from_env:
+        mock_from_env.return_value.containers.get.side_effect = _get
+        assert _probe_addon_connectivity(service, "container-id") == []
+    assert flaky.reload.called
+
+
+@pytest.mark.django_db
 def test_probe_never_execs_into_containers():
     user = get_user_model().objects.create(username="addon-probe-noexec")
     service = Service.objects.create(name="addon-probe-noexec", owner=user)
