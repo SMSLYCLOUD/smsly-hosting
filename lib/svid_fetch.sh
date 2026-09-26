@@ -15,7 +15,12 @@ DIR="/opt/spire/svids"
 BIN="/opt/spire/bin/spire-agent"
 
 # Container names carrying the baked spire-agent binary + spire mounts.
-SERVICES="smsly-backend smsly-audit-log-service smsly-identity-service smsly-platform-api smsly-transaction-chain smsly-security-gateway-ojq0s smsly-policy-service smsly-rate-limit-service"
+# Gateway is blue-green suffixed per deploy — resolve it dynamically.
+SERVICES="smsly-backend smsly-audit-log-service smsly-identity-service smsly-platform-api smsly-transaction-chain smsly-policy-service smsly-rate-limit-service"
+_gateway="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^smsly-security-gateway' | grep -v envoy | head -n 1)"
+if [ -n "$_gateway" ]; then
+    SERVICES="$SERVICES $_gateway"
+fi
 
 fail=0
 for c in $SERVICES; do
