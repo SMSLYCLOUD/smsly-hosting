@@ -31,9 +31,9 @@ from django.test import SimpleTestCase, override_settings
 from apps.cloud.adapters.local import (
     _health_paths,
     _health_status_range,
-    _nft_fallback_command,
     _normalize_health_path,
 )
+from apps.deployments.services.network_scope import _nft_fallback_command
 
 
 class HealthFallbackPathsTests(SimpleTestCase):
