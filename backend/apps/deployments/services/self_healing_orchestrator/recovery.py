@@ -359,10 +359,14 @@ class RecoveryMixin:
             self._log(f"Repairing buildx on node (fallback={fallback!r})")
 
             # 1. Make sure the fallback exists, prefer the
-            #    docker-container driver.
+            #    docker-container driver. Scoped to smsly-net so the
+            #    internal registry (registry:5000) resolves via Docker
+            #    embedded DNS — on the default bridge it NXDOMAINs and
+            #    every build goes cold (2026-09-26 policy retry incident).
             create_out, _, _ = self._exec(
                 f"docker buildx create --name {fallback} "
-                f"--driver docker-container --use 2>&1 || true",
+                f"--driver docker-container "
+                f"--driver-opt network=smsly-net --use 2>&1 || true",
                 timeout=60,
             )
             self._log(f"buildx create fallback: {create_out.strip()[:200]}")

@@ -74,10 +74,17 @@ def _ephemeral_builder_enabled() -> bool:
 
 
 def _create_ephemeral_builder(name: str, mem_mb: int, cpu_pct: int) -> str | None:
-    """Create a docker-container builder with resource caps. Name or None."""
+    """Create a docker-container builder with resource caps. Name or None.
+
+    Scoped to smsly-net: the internal registry (registry:5000) only
+    resolves via Docker embedded DNS on user-defined networks. On the
+    default bridge it NXDOMAINs (2026-09-26 policy retry incident),
+    forcing every build cold.
+    """
     try:
         created = subprocess.run(
             ["docker", "buildx", "create", "--driver", "docker-container",
+             "--driver-opt", "network=smsly-net",
              "--name", name],
             capture_output=True, text=True, timeout=60,
         )

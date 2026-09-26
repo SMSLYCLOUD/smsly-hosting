@@ -74,6 +74,11 @@ def _ensure_buildx_fallback(fallback_name: str = 'smsly-fallback') -> tuple[bool
     ``docker`` driver. The fallback name is operator-tunable
     via ``settings.BUILDX_FALLBACK_BUILDER`` (env var).
 
+    Scoped to smsly-net: the internal registry (registry:5000) only
+    resolves via Docker embedded DNS on user-defined networks. On the
+    default bridge it NXDOMAINs (2026-09-26 policy retry incident),
+    forcing every fallback build cold.
+
     Returns ``(created, status)`` where ``created`` is True if
     a new builder was created (or already existed) and ``status``
     is a short human-readable description for logs.
@@ -94,6 +99,7 @@ def _ensure_buildx_fallback(fallback_name: str = 'smsly-fallback') -> tuple[bool
             'docker', 'buildx', 'create',
             '--name', fallback_name,
             '--driver', 'docker-container',
+            '--driver-opt', 'network=smsly-net',
             '--use',
         ],
         capture_output=True, text=True, timeout=60,
