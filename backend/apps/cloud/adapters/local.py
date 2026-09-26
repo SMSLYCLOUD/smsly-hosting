@@ -1810,7 +1810,35 @@ class LocalAdapter(BaseCloudAdapter):
             if green_healthcheck is not None:
                 create_kwargs["healthcheck"] = green_healthcheck
 
-            promoted = self.docker_client.containers.create(**create_kwargs)
+            promoted = None
+            try:
+                promoted = self.docker_client.containers.create(**create_kwargs)
+            except docker.errors.APIError as create_exc:
+                # 409 race: another actor (concurrent deploy/refresh) recreated
+                # the canonical name between our preserve step and this create.
+                # Rename the current holder aside and retry ONCE instead of
+                # failing the whole promotion (2026-09-26 audit 409 incident).
+                if "409" not in str(create_exc) and "Conflict" not in str(create_exc):
+                    raise
+                logger.warning(
+                    "Blue-green promote: canonical name %s taken at create "
+                    "(concurrent actor?) — moving holder aside and retrying once",
+                    name,
+                )
+                try:
+                    _holder = self.docker_client.containers.get(name)
+                    _holder.stop(timeout=10)
+                except Exception:
+                    pass
+                try:
+                    _holder = self.docker_client.containers.get(name)
+                    _holder.rename(f"{name}-promote-conflict-{secrets.token_hex(3)}")
+                except Exception as rename_exc:
+                    raise RuntimeError(
+                        f"Promote create conflict on {name} and holder "
+                        f"could not be moved aside: {rename_exc}"
+                    ) from create_exc
+                promoted = self.docker_client.containers.create(**create_kwargs)
             promoted.start()
 
             if not self._wait_container_healthy(

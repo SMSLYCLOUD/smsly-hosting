@@ -291,6 +291,73 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         )
 
     @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    def test_promote_container_retries_on_canonical_name_conflict(self, _wait_mock):
+        # Regression 2026-09-26: a concurrent actor recreated the canonical
+        # name between preserve and create -> 409 killed the promotion.
+        # Promote must move the holder aside and retry once.
+        import docker as _docker
+
+        adapter = object.__new__(LocalAdapter)
+        docker_client = MagicMock()
+        docker_client.api.create_endpoint_config.return_value = {}
+        docker_client.api.create_networking_config.return_value = {}
+        adapter.docker_client = docker_client
+        adapter.k8s_client = None
+        adapter.batch_v1 = None
+
+        green = MagicMock()
+        green.name = "smsly-audit-log-service-green-18e00a"
+        green.id = "green-id"
+        green.labels = {
+            "smsly.blue_green.is_public": "True",
+            "smsly.blue_green.port": "8080",
+            "smsly.blue_green.host_rule": "Host(`audit.example.com`)",
+            "traefik.enable": "false",
+        }
+        green.attrs = {
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "Config": {
+                "Env": [],
+                "Cmd": None,
+                "Entrypoint": None,
+                "Healthcheck": None,
+            },
+            "HostConfig": {
+                "Binds": None,
+                "RestartPolicy": {},
+            },
+        }
+        green.image.tags = ["registry:5000/proj/audit:test"]
+
+        holder = MagicMock()
+        promoted = MagicMock()
+        promoted.id = "promoted-id"
+        conflict = _docker.errors.APIError(
+            '409 Client Error: Conflict ("Conflict. The container name '
+            '"/smsly-audit-log-service" is already in use")'
+        )
+        docker_client.containers.create.side_effect = [conflict, promoted]
+
+        def _get(value):
+            if value == "green-id":
+                return green
+            return holder
+
+        docker_client.containers.get.side_effect = _get
+        docker_client.networks.get.return_value = MagicMock()
+
+        result = adapter.promote_container("smsly-audit-log-service", "green-id")
+
+        self.assertEqual(result, "promoted-id")
+        self.assertEqual(docker_client.containers.create.call_count, 2)
+        holder.stop.assert_called()
+        renames = [c.args[0] for c in holder.rename.call_args_list]
+        self.assertTrue(
+            any(r.startswith("smsly-audit-log-service-promote-conflict-") for r in renames),
+            renames,
+        )
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
     def test_promote_container_preserves_paas_labels(self, _wait_mock):
         # Regression 2026-09-26: promotion rebuilt labels from scratch and
         # dropped com.paas.* — SPIRE entries select on
