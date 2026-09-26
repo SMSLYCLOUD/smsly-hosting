@@ -161,6 +161,72 @@ class MigrateQuiesceTests(TestCase):
         addon.refresh_from_db()
         self.assertEqual(addon.provision_mode, "container")
 
+    def test_shared_target_pushes_pooler_config_on_success(self):
+        """A successful container->shared migration must push the tenant
+        pooler config AFTER the row is ACTIVE.
+        Regression for 2026-09-26: the nested provision's push ran while
+        the row was MIGRATING (excluded from the render), so the pooler
+        never learned the user and every connection failed with
+        "no such user" / SASL authentication failed."""
+        addon = self._addon(provision_mode="container")
+        with mock.patch(
+            "apps.addons.services.addon_migrate._service_container_names",
+            return_value=[],
+        ), mock.patch(
+            "apps.addons.services.addon_provisioner.addon_provisioner",
+            self._provisioner(
+                new_url="postgresql://u:pw@pg-shared:5432/db"),
+        ), mock.patch(
+            "apps.addons.services.addon_migrate.verify_postgres_url",
+            return_value=True,
+        ), mock.patch(
+            "apps.addons.services.addon_migrate.container_network_aliases",
+            return_value={},
+        ), mock.patch(
+            "apps.addons.services.shared_postgres.drop_database_only",
+        ), mock.patch(
+            "apps.addons.services.tenant_pooler.push_tenants_config",
+            return_value={"ok": True, "pools": 1, "changed": True},
+        ) as mock_push:
+            result = migrate_addon_mode(str(addon.id), "shared")
+        mock_push.assert_called_once_with()
+        self.assertEqual(result["status"], "ok")
+        self.assertNotIn("pooler_push_warning", result)
+        addon.refresh_from_db()
+        self.assertEqual(addon.provision_mode, "shared")
+        self.assertEqual(addon.status, Addon.Status.ACTIVE)
+
+    def test_shared_target_push_failure_warns_not_rolls_back(self):
+        """A failed post-migration pooler push must surface as a warning,
+        not a rollback — the source backend is already gone."""
+        addon = self._addon(provision_mode="container")
+        with mock.patch(
+            "apps.addons.services.addon_migrate._service_container_names",
+            return_value=[],
+        ), mock.patch(
+            "apps.addons.services.addon_provisioner.addon_provisioner",
+            self._provisioner(
+                new_url="postgresql://u:pw@pg-shared:5432/db"),
+        ), mock.patch(
+            "apps.addons.services.addon_migrate.verify_postgres_url",
+            return_value=True,
+        ), mock.patch(
+            "apps.addons.services.addon_migrate.container_network_aliases",
+            return_value={},
+        ), mock.patch(
+            "apps.addons.services.shared_postgres.drop_database_only",
+        ), mock.patch(
+            "apps.addons.services.tenant_pooler.push_tenants_config",
+            return_value={"ok": False, "pools": 1, "error": "hopper down"},
+        ) as mock_push:
+            result = migrate_addon_mode(str(addon.id), "shared")
+        mock_push.assert_called_once_with()
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("pooler_push_warning", result)
+        addon.refresh_from_db()
+        self.assertEqual(addon.provision_mode, "shared")
+        self.assertEqual(addon.status, Addon.Status.ACTIVE)
+
     def test_shared_target_orphan_dropped_on_failure(self):
         addon = self._addon(provision_mode="container")
         prov = self._provisioner(

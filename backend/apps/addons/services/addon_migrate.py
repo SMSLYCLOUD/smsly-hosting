@@ -422,6 +422,45 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
         addon.status = Addon.Status.ACTIVE
         addon.save(update_fields=['status', 'updated_at'])
         logger.info("Migrated addon %s to %s", addon.id, target_mode)
+        result_push_warning = ''
+        if target_mode == 'shared':
+            # The nested provision's pooler push ran while this row was
+            # MIGRATING, and the tenant render only includes ACTIVE
+            # shared rows — so the pooler never learned this user.
+            # Push now that we're ACTIVE; without it every app
+            # connection fails with "no such user" / SASL
+            # authentication failed (2026-09-26 incident).
+            # Best-effort: the data is safe on shared regardless, but
+            # a failed push needs an immediate manual
+            # shared-pooler-push, so log loudly (never debug).
+            try:
+                from apps.addons.services.tenant_pooler import (
+                    push_tenants_config as _push_tenants,
+                )
+                _push_result = _push_tenants() or {}
+                if not _push_result.get('ok'):
+                    logger.error(
+                        "Migration pooler push FAILED for %s: %s — "
+                        "run shared-pooler-push before redeploying the service",
+                        addon.id, _push_result.get('error'))
+                    result_push_warning = (
+                        "Tenant pooler push failed "
+                        f"({_push_result.get('error')}); run shared-pooler-push, "
+                        "then redeploy the service.")
+                else:
+                    result_push_warning = ''
+                    logger.info(
+                        "Migration pooler push for %s: pools=%s changed=%s",
+                        addon.id, _push_result.get('pools'),
+                        _push_result.get('changed'))
+            except Exception as exc:
+                logger.error(
+                    "Migration pooler push skipped for %s: %s — "
+                    "run shared-pooler-push before redeploying the service",
+                    addon.id, exc)
+                result_push_warning = (
+                    f"Tenant pooler push skipped ({exc}); run "
+                    "shared-pooler-push, then redeploy the service.")
         result = {
             'status': 'ok',
             'target_mode': target_mode,
@@ -432,6 +471,8 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
         }
         if source_cleanup_warning:
             result['source_cleanup_warning'] = source_cleanup_warning
+        if target_mode == 'shared' and result_push_warning:
+            result['pooler_push_warning'] = result_push_warning
         return result
     except Exception:
         # Roll back to the original row; the source is intact unless the
