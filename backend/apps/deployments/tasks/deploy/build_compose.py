@@ -469,7 +469,7 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
     except Exception as exc:
         logger.debug("Addon env var injection skipped: %s", exc)
 
-    _link_ecosystem(service, env_vars)
+    _link_ecosystem(service, env_vars, locked_keys=locked_keys)
 
     _smart_derive_database_vars(env_vars)
     _smart_derive_redis_vars(env_vars)
@@ -629,7 +629,7 @@ _SERVICE_REDIS_DB = {
     'smsly-marketer':   4,
 }
 
-def _link_ecosystem(service: Service, env_vars: dict) -> None:
+def _link_ecosystem(service: Service, env_vars: dict, locked_keys: set | None = None) -> None:
     try:
         from apps.deployments.services.ecosystem_graph import (
             build_ecosystem_graph,
@@ -686,7 +686,13 @@ def _link_ecosystem(service: Service, env_vars: dict) -> None:
             '<your_value>', '<your-url>', 'http://localhost:8000',
             'https://localhost:8000', 'http://localhost:8004',
         }
+        _locked = locked_keys or set()
         for env_key, match_patterns in _SERVICE_URL_PATTERNS.items():
+            if env_key in _locked:
+                # Operator-locked URL: never rewrite from the sibling graph
+                # (2026-09-26: gateway mesh URLs kept reverting to public
+                # edge URLs on every deploy despite locked USER values).
+                continue
             current = str(env_vars.get(env_key, '') or '').strip().lower()
             # AI Senate and copied templates often leave a placeholder or
             # localhost URL. Replace those with the resolved sibling URL, but
