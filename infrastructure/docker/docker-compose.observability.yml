@@ -79,7 +79,10 @@ services:
 
   # Postgres exporters (tenant shared + platform primary).
   # DSN password comes from POSTGRES_EXPORTER_PASSWORD in .env (generated
-  # once, role smsly_monitor with pg_monitor grant, CONNECTION LIMIT 3).
+  # once, role smsly_monitor with pg_monitor grant, CONNECTION LIMIT 20).
+  # Limit 20, not 3: each exporter fans out per-database connections
+  # (AUTO_DISCOVER_DATABASES) plus held-idle handles — limit 3 caused
+  # constant "too many connections for role" FATALs (2026-09-26).
   # One exporter per server: per-database size/connection series carry a
   # server label so shared-tenant growth pages before it hurts neighbors.
   postgres-exporter-shared:

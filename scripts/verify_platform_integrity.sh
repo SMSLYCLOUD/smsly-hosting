@@ -816,6 +816,40 @@ ensure_mesh_dns_serving() {
     fi
 }
 
+# ── 18. Postgres WAL archiving must drain (2026-09-26 root cause) ──
+# The primary ships WAL via `cp` into the postgres-archive volume. That
+# dir was root-owned, so EVERY archive failed, pg_wal grew to 7.4G, and
+# a full disk would have stopped postgres. Self-heals the ownership;
+# alerts on WAL size and on monitor-role connection starvation (each
+# exporter fans out per-database connections; rolconnlimit 3 caused
+# constant "too many connections" FATALs — raised to 20).
+ensure_postgres_archiving() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local c="smsly-postgres-primary"
+    timeout -k 5 10 docker inspect "$c" >/dev/null 2>&1 \
+        || { log "$c absent — skipping WAL archive check"; return 0; }
+    local owner=""
+    owner=$(timeout -k 5 15 docker exec "$c" stat -c '%U' /var/lib/postgresql/archive 2>/dev/null || echo unknown)
+    if [ "$owner" != "postgres" ]; then
+        log "ALERT: $c archive dir owned by $owner — WAL archiving is failing; repairing"
+        if timeout -k 5 30 docker exec -u 0 "$c" chown postgres:postgres /var/lib/postgresql/archive >/dev/null 2>&1; then
+            log "archive dir ownership repaired to postgres"
+        else
+            log "ALERT: archive dir ownership repair FAILED — pg_wal will grow until the disk fills"
+        fi
+    else
+        log "postgres archive dir writable (postgres)"
+    fi
+    local walsize=""
+    walsize=$(timeout -k 5 15 docker exec "$c" du -sm /var/lib/postgresql/data/pg_wal 2>/dev/null | awk '{print $1}' || echo 0)
+    if [ "${walsize:-0}" -ge 10240 ]; then
+        log "ALERT: pg_wal is ${walsize}MB — archiving is not keeping up (check archive_command + disk)"
+    fi
+    if timeout -k 5 15 docker logs "$c" --since 60m 2>&1 | grep -a -q 'too many connections for role'; then
+        log "ALERT: $c rejecting monitor connections (role limit) — run: ALTER ROLE smsly_monitor CONNECTION LIMIT 20"
+    fi
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -839,4 +873,5 @@ ensure_cosign_key_readable
 ensure_containerd_healthy
 ensure_tenants_pooler_healthy
 ensure_mesh_dns_serving
+ensure_postgres_archiving
 log "integrity check complete"
