@@ -45,8 +45,14 @@ function parseCidrs(text: string): { cidrs: string[]; errors: string[] } {
 
 export function NetworkTab({
   projectId,
+  domains,
 }: {
   projectId?: string | null;
+  domains?: {
+    public?: string | null;
+    custom?: string[];
+    nodeDomain?: string | null;
+  } | null;
 }) {
   const { isStaff, isSuperuser } = usePermissions();
   const canEdit = isStaff || isSuperuser;
@@ -192,6 +198,36 @@ export function NetworkTab({
 
   return (
     <div className="space-y-4">
+      {domains && (
+        <Card className="p-4">
+          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <Globe size={12} /> Domains
+          </p>
+          <div className="text-sm font-mono space-y-1">
+            {domains.public && (
+              <div>
+                <span className="text-zinc-500">public: </span>
+                <span className="text-foreground break-all">{domains.public}</span>
+              </div>
+            )}
+            {(domains.custom || []).map((d) => (
+              <div key={d}>
+                <span className="text-zinc-500">custom: </span>
+                <span className="text-foreground break-all">{d}</span>
+              </div>
+            ))}
+            {domains.nodeDomain && (
+              <div>
+                <span className="text-zinc-500">node: </span>
+                <span className="text-foreground break-all">{domains.nodeDomain}</span>
+              </div>
+            )}
+            {!domains.public && (domains.custom || []).length === 0 && !domains.nodeDomain && (
+              <div className="text-zinc-500">No domains attached.</div>
+            )}
+          </div>
+        </Card>
+      )}
       <Card className="p-4">
         <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
           <Globe size={12} /> Effective egress

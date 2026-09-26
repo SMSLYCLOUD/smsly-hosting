@@ -1124,7 +1124,13 @@ export default function ServiceDetailPage() {
 
             {activeTab === 'network' && (
                 <div className="animate-in fade-in slide-in-from-bottom-4">
-                    <NetworkTab projectId={service.project} />
+                    <NetworkTab
+                      projectId={service.project}
+                      domains={{
+                        public: service.public_domain,
+                        custom: service.custom_domains,
+                      }}
+                    />
                 </div>
             )}
 
