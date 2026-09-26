@@ -390,7 +390,29 @@ def pooler_status():
 
 
 def attach_pooler_alias(network, alias):
-    """Join the pooler to ``network`` with DNS ``alias`` (idempotent)."""
+    """Join the pooler to ``network`` with DNS ``alias`` (idempotent).
+
+    Fail-closed: only aliases of shared+pooler-routed addons may land on
+    the pooler. Attaching a dedicated addon's alias shadows its real
+    container and routes traffic into a pooler with no such pool
+    (2026-09-26: audit/chain SASL roulette from stale pooler aliases).
+    """
+    from django.db.models import Q
+    from apps.deployments.models.addons import Addon
+    try:
+        rec = Addon.objects.filter(status=Addon.Status.ACTIVE).filter(
+            Q(name=alias) | Q(connection_url__icontains='@' + alias + ':')
+        ).first()
+        if rec is not None and not (
+                getattr(rec, 'provision_mode', '') == 'shared'
+                and bool(getattr(rec, 'pooler_routed', False))):
+            raise RuntimeError(
+                f'refusing pooler alias {alias!r}: addon '
+                f'{rec.name} is not shared+pooler-routed')
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        logger.warning("pooler alias guard lookup skipped for %s: %s", alias, exc)
     container = tenants_container_name()
     if container is None:
         raise RuntimeError('pgbouncer-tenants container not found.')
