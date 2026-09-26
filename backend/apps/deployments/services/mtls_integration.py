@@ -205,10 +205,19 @@ def get_mtls_env_vars(service) -> dict:
 
 
 def _spire_volume_names(service) -> tuple[str, str]:
-    """Return (socket_volume, svids_volume) for the service's trust domain."""
+    """Return (socket_volume, svids_volume) for the service's trust domain.
+
+    Always resolved to the real Docker volume name: bare short names make
+    Docker auto-create EMPTY decoy volumes that shadow the socket/svids
+    dirs (2026-09-26: smsly-backend mounted empty decoys, no SVIDs, audit
+    :8443 never started). Single choke point for get_mtls_volumes,
+    get_mtls_docker_run_args, and get_mtls_docker_run_volumes.
+    """
     if get_service_trust_domain(service) == PLATFORM_SPIFFE_TRUST_DOMAIN:
-        return PLATFORM_SPIRE_SOCKET_HOST_PATH, PLATFORM_SPIRE_SVIDS_HOST_PATH
-    return ECOSYSTEM_SPIRE_SOCKET_HOST_PATH, ECOSYSTEM_SPIRE_SVIDS_HOST_PATH
+        short = (PLATFORM_SPIRE_SOCKET_HOST_PATH, PLATFORM_SPIRE_SVIDS_HOST_PATH)
+    else:
+        short = (ECOSYSTEM_SPIRE_SOCKET_HOST_PATH, ECOSYSTEM_SPIRE_SVIDS_HOST_PATH)
+    return resolve_spire_volume_name(short[0]), resolve_spire_volume_name(short[1])
 
 
 def get_mtls_volumes(service=None) -> list:
