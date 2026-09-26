@@ -69,22 +69,16 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                 self.channel_name
             )
 
-            query_string = self.scope.get('query_string', b'').decode()
-
             initial = await self._get_initial_state()
             await self.send(text_data=json.dumps({
                 'type': 'initial_state',
                 **initial
             }))
 
-            tail = 200
-            for param in query_string.split('&'):
-                if param.startswith('tail='):
-                    try:
-                        tail = min(int(param.split('=', 1)[1]), 2000)
-                    except ValueError:
-                        pass
-            self._stream_task = asyncio.create_task(self._stream_logs(tail))
+            # Follow stream uses --tail 0: _get_initial_state above already
+            # delivered the tail, and replaying it here would paint
+            # every line twice.
+            self._stream_task = asyncio.create_task(self._stream_logs())
 
         except Exception as e:
             if settings.DEBUG:
@@ -165,7 +159,8 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
             logger.error("Failed to get initial addon log state: %s", e)
             return {'logs': '', 'status': 'error', 'addon_type': '', 'container_name': ''}
 
-    async def _stream_logs(self, tail=200):
+    async def _stream_logs(self):
+        """Stream only NEW addon container log lines (follow from the live edge)."""
         try:
             from apps.deployments.models.addons import Addon
             addon = await database_sync_to_async(
@@ -180,7 +175,7 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
 
         try:
             self._proc = subprocess.Popen(
-                ['docker', 'logs', '--tail', str(tail), '-f', '--timestamps', container_name],
+                ['docker', 'logs', '--tail', '0', '-f', '--timestamps', container_name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

@@ -90,9 +90,11 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 **initial
             }))
 
-            # Start streaming if container is running
+            # Start streaming if container is running. The follow stream
+            # uses --tail 0: initial_state above already delivered the
+            # tail, and replaying it here would paint every line twice.
             if initial.get('container_status') == 'running':
-                self._stream_task = asyncio.create_task(self._stream_logs(tail))
+                self._stream_task = asyncio.create_task(self._stream_logs())
 
         except Exception as e:
             logger.error("RuntimeLogConsumer.connect() failed: %s", e, exc_info=True)
@@ -214,8 +216,8 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 'container_id': '', 'container_status': 'error',
             }
 
-    async def _stream_logs(self, tail=200):
-        """Stream Docker logs from the container using subprocess."""
+    async def _stream_logs(self):
+        """Stream only NEW Docker log lines (follow from the live edge)."""
         try:
             from apps.deployments.models import Deployment
             from apps.deployments.views.deployment.logs import (
@@ -258,7 +260,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
 
         try:
             self._proc = subprocess.Popen(
-                ['docker', 'logs', '--tail', str(tail), '-f', '--timestamps', container_name],
+                ['docker', 'logs', '--tail', '0', '-f', '--timestamps', container_name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
