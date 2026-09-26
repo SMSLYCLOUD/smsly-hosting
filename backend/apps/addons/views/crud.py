@@ -494,10 +494,11 @@ class AddonViewSet(viewsets.ModelViewSet):
         """Queue a shared <-> container migration. Body: {"mode": "shared"|"container"}.
 
         Only POSTGRES, ACTIVE, local addons. Runs async (quiesce + dump +
-        provision + restore + verify); the source is dropped only after
-        verification. The owning service is stopped for the migration
-        window and must be REDEPLOYED afterwards to pick up the URL
-        (a plain restart keeps the old env).
+        provision + restore + verify + pooler push); the source is dropped
+        only after verification. The owning service is stopped for the
+        migration window and automatically refreshed onto the new URL
+        afterwards (same image, no rebuild) — redeploy manually only if
+        the result carries a warning.
         """
         instance = self.get_object()
         assert_can_write(self.request.user, instance.service, action='migrate addon')

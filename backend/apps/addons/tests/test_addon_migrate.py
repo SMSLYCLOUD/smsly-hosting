@@ -227,6 +227,56 @@ class MigrateQuiesceTests(TestCase):
         self.assertEqual(addon.provision_mode, "shared")
         self.assertEqual(addon.status, Addon.Status.ACTIVE)
 
+    def test_shared_success_auto_repoints_user_url_and_refreshes(self):
+        """Post-migration auto-finish: stale USER-held URL copies are
+        repointed and the quiesced service is refreshed (same image,
+        fresh env) — no manual redeploy."""
+        from apps.deployments.models import EnvironmentVariable
+        old = "postgresql://u:pw@pg-old:5432/db"
+        new = "postgresql://u:pw@pg-shared:5432/db"
+        addon = self._addon(provision_mode="container",
+                            connection_url=old)
+        EnvironmentVariable.objects.create(
+            service=self.service, key="DATABASE_URL", value=old,
+            is_secret=True, source="USER")
+        EnvironmentVariable.objects.create(
+            service=self.service, key="CUSTOM_COPY", value=old,
+            is_secret=False, source="USER")
+        with mock.patch(
+            "apps.addons.services.addon_migrate._service_container_names",
+            return_value=["svc-c1"],
+        ), mock.patch(
+            "apps.addons.services.addon_migrate._stop_service_containers",
+        ), mock.patch(
+            "apps.addons.services.addon_provisioner.addon_provisioner",
+            self._provisioner(new_url=new),
+        ), mock.patch(
+            "apps.addons.services.addon_migrate.verify_postgres_url",
+            return_value=True,
+        ), mock.patch(
+            "apps.addons.services.addon_migrate.container_network_aliases",
+            return_value={},
+        ), mock.patch(
+            "apps.addons.services.shared_postgres.drop_database_only",
+        ), mock.patch(
+            "apps.addons.services.tenant_pooler.push_tenants_config",
+            return_value={"ok": True, "pools": 1, "changed": True},
+        ), mock.patch(
+            "apps.addons.services.addon_migrate._start_service_containers",
+        ), mock.patch(
+            "apps.deployments.services.container_refresh.recreate_with_fresh_env",
+            return_value={"ok": True, "container_id": "abc123"},
+        ) as mock_refresh:
+            result = migrate_addon_mode(str(addon.id), "shared")
+        mock_refresh.assert_called_once()
+        self.assertEqual(
+            EnvironmentVariable.objects.get(key="DATABASE_URL").value, new)
+        self.assertEqual(
+            EnvironmentVariable.objects.get(key="CUSTOM_COPY").value, new)
+        self.assertIn("auto_finish", result)
+        self.assertIn("container refreshed", result["auto_finish"])
+        self.assertIn("automatically refreshed", result["message"])
+
     def test_shared_target_orphan_dropped_on_failure(self):
         addon = self._addon(provision_mode="container")
         prov = self._provisioner(

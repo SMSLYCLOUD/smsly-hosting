@@ -17,9 +17,11 @@ the alias) which is removed before the switch is complete:
 - container -> shared: remove the old container (which carries the alias).
 
 Write quiesce: the owning service's containers are stopped before the
-dump (post-dump writes would otherwise be lost) and left stopped —
-callers must REDEPLOY afterwards (a plain restart keeps the old env).
-On failure the stopped containers are restarted to restore service.
+dump (post-dump writes would otherwise be lost). On success the service
+is automatically refreshed onto the new credentials (same image, fresh
+env, no rebuild) and stale exact-match URL copies are repointed — no
+manual redeploy needed unless the result carries a warning. On failure
+the stopped containers are restarted to restore service.
 
 Concurrency: the row is marked MIGRATING inside an atomic check-and-set;
 a second concurrent migration sees non-ACTIVE and is rejected.
@@ -251,10 +253,9 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
 
     stop_services (default True) stops the owning service's containers
     before the dump so no writes land after it — without quiesce,
-    post-dump rows are silently lost. Stopped containers are left
-    stopped: the stored connection URL changes, so the service must be
-    REDEPLOYED (a plain restart keeps the old env). On failure the
-    stopped containers are restarted to restore service.
+    post-dump rows are silently lost. On success the service is
+    automatically refreshed onto the new URL (same image, no rebuild).
+    On failure the stopped containers are restarted to restore service.
     """
     from apps.addons.services.addon_provisioner import addon_provisioner
     from apps.addons.services.shared_postgres import SHARED_CONTAINER, drop_logical_db
@@ -473,6 +474,58 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
             result['source_cleanup_warning'] = source_cleanup_warning
         if target_mode == 'shared' and result_push_warning:
             result['pooler_push_warning'] = result_push_warning
+        # 8. Hands-free finish: repoint stale URL copies and roll the
+        #    service onto the new credentials WITHOUT a rebuild.
+        #    Best-effort throughout — the data is safe either way, so
+        #    failures surface as notes, never rollbacks.
+        auto_notes = []
+        final_url = str(getattr(addon, 'connection_url', '') or '').strip()
+        if old_url and final_url and old_url != final_url:
+            # USER-managed vars holding the pre-migration URL verbatim
+            # are stale by definition (same string = same dead
+            # backend) — repoint them. Anything user-customized
+            # (different string) is left untouched.
+            try:
+                from apps.deployments.models import (
+                    EnvironmentVariable as _Env,
+                )
+                stale_user = _Env.objects.filter(
+                    service=addon.service, value=old_url,
+                ).exclude(source='ADDON')
+                for var in stale_user:
+                    var.value = final_url
+                    var.save(update_fields=['value', 'updated_at'])
+                    auto_notes.append(f"repointed {var.key}")
+                    logger.info("Migration auto-finish: repointed %s",
+                                var.key)
+            except Exception as exc:
+                auto_notes.append(f"env repoint skipped: {exc}")
+        if stopped_containers:
+            # Quiesce left the app stopped — start it, then recreate
+            # with fresh env (same image, new credentials, no build).
+            _start_service_containers(stopped_containers)
+            try:
+                from apps.deployments.services.container_refresh import (
+                    recreate_with_fresh_env as _recreate,
+                )
+                _refresh = _recreate(addon.service) or {}
+                auto_notes.append(
+                    f"container refreshed ({_refresh.get('container_id', '?')})")
+                logger.info("Migration auto-finish: refreshed %s",
+                            addon.service.name)
+            except Exception as exc:
+                auto_notes.append(
+                    "container refresh skipped — redeploy the service "
+                    f"manually so it picks up the new URL ({exc})")
+                logger.warning("Migration auto-finish refresh failed "
+                               "for %s: %s", addon.service.name, exc)
+        if auto_notes:
+            result['auto_finish'] = '; '.join(auto_notes)
+            if any('container refreshed' in n for n in auto_notes):
+                result['message'] = (
+                    'Migration complete. The owning service was '
+                    'automatically refreshed onto the new connection URL '
+                    '(same image, no rebuild).')
         return result
     except Exception:
         # Roll back to the original row; the source is intact unless the
