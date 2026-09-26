@@ -18,6 +18,8 @@ import logging
 
 from celery import shared_task
 
+from django.db.models import Q
+
 from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
 
 logger = logging.getLogger(__name__)
@@ -38,15 +40,25 @@ def reverify_custom_domains_task(self):
     config = PlatformConfig.load()
     demoted, verified_ok = [], []
 
-    # Only re-check domains that are actively trusted.
+    # Re-check trusted domains AND demoted ones. Demotion used to be
+    # sticky: a domain felled by transient stalls (trulay.co, 2026-09-26)
+    # stayed red forever until a human clicked verify, even though the
+    # next hourly pass would have cleared it. A demoted row that passes
+    # the same full bar is re-promoted below (routing + SSL re-issued).
     candidates = Domain.objects.filter(
-        verified=True,
-    ).filter(
-        status__in=[
-            DomainStatus.ACTIVE,
-            DomainStatus.DNS_VERIFIED,
-            DomainStatus.SSL_PROVISIONING,
-        ],
+        Q(
+            verified=True,
+            status__in=[
+                DomainStatus.ACTIVE,
+                DomainStatus.DNS_VERIFIED,
+                DomainStatus.SSL_PROVISIONING,
+            ],
+        )
+        | Q(
+            verified=False,
+            status=DomainStatus.DNS_PENDING,
+            verify_fail_count__gte=3,
+        )
     ).select_related("service")
 
     for domain in candidates:
@@ -63,17 +75,58 @@ def reverify_custom_domains_task(self):
 
         if result.verified:
             verified_ok.append(domain.domain_name)
-            if (domain.verify_fail_count or 0) != 0:
+            if (domain.verify_fail_count or 0) != 0 or not domain.verified:
+                was_demoted = not domain.verified
+                domain.verified = True
                 domain.verify_fail_count = 0
-                domain.save(update_fields=["verify_fail_count", "updated_at"])
+                domain.last_error = None
+                if was_demoted:
+                    # Self-heal a transient demotion: restore routable
+                    # status and re-issue SSL/routing through the
+                    # standard provisioning path.
+                    domain.status = DomainStatus.DNS_VERIFIED
+                domain.save(update_fields=[
+                    "verified", "verify_fail_count", "status",
+                    "last_error", "updated_at",
+                ])
+                if was_demoted:
+                    logger.warning(
+                        "reverify: RE-PROMOTED %s (service %s) — %s",
+                        domain.domain_name,
+                        getattr(domain.service, "name", "?"),
+                        result.actual,
+                    )
+                    try:
+                        from apps.domains.tasks import (
+                            verify_dns_and_provision_ssl_task,
+                        )
+                        verify_dns_and_provision_ssl_task.delay(domain.id)
+                    except Exception as exc:
+                        logger.error(
+                            "reverify: ssl reprovision dispatch failed for %s: %s",
+                            domain.domain_name, exc,
+                        )
+                    try:
+                        from apps.deployments.tasks.deploy.caddy import (
+                            sync_caddy_task,
+                        )
+                        sync_caddy_task.delay()
+                    except Exception as exc:
+                        logger.error(
+                            "reverify: caddy resync dispatch failed for %s: %s",
+                            domain.domain_name, exc,
+                        )
             continue
 
         # Demote only after consecutive failures — a single transient
         # (resolver blip, slow token serve) must not take down a live
         # custom domain. Counter resets on any successful pass above.
+        # Already-demoted rows just refresh the error (no re-demotion,
+        # no hourly caddy regen for an unchanged state).
+        was_trusted = bool(domain.verified)
         fails = (domain.verify_fail_count or 0) + 1
         domain.verify_fail_count = fails
-        if fails < 3:
+        if fails < 3 and was_trusted:
             domain.last_error = (
                 f"Re-verification failed ({fails}/3): {result.error or result.actual}"
             )
@@ -82,6 +135,14 @@ def reverify_custom_domains_task(self):
                 "reverify: %s failed %d/3 — keeping current status (%s)",
                 domain.domain_name, fails, domain.status,
             )
+            continue
+        if not was_trusted:
+            domain.last_error = (
+                f"Still unverified: {result.error or result.actual}"
+            )
+            domain.save(update_fields=[
+                "last_error", "verify_fail_count", "updated_at",
+            ])
             continue
         domain.verified = False
         domain.ssl_active = False

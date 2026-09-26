@@ -80,6 +80,38 @@ class HttpProofTests(SimpleTestCase):
         self.assertEqual(detail, "no token")
 
 
+class HttpProofRetryTests(SimpleTestCase):
+    @mock.patch("time.sleep")
+    @mock.patch("requests.get")
+    def test_timeout_then_success_verifies(self, mock_get, mock_sleep):
+        import requests as _rq
+        mock_get.side_effect = [
+            _rq.exceptions.ReadTimeout("slow"),
+            _resp(200, "tok-abc-123"),
+        ]
+        ok, detail = verify_http_proof(_domain())
+        self.assertTrue(ok)
+        self.assertEqual(mock_get.call_count, 2)
+
+    @mock.patch("time.sleep")
+    @mock.patch("requests.get")
+    def test_persistent_timeout_fails_after_retries(self, mock_get, mock_sleep):
+        import requests as _rq
+        mock_get.side_effect = _rq.exceptions.ReadTimeout("slow")
+        ok, detail = verify_http_proof(_domain(), attempts=3)
+        self.assertFalse(ok)
+        self.assertEqual(mock_get.call_count, 3)
+        self.assertIn("fetch failed", detail)
+
+    @mock.patch("time.sleep")
+    @mock.patch("requests.get")
+    def test_404_fails_fast_without_retry(self, mock_get, mock_sleep):
+        mock_get.return_value = _resp(404, "not found")
+        ok, detail = verify_http_proof(_domain())
+        self.assertFalse(ok)
+        self.assertEqual(mock_get.call_count, 1)
+
+
 class FallbackIntegrationTests(SimpleTestCase):
     def _empty_dns(self):
         return mock.patch(

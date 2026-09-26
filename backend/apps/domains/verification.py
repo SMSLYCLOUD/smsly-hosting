@@ -68,7 +68,7 @@ def ensure_verification_token(domain_obj) -> str:
     return token or ""
 
 
-def verify_http_proof(domain_obj, timeout: float = 10) -> tuple:
+def verify_http_proof(domain_obj, timeout: float = 10, attempts: int = 3) -> tuple:
     """Fetch the row's challenge token over the PUBLIC edge.
 
     Works grey AND orange-proxied (and through apex CNAME flattening),
@@ -76,23 +76,39 @@ def verify_http_proof(domain_obj, timeout: float = 10) -> tuple:
     / NoAnswer instead of the chain. Strength equals DNS proof — only
     whoever steers the hostname at us can complete it — plus path proof
     that traffic actually arrives. Returns (ok, detail).
+
+    Retries transient failures (read timeouts through the public edge
+    demoted trulay.co 3 hours straight on 2026-09-26 — a single 10s
+    stall must not fail the pass). Deterministic answers (wrong body,
+    404) fail fast.
     """
+    import time
+
     host = _clean_hostname(getattr(domain_obj, "domain_name", "") or "")
     token = str(getattr(domain_obj, "verification_token", "") or "").strip()
     if not host or not token:
         return False, "no token"
-    try:
-        import requests
-        resp = requests.get(
-            f"http://{host}/.well-known/smsly-verify/{token}",
-            timeout=timeout, allow_redirects=True,
-            headers={"User-Agent": "smsly-domain-verify/1.0"},
-        )
-    except Exception as exc:
-        return False, f"fetch failed: {exc!s}"[:160]
-    if resp.status_code == 200 and (resp.text or "").strip() == token:
-        return True, "served token over public edge"
-    return False, f"HTTP {resp.status_code}"
+    url = f"http://{host}/.well-known/smsly-verify/{token}"
+    last_detail = "no attempt"
+    for attempt in range(max(1, int(attempts or 1))):
+        try:
+            import requests
+            resp = requests.get(
+                url,
+                timeout=timeout, allow_redirects=True,
+                headers={"User-Agent": "smsly-domain-verify/1.0"},
+            )
+        except Exception as exc:
+            last_detail = f"fetch failed: {exc!s}"[:160]
+        else:
+            if resp.status_code == 200 and (resp.text or "").strip() == token:
+                return True, "served token over public edge"
+            last_detail = f"HTTP {resp.status_code}"
+            if resp.status_code not in (408, 425, 429, 500, 502, 503, 504):
+                return False, last_detail
+        if attempt + 1 < max(1, int(attempts or 1)):
+            time.sleep(2 * (attempt + 1))
+    return False, last_detail
 
 
 def _clean_hostname(value: str) -> str:
