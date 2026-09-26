@@ -32,8 +32,11 @@ for c in $SERVICES; do
     fi
     # Normalize only on content change: blind cp would bump mtimes every
     # run and trigger pointless TLS listener restarts downstream.
+    # Also relax the indexed files to 644: app runtimes (non-root) read
+    # SVIDs directly and the raw key is root-only 600 (2026-09-26: mesh
+    # proxy mTLS EACCES). Keys never leave the workload network scope.
     if ! docker exec -u root "$c" sh -c \
-        'cd /opt/spire/svids && k=$(ls -t svid.*.key 2>/dev/null | head -n 1) && [ -n "$k" ] && n=${k%.key} && b=$(ls -t bundle.*.pem 2>/dev/null | head -n 1) && [ -n "$b" ] && { cmp -s "$n.pem" cert.pem || cp -f "$n.pem" cert.pem; } && { cmp -s "$n.key" key.pem || cp -f "$n.key" key.pem; } && { cmp -s "$b" bundle.pem || cp -f "$b" bundle.pem; } && chmod 644 cert.pem key.pem bundle.pem' \
+        'cd /opt/spire/svids && chmod 644 svid.*.pem svid.*.key bundle.*.pem 2>/dev/null; k=$(ls -t svid.*.key 2>/dev/null | head -n 1) && [ -n "$k" ] && n=${k%.key} && b=$(ls -t bundle.*.pem 2>/dev/null | head -n 1) && [ -n "$b" ] && { cmp -s "$n.pem" cert.pem || cp -f "$n.pem" cert.pem; } && { cmp -s "$n.key" key.pem || cp -f "$n.key" key.pem; } && { cmp -s "$b" bundle.pem || cp -f "$b" bundle.pem; } && chmod 644 cert.pem key.pem bundle.pem' \
         >/dev/null 2>&1; then
         echo "$(date -u +%FT%TZ) $c normalize FAILED"
         fail=1
