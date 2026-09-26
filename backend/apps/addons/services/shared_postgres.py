@@ -589,6 +589,15 @@ def _db_exists(db_name: str) -> bool:
     return out.splitlines()[0].strip() == "1" if out else False
 
 
+def database_exists(db_name: str) -> bool:
+    """Public probe: does a database with this name exist on shared?
+
+    Used by migration staging to preserve the original database name
+    when it is free (no cross-tenant collision).
+    """
+    return _db_exists(db_name)
+
+
 def _lit(value: str) -> str:
     """Quote an SQL string literal."""
     return "'" + str(value).replace("'", "''") + "'"

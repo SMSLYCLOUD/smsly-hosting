@@ -193,6 +193,9 @@ class MigrateQuiesceTests(TestCase):
         ), mock.patch(
             "apps.addons.services.shared_postgres.drop_database_only",
         ), mock.patch(
+            "apps.addons.services.shared_postgres.database_exists",
+            return_value=True,
+        ), mock.patch(
             "apps.addons.services.tenant_pooler.push_tenants_config",
             return_value={"ok": True, "pools": 1, "changed": True},
         ) as mock_push:
@@ -223,6 +226,9 @@ class MigrateQuiesceTests(TestCase):
             return_value={},
         ), mock.patch(
             "apps.addons.services.shared_postgres.drop_database_only",
+        ), mock.patch(
+            "apps.addons.services.shared_postgres.database_exists",
+            return_value=True,
         ), mock.patch(
             "apps.addons.services.tenant_pooler.push_tenants_config",
             return_value={"ok": False, "pools": 1, "error": "hopper down"},
@@ -266,6 +272,9 @@ class MigrateQuiesceTests(TestCase):
             return_value={},
         ), mock.patch(
             "apps.addons.services.shared_postgres.drop_database_only",
+        ), mock.patch(
+            "apps.addons.services.shared_postgres.database_exists",
+            return_value=True,
         ), mock.patch(
             "apps.addons.services.tenant_pooler.push_tenants_config",
             return_value={"ok": True, "pools": 1, "changed": True},
@@ -396,8 +405,8 @@ class MigrateCredentialPreservationTests(TestCase):
 
     The target backend is created with the SOURCE's credentials, so
     every existing copy keeps working and dump/restore role ownership
-    resolves. Only the database name changes, and only on shared
-    targets (temp staging name — the source DB is still live).
+    resolves. The database name is preserved when free on shared, and
+    only falls back to a temp staging name on collision.
     """
     def setUp(self):
         self.user = User.objects.create_user(username="migpres", password="x")
@@ -474,17 +483,52 @@ class MigrateCredentialPreservationTests(TestCase):
             'hostname': 'pg-old', 'username': 'alice', 'password': 's3cret',
             'port': 5432, 'database': 'appdb'}
         m1, m2, m3, m4, m5, m6 = self._mocks(prov)
-        with m1, m2, m3, m4, m5, m6:
+        with m1, m2, m3, m4, m5, m6, mock.patch(
+            "apps.addons.services.shared_postgres.database_exists",
+            return_value=True,
+        ):
             result = migrate_addon_mode(str(addon.id), "shared")
         self.assertEqual(result["status"], "ok")
         from urllib.parse import urlparse as _up
         parts = _up(seen["url"])
-        # Same user, password, host — only the db name is a temp staging name.
+        # Same user, password, host — only the db name is a temp staging
+        # name because "appdb" is taken on shared.
         self.assertEqual(parts.username, "alice")
         self.assertEqual(parts.password, "s3cret")
         self.assertEqual(parts.hostname, "pg-old")
         self.assertNotEqual(parts.path.lstrip("/"), "appdb")
         self.assertIn("__mig_", parts.path)
+        addon.refresh_from_db()
+        self.assertEqual(addon.connection_url, seen["url"])
+
+    def test_container_to_shared_preserves_db_name_when_free(self):
+        addon = self._addon(provision_mode="container", pooler_routed=False)
+        seen = {}
+        prov = mock.MagicMock()
+        prov.create_backup.return_value = "/tmp/dump.sql"
+
+        def _dispatch(a):
+            seen["url"] = a.connection_url
+            return ("", a.connection_url)
+        prov.provision_dispatch.side_effect = _dispatch
+        prov.restore_backup.return_value = True
+        prov._parse_connection_url.return_value = {
+            'hostname': 'pg-old', 'username': 'alice', 'password': 's3cret',
+            'port': 5432, 'database': 'appdb'}
+        m1, m2, m3, m4, m5, m6 = self._mocks(prov)
+        with m1, m2, m3, m4, m5, m6, mock.patch(
+            "apps.addons.services.shared_postgres.database_exists",
+            return_value=False,
+        ):
+            result = migrate_addon_mode(str(addon.id), "shared")
+        self.assertEqual(result["status"], "ok")
+        from urllib.parse import urlparse as _up
+        parts = _up(seen["url"])
+        # Free on shared — the full original URL shape is preserved.
+        self.assertEqual(parts.username, "alice")
+        self.assertEqual(parts.password, "s3cret")
+        self.assertEqual(parts.hostname, "pg-old")
+        self.assertEqual(parts.path.lstrip("/"), "appdb")
         addon.refresh_from_db()
         self.assertEqual(addon.connection_url, seen["url"])
 

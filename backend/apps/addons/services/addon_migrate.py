@@ -294,12 +294,12 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
     # Credential preservation: the target backend is created with the
     # SOURCE's username/password (and alias), so every existing copy of
     # the credentials keeps working and dump/restore role ownership
-    # lines resolve. Only the database name changes, and only on shared
-    # targets: the source DB is still live on the same server, so the
-    # target stages under a deterministic temp name (retry-convergent —
-    # leftovers are dropped before restore). Container targets get a
-    # fresh cluster, so the original db name is reused verbatim and the
-    # final URL is byte-identical to the old one.
+    # lines resolve. The database name is preserved too when it is free
+    # on the shared server; only a taken name forces a deterministic
+    # temp staging name (retry-convergent — leftovers are dropped
+    # before restore). Container targets get a fresh cluster, so the
+    # original db name is reused verbatim and the final URL is
+    # byte-identical to the old one.
     from urllib.parse import quote as _quote
     old_user = str(old_parts.get('username') or '')
     old_password = str(old_parts.get('password') or '')
@@ -312,7 +312,26 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
             "credentials it cannot read.")
     staging_db = old_db
     if target_mode == 'shared':
-        staging_db = f"{old_db[:40]}__mig_{str(addon.id).replace('-', '')[:8]}"
+        temp_db = f"{old_db[:40]}__mig_{str(addon.id).replace('-', '')[:8]}"
+        try:
+            from apps.addons.services.shared_postgres import (
+                database_exists as _shared_db_exists,
+            )
+            if _shared_db_exists(old_db):
+                staging_db = temp_db
+                logger.info(
+                    "Migration %s: database name %r taken on shared — "
+                    "staging under %r", addon.id, old_db, staging_db)
+            else:
+                logger.info(
+                    "Migration %s: database name %r free on shared — "
+                    "preserving it", addon.id, old_db)
+        except Exception as exc:
+            # Shared server unreachable — staging safe; the nested
+            # provision will surface the real error.
+            staging_db = temp_db
+            logger.debug("Migration %s: shared name probe failed (%s) — "
+                         "staging under %r", addon.id, exc, staging_db)
     staging_url = (
         f"postgresql://{_quote(old_user, safe='')}:{_quote(old_password, safe='')}"
         f"@{alias}:{old_port}/{staging_db}"
