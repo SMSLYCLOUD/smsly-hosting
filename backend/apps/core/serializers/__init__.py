@@ -32,9 +32,11 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
 
     permissions = serializers.SerializerMethodField()
     roles = serializers.SerializerMethodField()
+    is_staff = serializers.ReadOnlyField()
+    is_superuser = serializers.ReadOnlyField()
 
     class Meta(UserDetailsSerializer.Meta):
-        fields = (*UserDetailsSerializer.Meta.fields, 'permissions', 'roles')
+        fields = (*UserDetailsSerializer.Meta.fields, 'permissions', 'roles', 'is_staff', 'is_superuser')
 
     def get_permissions(self, user) -> list[str]:
         return get_user_permissions(user)
