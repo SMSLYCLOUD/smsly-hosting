@@ -592,6 +592,21 @@ class LocalAdapter(BaseCloudAdapter):
         a green container first, then promotes it. The old container keeps
         serving while the green candidate is warming up.
         """
+        # Writable-HOME defaults under the read-only rootfs. Platform
+        # containers run read_only, so the image's $HOME (e.g.
+        # /home/appuser) is NOT writable — anything resolving config,
+        # cache, or control sockets under $HOME crash-loops (gunicorn
+        # 26 control server at ~/.gunicorn, HuggingFace/matplotlib
+        # caches, …). /tmp is a 100m tmpfs mount on every deploy, so
+        # point HOME + XDG_RUNTIME_DIR there unless the service sets
+        # them explicitly. (Baked-in $HOME reads are the known
+        # trade-off; writes are fatal while reads merely mis-resolve.)
+        env = dict(env or {})
+        if not env.get("HOME"):
+            env["HOME"] = "/tmp"
+            logger.debug("Defaulted HOME=/tmp for %s (read-only rootfs)", name)
+        if not env.get("XDG_RUNTIME_DIR"):
+            env["XDG_RUNTIME_DIR"] = "/tmp"
         # Resolve scoped network for this service
         network_name = self._resolve_network_name()
 
