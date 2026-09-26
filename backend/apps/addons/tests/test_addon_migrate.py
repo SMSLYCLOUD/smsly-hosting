@@ -82,7 +82,7 @@ class MigrateQuiesceTests(TestCase):
             'port': 5432, 'database': 'db'}
         return prov
 
-    def test_containers_stopped_before_dump(self):
+    def test_containers_stopped_before_dump_then_restarted(self):
         addon = self._addon()
         events = []
         prov = self._provisioner()
@@ -103,16 +103,24 @@ class MigrateQuiesceTests(TestCase):
             "apps.addons.services.shared_postgres.drop_logical_db",
         ), mock.patch(
             "apps.addons.services.addon_migrate._start_service_containers",
-        ) as mock_start, mock.patch(
+            side_effect=lambda names: events.append(("start", list(names))),
+        ), mock.patch(
             "apps.addons.services.addon_migrate.container_network_aliases",
             return_value={},
+        ), mock.patch(
+            "apps.deployments.services.container_refresh.recreate_with_fresh_env",
+            side_effect=lambda svc: events.append(("refresh", svc.name)) or {"ok": True},
         ):
             migrate_addon_mode(str(addon.id), "container")
         kinds = [k for k, _ in events]
         self.assertIn("stop", kinds)
         self.assertIn("dump", kinds)
         self.assertLess(kinds.index("stop"), kinds.index("dump"))
-        mock_start.assert_not_called()
+        # Quiesced containers are restarted and refreshed onto the new
+        # URL automatically — no manual redeploy.
+        self.assertIn("start", kinds)
+        self.assertIn("refresh", kinds)
+        self.assertLess(kinds.index("dump"), kinds.index("start"))
 
     def test_failed_migration_restarts_stopped_and_restores_row(self):
         addon = self._addon()

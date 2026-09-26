@@ -131,10 +131,15 @@ def sync_addon_env_vars(addon, old_url=""):
             },
         )
     if old_url:
-        stale = EnvironmentVariable.objects.filter(
-            service=addon.service, source='ADDON', value=old_url,
-        )
-        for var in stale:
+        # NOTE: EncryptedCharField (Fernet, random IV) never matches a
+        # plaintext ORM filter — an exact `value=old_url` lookup encrypts
+        # with a fresh IV and matches nothing. Compare decrypted values
+        # in Python (per-object save keeps the ciphertext valid).
+        for var in EnvironmentVariable.objects.filter(
+            service=addon.service, source='ADDON',
+        ):
+            if var.value != old_url:
+                continue
             var.value = new_url
             var.save(update_fields=['value', 'updated_at'])
             logger.info("Migration env sync: repointed %s at new backend",
@@ -484,15 +489,18 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
             # USER-managed vars holding the pre-migration URL verbatim
             # are stale by definition (same string = same dead
             # backend) — repoint them. Anything user-customized
-            # (different string) is left untouched.
+            # (different string) is left untouched. Python-side
+            # comparison: EncryptedCharField never matches a plaintext
+            # ORM filter (Fernet random IV).
             try:
                 from apps.deployments.models import (
                     EnvironmentVariable as _Env,
                 )
-                stale_user = _Env.objects.filter(
-                    service=addon.service, value=old_url,
-                ).exclude(source='ADDON')
-                for var in stale_user:
+                for var in _Env.objects.filter(
+                    service=addon.service,
+                ).exclude(source='ADDON'):
+                    if var.value != old_url:
+                        continue
                     var.value = final_url
                     var.save(update_fields=['value', 'updated_at'])
                     auto_notes.append(f"repointed {var.key}")
