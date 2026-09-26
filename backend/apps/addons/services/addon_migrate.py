@@ -204,9 +204,12 @@ def _verify_target_via_exec(container_name: str, url: str, timeout=30) -> bool:
         from urllib.parse import urlparse as _urlparse
         parsed = _urlparse(url or '')
         user = parsed.username or 'postgres'
+        # Connect to the TARGET database, not `postgres`: tenant roles
+        # are revoked from the system catalogs (shared lockdown), so
+        # `-d postgres` always fails for them with "permission denied".
         db = (parsed.path or '').lstrip('/') or 'postgres'
         cmd = ['docker', 'exec', container_name,
-               'psql', '-U', user, '-d', 'postgres', '-tAc', 'SELECT 1']
+               'psql', '-U', user, '-d', db, '-tAc', 'SELECT 1']
         env = dict(__import__('os').environ)
         if parsed.password:
             env['PGPASSWORD'] = parsed.password

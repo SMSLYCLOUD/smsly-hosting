@@ -294,6 +294,33 @@ class MigrateQuiesceTests(TestCase):
         self.assertIn("container refreshed", result["auto_finish"])
         self.assertIn("automatically refreshed", result["message"])
 
+    def test_verify_targets_the_database_not_postgres(self):
+        """Exec verification must connect to the target database.
+
+        Regression: it connected to `postgres`, which tenant roles are
+        revoked from (shared lockdown) — every shared migration failed
+        verification with SELECT 1 even though the target was healthy.
+        """
+        import subprocess as _sp
+        from apps.addons.services import addon_migrate as _mig
+        seen = {}
+
+        def _fake(cmd, **kwargs):
+            seen["cmd"] = cmd
+            m = mock.MagicMock()
+            m.returncode = 0
+            m.stdout = "1\n"
+            return m
+
+        with mock.patch("subprocess.run", side_effect=_fake):
+            ok = _mig._verify_target_via_exec(
+                "smsly-shared-postgres",
+                "postgresql://alice:s3cret@pg-shared:5432/appdb")
+        self.assertTrue(ok)
+        self.assertIn("-d", seen["cmd"])
+        self.assertEqual(
+            seen["cmd"][seen["cmd"].index("-d") + 1], "appdb")
+
     def test_shared_target_orphan_dropped_on_failure(self):
         addon = self._addon(provision_mode="container")
         prov = self._provisioner(
