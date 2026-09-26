@@ -332,6 +332,78 @@ def _rule_tag(bridge_iface: str) -> str:
     return RULE_TAG_PREFIX + bridge_iface.replace("br-", "", 1)
 
 
+DOMAIN_EGRESS_PREFIX = "domain:"
+
+_HOSTNAME_LABEL_RE = None  # lazy compiled below
+
+
+def _split_domain_entries(
+    entries: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Split an egress list into (static_cidrs, domain_names, invalid).
+
+    ``domain:api.example.com`` entries are resolved to IPs at apply
+    time (iptables matches L3 only) and re-resolved on every beat
+    reconcile. Hostnames are lowercased; invalid ones are returned
+    for the caller to warn about (never silently dropped into a
+    CIDR slot).
+    """
+    import re as _re
+
+    global _HOSTNAME_LABEL_RE
+    if _HOSTNAME_LABEL_RE is None:
+        _HOSTNAME_LABEL_RE = _re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
+    label_re = _HOSTNAME_LABEL_RE
+
+    cidrs: list[str] = []
+    domains: list[str] = []
+    invalid: list[str] = []
+    for entry in entries or []:
+        text = str(entry or "").strip()
+        if not text:
+            continue
+        if text.lower().startswith(DOMAIN_EGRESS_PREFIX):
+            host = text[len(DOMAIN_EGRESS_PREFIX):].strip().lower().rstrip(".")
+            labels = host.split(".")
+            if (
+                host and len(host) <= 253 and len(labels) >= 2
+                and all(label_re.match(label) for label in labels)
+            ):
+                if host not in domains:
+                    domains.append(host)
+            else:
+                invalid.append(text)
+        else:
+            cidrs.append(text)
+    return cidrs, domains, invalid
+
+
+def resolve_domain_egress(host: str) -> list[str]:
+    """Resolve one hostname to /32 CIDRs (IPv4 only). Empty on failure."""
+    import socket as _socket
+
+    try:
+        infos = _socket.getaddrinfo(host, None, family=_socket.AF_INET)
+    except Exception as exc:
+        logger.warning("Egress domain %r failed to resolve: %s", host, exc)
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for info in infos:
+        ip = (info[4][0] if len(info) > 4 else "") or ""
+        try:
+            import ipaddress as _ipmod
+            addr = str(_ipmod.IPv4Address(ip))
+        except ValueError:
+            continue
+        if addr not in seen:
+            seen.add(addr)
+            out.append(f"{addr}/32")
+    if not out:
+        logger.warning("Egress domain %r resolved to no IPv4 addresses", host)
+    return out
+
+
 def _bridge_exists(bridge_iface: str) -> bool:
     res = _sh(["ip", "link", "show", bridge_iface])
     return res.returncode == 0
@@ -392,8 +464,14 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
     if not allowed_egress_networks:
         return
 
+    static_cidrs, domain_names, invalid_entries = _split_domain_entries(
+        allowed_egress_networks
+    )
+    for bad in invalid_entries:
+        logger.warning("Invalid egress entry (neither CIDR nor domain:): %s", bad)
+
     valid_cidrs: list[str] = []
-    for cidr in allowed_egress_networks:
+    for cidr in static_cidrs:
         try:
             net = ipaddress.IPv4Network(cidr)
         except ValueError:
@@ -401,7 +479,30 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
             continue
         valid_cidrs.append(str(net))
 
+    # domain: entries resolve now (iptables is L3-only). Failures warn
+    # and continue with the rest — but if NOTHING valid remains from a
+    # non-empty list, bail WITHOUT writing: an empty install would
+    # leave the bridge wide open while the UI claims lockdown.
+    resolved_map: dict[str, list[str]] = {}
+    for host in domain_names:
+        resolved = resolve_domain_egress(host)
+        resolved_map[host] = resolved
+        valid_cidrs.extend(resolved)
+    if resolved_map:
+        logger.info(
+            "Egress domain resolution for %s: %s",
+            network_name,
+            {host: cidrs for host, cidrs in resolved_map.items()},
+        )
+
     if not valid_cidrs:
+        if static_cidrs or domain_names:
+            logger.error(
+                "Egress for %s has entries but nothing valid "
+                "(all CIDRs invalid / domains unresolvable) — leaving "
+                "existing rules untouched.",
+                network_name,
+            )
         return
 
     bridge_iface = _get_bridge_interface_name(network_name)
@@ -528,6 +629,116 @@ def ensure_router_on_network(network_name: str) -> bool:
         return False
 
 
+def _installed_bridge_cidrs(bridge_iface: str, tag: str) -> set[str]:
+    """CIDRs currently RETURNed for this bridge (our tag only)."""
+    found: set[str] = set()
+    for rule in _list_docker_user_rules():
+        if tag not in rule:
+            continue
+        parts = rule.split()
+        has_iface = any(
+            parts[i] == "-i" and i + 1 < len(parts) and parts[i + 1] == bridge_iface
+            for i in range(len(parts))
+        )
+        if not has_iface or "-j" not in parts:
+            continue
+        try:
+            j_idx = parts.index("-j")
+            if parts[j_idx + 1] != "RETURN":
+                continue
+        except (ValueError, IndexError):
+            continue
+        for i, part in enumerate(parts):
+            if part == "-d" and i + 1 < len(parts):
+                try:
+                    import ipaddress as _ipmod
+                    found.add(str(_ipmod.IPv4Network(parts[i + 1])))
+                except ValueError:
+                    pass
+    return found
+
+
+def refresh_domain_egress() -> dict[str, int]:
+    """Re-resolve ``domain:`` egress entries and converge live rules.
+
+    DNS answers rotate (CDN/anycast), so a resolve-once snapshot rots.
+    Runs inside the beat reconcile: for every active scope row with
+    domain entries, add newly-resolved CIDRs and remove ones that no
+    longer resolve — never touching statically-listed CIDRs or other
+    bridges' rules. Add-before-delete keeps the bridge protected
+    throughout (the catch-all DROP is never removed).
+    """
+    stats = {"bridges": 0, "added": 0, "removed": 0}
+    try:
+        from apps.deployments.models.network_scope import ScopedNetwork
+    except Exception as exc:
+        logger.debug("Domain egress refresh skipped (models unavailable): %s", exc)
+        return stats
+    try:
+        rows = list(ScopedNetwork.objects.filter(is_active=True))
+    except Exception as exc:
+        logger.debug("Domain egress refresh skipped (DB unavailable): %s", exc)
+        return stats
+    for row in rows:
+        try:
+            entries = list(getattr(row, "allowed_egress_networks", None) or [])
+        except Exception:
+            continue
+        _, domains, _ = _split_domain_entries(entries)
+        if not domains:
+            continue
+        try:
+            name = ScopedNetwork.resolve_network_name(row.scope)
+        except Exception:
+            continue
+        if not name:
+            continue
+        bridge_iface = _get_bridge_interface_name(name)
+        if not bridge_iface:
+            continue
+        tag = _rule_tag(bridge_iface)
+        desired: set[str] = set()
+        for host in domains:
+            desired.update(resolve_domain_egress(host))
+        if not desired:
+            logger.warning(
+                "Domain egress refresh for %s resolved nothing — keeping existing rules",
+                name,
+            )
+            continue
+        static_cidrs, _, _ = _split_domain_entries(entries)
+        static_set: set[str] = set()
+        for cidr in static_cidrs:
+            try:
+                import ipaddress as _ipmod
+                static_set.add(str(_ipmod.IPv4Network(cidr)))
+            except ValueError:
+                pass
+        installed = _installed_bridge_cidrs(bridge_iface, tag)
+        for cidr in sorted(desired - installed):
+            res = _sh([
+                "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+                "-d", cidr, "-j", "RETURN",
+                "-m", "comment", "--comment", tag,
+            ])
+            if res.returncode == 0 or "already exists" in (res.stderr or ""):
+                stats["added"] += 1
+            else:
+                logger.warning("Domain egress add failed %s -> %s: %s", name, cidr, (res.stderr or "")[:120])
+        for cidr in sorted(installed - desired - static_set):
+            res = _sh([
+                "iptables", "-D", "DOCKER-USER", "-i", bridge_iface,
+                "-d", cidr, "-j", "RETURN",
+                "-m", "comment", "--comment", tag,
+            ])
+            if res.returncode == 0:
+                stats["removed"] += 1
+            else:
+                logger.debug("Domain egress del failed %s -> %s: %s", name, cidr, (res.stderr or "")[:120])
+        stats["bridges"] += 1
+    return stats
+
+
 def reconcile_network_isolation() -> dict[str, int]:
     """Periodic self-healing pass over scoped networks.
 
@@ -545,6 +756,17 @@ def reconcile_network_isolation() -> dict[str, int]:
         stats["purged_rules"] = _purge_stale_only()
     except Exception:
         logger.exception("stale rule purge failed")
+
+    # 1b. Refresh domain: egress entries (rotating DNS answers would
+    # otherwise freeze at whatever resolved at apply time — the
+    # idempotency gate skips tagged bridges entirely).
+    try:
+        _domain_stats = refresh_domain_egress()
+        stats["domain_refreshed"] = _domain_stats.get("bridges", 0)
+        stats["domain_added"] = _domain_stats.get("added", 0)
+        stats["domain_removed"] = _domain_stats.get("removed", 0)
+    except Exception:
+        logger.exception("domain egress refresh failed")
 
     # 2. Reapply + router attach for live scoped bridges.
     try:

@@ -37,8 +37,11 @@ from django.test import SimpleTestCase, TestCase
 from apps.deployments.services.network_scope import (
     _get_bridge_interface_name,
     _sh,
+    _split_domain_entries,
     apply_egress_restrictions,
     ensure_scoped_network,
+    refresh_domain_egress,
+    resolve_domain_egress,
 )
 
 
@@ -522,3 +525,151 @@ class ScopedNetworkViewsetReconcileTests(TestCase):
         self.assertEqual(resp.status_code, 201)
         mock_clear.assert_called_once_with("test-br-created")
         mock_apply.assert_called_once_with("test-br-created", ["10.0.0.0/8"])
+
+
+class DomainEgressTests(SimpleTestCase):
+    """domain: allowlist entries resolve to IPs at apply, refresh on beat."""
+
+    def test_split_domain_entries(self):
+        cidrs, domains, invalid = _split_domain_entries([
+            "10.0.0.0/8",
+            "domain:api.resend.com",
+            "DOMAIN:Example.COM.",
+            "not a cidr",
+            "",
+        ])
+        # Split is syntactic: non-domain text stays in cidrs for the
+        # apply step to validate; only malformed domain: entries land
+        # in invalid.
+        self.assertEqual(cidrs, ["10.0.0.0/8", "not a cidr"])
+        self.assertEqual(domains, ["api.resend.com", "example.com"])
+        self.assertEqual(invalid, [])
+
+    def test_split_rejects_bad_hostnames(self):
+        cidrs, domains, invalid = _split_domain_entries([
+            "domain:bad host!",
+            "domain:singlelabel",
+            "domain:-lead.com",
+        ])
+        self.assertEqual(cidrs, [])
+        self.assertEqual(domains, [])
+        self.assertEqual(len(invalid), 3)
+
+    def test_resolve_domain_egress_failure_returns_empty(self):
+        with patch("socket.getaddrinfo", side_effect=OSError("nope")):
+            self.assertEqual(resolve_domain_egress("example.com"), [])
+
+    def test_resolve_domain_egress_collects_ipv4(self):
+        fake = [
+            (2, 1, 6, "", ("93.184.216.34", 0)),
+            (2, 1, 6, "", ("93.184.216.34", 0)),
+            (10, 1, 6, "", ("2606:2800:220:1:248:1893:25c8:1946", 0, 0, 0)),
+        ]
+        with patch("socket.getaddrinfo", return_value=fake):
+            self.assertEqual(
+                resolve_domain_egress("example.com"), ["93.184.216.34/32"],
+            )
+
+    @patch("apps.deployments.services.network_scope.subprocess.run")
+    @patch("apps.deployments.services.network_scope.docker.from_env")
+    def test_apply_resolves_domains_into_rules(self, mock_docker, mock_run):
+        fake_net = MagicMock()
+        fake_net.attrs = {"Id": "deadbeef-1234-1234-1234-123456789012"}
+        mock_client = MagicMock()
+        mock_client.networks.get.return_value = fake_net
+        mock_docker.return_value = mock_client
+        mock_run.return_value = _fake_completed_process()
+        with patch(
+            "apps.deployments.services.network_scope.resolve_domain_egress",
+            return_value=["1.2.3.4/32"],
+        ):
+            apply_egress_restrictions("test-net", ["domain:api.example.com"])
+        scripts = _scripts(mock_run)
+        joined = "\n".join(scripts)
+        self.assertIn("1.2.3.4/32", joined)
+
+    @patch("apps.deployments.services.network_scope.subprocess.run")
+    @patch("apps.deployments.services.network_scope.docker.from_env")
+    def test_apply_all_unresolvable_leaves_bridge_alone(self, mock_docker, mock_run):
+        fake_net = MagicMock()
+        fake_net.attrs = {"Id": "deadbeef-1234-1234-1234-123456789012"}
+        mock_client = MagicMock()
+        mock_client.networks.get.return_value = fake_net
+        mock_docker.return_value = mock_client
+        with patch(
+            "apps.deployments.services.network_scope.resolve_domain_egress",
+            return_value=[],
+        ):
+            apply_egress_restrictions("test-net", ["domain:gone.example"])
+        # No rule writes at all (returns before even the idempotency
+        # pre-read) — so a lockdown claim can never silently mean
+        # "wide open".
+        scripts = _scripts(mock_run)
+        self.assertEqual(scripts, [])
+
+
+class RefreshDomainEgressTests(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.admin = User.objects.create_user(
+            username="domain_scope_admin", password="123", is_staff=True,
+            is_superuser=True,
+        )
+        from apps.deployments.models.core import Project
+        self.project = Project.objects.create(name="Domain Proj", owner=self.admin)
+        from django.contrib.contenttypes.models import ContentType
+        from apps.deployments.models.network_scope import ScopedNetwork
+        self.row = ScopedNetwork.objects.create(
+            content_type=ContentType.objects.get_for_model(Project),
+            object_id=self.project.id,
+            network_name="test-br-domains",
+            allowed_egress_networks=["domain:api.example.com"],
+        )
+
+    def test_refresh_adds_new_and_removes_stale(self):
+        from apps.deployments.services import network_scope as ns_mod
+        installed = [
+            "-i br-test -d 9.9.9.9/32 -j RETURN -m comment --comment smsly-egress-test ",
+        ]
+        with patch.object(
+            ns_mod, "_list_docker_user_rules", return_value=installed,
+        ), patch.object(
+            ns_mod, "_get_bridge_interface_name", return_value="br-test",
+        ), patch.object(
+            ns_mod, "resolve_domain_egress", return_value=["1.2.3.4/32"],
+        ), patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            stats = refresh_domain_egress()
+        self.assertEqual(stats["bridges"], 1)
+        self.assertEqual(stats["added"], 1)
+        self.assertEqual(stats["removed"], 1)
+        calls = [" ".join(c.args[0]) for c in mock_sh.call_args_list]
+        self.assertTrue(any("-I" in c and "1.2.3.4/32" in c for c in calls))
+        self.assertTrue(any("-D" in c and "9.9.9.9/32" in c for c in calls))
+
+    def test_refresh_keeps_static_cidrs(self):
+        from apps.deployments.models.network_scope import ScopedNetwork
+        from apps.deployments.services import network_scope as ns_mod
+        self.row.allowed_egress_networks = ["10.0.0.0/8", "domain:api.example.com"]
+        self.row.save(update_fields=["allowed_egress_networks"])
+        installed = [
+            "-i br-test -d 10.0.0.0/8 -j RETURN -m comment --comment smsly-egress-test ",
+            "-i br-test -d 9.9.9.9/32 -j RETURN -m comment --comment smsly-egress-test ",
+        ]
+        with patch.object(
+            ns_mod, "_list_docker_user_rules", return_value=installed,
+        ), patch.object(
+            ns_mod, "_get_bridge_interface_name", return_value="br-test",
+        ), patch.object(
+            ns_mod, "resolve_domain_egress", return_value=["1.2.3.4/32"],
+        ), patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            stats = refresh_domain_egress()
+        calls = [" ".join(c.args[0]) for c in mock_sh.call_args_list]
+        # Static 10.0.0.0/8 untouched; stale 9.9.9.9 removed; new added.
+        self.assertFalse(any("10.0.0.0/8" in c for c in calls))
+        self.assertTrue(any("-D" in c and "9.9.9.9/32" in c for c in calls))
+        self.assertEqual(stats["removed"], 1)

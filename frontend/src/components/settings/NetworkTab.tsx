@@ -24,12 +24,23 @@ interface ScopedNetworkRow {
 function parseCidrs(text: string): { cidrs: string[]; errors: string[] } {
   const cidrs: string[] = [];
   const errors: string[] = [];
+  const labelRe = /^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$/;
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
+    if (line.toLowerCase().startsWith("domain:")) {
+      const host = line.slice(7).trim().toLowerCase().replace(/\.$/, "");
+      const labels = host.split(".");
+      if (host && host.length <= 253 && labels.length >= 2 && labels.every((l) => labelRe.test(l))) {
+        cidrs.push(`domain:${host}`);
+      } else {
+        errors.push(`Invalid domain: ${line}`);
+      }
+      continue;
+    }
     const m = line.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/);
     if (!m) {
-      errors.push(`Invalid CIDR: ${line}`);
+      errors.push(`Invalid CIDR (use x.x.x.x/x or domain:name): ${line}`);
       continue;
     }
     const octets = m.slice(1, 5).map(Number);
@@ -279,7 +290,7 @@ export function NetworkTab({
             <Textarea
               value={cidrText}
               onChange={(e) => setCidrText(e.target.value)}
-              placeholder={"10.0.0.0/8\n192.168.0.0/16"}
+              placeholder={"10.0.0.0/8\n192.168.0.0/16\ndomain:api.resend.com"}
               className="font-mono text-xs"
               rows={5}
             />
@@ -307,6 +318,7 @@ export function NetworkTab({
           <p className="text-[11px] text-zinc-500">
             Applies to the host firewall immediately — narrowing takes effect on save, no redeploy needed.
             SaaS APIs on rotating IPs (e.g. Resend, Stripe) need broad ranges; when in doubt, keep Unrestricted.
+            <span className="text-zinc-400"> domain: entries resolve to IPs at apply and re-resolve every ~10 min.</span>
           </p>
         </Card>
       ) : (
