@@ -910,6 +910,10 @@ class AddonProvisioner:
             # Minio needs a username too, we can auto-generate one or use a default like 'admin'
             username = secrets.token_hex(8)
             container_id, connection_url = self._provision_minio(container_name, password, cast(int, port), alias_name, username=username, public_domain=public_domain)
+            if not connection_url:
+                raise RuntimeError(
+                    "Garage key reuse fired on a fresh random name — "
+                    "refusing to persist a URL with an unknown secret.")
         elif addon_type == 'POSTGRES':
             container_id, connection_url = self._provision_postgres(container_name, password, cast(int, port), alias_name, public_domain=public_domain)
         elif addon_type == 'REDIS':
@@ -1465,6 +1469,47 @@ metrics = false
             )
         return self._strip_ansi(result.stdout or "")
 
+    def _garage_resolve_key(self, container_name: str, key_name: str) -> tuple[str, str | None]:
+        """Return (key_id, secret_or_None) for ``key_name``.
+
+        Reuses the key when it unambiguously exists; creates it only
+        when absent. Garage allows duplicate names and resolves
+        ``--key`` by FUZZY match, so a blind ``key create`` on every
+        retry minted same-named keys until ``bucket allow`` failed with
+        "N matching keys" (2026-09-26: 10 dupes). Ambiguity now fails
+        closed with dedupe guidance instead of adding to the pile.
+
+        The secret is shown ONLY at creation — reuse returns None, so
+        callers that must persist a fresh URL must only call this with
+        a fresh (random) name.
+        """
+        import re as _re_mod
+
+        info_out = ""
+        try:
+            info_out = self._garage_exec(container_name, "key", "info", key_name)
+        except RuntimeError as exc:
+            if "matching keys" in str(exc).lower():
+                raise RuntimeError(
+                    f"Garage has multiple keys matching {key_name!r} — "
+                    f"dedupe with `garage key delete` (keep the ID in the "
+                    f"stored s3:// URL), then retry."
+                ) from exc
+            logger.info("Garage key %r absent; creating", key_name)
+        if info_out:
+            id_match = _re_mod.search(r"Key ID:\s*(\S+)", info_out)
+            if not id_match:
+                raise RuntimeError(f"Could not parse garage key id for {key_name}")
+            return id_match.group(1), None
+        key_out = self._garage_exec(container_name, "key", "create", key_name)
+        id_match = _re_mod.search(r"Key ID:\s*(\S+)", key_out)
+        secret_match = _re_mod.search(r"Secret key:\s*(\S+)", key_out)
+        if not id_match or not secret_match:
+            raise RuntimeError(
+                f"Could not parse garage key credentials: {key_out[-200:]}"
+            )
+        return id_match.group(1), secret_match.group(1)
+
     def _provision_minio(self, container_name: str,
                          password: str, port: int,
                          alias_name: str = '', username: str = 'admin', public_domain: str | None = None,
@@ -1579,36 +1624,26 @@ metrics = false
         except RuntimeError as exc:
             logger.info("Garage layout apply skipped/failed (may pre-exist): %s", exc)
 
-        # Key: create, or rotate when a previous attempt left it behind
-        # (the secret is shown ONLY at creation — a stale key cannot
-        # be recovered, only replaced).
-        try:
-            key_out = self._garage_exec(container_name, "key", "create", key_name)
-        except RuntimeError:
-            logger.info("Garage key %r exists; rotating", key_name)
-            info_out = self._garage_exec(container_name, "key", "info", key_name)
-            id_match = _re_mod.search(r"Key ID:\s*(\S+)", info_out)
-            if not id_match:
-                raise RuntimeError(f"Could not parse garage key id for {key_name}")
-            self._garage_exec(container_name, "key", "delete", id_match.group(1))
-            key_out = self._garage_exec(container_name, "key", "create", key_name)
-        id_match = _re_mod.search(r"Key ID:\s*(\S+)", key_out)
-        secret_match = _re_mod.search(r"Secret key:\s*(\S+)", key_out)
-        if not id_match or not secret_match:
-            raise RuntimeError(
-                f"Could not parse garage key credentials: {key_out[-200:]}"
-            )
-        key_id, key_secret = id_match.group(1), secret_match.group(1)
+        # Key: reuse when it unambiguously exists, create only when
+        # absent (never rotate here — the secret is shown ONLY at
+        # creation, and reprovision callers keep serving the stored
+        # URL, so deleting the live key would break auth).
+        key_id, key_secret = self._garage_resolve_key(container_name, key_name)
 
         try:
             self._garage_exec(container_name, "bucket", "create", bucket_name)
         except RuntimeError as exc:
             logger.info("Garage bucket create skipped/failed (may pre-exist): %s", exc)
+        # Allow by full key ID (exact), never by name — names fuzzy-match.
         self._garage_exec(
             container_name, "bucket", "allow",
-            "--read", "--write", "--owner", bucket_name, "--key", key_name,
+            "--read", "--write", "--owner", bucket_name, "--key", key_id,
         )
 
+        if key_secret is None:
+            # Reuse path (reprovision/verify): the stored URL already
+            # carries working creds — nothing new to persist.
+            return container_id, ""
         connection_url = f"s3://{key_id}:{key_secret}@{hostname}:{port}/{bucket_name}"
         return container_id, connection_url
 
