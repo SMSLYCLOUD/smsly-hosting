@@ -82,6 +82,12 @@ class Deployment(TimeStampedModel):
         default=dict, blank=True, help_text="Trivy scan results")
 
     container_id = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
+    celery_task_id = models.CharField(  # type: ignore[var-annotated]
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="Celery task id running this deployment (for revoke on cancel).",
+    )
     remote_deployment_id = models.CharField(  # type: ignore[var-annotated]
         max_length=64,
         blank=True,

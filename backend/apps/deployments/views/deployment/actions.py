@@ -244,6 +244,19 @@ class LifecycleActionsMixin:
         deployment.finished_at = timezone.now()
         deployment.build_logs += "\n\n[Cancelled] Deployment cancelled by user."
 
+        # Revoke the worker task: a DB flag alone leaves a delivered task
+        # running (2026-09-26: cancelled duplicates collided on promote).
+        # terminate=True stops a running build; best-effort, never fatal.
+        try:
+            task_id = getattr(deployment, 'celery_task_id', '') or ''
+            if task_id:
+                from celery import current_app as _celery_app
+                _celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+                deployment.build_logs += "\n[Cancelled] Worker task revoked."
+                logger.info("Revoked celery task %s for cancelled deployment %s", task_id, deployment.id)
+        except Exception as exc:
+            logger.warning("Celery revoke failed for deployment %s: %s", deployment.id, exc)
+
         # Clean up any running containers associated with this deployment
         try:
             if deployment.green_container_id or deployment.container_id:
@@ -327,10 +340,28 @@ class LifecycleActionsMixin:
         # Capture owners BEFORE the bulk update (the queryset would
         # otherwise re-evaluate to the already-cancelled rows = empty).
         affected_service_ids = list(qs.values_list("service_id", flat=True).distinct())
+        # Capture worker task ids BEFORE the update for the same reason —
+        # a DB flag alone leaves delivered tasks running (2026-09-26).
+        task_ids = [
+            tid for tid in qs.exclude(
+                celery_task_id__isnull=True).exclude(
+                celery_task_id='').values_list("celery_task_id", flat=True)
+        ]
         count = qs.update(
             status=Deployment.Status.CANCELLED,
             finished_at=timezone.now(),
         )
+        try:
+            if task_ids:
+                from celery import current_app as _celery_app
+                for tid in set(task_ids):
+                    try:
+                        _celery_app.control.revoke(tid, terminate=True, signal='SIGTERM')
+                    except Exception:
+                        pass
+                logger.info("Revoked %d worker task(s) on bulk-cancel", len(set(task_ids)))
+        except Exception as exc:
+            logger.warning("Celery bulk-revoke failed: %s", exc)
 
         # Bulk-cancelled greens keep running (no per-row container cleanup
         # here), but they must stop receiving canary traffic immediately.

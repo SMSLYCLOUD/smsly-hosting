@@ -67,12 +67,24 @@ def enqueue_smart_deploy_task(
     }
     queue = _current_agent_node_queue()
     if queue:
-        return smart_deploy_task.apply_async(
+        result = smart_deploy_task.apply_async(
             kwargs=kwargs,
             queue=queue,
             routing_key=queue,
         )
-    return smart_deploy_task.delay(**kwargs)
+    else:
+        result = smart_deploy_task.delay(**kwargs)
+    # Persist the worker task id on the deployment: cancelling the DB row
+    # alone leaves a delivered task running (2026-09-26: cancelled
+    # duplicates collided on blue-green promote). Never fatal.
+    try:
+        task_id = getattr(result, 'id', '') or ''
+        if task_id:
+            Deployment.objects.filter(id=str(deployment_id)).update(
+                celery_task_id=task_id)
+    except Exception:
+        pass
+    return result
 
 def recover_stalled_queued_deployments(limit: int = 100) -> dict:
     """
