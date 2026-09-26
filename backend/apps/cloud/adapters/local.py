@@ -2019,6 +2019,10 @@ class LocalAdapter(BaseCloudAdapter):
         import time as _time
         deadline = _time.monotonic() + timeout_seconds
         poll_count = 0
+        # Defaults for the all-polls-failed path: every lookup raising
+        # (e.g. container not yet visible under load) must return False,
+        # not UnboundLocalError at the timeout return below (2026-09-26).
+        status, health, oom = "unknown", "", False
         while _time.monotonic() < deadline:
             try:
                 if self.docker_client is None:

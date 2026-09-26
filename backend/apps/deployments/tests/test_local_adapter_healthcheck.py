@@ -619,3 +619,23 @@ class LocalhostHealthcheckRewriteTests(SimpleTestCase):
         self.assertEqual(fixed["Interval"], 30_000_000_000)
         self.assertEqual(fixed["Timeout"], 10_000_000_000)
         self.assertEqual(fixed["Retries"], 3)
+
+
+class WaitContainerHealthyTests(SimpleTestCase):
+    """Regression: all polls failing must return False, not UnboundLocalError.
+
+    2026-09-26 policy redeploy: under load the container was never visible
+    to the health polls, so `status`/`health` were never assigned and the
+    timeout return raised instead of returning False.
+    """
+
+    def test_all_lookups_fail_returns_false(self):
+        adapter = object.__new__(LocalAdapter)
+        docker_client = MagicMock()
+        docker_client.containers.get.side_effect = docker.errors.NotFound("missing")
+        adapter.docker_client = docker_client
+        self.assertFalse(
+            adapter._wait_container_healthy(
+                "deadbeef", timeout_seconds=1, poll_seconds=1,
+            )
+        )
