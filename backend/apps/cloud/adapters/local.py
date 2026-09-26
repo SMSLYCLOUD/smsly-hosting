@@ -1560,9 +1560,12 @@ class LocalAdapter(BaseCloudAdapter):
                 promoted_env[key] = value
         self._apply_router_special_labels(live_labels, name, promoted_env)
 
-        # Preserve metadata labels
+        # Preserve metadata labels. com.paas.* MUST survive promotion:
+        # SPIRE entries select docker:label:com.paas.service, so dropping
+        # them breaks SVID issuance on the live container ("No identity
+        # issued", 2026-09-26: every blue-green promoted service lost mTLS).
         for k, v in green_labels.items():
-            if k.startswith('smsly.'):
+            if k.startswith('smsly.') or k.startswith('com.paas.'):
                 live_labels[k] = v
 
         # For preview environments on remote nodes, neutralize parent router labels

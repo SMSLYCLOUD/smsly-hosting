@@ -4798,7 +4798,11 @@ _harden_spire_start_agent() {
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    # --cgroupns host is REQUIRED, not optional: the docker workload
+    # attestor maps caller PID -> container via /proc cgroups. With the
+    # default private cgroupns every peer shows as "/" so no selectors
+    # match and every fetch fails "No identity issued" (2026-09-26).
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
@@ -11409,7 +11413,11 @@ _harden_spire_start_agent() {
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    # --cgroupns host is REQUIRED, not optional: the docker workload
+    # attestor maps caller PID -> container via /proc cgroups. With the
+    # default private cgroupns every peer shows as "/" so no selectors
+    # match and every fetch fails "No identity issued" (2026-09-26).
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
@@ -13062,7 +13070,11 @@ _harden_spire_start_agent() {
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    # --cgroupns host is REQUIRED, not optional: the docker workload
+    # attestor maps caller PID -> container via /proc cgroups. With the
+    # default private cgroupns every peer shows as "/" so no selectors
+    # match and every fetch fails "No identity issued" (2026-09-26).
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
@@ -23676,7 +23688,11 @@ _harden_spire_start_agent() {
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    # --cgroupns host is REQUIRED, not optional: the docker workload
+    # attestor maps caller PID -> container via /proc cgroups. With the
+    # default private cgroupns every peer shows as "/" so no selectors
+    # match and every fetch fails "No identity issued" (2026-09-26).
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \

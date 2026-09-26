@@ -122,6 +122,10 @@ def _start_agent_with_token(
                 "--hostname", agent_container,
                 "--network", _SPIRE_NETWORK,
                 "--pid", "host",
+                # REQUIRED: docker workload attestor maps caller PID to
+                # container via /proc cgroups; private cgroupns shows every
+                # peer as "/" so no selectors match ("No identity issued").
+                "--cgroupns", "host",
                 "--restart", "unless-stopped",
                 "-v", f"{data_volume}:/opt/spire/data",
                 "-v", f"{socket_volume}:/opt/spire/run",

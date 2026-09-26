@@ -291,6 +291,67 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         )
 
     @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    def test_promote_container_preserves_paas_labels(self, _wait_mock):
+        # Regression 2026-09-26: promotion rebuilt labels from scratch and
+        # dropped com.paas.* — SPIRE entries select on
+        # docker:label:com.paas.service, so every promoted service lost
+        # SVID issuance ("No identity issued").
+        adapter = object.__new__(LocalAdapter)
+        docker_client = MagicMock()
+        docker_client.api.create_endpoint_config.return_value = {}
+        docker_client.api.create_networking_config.return_value = {}
+        adapter.docker_client = docker_client
+        adapter.k8s_client = None
+        adapter.batch_v1 = None
+
+        green = MagicMock()
+        green.name = "smsly-backend-green-a1b2c3"
+        green.id = "green-id"
+        green.labels = {
+            "smsly.blue_green.is_public": "True",
+            "smsly.blue_green.port": "3000",
+            "smsly.blue_green.host_rule": "Host(`smsly-backend.example.com`)",
+            "traefik.enable": "false",
+            "com.paas.service": "smsly-backend",
+            "com.paas.mtls": "true",
+            "com.paas.spiffe_id": "spiffe://ecosystem.local/service/smsly-backend",
+        }
+        green.attrs = {
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "Config": {
+                "Env": [],
+                "Cmd": None,
+                "Entrypoint": None,
+                "Healthcheck": None,
+            },
+            "HostConfig": {
+                "Binds": None,
+                "RestartPolicy": {},
+            },
+        }
+        green.image.tags = ["registry:5000/proj-9063c108/smsly-backend:test"]
+
+        old_live = MagicMock()
+        promoted = MagicMock()
+        promoted.id = "promoted-id"
+        docker_client.containers.create.return_value = promoted
+        docker_client.containers.get.side_effect = lambda value: (
+            green if value == "green-id" else old_live
+        )
+        docker_client.networks.get.return_value = MagicMock()
+
+        result = adapter.promote_container("smsly-backend", "green-id")
+
+        self.assertEqual(result, "promoted-id")
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(labels["com.paas.service"], "smsly-backend")
+        self.assertEqual(labels["com.paas.mtls"], "true")
+        self.assertEqual(
+            labels["com.paas.spiffe_id"],
+            "spiffe://ecosystem.local/service/smsly-backend",
+        )
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
     def test_promote_container_injects_traefik_loadbalancer_healthchecks(self, _wait_mock):
         adapter = object.__new__(LocalAdapter)
         docker_client = MagicMock()
