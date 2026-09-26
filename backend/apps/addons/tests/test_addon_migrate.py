@@ -191,7 +191,7 @@ class MigrateQuiesceTests(TestCase):
             "apps.addons.services.addon_migrate.container_network_aliases",
             return_value={},
         ), mock.patch(
-            "apps.addons.services.shared_postgres.drop_database_only",
+            "apps.addons.services.shared_postgres.recreate_empty_database",
         ), mock.patch(
             "apps.addons.services.shared_postgres.database_exists",
             return_value=True,
@@ -225,7 +225,7 @@ class MigrateQuiesceTests(TestCase):
             "apps.addons.services.addon_migrate.container_network_aliases",
             return_value={},
         ), mock.patch(
-            "apps.addons.services.shared_postgres.drop_database_only",
+            "apps.addons.services.shared_postgres.recreate_empty_database",
         ), mock.patch(
             "apps.addons.services.shared_postgres.database_exists",
             return_value=True,
@@ -271,7 +271,7 @@ class MigrateQuiesceTests(TestCase):
             "apps.addons.services.addon_migrate.container_network_aliases",
             return_value={},
         ), mock.patch(
-            "apps.addons.services.shared_postgres.drop_database_only",
+            "apps.addons.services.shared_postgres.recreate_empty_database",
         ), mock.patch(
             "apps.addons.services.shared_postgres.database_exists",
             return_value=True,
@@ -438,7 +438,7 @@ class MigrateCredentialPreservationTests(TestCase):
             mock.patch(
                 "apps.addons.services.shared_postgres.drop_logical_db"),
             mock.patch(
-                "apps.addons.services.shared_postgres.drop_database_only"),
+                "apps.addons.services.shared_postgres.recreate_empty_database"),
         )
 
     def test_shared_to_container_keeps_full_url(self):
@@ -519,7 +519,9 @@ class MigrateCredentialPreservationTests(TestCase):
         with m1, m2, m3, m4, m5, m6, mock.patch(
             "apps.addons.services.shared_postgres.database_exists",
             return_value=False,
-        ):
+        ), mock.patch(
+            "apps.addons.services.shared_postgres.recreate_empty_database",
+        ) as mock_recreate:
             result = migrate_addon_mode(str(addon.id), "shared")
         self.assertEqual(result["status"], "ok")
         from urllib.parse import urlparse as _up
@@ -529,6 +531,8 @@ class MigrateCredentialPreservationTests(TestCase):
         self.assertEqual(parts.password, "s3cret")
         self.assertEqual(parts.hostname, "pg-old")
         self.assertEqual(parts.path.lstrip("/"), "appdb")
+        # Staging was recreated empty (not just dropped) with the owner.
+        mock_recreate.assert_called_once_with("alice", "appdb")
         addon.refresh_from_db()
         self.assertEqual(addon.connection_url, seen["url"])
 

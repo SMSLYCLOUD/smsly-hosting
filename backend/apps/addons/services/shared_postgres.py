@@ -644,6 +644,25 @@ def ensure_logical_db(db_user: str, db_name: str, password: str) -> None:
     _psql(db_name, "CREATE EXTENSION IF NOT EXISTS vector;")
 
 
+def recreate_empty_database(db_user: str, db_name: str) -> None:
+    """Drop and recreate ONE database with owner + tenant lockdown.
+
+    Unlike :func:`ensure_logical_db` this never touches roles or
+    passwords — used when the owner must survive (migration staging
+    databases share the source's role). The recreate is required
+    because a plain ``pg_dump`` carries no ``CREATE DATABASE``: piping
+    it into a dropped database fails with
+    ``FATAL: database ... does not exist`` (psql exit 2).
+    """
+    drop_database_only(db_name)
+    if not db_name:
+        return
+    _psql("postgres", f"CREATE DATABASE {_quote_ident(db_name)} OWNER {_quote_ident(db_user)};")
+    _psql("postgres", f"REVOKE CONNECT ON DATABASE {_quote_ident(db_name)} FROM PUBLIC;")
+    _psql("postgres", f"GRANT CONNECT ON DATABASE {_quote_ident(db_name)} TO {_quote_ident(db_user)};")
+    _psql(db_name, "CREATE EXTENSION IF NOT EXISTS vector;")
+
+
 def drop_database_only(db_name: str) -> None:
     """Terminate backends and drop ONE database. Idempotent.
 

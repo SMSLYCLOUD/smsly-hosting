@@ -380,16 +380,25 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
 
         # 3. Restore the dump into the target. On shared targets the
         # staging DB may hold a previous attempt's partial data (same
-        # deterministic name) — drop it first so restore starts clean.
-        # Role is untouched (shared with the live source).
+        # deterministic name) — recreate it empty first so restore
+        # starts clean. The recreate (not just a drop) is required: a
+        # plain pg_dump carries no CREATE DATABASE, so piping it into
+        # a dropped database fails with "database does not exist"
+        # (psql exit 2 — every container->shared migration failed here
+        # until this step recreated). Role is untouched (shared with
+        # the live source).
         if target_mode == 'shared':
             try:
+                from urllib.parse import urlparse as _urlparse2
                 from apps.addons.services.shared_postgres import (
-                    drop_database_only,
+                    recreate_empty_database,
                 )
-                drop_database_only(staging_db)
+                _parsed = _urlparse2(addon.connection_url or '')
+                recreate_empty_database(
+                    _parsed.username or old_user, staging_db)
             except Exception as exc:
-                logger.debug("Migration staging cleanup skipped: %s", exc)
+                raise RuntimeError(
+                    f"Could not prepare staging database: {exc}")
         if not addon_provisioner.restore_backup(addon, dump_path):
             raise RuntimeError("Restore into the migration target failed.")
         # 4. Verify before touching the source: direct dial first, then
