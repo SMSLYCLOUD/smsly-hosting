@@ -854,6 +854,19 @@ class AddonViewSet(viewsets.ModelViewSet):
                     }, status=status.HTTP_404_NOT_FOUND)
 
             # Execute the mc command inside the container
+            _toggle_image = ""
+            try:
+                _toggle_image = str((container.attrs.get("Config") or {}).get("Image") or "")
+            except Exception:
+                pass
+            if "garage" in _toggle_image.lower():
+                # Garage-backed S3 (MinIO images are gone upstream) has no
+                # mc console: bucket publicity is managed via
+                # `garage bucket allow/deny`. Not yet wired — fail
+                # loudly instead of exec-ing a missing binary.
+                return Response({
+                    'error': 'Bucket publicity toggle is not supported on Garage-backed storage yet.'
+                }, status=status.HTTP_400_BAD_REQUEST)
             cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
             exit_code, output = container.exec_run(cmd)
 
@@ -1054,6 +1067,13 @@ def toggle_bucket_public_api(request, pk) -> Response:
             if settings.DEBUG:
                 logger.error("FAILED: Could not find container for Addon %s after full scan", addon_uuid)
             return Response({'error': 'MinIO container not found for this addon'}, status=404)
+
+        try:
+            _toggle_image2 = str((container.attrs.get("Config") or {}).get("Image") or "")
+        except Exception:
+            _toggle_image2 = ""
+        if "garage" in _toggle_image2.lower():
+            return Response({'error': 'Bucket publicity toggle is not supported on Garage-backed storage yet.'}, status=400)
 
         cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
         exit_code, output = container.exec_run(cmd)

@@ -45,7 +45,11 @@ class AddonProvisioner:
         'QDRANT': 'qdrant/qdrant:v1.12.1',
         'ELASTICSEARCH': 'docker.elastic.co/elasticsearch/elasticsearch:8.12.0',
         'RABBITMQ': 'rabbitmq:3.13-management',
-        'MINIO': 'quay.io/minio/minio:latest',
+        # NOTE: MinIO withdrew all public images (quay namespace empty,
+        # Hub repo gone), so the MINIO addon type runs Garage (S3 API
+        # compatible) behind the unchanged s3:// contract. See
+        # _provision_minio.
+        'MINIO': 'dxflrs/garage:v2.4.1',
     }
 
     # Default ports for each addon
@@ -1270,22 +1274,16 @@ class AddonProvisioner:
             connection_url = f"amqp://{user}:{password}@{hostname}:{port}//"
 
         elif addon_type == 'MINIO':
-            username = secrets.token_hex(8)
-            env_vars.update({
-                'MINIO_ROOT_USER': username,
-                'MINIO_ROOT_PASSWORD': password,
-            })
-            cmd_parts.extend([
-                '-v', f'{container_name}-data:/data',
-            ])
-            if alias_name:
-                cmd_parts.extend(['--network-alias', alias_name])
-            _attach_env_file()
-            cmd_parts.extend([image, 'server', '/data', '--console-address', ':9001'])
-            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
-            hostname = alias_name or container_name
-            bucket_name = "default-bucket"
-            connection_url = f"s3://{username}:{password}@{hostname}:{port}/{bucket_name}"
+            # Garage-backed S3 (MinIO images are gone upstream) needs a
+            # config file + layout/key/bucket admin steps that the
+            # single-shot remote docker-run cannot express. Fail loudly
+            # instead of a cryptic registry pull 401.
+            raise RuntimeError(
+                "MINIO (Garage) addons are not yet supported on remote "
+                "nodes — provision this addon on the master/local "
+                "provider. Remote support requires the Garage admin "
+                "flow over SSH (config upload + layout + key steps)."
+            )
 
         elif addon_type in ('QDRANT', 'ELASTICSEARCH'):
             if alias_name:
@@ -1417,82 +1415,201 @@ class AddonProvisioner:
         self._wait_for_health(container_name, 15672, path="/api/health/checks/alarms", use_http=True)
         return container_id, connection_url
 
+    def _garage_toml(self, rpc_secret: str, admin_token: str, s3_port: int) -> str:
+        """Render garage.toml for a single-node deployment.
+
+        Pure function (no I/O) so it is unit-testable. s3_port is the
+        platform-facing S3 API port (9000, matching the MINIO addon
+        contract); mesh/internal ports stay on garage defaults.
+        """
+        return f"""metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+replication_factor = 1
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "{rpc_secret}"
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:{s3_port}"
+root_domain = ".s3.garage.localhost"
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.garage.localhost"
+[k2v]
+enabled = false
+[admin]
+api_bind_addr = "[::]:3903"
+admin_token = "{admin_token}"
+metrics = false
+"""
+
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        import re as _re
+        return _re.sub(r"\x1b\[[0-9;]*m", "", text or "")
+
+    def _garage_exec(self, container_name: str, *args: str, timeout: int = 60) -> str:
+        """Run a garage CLI command in the addon container; return stdout.
+
+        Raises RuntimeError with the tail of stderr on failure.
+        """
+        result = subprocess.run(
+            ["docker", "exec", container_name, "/garage", *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode != 0:
+            err = self._strip_ansi(result.stderr or result.stdout or "").strip()
+            raise RuntimeError(
+                f"garage {' '.join(args)} failed: {err[-300:]}"
+            )
+        return self._strip_ansi(result.stdout or "")
+
     def _provision_minio(self, container_name: str,
                          password: str, port: int,
                          alias_name: str = '', username: str = 'admin', public_domain: str | None = None,
                          host_port: int | None = None) -> tuple[str, str]:
-        """Provision a MinIO container."""
-        env_file = self._write_env_file({
-            'MINIO_ROOT_USER': username,
-            'MINIO_ROOT_PASSWORD': password,
-        })
-        cmd = [
-            'docker', 'run', '-d',
-            '--name', container_name,
-            '--network', self.network_name,
-            '--restart', 'unless-stopped',
-            *self.SECURITY_OPTS,
-            '--env-file', env_file,
-            '-v', f'{container_name}-data:/data',
-        ]
-        if host_port:
-            cmd.extend(self._publish_args(host_port, port))
-        if public_domain:
-            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, 9001)
+        """Provision S3-compatible object storage (Garage backend).
 
-        if alias_name:
-            cmd.extend(['--network-alias', alias_name])
-        cmd.extend([
-            self.ADDON_IMAGES['MINIO'],
-            'server', '/data', '--console-address', ':9001'
-        ])
+        MinIO withdrew all public images (quay.io namespace empty,
+        Docker Hub repo gone), so the MINIO addon type now runs
+        dxflrs/garage (S3 API-compatible) behind the unchanged
+        s3://user:pass@host:port/bucket contract — every consumer
+        (parsed_credentials, env keys, URLs) keeps working.
+        """
+        import re as _re_mod
+        import tempfile
 
+        garage_image = "dxflrs/garage:v2.4.1"
+        bucket_name = "default-bucket"
+        key_name = (username or "admin").strip() or "admin"
+
+        rpc_secret = secrets.token_hex(32)
+        admin_token = secrets.token_urlsafe(32)
+        toml_text = self._garage_toml(rpc_secret, admin_token, port)
+
+        fd, cfg_path = tempfile.mkstemp(prefix="smsly-garage-", suffix=".toml")
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=120)
+            with os.fdopen(fd, "w") as handle:
+                handle.write(toml_text)
+            os.chmod(cfg_path, 0o600)
+
+            cmd = [
+                'docker', 'create',
+                '--name', container_name,
+                '--network', self.network_name,
+                '--restart', 'unless-stopped',
+                *self.SECURITY_OPTS,
+                # MINIO_ROOT_* are informational only (garage mints its
+                # own key/secret below); kept so the existing
+                # container-env reconstruction path keeps working.
+                '-e', f'MINIO_ROOT_USER={key_name}',
+                '-v', f'{container_name}-data:/var/lib/garage',
+            ]
+            if host_port:
+                cmd.extend(self._publish_args(host_port, port))
+            # NOTE: no Traefik console labels — garage has no mc-style
+            # console; the S3 API stays internal like other DB addons.
+            if alias_name:
+                cmd.extend(['--network-alias', alias_name])
+            cmd.append(garage_image)
+            create_proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+            )
+            if create_proc.returncode != 0:
+                raise RuntimeError(
+                    f"docker create failed for {container_name}: "
+                    f"{(create_proc.stderr or '').strip()[-300:]}"
+                )
+            container_id = ""
+            try:
+                cp_proc = subprocess.run(
+                    ['docker', 'cp', cfg_path, f'{container_name}:/etc/garage.toml'],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if cp_proc.returncode != 0:
+                    raise RuntimeError(
+                        f"docker cp garage.toml failed: "
+                        f"{(cp_proc.stderr or '').strip()[-200:]}"
+                    )
+                start_proc = subprocess.run(
+                    ['docker', 'start', container_name],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if start_proc.returncode != 0:
+                    raise RuntimeError(
+                        f"docker start failed: "
+                        f"{(start_proc.stderr or '').strip()[-200:]}"
+                    )
+                container_id = (start_proc.stdout or '').strip()[:12] or container_name
+            except Exception:
+                with contextlib.suppress(Exception):
+                    subprocess.run(
+                        ['docker', 'rm', '-f', container_name],
+                        capture_output=True, timeout=60,
+                    )
+                raise
         finally:
             with contextlib.suppress(Exception):
-                os.remove(env_file)
-        container_id = result.stdout.strip()[:12]
+                os.remove(cfg_path)
 
         hostname = alias_name or container_name
-        # Add a default bucket name to the connection URL path
-        bucket_name = "default-bucket"
-        connection_url = f"s3://{username}:{password}@{hostname}:{port}/{bucket_name}"
 
-        self._wait_for_health(container_name, port, path="/minio/health/live", use_http=True)
+        self._wait_for_health(container_name, port)
 
-        # Create the default bucket automatically
+        # Layout: single node owns everything (idempotent-ish — a
+        # reprovision reusing the persisted data volume finds the
+        # layout already applied; tolerate that).
+        node_out = self._garage_exec(container_name, "node", "id")
+        node_match = _re_mod.search(r"\b([0-9a-f]{64})\b", node_out)
+        if not node_match:
+            raise RuntimeError(f"Could not parse garage node id: {node_out[-200:]}")
+        node_id = node_match.group(1)
         try:
-            import time
-            time.sleep(2) # Give it a moment to fully initialize the API after healthcheck
+            self._garage_exec(
+                container_name, "layout", "assign",
+                "-z", "dc1", "-c", "10G", node_id,
+            )
+        except RuntimeError as exc:
+            logger.info("Garage layout assign skipped/failed (may pre-exist): %s", exc)
+        try:
+            self._garage_exec(
+                container_name, "layout", "apply", "--version", "1",
+            )
+        except RuntimeError as exc:
+            logger.info("Garage layout apply skipped/failed (may pre-exist): %s", exc)
 
-            # Use 'mc' from inside the minio container to create the bucket
-            # Credentials are passed via MC_HOST_<alias> env var, NOT argv,
-            # so they never appear in the process list / docker exec output.
-            import urllib.parse
-            encoded_password = urllib.parse.quote(password, safe='')
-            subprocess.run([
-                'docker', 'exec',
-                '-e', f'MC_HOST_myminio=http://{username}:{encoded_password}@127.0.0.1:{port}',
-                container_name,
-                'mc', 'alias', 'set', 'myminio', f'http://127.0.0.1:{port}'
-            ], capture_output=True, check=False, timeout=60)
+        # Key: create, or rotate when a previous attempt left it behind
+        # (the secret is shown ONLY at creation — a stale key cannot
+        # be recovered, only replaced).
+        try:
+            key_out = self._garage_exec(container_name, "key", "create", key_name)
+        except RuntimeError:
+            logger.info("Garage key %r exists; rotating", key_name)
+            info_out = self._garage_exec(container_name, "key", "info", key_name)
+            id_match = _re_mod.search(r"Key ID:\s*(\S+)", info_out)
+            if not id_match:
+                raise RuntimeError(f"Could not parse garage key id for {key_name}")
+            self._garage_exec(container_name, "key", "delete", id_match.group(1))
+            key_out = self._garage_exec(container_name, "key", "create", key_name)
+        id_match = _re_mod.search(r"Key ID:\s*(\S+)", key_out)
+        secret_match = _re_mod.search(r"Secret key:\s*(\S+)", key_out)
+        if not id_match or not secret_match:
+            raise RuntimeError(
+                f"Could not parse garage key credentials: {key_out[-200:]}"
+            )
+        key_id, key_secret = id_match.group(1), secret_match.group(1)
 
-            # Then, create the bucket
-            subprocess.run([
-                'docker', 'exec',
-                '-e', f'MC_HOST_myminio=http://{username}:{encoded_password}@127.0.0.1:{port}',
-                container_name,
-                'mc', 'mb', f'myminio/{bucket_name}'
-            ], capture_output=True, check=False, timeout=60) # check=False because it might already exist on re-provision
-        except Exception as e:
-            logger.error("Failed to auto-create default MinIO bucket %s: %s", bucket_name, e)
+        try:
+            self._garage_exec(container_name, "bucket", "create", bucket_name)
+        except RuntimeError as exc:
+            logger.info("Garage bucket create skipped/failed (may pre-exist): %s", exc)
+        self._garage_exec(
+            container_name, "bucket", "allow",
+            "--read", "--write", "--owner", bucket_name, "--key", key_name,
+        )
 
+        connection_url = f"s3://{key_id}:{key_secret}@{hostname}:{port}/{bucket_name}"
         return container_id, connection_url
 
     def _provision_generic(self, addon_type: str, container_name: str,

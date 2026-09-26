@@ -418,7 +418,9 @@ APP_TEMPLATES: dict[str, AppTemplate] = {
         name='MinIO',
         description='High-performance S3-compatible object storage.',
         category='dev-tools',
-        docker_image='quay.io/minio/minio:latest',
+        # MinIO withdrew public images; the provisioner runs Garage
+        # (S3-compatible) behind this entry — see _provision_minio.
+        docker_image='dxflrs/garage:v2.4.1',
         default_port=9000,
         env_vars={'MINIO_ROOT_USER': 'admin',
                   'MINIO_ROOT_PASSWORD': '${RANDOM_PASSWORD}'},
