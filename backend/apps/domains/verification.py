@@ -38,6 +38,13 @@ PUBLIC_VERIFICATION_RESOLVERS: tuple[str, ...] = (
 )
 VERIFICATION_QUORUM = 2  # of len(PUBLIC_VERIFICATION_RESOLVERS)
 
+# Overall wall-clock budget for one verify_custom_domain_dns call.
+# The dashboard's API client times out at 30s — a slower success
+# surfaces in the UI as "Verification failed" even though the row
+# flips verified server-side. DNS quorum and HTTP proof run
+# concurrently and the first proof wins; nothing here may exceed this.
+VERIFY_OVERALL_TIMEOUT = 25.0
+
 
 @dataclass(frozen=True)
 class DnsVerificationResult:
@@ -91,24 +98,36 @@ def verify_http_proof(domain_obj, timeout: float = 10, attempts: int = 3) -> tup
     url = f"http://{host}/.well-known/smsly-verify/{token}"
     last_detail = "no attempt"
     for attempt in range(max(1, int(attempts or 1))):
-        try:
-            import requests
-            resp = requests.get(
-                url,
-                timeout=timeout, allow_redirects=True,
-                headers={"User-Agent": "smsly-domain-verify/1.0"},
-            )
-        except Exception as exc:
-            last_detail = f"fetch failed: {exc!s}"[:160]
-        else:
-            if resp.status_code == 200 and (resp.text or "").strip() == token:
-                return True, "served token over public edge"
-            last_detail = f"HTTP {resp.status_code}"
-            if resp.status_code not in (408, 425, 429, 500, 502, 503, 504):
-                return False, last_detail
+        ok, last_detail, retryable = _fetch_http_proof_once(url, token, timeout)
+        if ok:
+            return True, "served token over public edge"
+        if not retryable:
+            return False, last_detail
         if attempt + 1 < max(1, int(attempts or 1)):
             time.sleep(2 * (attempt + 1))
     return False, last_detail
+
+
+def _fetch_http_proof_once(url: str, token: str, timeout: float) -> tuple:
+    """One HTTP-proof fetch. Returns (ok, detail, retryable).
+
+    Deterministic answers (wrong body, 404) are NOT retryable;
+    transport errors and 5xx/429 are.
+    """
+    try:
+        import requests
+        resp = requests.get(
+            url,
+            timeout=timeout, allow_redirects=True,
+            headers={"User-Agent": "smsly-domain-verify/1.0"},
+        )
+    except Exception as exc:
+        return False, f"fetch failed: {exc!s}"[:160], True
+    if resp.status_code == 200 and (resp.text or "").strip() == token:
+        return True, "served token over public edge", False
+    detail = f"HTTP {resp.status_code}"
+    retryable = resp.status_code in (408, 425, 429, 500, 502, 503, 504)
+    return False, detail, retryable
 
 
 def _clean_hostname(value: str) -> str:
@@ -210,6 +229,42 @@ def resolve_cname_chain(hostname: str, timeout: float = DEFAULT_RESOLVER_TIMEOUT
     return chain
 
 
+def _dns_quorum_votes(domain: str, expected_cnames: set[str],
+                      acceptable_ips: set[str]) -> tuple:
+    """Run the DNS quorum loop. Returns (agreeing, first_match, chain, ips).
+
+    Pure function of precomputed inputs (no ORM access) so it can run
+    on a worker thread.
+    """
+    agreeing = 0
+    first_match = ""
+    sample_chain: list[str] = []
+    sample_ips: set[str] = set()
+
+    for ns in PUBLIC_VERIFICATION_RESOLVERS:
+        chain = resolve_cname_chain(domain, nameservers=(ns,))
+        ips = resolve_host_ips(domain, nameservers=(ns,))
+        if not sample_chain and chain:
+            sample_chain = chain
+        sample_ips.update(ips)
+
+        matched = ""
+        for target in chain:
+            if target in expected_cnames:
+                matched = f"CNAME {target}"
+                break
+        if not matched and acceptable_ips:
+            ip_hits = ips & acceptable_ips
+            if ip_hits:
+                matched = f"IP {sorted(ip_hits)[0]}"
+        if matched:
+            agreeing += 1
+            if not first_match:
+                first_match = matched
+
+    return agreeing, first_match, sample_chain, sample_ips
+
+
 def _format_expected(cnames: set[str], ips: set[str]) -> str:
     parts = []
     if cnames:
@@ -300,36 +355,69 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
     origin_ip = _clean_ip(getattr(config, "server_ip", "") or "")
     acceptable_ips = {origin_ip} if origin_ip else set()
 
-    # ── Quorum verification across independent resolvers ──────────────
-    # For each public resolver, resolve the domain independently and
-    # evaluate the match. The domain verifies only if at least
-    # VERIFICATION_QUORUM resolvers agree it points at us.
-    agreeing = 0
-    first_match = ""
-    sample_chain: list[str] = []
-    sample_ips: set[str] = set()
+    # ── Concurrent proof: DNS quorum + HTTP proof race ─────────────
+    # Sequential DNS-then-HTTP punishes whichever case needs the second
+    # proof: orange apexes always burn the full (slow, doomed) DNS quorum
+    # before the instant HTTP proof runs, and grey domains sit through a
+    # doomed 3-attempt HTTP fetch before DNS proves them. Both proofs are
+    # independent, so they race — first proof wins, overall wall-clock
+    # stays under VERIFY_OVERALL_TIMEOUT (dashboard axios budget is 30s;
+    # slower successes surface as phantom "Verification failed" toasts
+    # while the row flips verified server-side).
+    import concurrent.futures as _futures
+    import time as _time
 
-    for ns in PUBLIC_VERIFICATION_RESOLVERS:
-        chain = resolve_cname_chain(domain, nameservers=(ns,))
-        ips = resolve_host_ips(domain, nameservers=(ns,))
-        if not sample_chain and chain:
-            sample_chain = chain
-        sample_ips.update(ips)
+    host = domain
+    token = str(getattr(domain_obj, "verification_token", "") or "").strip()
+    http_url = f"http://{host}/.well-known/smsly-verify/{token}" if token else ""
+    deadline = _time.monotonic() + VERIFY_OVERALL_TIMEOUT
+    dns_result: tuple | None = None
+    http_result: tuple | None = None
 
-        matched = ""
-        for target in chain:
-            if target in expected_cnames:
-                matched = f"CNAME {target}"
+    def _run_http():
+        if not http_url:
+            return False, "no token"
+        return verify_http_proof(domain_obj)
+
+    pool = _futures.ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="verify",
+    )
+    try:
+        fut_dns = pool.submit(
+            _dns_quorum_votes, domain, expected_cnames, acceptable_ips)
+        fut_http = pool.submit(_run_http)
+        pending = {fut_dns, fut_http}
+        while pending:
+            remaining = max(0.0, deadline - _time.monotonic())
+            done, pending = _futures.wait(
+                pending, timeout=remaining,
+                return_when=_futures.FIRST_COMPLETED,
+            )
+            for fut in done:
+                try:
+                    if fut is fut_dns:
+                        dns_result = fut.result()
+                    else:
+                        http_result = fut.result()
+                except Exception as exc:
+                    if fut is fut_dns:
+                        dns_result = (0, "", [], set())
+                    else:
+                        http_result = (False, f"fetch failed: {exc!s}"[:160])
+            if dns_result is not None and dns_result[0] >= VERIFICATION_QUORUM:
                 break
-        if not matched and acceptable_ips:
-            ip_hits = ips & acceptable_ips
-            if ip_hits:
-                matched = f"IP {sorted(ip_hits)[0]}"
-        if matched:
-            agreeing += 1
-            if not first_match:
-                first_match = matched
+            if http_result is not None and http_result[0]:
+                break
+            if not remaining:
+                break
+    finally:
+        # Never block the response on the loser: a plain exit-join
+        # would wait out its full socket timeouts.
+        pool.shutdown(wait=False, cancel_futures=True)
 
+    agreeing, first_match, sample_chain, sample_ips = (
+        dns_result if dns_result is not None else (0, "", [], set())
+    )
     actual = _format_actual(sample_chain, sample_ips)
     if agreeing >= VERIFICATION_QUORUM:
         return DnsVerificationResult(
@@ -342,7 +430,13 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
     # HTTP-proof fallback (orange-compatible): DNS quorum above cannot see
     # through Cloudflare proxying or apex CNAME flattening. Fetching the
     # row's token over the public edge proves the same control.
-    http_ok, http_detail = verify_http_proof(domain_obj)
+    # NOTE: when the race already ran the proof, reuse its outcome — a
+    # fresh call here would restart the full retry budget past the
+    # deadline the race just enforced.
+    if http_result is None:
+        http_ok, http_detail = False, "proof did not finish in time"
+    else:
+        http_ok, http_detail = http_result
     if http_ok:
         return DnsVerificationResult(
             verified=True,

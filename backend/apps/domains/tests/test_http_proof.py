@@ -112,6 +112,53 @@ class HttpProofRetryTests(SimpleTestCase):
         self.assertEqual(mock_get.call_count, 1)
 
 
+class RaceTests(SimpleTestCase):
+    """DNS quorum and HTTP proof race; first proof wins under a deadline.
+
+    Regression for trulay.co 2026-09-26: sequential DNS-then-HTTP meant
+    an orange apex burned the full (doomed, slow) DNS quorum before the
+    instant HTTP proof ran — past the dashboard's 30s API budget, so the
+    UI toasted failure while the row flipped verified server-side.
+    """
+
+    def test_http_win_short_circuits_slow_dns(self):
+        import time as _time
+        with mock.patch(
+            "apps.domains.verification._dns_quorum_votes"
+        ) as mock_dns, mock.patch(
+            "apps.domains.verification.verify_http_proof"
+        ) as mock_http:
+            mock_dns.side_effect = lambda *a: (
+                _time.sleep(5), (0, "", [], set()))[1]
+            mock_http.return_value = (True, "served token over public edge")
+            t0 = _time.monotonic()
+            result = verify_custom_domain_dns(_domain(), _config())
+            elapsed = _time.monotonic() - t0
+        self.assertTrue(result.verified)
+        self.assertIn("HTTP proof", result.matched_by)
+        self.assertLess(elapsed, 4.5)
+
+    def test_deadline_caps_two_stalled_proofs(self):
+        import time as _time
+        with mock.patch(
+            "apps.domains.verification._dns_quorum_votes"
+        ) as mock_dns, mock.patch(
+            "apps.domains.verification.verify_http_proof"
+        ) as mock_http, mock.patch(
+            "apps.domains.verification.VERIFY_OVERALL_TIMEOUT", 1.0,
+        ):
+            mock_dns.side_effect = lambda *a: (
+                _time.sleep(5), (0, "", [], set()))[1]
+            mock_http.side_effect = lambda *a: (
+                _time.sleep(5), (False, "slow"))[1]
+            t0 = _time.monotonic()
+            result = verify_custom_domain_dns(_domain(), _config())
+            elapsed = _time.monotonic() - t0
+        self.assertFalse(result.verified)
+        self.assertIn("did not finish in time", result.error)
+        self.assertLess(elapsed, 4.5)
+
+
 class FallbackIntegrationTests(SimpleTestCase):
     def _empty_dns(self):
         return mock.patch(
