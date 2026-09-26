@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { ScopedRegistryTab } from '@/components/settings/ScopedRegistryTab';
+import { NetworkTab } from '@/components/settings/NetworkTab';
 import { RegistryCredentialsCard } from '@/components/settings/RegistryCredentialsCard';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -685,6 +686,11 @@ function ProjectDetailContent() {
                     )}
                   </div>
                 </div>
+              </div>
+
+              {/* Egress policy — same project scope the service Network tab edits */}
+              <div className="border-t border-zinc-800 pt-5">
+                <NetworkTab projectId={project?.id ?? null} />
               </div>
 
               {/* Team */}
