@@ -353,7 +353,7 @@ class MigrateAuthPreservationTests(TestCase):
         ):
             return migrate_addon_mode(str(addon.id), "container")
 
-    def test_addon_sourced_url_repointed_user_value_untouched(self):
+    def test_stale_user_url_repointed_custom_user_url_untouched(self):
         from apps.deployments.models import EnvironmentVariable
         addon = self._addon()
         EnvironmentVariable.objects.create(
@@ -364,13 +364,24 @@ class MigrateAuthPreservationTests(TestCase):
             service=self.service, key="LEGACY_URL",
             value="postgresql://u:pw@pg-old:5432/db",
             is_secret=False, source="USER")
+        EnvironmentVariable.objects.create(
+            service=self.service, key="CUSTOM_URL",
+            value="postgresql://custom:secret@elsewhere:5432/other",
+            is_secret=False, source="USER")
         self._run_migrate(addon, self._provisioner())
         db_url = EnvironmentVariable.objects.get(
             service=self.service, key="DATABASE_URL")
         self.assertEqual(db_url.value, "postgresql://nu:np@pg-new:5432/db")
+        # A USER var holding the pre-migration URL verbatim is stale by
+        # definition and gets repointed (auto-finish); a genuinely
+        # customized value is left untouched.
         legacy = EnvironmentVariable.objects.get(
             service=self.service, key="LEGACY_URL")
-        self.assertEqual(legacy.value, "postgresql://u:pw@pg-old:5432/db")
+        self.assertEqual(legacy.value, "postgresql://nu:np@pg-new:5432/db")
+        custom = EnvironmentVariable.objects.get(
+            service=self.service, key="CUSTOM_URL")
+        self.assertEqual(
+            custom.value, "postgresql://custom:secret@elsewhere:5432/other")
 
     def test_pooler_flag_cleared_on_container_target(self):
         addon = self._addon(pooler_routed=True)
