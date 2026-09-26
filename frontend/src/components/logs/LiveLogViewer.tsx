@@ -248,10 +248,14 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
             if (!raw) return;
             const chunks = raw.split(/\r?\n/).filter((c) => c.length > 0);
             if (chunks.length === 0) return;
-            // For mergeRaw, use a hash of the line content as the id so
-            // re-polls of identical tail output don't double-paint.
-            const lines: LogLine[] = chunks.map((text, i) => ({
-                id: `${idPrefix}-${text.length}-${i}-${text.slice(0, 40)}`,
+            // Content-stable ids (NO per-call counter, NO chunk index):
+            // both build lines ([timestamp] [tx:] prefix) and runtime
+            // lines (docker --timestamps prefix) start with a timestamp,
+            // so each id is unique per line but identical across replays.
+            // Reconnects / REST polls that resend already-rendered history
+            // therefore dedupe instead of double-painting.
+            const lines: LogLine[] = chunks.map((text) => ({
+                id: `${idPrefix}-${text.length}-${text.slice(0, 80)}`,
                 source,
                 text,
             }));

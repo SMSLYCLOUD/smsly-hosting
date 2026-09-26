@@ -8,7 +8,6 @@ import { useToast } from '@/components/ui/use-toast';
 import {
     LiveLogViewer,
     LiveLogViewerHandle,
-    LogLine,
 } from '@/components/logs/LiveLogViewer';
 
 export function LogsTab({ deployment }: { deployment: Deployment | null }) {
@@ -23,14 +22,8 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const runtimeViewerRef = useRef<LiveLogViewerHandle>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
-    const seqRef = useRef(0);
     const initialLoadDoneRef = useRef<{ build: boolean; runtime: boolean }>({ build: false, runtime: false });
     const activeWsTypeRef = useRef<'BUILD' | 'RUNTIME' | null>(null);
-
-    const makeId = useCallback((prefix: string) => {
-        seqRef.current += 1;
-        return `${prefix}-${Date.now().toString(36)}-${seqRef.current.toString(36)}`;
-    }, []);
 
     // Initial load of pipeline stages from prop
     useEffect(() => {
@@ -53,17 +46,11 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         if (initialLoadDoneRef.current.build) return;
         const logs = deployment.build_logs || '';
         if (logs) {
-            const lines: LogLine[] = logs
-                .split('\n')
-                .filter((l) => l.length > 0)
-                .map((text) => ({
-                    // Use content-derived id so a subsequent WS initial_state
-                    // (which may send the same lines again) dedupes naturally.
-                    id: `bld-${text.length}-${text.slice(0, 80).replace(/\s+/g, '_')}`,
-                    text,
-                }));
+            // Content-stable ids via mergeRaw('bld') — a later WS
+            // initial_state carrying the same lines dedupes instead of
+            // painting them twice.
             buildViewerRef.current?.clear();
-            buildViewerRef.current?.append(lines);
+            buildViewerRef.current?.mergeRaw(logs, undefined, 'bld');
             initialLoadDoneRef.current.build = true;
         } else {
             // Even if empty, mark as done so we don't re-seed on every parent
@@ -107,25 +94,20 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
                         if (data.build_logs) {
-                            // MERGE: dedupe by line-content id so the
-                            // REST-seeded lines don't get re-painted, and
-                            // the buffer isn't wiped on every reconnect.
-                            const lines: LogLine[] = data.build_logs
-                                .split('\n')
-                                .filter((l: string) => l.length > 0)
-                                .map((text: string) => ({
-                                    id: `bld-${text.length}-${text.slice(0, 80).replace(/\s+/g, '_')}`,
-                                    text,
-                                }));
-                            buildViewerRef.current?.merge(lines);
+                            // MERGE with the same 'bld' content ids as the
+                            // REST seed and live lines: reconnect replays
+                            // dedupe instead of duplicating.
+                            buildViewerRef.current?.mergeRaw(data.build_logs, undefined, 'bld');
                         }
                         if (data.stages) {
                             setPipelineStages(data.stages);
                         }
                     } else if (data.type === 'build_log') {
                         if (data.log) {
-                            // Live log lines get a unique runtime id.
-                            buildViewerRef.current?.appendRaw(data.log, undefined, 'live');
+                            // Live lines use mergeRaw (not unique-id append)
+                            // so a reconnect that resends them in
+                            // initial_state does not paint them twice.
+                            buildViewerRef.current?.mergeRaw(data.log, undefined, 'bld');
                         }
                     } else if (data.type === 'pipeline_update') {
                         if (data.stages) setPipelineStages(data.stages);
@@ -196,7 +178,10 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                         }
                     } else if (data.type === 'log') {
                         if (data.log) {
-                            runtimeViewerRef.current?.appendRaw(data.log, undefined, 'rt-live');
+                            // Same 'rt' content ids as initial_state: the
+                            // follow stream only sends new lines, and any
+                            // replayed overlap dedupes instead of doubling.
+                            runtimeViewerRef.current?.mergeRaw(data.log, undefined, 'rt');
                         }
                     } else if (data.type === 'error') {
                         setRuntimeMessage(data.error || 'Stream error');
@@ -278,14 +263,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     if (res.ok) {
                         const data = await res.json();
                         if (data.build_logs) {
-                            const lines: LogLine[] = data.build_logs
-                                .split('\n')
-                                .filter((l: string) => l.length > 0)
-                                .map((text: string) => ({
-                                    id: `bld-${text.length}-${text.slice(0, 80).replace(/\s+/g, '_')}`,
-                                    text,
-                                }));
-                            buildViewerRef.current?.merge(lines);
+                            buildViewerRef.current?.mergeRaw(data.build_logs, undefined, 'bld');
                         }
                     }
                 } catch {
@@ -309,7 +287,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                         const data = await res.json();
                         const logs = data.runtime_logs || '';
                         if (logs) {
-                            runtimeViewerRef.current?.mergeRaw(logs, undefined, 'rt-poll');
+                            runtimeViewerRef.current?.mergeRaw(logs, undefined, 'rt');
                         }
                         setRuntimeMessage(data.message || '');
                         if (data.container_role === 'candidate' || data.container_role === 'live') {
