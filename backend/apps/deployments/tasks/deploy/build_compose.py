@@ -398,6 +398,15 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
 
     if 'PORT' not in locked_keys:
         explicit_env_port = str(env_vars.get('PORT', '')).strip()
+        # PORT=0 (or garbage) makes uvicorn bind an ephemeral port that
+        # nothing routes to (2026-09-26 audit roulette) — treat as unset
+        # so detection/defaults below apply instead.
+        try:
+            _port_val = int(explicit_env_port)
+            if _port_val <= 0 or _port_val > 65535:
+                explicit_env_port = ''
+        except (ValueError, TypeError):
+            explicit_env_port = ''
         if explicit_env_port:
             env_vars['PORT'] = explicit_env_port
             try:
