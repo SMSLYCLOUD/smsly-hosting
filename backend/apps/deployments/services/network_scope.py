@@ -445,11 +445,15 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
     Idempotent: every rule carries a per-bridge comment tag; when the tag is
     already present the function returns without touching anything.
 
-    If ``allowed_egress_networks`` contains ``0.0.0.0/0`` the function
-    treats the request as unrestricted and applies cross-bridge isolation
+    If ``allowed_egress_networks`` is empty or contains ``0.0.0.0/0``
+    the request is unrestricted: cross-bridge isolation still applies
     (containers on different bridges cannot reach each other via host
-    routing) while allowing internet outbound, DNS, and same-bridge addon
-    traffic.
+    routing) while internet outbound, DNS, and same-bridge addon
+    traffic are allowed. Empty is the UI/API contract for unrestricted
+    (the dashboard sends ``[]``) — it must install the isolation block,
+    never silently write nothing: reconcile clears old rules first, so
+    a no-op here would leave the bridge with zero rules after a
+    restricted→unrestricted switch.
 
     Final evaluation order:
 
@@ -461,8 +465,13 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
       6. Cross-bridge DROP               (inter-container isolation)
       7. Catch-all DROP                  (default deny)
     """
+    # Empty allowlist = unrestricted (UI/API contract). Install the
+    # isolation block below — never return silently: the caller
+    # (reconcile) clears old rules first, so a no-op here strands the
+    # bridge with zero rules after restricted→unrestricted, while the
+    # UI reports "unrestricted".
     if not allowed_egress_networks:
-        return
+        allowed_egress_networks = ["0.0.0.0/0"]
 
     static_cidrs, domain_names, invalid_entries = _split_domain_entries(
         allowed_egress_networks

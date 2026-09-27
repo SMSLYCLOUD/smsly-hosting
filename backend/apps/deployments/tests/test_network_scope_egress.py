@@ -26,8 +26,9 @@ After the fix:
     chain, never shadowed).
   * iptables stderr is logged on non-zero exit; FileNotFoundError on the
     ``iptables`` binary is logged, not raised.
-  * ``0.0.0.0/0`` in the allowlist short-circuits the function (operator
-    intent is "allow anywhere" — there is nothing to restrict).
+  * ``0.0.0.0/0`` — or an empty allowlist, the UI/API contract for
+    unrestricted — installs the isolation block (cross-bridge and
+    metadata DROP, internet/same-bridge/DNS RETURNs).
 """
 
 from unittest.mock import MagicMock, patch
@@ -70,10 +71,28 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
 
     @patch("apps.deployments.services.network_scope.subprocess.run")
     @patch("apps.deployments.services.network_scope.docker.from_env")
-    def test_empty_allowlist_does_nothing(self, mock_docker, mock_run):
+    def test_empty_allowlist_applies_unrestricted_block(self, mock_docker, mock_run):
+        """Empty list is the UI/API contract for unrestricted: it must
+        install the isolation block (same 12-rule shape as 0.0.0.0/0),
+        never silently write nothing. Regression 2026-09-27: clicking
+        Unrestricted + Apply cleared the old rules via reconcile and
+        then wrote zero rules, while the UI reported success."""
+        fake_net = MagicMock()
+        fake_net.attrs = {"Id": "deadbeef-1234-1234-1234-123456789012"}
+        mock_client = MagicMock()
+        mock_client.networks.get.return_value = fake_net
+        mock_docker.return_value = mock_client
+        mock_run.return_value = _fake_completed_process()
+
         apply_egress_restrictions("any-net", [])
-        mock_run.assert_not_called()
-        mock_docker.assert_not_called()
+        scripts = _scripts(mock_run)
+        # Same shape as the explicit 0.0.0.0/0 call: 1 list + DROP +
+        # cross DROP + same RETURN + 5 NIC RETURNs + ESTABLISHED RETURN
+        # + metadata DROP + DNS RETURN = 12.
+        self.assertEqual(len(scripts), 12)
+        joined = "\n".join(scripts)
+        self.assertIn("-o br-+", joined)
+        self.assertIn("169.254.169.254/32", joined)
 
     @patch("apps.deployments.services.network_scope.subprocess.run")
     @patch("apps.deployments.services.network_scope.docker.from_env")
