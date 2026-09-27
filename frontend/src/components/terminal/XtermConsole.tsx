@@ -33,6 +33,8 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
     let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     let handleResize: (() => void) | null = null;
     let onDataDisposable: IDisposable | null = null;
+    let resizeDisposable: IDisposable | null = null;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     let asyncInitDone = false;
 
     (async () => {
@@ -65,6 +67,25 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
       const onResize = () => f.fit();
       handleResize = onResize;
       window.addEventListener('resize', onResize);
+
+      // Keep the remote pty sized like the local terminal (debounced):
+      // without this, output wraps at the stale 80-col width after any
+      // window resize and the display corrupts.
+      const sendResize = () => {
+        if (disposed || !socket || socket.readyState !== WebSocket.OPEN) return;
+        const dims = f.proposeDimensions();
+        if (!dims || !dims.cols || !dims.rows) return;
+        try {
+          socket.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
+        } catch {
+          // ignore — next resize or input will resync
+        }
+      };
+      const scheduleResize = () => {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(sendResize, 250);
+      };
+      resizeDisposable = t.onResize(scheduleResize);
 
       if (!wsUrl) {
         t.writeln(
@@ -144,6 +165,8 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
           if (socket?.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'ready' }));
           }
+          // Sync pty size now that the shell is up.
+          sendResize();
 
           // Don't reset reconnect counter immediately — wait for a stable
           // connection (5s without disconnect) to prevent rapid connect/
@@ -203,6 +226,13 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
           if (event.reason) {
             t.writeln(`\x1b[31m[reason] ${event.reason}\x1b[0m`);
           }
+          // Auth failures (4001/4002/4003) never succeed on retry with
+          // the same token — reconnecting just burns 15 backoff cycles.
+          // Tell the user to refresh (fresh token exchange) instead.
+          if (event.code === 4001 || event.code === 4002 || event.code === 4003) {
+            t.writeln('\x1b[31m[authentication failed — refresh the page to retry]\x1b[0m');
+            return;
+          }
           if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
             t.writeln('\x1b[31m[reconnect limit reached — refresh page to retry]\x1b[0m');
             return;
@@ -253,6 +283,10 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
         clearInterval(heartbeatInterval);
       }
       onDataDisposable?.dispose();
+      resizeDisposable?.dispose();
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+      }
       if (handleResize) {
         window.removeEventListener('resize', handleResize);
       }

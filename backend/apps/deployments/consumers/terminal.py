@@ -16,6 +16,16 @@ from .base import authenticate_ws_token, get_websocket_subprotocol, verify_deplo
 logger = logging.getLogger(__name__)
 
 
+def _swallow_audit_error(task: asyncio.Task) -> None:
+    """Done-callback: audit failures are observability-only, never fatal."""
+    try:
+        task.exception()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.debug("Console audit write failed: %s", exc)
+
+
 class TerminalConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for interactive terminal access to containers.
@@ -262,13 +272,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not self.user:
             if settings.DEBUG:
                 logger.error("Closing 4001: Missing token")
-                await self.close(code=4001)
+            await self.close(code=4001)
             return
 
         try:
             data = json.loads(text_data)
             if data.get('type') == 'ping':
+                self._last_activity = time.time()
                 await self._out_queue.put({'type': 'pong'})
+                return
+            if data.get('type') == 'resize':
+                await self._handle_resize(data)
                 return
             if data.get('type') == 'input' and data.get('payload'):
                 try:
@@ -282,20 +296,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             pass
 
         if text_data:
+            self._last_activity = time.time()
             for char in text_data:
                 if char in ('\r', '\n'):
                     if self._cmd_buffer.strip():
-                        from asgiref.sync import sync_to_async
-                        from apps.deployments.utils import log_event
-                        await sync_to_async(log_event)(
-                            action="CONSOLE_COMMAND_EXECUTED",
-                            target=f"Deployment: {self.deployment_id}",
-                            actor=self.user,
-                            metadata={
-                                "command": self._cmd_buffer.strip(),
-                                "container_id": self.container_id
-                            }
-                        )
+                        # Fire-and-forget: audit must never stall
+                        # keystroke forwarding under DB load.
+                        audit_task = asyncio.create_task(
+                            self._audit_command(self._cmd_buffer.strip()))
+                        audit_task.add_done_callback(_swallow_audit_error)
                     self._cmd_buffer = ""
                 elif ord(char) == 127:
                     self._cmd_buffer = self._cmd_buffer[:-1]
@@ -308,6 +317,44 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             if settings.DEBUG:
                 logger.error("Error forwarding input to container: %s", e, exc_info=True)
+
+    async def _audit_command(self, command: str) -> None:
+        """Persist one executed command without blocking the input path."""
+        try:
+            from asgiref.sync import sync_to_async
+            from apps.deployments.utils import log_event
+            await sync_to_async(log_event)(
+                action="CONSOLE_COMMAND_EXECUTED",
+                target=f"Deployment: {self.deployment_id}",
+                actor=self.user,
+                metadata={
+                    "command": command,
+                    "container_id": self.container_id,
+                },
+            )
+        except Exception as exc:
+            logger.debug("Console audit write failed: %s", exc)
+
+    async def _handle_resize(self, data: dict) -> None:
+        """Apply client terminal size to the remote pty (best-effort)."""
+        try:
+            cols = int(data.get("cols") or 0)
+            rows = int(data.get("rows") or 0)
+        except (TypeError, ValueError):
+            return
+        if cols < 20 or rows < 5 or cols > 500 or rows > 200:
+            return
+        if not self.exec_id:
+            return
+        try:
+            from apps.cloud.docker_client import get_docker_exec_client
+            client = get_docker_exec_client()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, client.api.exec_resize, self.exec_id, rows, cols,
+            )
+        except Exception as exc:
+            logger.debug("Exec resize failed: %s", exc)
 
     def _send_to_shell(self, data):
         raw = self._raw_sock or self.exec_socket
@@ -332,6 +379,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         )
         max_exec_reconnects = 10
         exec_reconnect_count = 0
+        exec_reconnect_delay = 1.0
 
         try:
             while True:
@@ -341,8 +389,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         timeout=20.0
                     )
                 except asyncio.TimeoutError:
-                    logger.warning("Terminal read timed out")
-                    return
+                    # A quiet shell is NORMAL (user thinking, long build).
+                    # Killing the session here was the top console
+                    # stability bug — keep waiting.
+                    continue
 
                 if data is None:
                     exec_reconnect_count += 1
@@ -373,7 +423,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         logger.debug("Failed to send reconnecting message: %s", exc)
 
                     self._close_exec_socket()
-                    await asyncio.sleep(1.0)
+                    # Back off exponentially (1s → 10s cap): rapid
+                    # reconnects hammer the Docker API when the
+                    # container is mid-redeploy and going nowhere.
+                    await asyncio.sleep(exec_reconnect_delay)
+                    exec_reconnect_delay = min(exec_reconnect_delay * 2.0, 10.0)
 
                     self.container_id = await self._find_container()
                     if not self.container_id:
@@ -414,6 +468,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
                 self._last_activity = time.time()
                 exec_reconnect_count = 0
+                exec_reconnect_delay = 1.0
                 text = data.decode('utf-8', errors='replace').replace('\x00', '')
                 enc_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
                 await self._out_queue.put({'message': enc_text})
