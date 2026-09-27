@@ -271,6 +271,12 @@ class Service(TimeStampedModel):
 
     # Network
     internal_port = models.IntegerField(default=8000)  # type: ignore[var-annotated]
+    mesh_alias = models.CharField(  # type: ignore[var-annotated]
+        max_length=100, blank=True, default="",
+        help_text="Stable DNS alias attached to this service's LIVE container "
+                  "on its networks (e.g. 'smsly-marketer' for a service whose "
+                  "container name carries a per-deploy suffix). Lets mesh "
+                  "callers address it without tracking renames. Empty = none.")
     public_domain = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, null=True, unique=True)
     public_domain_hidden = models.BooleanField(  # type: ignore[var-annotated]

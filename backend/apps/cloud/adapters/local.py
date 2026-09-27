@@ -918,6 +918,24 @@ class LocalAdapter(BaseCloudAdapter):
             aliases = [container_name, f"{container_name}.default.internal"]
             if alias_name:
                 aliases.append(alias_name)
+        else:
+            # Stable mesh alias for the LIVE container only (greens must
+            # never share it — duplicate aliases round-robin DNS).
+            # Lets callers address suffixed services (e.g. marketer)
+            # without tracking renames (2026-09-26).
+            try:
+                from apps.deployments.models import Service as _SvcMesh
+                _mesh_svc = None
+                _mesh_sid = getattr(self, '_service_id', None)
+                if _mesh_sid:
+                    _mesh_svc = _SvcMesh.objects.filter(id=_mesh_sid).only('mesh_alias').first()
+                if _mesh_svc is None:
+                    _mesh_svc = _SvcMesh.objects.filter(name=name).only('mesh_alias').first()
+                _mesh_alias = str(getattr(_mesh_svc, 'mesh_alias', '') or '').strip()
+                if _mesh_alias and _mesh_alias not in aliases:
+                    aliases.append(_mesh_alias)
+            except Exception as exc:
+                logger.debug("Mesh alias lookup skipped for %s: %s", name, exc)
 
         logger.info(
             "Deploy strategy for %s: %s",
@@ -1500,6 +1518,32 @@ class LocalAdapter(BaseCloudAdapter):
         logger.info("Container %s is healthy and serving traffic", name)
         return new_container.id
 
+    def _green_forensics(self, green_container_id: str) -> str:
+        """Best-effort daemon evidence for a vanished green (never raises)."""
+        bits = []
+        try:
+            import subprocess as _sp
+            ev = _sp.run(
+                ["docker", "events", "--since", "2h", "--until", "1m",
+                 "--filter", "event=die", "--filter", "event=destroy",
+                 "--filter", "event=oom", "--format", "{{.Time}} {{.Action}} {{.ActorID}}"],
+                capture_output=True, text=True, timeout=20,
+            )
+            short = (green_container_id or "")[:12]
+            hits = [l for l in (ev.stdout or "").splitlines() if short and short in l]
+            bits.append("daemon-events: " + ("; ".join(hits[:4]) if hits else "no die/destroy/oom record"))
+        except Exception as exc:
+            bits.append(f"daemon-events unavailable: {exc}")
+        try:
+            import subprocess as _sp2
+            dm = _sp2.run(["sh", "-c", "dmesg 2>/dev/null | grep -i -E 'oom-killer|killed process' | tail -n 3"],
+                          capture_output=True, text=True, timeout=15)
+            out = (dm.stdout or "").strip()
+            bits.append("host-oom: " + (out[-300:] if out else "none"))
+        except Exception as exc:
+            bits.append(f"host-oom unavailable: {exc}")
+        return " | ".join(bits)
+
     def promote_container(self, name: str, green_container_id: str) -> str:
         """
         Promote a staged green container to live with rollback safety.
@@ -1518,9 +1562,13 @@ class LocalAdapter(BaseCloudAdapter):
                 raise RuntimeError("Docker client unavailable")
             green = self.docker_client.containers.get(green_container_id)
         except docker.errors.NotFound:
+            # Gather daemon-side forensics: the killer is usually the orphan
+            # sweep, a duplicate deploy, or OOM — all invisible otherwise
+            # (2026-09-26: two bake crashes with zero evidence).
+            detail = self._green_forensics(green_container_id)
             raise RuntimeError(
                 f"Green container {green_container_id} not found - "
-                f"may have crashed during bake period"
+                f"may have crashed during bake period. {detail}"
             )
 
         green.reload()
@@ -1764,6 +1812,14 @@ class LocalAdapter(BaseCloudAdapter):
             # inter-project) stays host-internal.
             from apps.deployments.services.network_scope import ensure_platform_bridge
             promote_aliases = [name, f"{name}.default.internal"]
+            try:
+                from apps.deployments.models import Service as _SvcMesh2
+                _mesh_svc2 = _SvcMesh2.objects.filter(name=name).only('mesh_alias').first()
+                _mesh_alias2 = str(getattr(_mesh_svc2, 'mesh_alias', '') or '').strip()
+                if _mesh_alias2 and _mesh_alias2 not in promote_aliases:
+                    promote_aliases.append(_mesh_alias2)
+            except Exception as exc:
+                logger.debug("Mesh alias lookup skipped on promote for %s: %s", name, exc)
             promote_networks_dict: dict[str, Any] = {
                 network_name: self.docker_client.api.create_endpoint_config(
                     aliases=promote_aliases

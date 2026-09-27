@@ -96,6 +96,37 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
         service = deployment.service
 
+        # Supersede: a NEWER deployment for the same service already exists
+        # (double-triggered UI+API runs collided on promote, 2026-09-26).
+        # The older run yields immediately instead of racing it.
+        try:
+            _terminal = {
+                Deployment.Status.ACTIVE, Deployment.Status.FAILED,
+                Deployment.Status.CANCELLED, Deployment.Status.INACTIVE,
+                Deployment.Status.ROLLED_BACK, Deployment.Status.BUILD_FAILED,
+                Deployment.Status.HEALTH_CHECK_FAILED,
+                Deployment.Status.MIGRATION_FAILED, Deployment.Status.BACKUP_FAILED,
+            }
+            _newer = Deployment.objects.filter(
+                service=service,
+                created_at__gt=deployment.created_at,
+            ).exclude(id=deployment.id).exclude(status__in=_terminal).first()
+            if _newer is not None:
+                deployment.status = Deployment.Status.INACTIVE
+                deployment.build_logs = (
+                    (deployment.build_logs or '')
+                    + f"\n[Superseded] Newer deployment {_newer.id} takes precedence; "
+                      f"this run exits without touching containers.\n"
+                )
+                deployment.save(update_fields=['status', 'build_logs', 'updated_at'])
+                logger.info(
+                    "Deployment %s superseded by newer %s; exiting",
+                    deployment.id, _newer.id,
+                )
+                return
+        except Exception as exc:
+            logger.debug("Supersede check skipped for %s: %s", deployment_id, exc)
+
         from apps.deployments.models import PlatformConfig
         config = PlatformConfig.load()
 

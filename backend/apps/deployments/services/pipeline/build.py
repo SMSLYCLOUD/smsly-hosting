@@ -278,6 +278,68 @@ def _registry_cache_settings(image_name, build_args):
 
 
 class BuildMixin:
+    def _check_vendor_drift(self) -> None:
+        """Warn-only: diff vendored smsly-core trio against smsly-shared HEAD.
+
+        Runs after clone, before build. Shallow sparse fetch (~seconds);
+        any failure degrades to silence — drift must never break a build.
+        """
+        import tempfile
+        src = getattr(self, 'source_dir', '') or ''
+        vendor = os.path.join(src, '_vendor', 'smsly-core', 'smsly_core')
+        if not os.path.isdir(vendor):
+            return
+        try:
+            from apps.deployments.utils import get_github_token_for_repo
+            env_map = {env.key: env.value for env in self.service.env_vars.all()}
+            shared_repo = env_map.get("SMSLY_SHARED_REPO", "SMSLYCLOUD/smsly-shared")
+            token = get_github_token_for_repo(
+                getattr(self.service, 'owner', None), shared_repo)
+            if not token:
+                return
+            trio = [
+                'smsly-core/smsly_core/spiffe_auth.py',
+                'smsly-core/smsly_core/auth_middleware.py',
+                'smsly-core/smsly_core/direct_access_protection.py',
+            ]
+            with tempfile.TemporaryDirectory(prefix='smsly-vendor-check-') as tmp:
+                url = f"https://x-access-token:{token}@github.com/{shared_repo}.git"
+                init = subprocess.run(
+                    ['git', 'init', '-q', tmp], capture_output=True, text=True, timeout=30)
+                if init.returncode != 0:
+                    return
+                seq = [
+                    (['git', '-C', tmp, 'remote', 'add', 'origin', url], 30),
+                    (['git', '-C', tmp, 'fetch', '--depth', '1', 'origin', 'HEAD'], 90),
+                    (['git', '-C', tmp, 'sparse-checkout', 'set'] + trio, 30),
+                    (['git', '-C', tmp, 'checkout', 'FETCH_HEAD'], 60),
+                ]
+                for cmd, to in seq:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=to)
+                    if r.returncode != 0:
+                        return
+                stale = []
+                for rel in trio:
+                    leaf = os.path.basename(rel)
+                    a = os.path.join(tmp, rel)
+                    b = os.path.join(vendor, leaf)
+                    try:
+                        with open(a, 'rb') as fa, open(b, 'rb') as fb:
+                            if fa.read() != fb.read():
+                                stale.append(leaf)
+                    except OSError:
+                        stale.append(f"{leaf} (missing locally)")
+                if stale:
+                    from apps.deployments.utils import append_log
+                    append_log(
+                        self.deployment,
+                        "⚠ Vendored smsly-core is STALE vs "
+                        f"{shared_repo} HEAD: {', '.join(stale)}. "
+                        "Sync _vendor/smsly-core before security fixes stop applying.\n",
+                    )
+        except Exception as exc:
+            logger.debug("Vendor drift check failed silently: %s", exc)
+
     def _build_image(self):
         """Step 2: Build Image (with cache check)."""
         update_stage(self.deployment, 'Build', 'running')
@@ -329,6 +391,15 @@ class BuildMixin:
                 self._clone_repo()
 
             tag_hash = self.deployment.commit_hash[:7]
+            # ── Vendored smsly-core drift check (warn-only) ──────────
+            # Repos vendor smsly-core at _vendor/smsly-core; the copies
+            # drift (2026-09-26: 19 stale copies broke :8443 auth). Diff
+            # the security-critical trio against smsly-shared HEAD and
+            # warn in the log so the next build picks up the sync.
+            try:
+                self._check_vendor_drift()
+            except Exception as exc:
+                logger.debug("Vendor drift check skipped: %s", exc)
             from apps.deployments.services.registry_credentials import (
                 project_image_namespace,
             )
