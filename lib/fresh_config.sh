@@ -640,6 +640,22 @@ NODE_SPIRE=${NODE_SPIRE:-1}
 NODE_LOG_SHIPPING=${NODE_LOG_SHIPPING:-1}
 EOF
 
+    # ── Bootstrap mesh vars passthrough (node self-provisioning) ──
+    # The bootstrap script bakes mesh identity into .env (MASTER_URL,
+    # WG_*, NODE_*, GATEWAY_SECRET...). The template above does not
+    # list them, so regeneration silently dropped them and compose
+    # failed on missing MASTER_URL/NODE_MESH_BIND_IP (2026-09-28: every
+    # node install died at stack deploy). Re-emit whitelisted keys when
+    # present in env (sourced from the stub above). Unknown keys are
+    # never carried — explicit whitelist only.
+    for _bk in MASTER_URL MASTER_IP NODE_NUMBER NODE_DOMAIN NODE_HOST SMSLY_NODE_HOST WG_ADDRESS WG_PRIVATE_KEY WG_PUBLIC_KEY MASTER_WG_PUBKEY MASTER_WG_ENDPOINT MASTER_MESH_IP GATEWAY_SECRET NODE_NAME SERVER_ID SMSLY_NODE_ID SMSLY_NODE_QUEUE MASTER_DB_USER MASTER_DB_PASSWORD MASTER_MQ_PASSWORD MASTER_REDIS_PASSWORD MASTER_FIELD_ENCRYPTION_KEY; do
+        _bv="${!_bk:-}"
+        if [ -n "$_bv" ]; then
+            printf '%s=%s\n' "$_bk" "$_bv" >> "$ENV_TMP"
+        fi
+    done
+    unset _bk _bv
+
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         echo -e "${BLUE}  → Lite Agent mode: frontend build is not part of this node.${NC}"
