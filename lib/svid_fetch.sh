@@ -53,6 +53,7 @@ fail=0
 # this early-out every run exits 1, which kills strict callers
 # (install.sh under set -e died silently mid-install on 2026-09-28)
 # and spams the 15-min cron forever on nodes.
+svid_fetch_main() {
 _found=0
 for c in $SERVICES; do
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
@@ -62,7 +63,7 @@ for c in $SERVICES; do
 done
 if [ "$_found" != "1" ]; then
     echo "$(date -u +%FT%TZ) no workload containers present — nothing to fetch"
-    exit 0
+    return 0
 fi
 for c in $SERVICES; do
     _svc="$(service_dir "$c")"
@@ -100,4 +101,16 @@ for c in $SERVICES; do
     fi
     echo "$(date -u +%FT%TZ) $c refreshed ($_svc)"
 done
-exit $fail
+    return $fail
+}
+
+# Source-safe: install.sh sources every lib/*.sh (except fresh/update/
+# harden/install-*) for functions. A bare top-level loop + `exit` here
+# would run at source time and kill the installer under set -e. Only
+# execute when run directly (cron/manual).
+case "${0##*/}" in
+svid_fetch.sh)
+    svid_fetch_main
+    exit $?
+    ;;
+esac
