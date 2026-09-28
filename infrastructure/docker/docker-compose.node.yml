@@ -396,7 +396,7 @@ services:
   # topology and must never listen on the public interface.
   # ============================================================
   coredns:
-    image: coredns/coredns:1.14.5
+    image: coredns/coredns:1.12.4
     command: -conf /etc/coredns/Corefile
     restart: unless-stopped
     security_opt:
