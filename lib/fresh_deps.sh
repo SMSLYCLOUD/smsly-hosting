@@ -165,7 +165,23 @@ ensure_wireguard_mesh() {
             apt_run apt-get install -y wireguard
         fi
         mkdir -p /etc/wireguard
-        if [ ! -f /etc/wireguard/private.key ]; then
+        if [ -n "${WG_PRIVATE_KEY:-}" ]; then
+            # Provisioned mesh identity (bootstrap token): the master
+            # already registered this keypair for our mesh address — a
+            # fresh key here would fail the handshake closed (2026-09-28:
+            # node came up on a stranger key, master only trusts the
+            # provisioned one). Always converge on the provisioned key.
+            printf '%s' "$WG_PRIVATE_KEY" > /etc/wireguard/private.key
+            chmod 600 /etc/wireguard/private.key
+            printf '%s' "$WG_PRIVATE_KEY" | wg pubkey > /etc/wireguard/public.key
+            if [ -f "/etc/wireguard/${wg_iface}.conf" ]; then
+                if grep -q '^PrivateKey' "/etc/wireguard/${wg_iface}.conf" 2>/dev/null; then
+                    sed -i "s|^PrivateKey .*|PrivateKey = ${WG_PRIVATE_KEY}|" "/etc/wireguard/${wg_iface}.conf"
+                else
+                    printf 'PrivateKey = %s\n' "$WG_PRIVATE_KEY" >> "/etc/wireguard/${wg_iface}.conf"
+                fi
+            fi
+        elif [ ! -f /etc/wireguard/private.key ]; then
             wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
         fi
         local privkey
