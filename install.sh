@@ -259,6 +259,11 @@ unset -f _registry_self_heal _test_registry _env_get_value _env_set_value
 # ─── Resolve script path ─────────────────────────────────────────────────────
 SCRIPT_PATH="$(readlink -f "$0" || echo "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+if [ -n "${SMSLY_SELF_COPY:-}" ] && [ -n "${SMSLY_LIVE_SCRIPT_DIR:-}" ]; then
+    # Re-exec'd from /tmp (self-rewrite guard below): lib/ still comes
+    # from the live checkout, never the temp copy.
+    SCRIPT_DIR="$SMSLY_LIVE_SCRIPT_DIR"
+fi
 
 # ─── Bootstrap lib/ when running from a standalone install.sh ──────────────────
 # When invoked via `curl ... -o /tmp/install.sh && bash /tmp/install.sh`, lib/
@@ -415,6 +420,24 @@ done
 
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
+fi
+
+# ─── Self-rewrite guard ────────────────────────────────────────────────────
+# fresh.sh syncs the repo (fetch + reset --hard) while THIS script is
+# still executing from it. Bash reads its script file incrementally, so
+# rewriting it mid-run derails the interpreter — the installer vanished
+# silently right after the repo-sync step, three attempts in a row
+# (2026-09-28 node bootstrap). Re-exec from a /tmp copy BEFORE the lock
+# is acquired (no fd to carry over) and before lib/ is sourced (the new
+# process sources the fresh tree); args re-parse identically and
+# exported MODE vars survive. Temp file is removed by the EXIT trap.
+if [ -z "${SMSLY_SELF_COPY:-}" ] && [ -f "${SCRIPT_PATH:-}" ]; then
+    _self_copy="/tmp/smsly-install-$$.sh"
+    if cp -f "$SCRIPT_PATH" "$_self_copy" 2>/dev/null; then
+        export SMSLY_SELF_COPY=1 SMSLY_LIVE_SCRIPT_DIR="$SCRIPT_DIR"
+        export SMSLY_SELF_COPY_FILE="$_self_copy"
+        exec bash "$_self_copy" "$@"
+    fi
 fi
 
 # ─── Log setup + lock + traps ──────────────────────────────────────────────────
@@ -732,26 +755,6 @@ if [ "$MODE_MEDIA_NODE" = "true" ]; then
     exit 0
 fi
 
-# ─── Self-rewrite guard ────────────────────────────────────────────────────
-# fresh.sh syncs the repo (fetch + reset --hard) while THIS script is
-# still executing from it. Bash reads its script file incrementally, so
-# rewriting it mid-run derails the interpreter — the installer vanished
-# silently right after the repo-sync step, three attempts in a row
-# (2026-09-28 node bootstrap). Re-exec from a /tmp copy; lib/ keeps
-# resolving to the live checkout. Lock (fd 9) and exported MODE vars
-# survive exec; args re-parse identically.
-if [ -z "${SMSLY_SELF_COPY:-}" ] && [ -f "${SCRIPT_PATH:-}" ]; then
-    _self_copy="/tmp/smsly-install-$$.sh"
-    if cp -f "$SCRIPT_PATH" "$_self_copy" 2>/dev/null; then
-        export SMSLY_SELF_COPY=1 SMSLY_LIVE_SCRIPT_DIR="$SCRIPT_DIR"
-        export SMSLY_SELF_COPY_FILE="$_self_copy"
-        exec bash "$_self_copy" "$@"
-    fi
-fi
-if [ -n "${SMSLY_SELF_COPY:-}" ] && [ -n "${SMSLY_LIVE_SCRIPT_DIR:-}" ]; then
-    SCRIPT_DIR="$SMSLY_LIVE_SCRIPT_DIR"
-    LIB_DIR="$SCRIPT_DIR/lib"
-fi
 if [ -f "$SCRIPT_DIR/lib/fresh.sh" ] && [ "$(basename "$SCRIPT_PATH")" != "backend/install.sh" ]; then
     echo -e "${BLUE}  → Running fresh install from live lib/ (always current)${NC}"
 elif [ -f "$SCRIPT_DIR/backend/install.sh" ] && [ "$(basename "$SCRIPT_PATH")" != "backend/install.sh" ]; then
