@@ -198,7 +198,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c '
-        apk add --no-cache docker-cli curl tzdata >/dev/null 2>&1 || true;
+        apk add --no-cache docker-cli curl tzdata ca-certificates >/dev/null 2>&1 || true;
         pip install --no-cache-dir requests >/dev/null 2>&1 || true;
         python /usr/local/bin/agent_registrar.py
       '

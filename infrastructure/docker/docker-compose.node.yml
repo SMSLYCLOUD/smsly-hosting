@@ -319,14 +319,19 @@ services:
     restart: unless-stopped
     command: >
       sh -c '
-        apk add --no-cache docker-cli curl tzdata >/dev/null 2>&1 || true;
+        apk add --no-cache docker-cli curl tzdata ca-certificates >/dev/null 2>&1 || true;
         pip install --no-cache-dir requests >/dev/null 2>&1 || true;
         python /usr/local/bin/agent_registrar.py
       '
     env_file: ../../.env
     environment:
       - MASTER_API_URL=${MASTER_URL:?MASTER_URL must be set in .env}
-      - MASTER_API_URL_FALLBACK=${MASTER_URL:?MASTER_URL must be set in .env}
+      # Mesh-direct fallback (WireGuard-encrypted): used when the public
+      # URL is bot-walled (Cloudflare challenges 403 non-browser clients
+      # while letting /health/live probes through — the old <500 probe
+      # pinned the broken public URL forever). TLS SNI + Host come from
+      # MASTER_API_URL automatically (registrar SNI override).
+      - MASTER_API_URL_FALLBACK=${MASTER_MESH_URL:-https://10.100.0.1}
       - SERVER_ID=${SMSLY_NODE_ID:-node}
       - GATEWAY_SECRET=${GATEWAY_SECRET:?GATEWAY_SECRET must be set in .env}
       - HEARTBEAT_INTERVAL=${AGENT_HEARTBEAT_INTERVAL:-30}
