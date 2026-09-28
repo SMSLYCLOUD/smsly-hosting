@@ -48,6 +48,22 @@ normalize_dir() {
 }
 
 fail=0
+# No workloads here at all (fresh node: edge stack only, no app
+# containers yet) — nothing to fetch is success, not failure. Without
+# this early-out every run exits 1, which kills strict callers
+# (install.sh under set -e died silently mid-install on 2026-09-28)
+# and spams the 15-min cron forever on nodes.
+_found=0
+for c in $SERVICES; do
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+        _found=1
+        break
+    fi
+done
+if [ "$_found" != "1" ]; then
+    echo "$(date -u +%FT%TZ) no workload containers present — nothing to fetch"
+    exit 0
+fi
 for c in $SERVICES; do
     _svc="$(service_dir "$c")"
     _subdir="$DIR/$_svc"
