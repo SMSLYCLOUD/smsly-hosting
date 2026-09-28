@@ -112,5 +112,31 @@ def test_public_url_uses_plain_urlopen(monkeypatch):
     mock_builder.assert_not_called()
 
 
+def test_fanout_abandons_walled_base_within_round(monkeypatch):
+    """A base whose probe passes but whose POSTs 403 must not pin:
+    the same round must try the next base (2026-09-28: CF answered
+    /health/live while challenging every API POST)."""
+    mod = _load(monkeypatch)
+    calls = []
+
+    def fake_post(base, path, body):
+        calls.append(base)
+        if "10.100.0.1" in base:
+            return 200, "{}"
+        return 403, "challenged"
+
+    with mock.patch.object(mod, "_post_json", side_effect=fake_post):
+        resolver = mod.BaseUrlResolver(
+            ["https://trulay.site", "https://10.100.0.1"]
+        )
+        status = mod.post_with_backoff(
+            resolver, "/api/v1/servers/srv-1/agent-heartbeat/", {}
+        )
+    assert status == 200
+    assert calls[0] == "https://trulay.site"
+    assert "https://10.100.0.1" in calls
+    assert resolver._current == "https://10.100.0.1"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

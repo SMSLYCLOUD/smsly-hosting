@@ -365,6 +365,18 @@ class BaseUrlResolver:
         self._current = None
         return None
 
+    def set_current(self, base: str | None) -> None:
+        """Pin (or clear) the sticky base explicitly."""
+        self._current = base
+
+    def ordered_bases(self) -> list[str]:
+        """Current base first, then the rest — for per-round fan-out."""
+        if self._current in self._urls:
+            return [self._current] + [
+                u for u in self._urls if u != self._current
+            ]
+        return list(self._urls)
+
     def _probe(self, url: str, timeout: int = 10) -> bool:
         # Only 2xx counts: a Cloudflare bot-challenge 403 used to pass
         # this probe (< 500), pinning the resolver on a URL whose POSTs
@@ -385,31 +397,40 @@ class BaseUrlResolver:
 def post_with_backoff(resolver: BaseUrlResolver, path: str, body: dict) -> int:
     """Post JSON to the master with exponential backoff.
 
-    Returns the HTTP status code (0 = transport failure). The
-    call retries on any 0/5xx response but stops on a
+    Returns the HTTP status code (0 = transport failure). Each round
+    tries every known base (sticky one first): a base whose probe
+    passes but whose POSTs fail (Cloudflare answering /health/live
+    while challenging API POSTs) is abandoned within the round instead
+    of pinning forever. Retries on any 0/5xx response but stops on a
     successful 2xx.
     """
     delay = 1.0
     last_status = 0
     last_error = ""
     for attempt in range(8):  # up to ~127s total
-        base = resolver.current()
-        if base is None:
+        bases = resolver.ordered_bases()
+        if not bases:
             last_error = "no reachable master"
-        else:
+        for base in bases:
             last_status, last_error = _post_json(base, path, body)
             if 200 <= last_status < 300:
+                resolver.set_current(base)
                 return last_status
-            # 4xx other than 401/408/429 are not worth retrying
+            # 4xx other than 401/403/408/429 are not worth retrying
+            # anywhere (same backend serves all bases).
             if 400 <= last_status < 500 and last_status not in {401, 403, 408, 429}:
                 log.error(
                     "post %s -> HTTP %d: %s (non-retryable, giving up)",
                     path, last_status, last_error[:200],
                 )
                 return last_status
+            log.warning(
+                "post %s via %s failed (attempt %d, status=%d): %s",
+                path, base, attempt + 1, last_status, last_error[:200],
+            )
         log.warning(
-            "post %s failed (attempt %d, status=%d): %s — retrying in %.0fs",
-            path, attempt + 1, last_status, last_error[:200], delay,
+            "post %s round %d exhausted, retrying in %.0fs",
+            path, attempt + 1, delay,
         )
         time.sleep(delay)
         delay = min(delay * 2, 60.0)
