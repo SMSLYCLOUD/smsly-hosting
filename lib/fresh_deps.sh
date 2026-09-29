@@ -150,6 +150,22 @@ fi
 
 # Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get
 # a placeholder that will be updated by WireGuardService after provisioning).
+_ensure_mesh_masquerade() {
+    # SNAT container→mesh traffic to the mesh address. The far side only
+    # routes 10.100.0.0/24 back through the tunnel — a bridge source IP
+    # (172.16.0.0/12) would strand replies on the public internet, so
+    # containers could reach mesh IPs over ping/HTTP but never complete
+    # TCP to app ports (2026-09-29: node registrar timed out to master).
+    # Idempotent; persisted with the other iptables rules by the
+    # hardening step (iptables-save → rules.v4).
+    ip link show wg0 >/dev/null 2>&1 || return 0
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -t nat -C POSTROUTING -s 172.16.0.0/12 -o wg0 -j MASQUERADE 2>/dev/null \
+            || iptables -t nat -A POSTROUTING -s 172.16.0.0/12 -o wg0 -j MASQUERADE 2>/dev/null \
+            || true
+    fi
+}
+
 ensure_wireguard_mesh() {
     local mesh_ip="${MASTER_MESH_IP:-10.100.0.1}"
     local wg_iface="wg0"
@@ -207,6 +223,7 @@ WGCONF
         if declare -F configure_mesh_dns_resolver >/dev/null 2>&1; then
             configure_mesh_dns_resolver || true
         fi
+        _ensure_mesh_masquerade
         return 0
     fi
 
@@ -243,6 +260,7 @@ WGCONF
     else
         echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start — PgCat mesh binding may fail${NC}"
     fi
+    _ensure_mesh_masquerade
 }
 ensure_wireguard_mesh
 
