@@ -29,6 +29,16 @@ logger = logging.getLogger(__name__)
 
 RULE_TAG_PREFIX = "smsly-egress-"
 
+# Tag for the mesh-reply exception (see ensure_mesh_reply_rule). Kept
+# separate from the per-bridge egress tag so old-format blocks — whose
+# tag already exists without an ESTABLISHED rule — still converge.
+MESH_REPLY_TAG = "smsly-mesh-reply"
+
+# WireGuard mesh interface wildcard. Node control traffic (agent
+# heartbeats, DNS) arrives over wg0; edge-proxy replies must return
+# the same way.
+MESH_IFACE_WILDCARD = "wg+"
+
 # One-shot host-network image used to run firewall commands from the
 # unprivileged backend container. Stock alpine ships NEITHER iptables
 # NOR nft — the old "sh: iptables: not found" errors meant every scoped
@@ -605,6 +615,51 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
     ])
 
 
+def ensure_mesh_reply_rule(bridge_iface: str) -> bool:
+    """Ensure reply traffic from a bridge back into the WireGuard mesh.
+
+    Inserts (once)::
+
+        iptables -I DOCKER-USER -i <br> -o wg+ -m conntrack
+            --ctstate ESTABLISHED,RELATED -j ACCEPT  # smsly-mesh-reply
+
+    Why: per-bridge egress blocks end in a terminal DROP with no mesh
+    allowance, so mesh-initiated TCP to a container (node -> master
+    Caddy :443) is accepted forward but its SYN-ACK dies on return
+    (2026-09-29: node heartbeats unreachable until a manual exception).
+
+    ESTABLISHED-only: containers can ANSWER mesh-initiated connections
+    but can never open new ones toward mesh IPs, so tenant isolation
+    is preserved. ACCEPT (not RETURN) so the verdict survives even on
+    bridges carrying old-format blocks whose terminal DROP would
+    otherwise swallow the reply. Harmless on hosts without wg (the
+    rule then matches nothing).
+
+    Returns True when the rule is present afterwards.
+    """
+    try:
+        existing = _list_docker_user_rules()
+    except Exception:
+        logger.debug("mesh-reply rule check skipped (firewall unavailable)")
+        return False
+    if any(MESH_REPLY_TAG in r and bridge_iface in r for r in existing):
+        return True
+    result = _sh([
+        "iptables", "-I", "DOCKER-USER",
+        "-i", bridge_iface, "-o", MESH_IFACE_WILDCARD,
+        "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
+        "-j", "ACCEPT",
+        "-m", "comment", "--comment", MESH_REPLY_TAG,
+    ])
+    if result.returncode == 0 or "already exists" in (result.stderr or ""):
+        return True
+    logger.warning(
+        "mesh-reply rule install failed for bridge %s: %s",
+        bridge_iface, (result.stderr or "").strip()[:160],
+    )
+    return False
+
+
 def _traefik_container_name() -> str:
     import os
     return os.environ.get("TRAEFIK_CONTAINER_NAME", "smsly-hosting-traefik-1")
@@ -754,11 +809,13 @@ def reconcile_network_isolation() -> dict[str, int]:
     * Purges DOCKER-USER rules whose bridge interface no longer exists
     * Reapplies egress isolation to every live ``paas-svc-*`` bridge that is
       missing its tag (closes the recreate-gap: fresh bridge = unrestricted)
+    * Ensures the mesh-reply exception on every live scoped bridge
+      (edge-proxy answers to node control traffic over wg0)
     * Ensures the edge router is attached to every scoped bridge
 
     Returns counters for logging/alerting.
     """
-    stats = {"purged_rules": 0, "reapplied": 0, "router_attached": 0}
+    stats = {"purged_rules": 0, "reapplied": 0, "router_attached": 0, "mesh_reply": 0}
 
     # 1. Purge stale-tagged rules (bridges that no longer exist).
     try:
@@ -800,6 +857,8 @@ def reconcile_network_isolation() -> dict[str, int]:
             if not tag_present:
                 apply_egress_restrictions(name, ["0.0.0.0/0"])
                 stats["reapplied"] += 1
+            if br and ensure_mesh_reply_rule(br):
+                stats["mesh_reply"] += 1
             if ensure_router_on_network(name):
                 stats["router_attached"] += 1
     except Exception:
