@@ -129,6 +129,83 @@ def sign(method: str, full_path: str, body: bytes) -> dict[str, str]:
     }
 
 
+# ── Mesh SNI override ─────────────────────────────────────────────────────
+# Control traffic (agent-ready / heartbeats) must survive Cloudflare
+# bot-fight, which 403s non-browser clients from datacenter IPs
+# (2026-09-28: every node heartbeat died at the edge). The fallback is
+# a direct TLS connection to the master over the WireGuard mesh, using
+# SNI + Host of the public master hostname: Caddy serves the right
+# site+cert, Django sees an allowed Host. Derived from MASTER_API_URL —
+# no extra env needed.
+def _primary_host() -> str:
+    try:
+        from urllib.parse import urlparse as _up
+        return (_up(MASTER_API_URL).hostname or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _url_host_is_ip(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse as _up
+        import ipaddress as _ip
+        _ip.ip_address((_up(url).hostname or "").strip())
+        return True
+    except Exception:
+        return False
+
+
+class _SNIHTTPSHandler(urllib.request.HTTPSHandler):
+    """HTTPS with explicit SNI (for dialling an IP that serves a name)."""
+
+    def __init__(self, sni_host: str):
+        super().__init__()
+        self._sni_host = sni_host
+
+    def https_open(self, req):
+        return self.do_open(_sni_connection_factory(self._sni_host), req)
+
+
+def _sni_connection_factory(sni_host: str):
+    import http.client as _http_client
+
+    def _factory(host, **kwargs):
+        conn = _http_client.HTTPSConnection(host, **kwargs)
+
+        def _connect():
+            import socket as _sock
+            import ssl as _ssl
+            sock = _sock.create_connection(
+                (conn.host, conn.port), conn.timeout, conn.source_address)
+            ctx = _ssl.create_default_context()
+            conn.sock = ctx.wrap_socket(sock, server_hostname=sni_host)
+
+        conn.connect = _connect  # type: ignore[method-assign]
+        return conn
+
+    return _factory
+
+
+def _open_url(req, timeout: int):
+    """urlopen with mesh SNI override for IP-literal HTTPS URLs."""
+    primary = _primary_host()
+    try:
+        from urllib.parse import urlparse as _up
+        parts = _up(req.full_url)
+        is_mesh_https = (
+            bool(primary)
+            and (parts.scheme or "").lower() == "https"
+            and _url_host_is_ip(req.full_url)
+        )
+    except Exception:
+        is_mesh_https = False
+    if is_mesh_https:
+        req.add_header("Host", primary)
+        opener = urllib.request.build_opener(_SNIHTTPSHandler(primary))
+        return opener.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 # ── HTTP helpers ──────────────────────────────────────────────────────────
 def _post_json(base_url: str, path: str, body: dict, timeout: int = 10) -> tuple[int, str]:
     body_bytes = json.dumps(body, sort_keys=True).encode("utf-8")
@@ -136,7 +213,7 @@ def _post_json(base_url: str, path: str, body: dict, timeout: int = 10) -> tuple
     headers = sign("POST", path, body_bytes)
     req = urllib.request.Request(url, data=body_bytes, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open_url(req, timeout) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", errors="replace") if e.fp else ""
@@ -288,14 +365,30 @@ class BaseUrlResolver:
         self._current = None
         return None
 
+    def set_current(self, base: str | None) -> None:
+        """Pin (or clear) the sticky base explicitly."""
+        self._current = base
+
+    def ordered_bases(self) -> list[str]:
+        """Current base first, then the rest — for per-round fan-out."""
+        if self._current in self._urls:
+            return [self._current] + [
+                u for u in self._urls if u != self._current
+            ]
+        return list(self._urls)
+
     def _probe(self, url: str, timeout: int = 10) -> bool:
+        # Only 2xx counts: a Cloudflare bot-challenge 403 used to pass
+        # this probe (< 500), pinning the resolver on a URL whose POSTs
+        # could never succeed — heartbeats 403'd forever with no fallback
+        # (2026-09-28).
         try:
             req = urllib.request.Request(
                 url.rstrip("/") + "/health/live",
                 headers={"User-Agent": "smsly-agent-registrar/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status < 500
+            with _open_url(req, timeout) as resp:
+                return 200 <= resp.status < 300
         except Exception:
             return False
 
@@ -304,31 +397,40 @@ class BaseUrlResolver:
 def post_with_backoff(resolver: BaseUrlResolver, path: str, body: dict) -> int:
     """Post JSON to the master with exponential backoff.
 
-    Returns the HTTP status code (0 = transport failure). The
-    call retries on any 0/5xx response but stops on a
+    Returns the HTTP status code (0 = transport failure). Each round
+    tries every known base (sticky one first): a base whose probe
+    passes but whose POSTs fail (Cloudflare answering /health/live
+    while challenging API POSTs) is abandoned within the round instead
+    of pinning forever. Retries on any 0/5xx response but stops on a
     successful 2xx.
     """
     delay = 1.0
     last_status = 0
     last_error = ""
     for attempt in range(8):  # up to ~127s total
-        base = resolver.current()
-        if base is None:
+        bases = resolver.ordered_bases()
+        if not bases:
             last_error = "no reachable master"
-        else:
+        for base in bases:
             last_status, last_error = _post_json(base, path, body)
             if 200 <= last_status < 300:
+                resolver.set_current(base)
                 return last_status
-            # 4xx other than 401/408/429 are not worth retrying
+            # 4xx other than 401/403/408/429 are not worth retrying
+            # anywhere (same backend serves all bases).
             if 400 <= last_status < 500 and last_status not in {401, 403, 408, 429}:
                 log.error(
                     "post %s -> HTTP %d: %s (non-retryable, giving up)",
                     path, last_status, last_error[:200],
                 )
                 return last_status
+            log.warning(
+                "post %s via %s failed (attempt %d, status=%d): %s",
+                path, base, attempt + 1, last_status, last_error[:200],
+            )
         log.warning(
-            "post %s failed (attempt %d, status=%d): %s — retrying in %.0fs",
-            path, attempt + 1, last_status, last_error[:200], delay,
+            "post %s round %d exhausted, retrying in %.0fs",
+            path, attempt + 1, delay,
         )
         time.sleep(delay)
         delay = min(delay * 2, 60.0)

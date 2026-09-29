@@ -194,8 +194,11 @@ sleep 5
 # first boot into auth/session failures that look like app bugs. Wait
 # for at least one connected slave (5 min cap, then fail loud with the
 # replica logs attached). Skipped when the operator allows writes
-# without replicas (MIN_REPLICAS_TO_WRITE=0, e.g. single-node dev).
-if [ "${REDIS_MIN_REPLICAS_TO_WRITE:-1}" != "0" ]; then
+# without replicas (MIN_REPLICAS_TO_WRITE=0, e.g. single-node dev) and
+# when the compose stack defines no replica service at all (node mode
+# ships a single Redis — waiting would time out on every install,
+# 2026-09-28).
+if [ "${REDIS_MIN_REPLICAS_TO_WRITE:-1}" != "0" ] && grep -q "^  *redis-replica:" "${COMPOSE_FILE:-docker-compose.prod.yml}"; then
     echo -e "${BLUE}  → Waiting for Redis replica to attach (writes require 1 replica)...${NC}"
     _redis_synced=false
     _redis_slaves=""

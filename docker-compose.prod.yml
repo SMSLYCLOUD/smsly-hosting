@@ -724,7 +724,7 @@ services:
     # Needed to bind :53 while dropping everything else.
     cap_add:
       - NET_BIND_SERVICE
-    image: coredns/coredns:1.14.5
+    image: coredns/coredns:1.12.4
     command: -conf /etc/coredns/Corefile
     restart: unless-stopped
     ports:

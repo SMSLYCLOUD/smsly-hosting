@@ -692,3 +692,60 @@ class RefreshDomainEgressTests(TestCase):
         self.assertFalse(any("10.0.0.0/8" in c for c in calls))
         self.assertTrue(any("-D" in c and "9.9.9.9/32" in c for c in calls))
         self.assertEqual(stats["removed"], 1)
+
+
+class EnsureMeshReplyRuleTests(SimpleTestCase):
+    """Mesh-reply exception: ESTABLISHED answers back into wg0.
+
+    Regression 2026-09-29: per-bridge egress blocks end in a terminal
+    DROP with no mesh allowance, so node -> master Caddy :443 was
+    accepted forward but its SYN-ACK died on return (heartbeats
+    unreachable). Old-format blocks carry the egress tag without an
+    ESTABLISHED rule, so this exception uses its own tag and converges
+    independently of the egress idempotency gate.
+    """
+
+    def test_inserts_accept_rule_when_missing(self):
+        from apps.deployments.services import network_scope as ns_mod
+        with patch.object(
+            ns_mod, "_list_docker_user_rules", return_value=[],
+        ), patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            self.assertTrue(ns_mod.ensure_mesh_reply_rule("br-mesh1"))
+        calls = [" ".join(c.args[0]) for c in mock_sh.call_args_list]
+        self.assertEqual(len(calls), 1)
+        rule = calls[0]
+        self.assertIn("-i br-mesh1", rule)
+        self.assertIn("-o wg+", rule)
+        self.assertIn("ESTABLISHED,RELATED", rule)
+        self.assertIn("-j ACCEPT", rule)
+        self.assertIn("smsly-mesh-reply", rule)
+
+    def test_skips_when_tagged_rule_present(self):
+        from apps.deployments.services import network_scope as ns_mod
+        installed = [
+            "-i br-mesh1 -o wg+ -m conntrack --ctstate ESTABLISHED,RELATED "
+            "-j ACCEPT -m comment --comment smsly-mesh-reply",
+        ]
+        with patch.object(
+            ns_mod, "_list_docker_user_rules", return_value=installed,
+        ), patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            self.assertTrue(ns_mod.ensure_mesh_reply_rule("br-mesh1"))
+        mock_sh.assert_not_called()
+
+    def test_other_bridge_tag_does_not_count(self):
+        from apps.deployments.services import network_scope as ns_mod
+        installed = [
+            "-i br-other -o wg+ -m conntrack --ctstate ESTABLISHED,RELATED "
+            "-j ACCEPT -m comment --comment smsly-mesh-reply",
+        ]
+        with patch.object(
+            ns_mod, "_list_docker_user_rules", return_value=installed,
+        ), patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            self.assertTrue(ns_mod.ensure_mesh_reply_rule("br-mesh1"))
+        self.assertEqual(mock_sh.call_count, 1)
