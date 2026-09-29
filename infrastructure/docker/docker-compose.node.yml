@@ -329,9 +329,11 @@ services:
       # Mesh-direct fallback (WireGuard-encrypted): used when the public
       # URL is bot-walled (Cloudflare challenges 403 non-browser clients
       # while letting /health/live probes through — the old <500 probe
-      # pinned the broken public URL forever). TLS SNI + Host come from
-      # MASTER_API_URL automatically (registrar SNI override).
-      - MASTER_API_URL_FALLBACK=${MASTER_MESH_URL:-https://10.100.0.1}
+      # pinned the broken public URL forever). Plain HTTP is correct
+      # here: WG already encrypts transit, the mesh IP is in Django
+      # ALLOWED_HOSTS, and Caddy's :80 catch-all skips the https
+      # redirect for IP-literal hosts straight into /api + /health.
+      - MASTER_API_URL_FALLBACK=${MASTER_MESH_URL:-http://10.100.0.1}
       # SERVER_ID is what the bootstrap token writes; SMSLY_NODE_ID is
       # the lite-agent convention. Prefer the former so the registrar
       # posts to /api/v1/servers/<uuid>/ and not /api/v1/servers/node/
