@@ -25583,10 +25583,16 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 # Why REDIRECT-all instead of matching dl-cdn only: netfilter NAT
 # decisions happen on the SYN (no HTTP payload yet), so Host-based
 # matching cannot steer — only the proxy itself can route by Host.
-# Consequently ALL plain-HTTP egress takes a local hop; the default
-# server passes non-dl-cdn traffic through byte-identical, HTTPS is
-# untouched, and nginx is monitored like any platform service. This is
-# the standard transparent-proxy pattern, not a hack.
+# The PREROUTING steer is scoped to the default docker bridge subnet:
+# REDIRECT maps to the incoming interface address and the shim listens
+# only on 127.0.0.1 + the docker0 gateway, so steering any OTHER bridge
+# blackholes its :80 (nothing listens on its gateway; 2026-09-29: node
+# smsly-net containers could not reach mesh :80). App builds run on
+# docker0, so nothing is lost; every other bridge now routes directly.
+# Host-local OUTPUT still takes the local hop (transparent default
+# server passes it through byte-identical); HTTPS is untouched, and
+# nginx is monitored like any platform service. This is the standard
+# transparent-proxy pattern, not a hack.
 #
 # Idempotent: safe to run on every install/update/resume and at boot.
 # Best-effort: never aborts the caller (returns 0); build failures still
@@ -25690,8 +25696,9 @@ ensure_egress_mirror() {
         _egress_warn "nginx not listening on ${SMSLY_EGRESS_MIRROR_PORT} after start (see nginx -t / journalctl -u nginx)"
     fi
 
-    # 3. Steer port-80 TCP to the shim (PREROUTING covers containers,
-    # OUTPUT covers host-local processes). REDIRECT keeps it local.
+    # 3. Steer port-80 TCP from the default docker bridge to the shim
+    # (PREROUTING covers build containers, OUTPUT covers host-local
+    # processes). REDIRECT keeps it local.
     #
     # LOOP-BREAKER (observed live, full platform outage class): the OUTPUT
     # rule also catches nginx's OWN upstream connections (it proxies TO
@@ -25705,9 +25712,20 @@ ensure_egress_mirror() {
         iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -m owner --uid-owner "$_nginx_user" -j RETURN 2>/dev/null || \
             _egress_warn "nginx OUTPUT exemption failed — shim will loop on itself"
     fi
-    if ! iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
-        iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
+    # Scoped to the docker0 subnet: the shim binds 127.0.0.1 + the docker0
+    # gateway only, and REDIRECT targets the incoming interface address —
+    # an unscoped steer sends every other bridge's :80 to a gateway where
+    # nothing listens (UFW DROPs it: silent blackhole). Builds run on
+    # docker0, so scoping loses nothing.
+    _docker_steer_src="$(_docker0_gateway | cut -d. -f1-2).0.0/16"
+    if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -A PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
             _egress_warn "PREROUTING rule install failed"
+    fi
+    # Converge: remove the legacy unscoped steer if present (it hijacked
+    # :80 from EVERY bridge, including mesh and project networks).
+    if iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -D PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || true
     fi
     if ! iptables -t nat -C OUTPUT -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
         iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \

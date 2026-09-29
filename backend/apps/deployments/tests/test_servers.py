@@ -182,6 +182,54 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.status_code, 204)
         self.assertEqual(ManagedServer.objects.count(), 0)
 
+    def test_delete_live_agent_refused_without_force(self):
+        """A node with a recent agent heartbeat cannot be deleted by
+        accident: without ?force=true the row must survive (2026-09-29:
+        the aws-full-1 row vanished and mesh HMAC heartbeats 404'd until
+        the row was rebuilt with the node's original secret)."""
+        from django.utils import timezone
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="LiveNode",
+            host="10.0.0.9",
+            last_agent_heartbeat_at=timezone.now(),
+        )
+        resp = self.client.delete(f"/api/v1/servers/{server.id}/")
+        self.assertEqual(resp.status_code, 409)
+        self.assertTrue(ManagedServer.objects.filter(id=server.id).exists())
+
+    def test_delete_live_agent_forced_writes_audit(self):
+        from apps.core.models.audit import AuditLog
+        from django.utils import timezone
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="LiveNode2",
+            host="10.0.0.10",
+            last_agent_heartbeat_at=timezone.now(),
+        )
+        resp = self.client.delete(f"/api/v1/servers/{server.id}/?force=true")
+        self.assertEqual(resp.status_code, 204)
+        entry = AuditLog.objects.filter(
+            action="SERVER_DELETE", target__contains="LiveNode2"
+        ).first()
+        self.assertIsNotNone(entry)
+        self.assertTrue(entry.metadata.get("forced"))
+
+    def test_delete_writes_audit(self):
+        from apps.core.models.audit import AuditLog
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Audited",
+            host="10.0.0.11",
+        )
+        resp = self.client.delete(f"/api/v1/servers/{server.id}/")
+        self.assertEqual(resp.status_code, 204)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="SERVER_DELETE", target__contains="Audited"
+            ).exists()
+        )
+
     def test_other_users_server_not_visible(self):
         other = User.objects.create_user(
             username="other", email="other@test.com", password="pass"

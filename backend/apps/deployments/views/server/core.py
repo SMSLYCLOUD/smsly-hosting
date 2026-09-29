@@ -3,9 +3,12 @@ Base ManagedServerViewSet — CRUD, queryset, serializer, and permissions.
 """
 
 import logging
+from datetime import timedelta
 
-from rest_framework import viewsets
+from django.utils import timezone
+from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from ...models.servers import ManagedServer
 from .serializers import (
@@ -72,6 +75,62 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         server = serializer.save()
         self._start_server_health_sync(server)
+
+    # ── Delete guard: a missing row turns the node's HMAC 404 forever ──
+    # 2026-09-29: the aws-full-1 row vanished (no guard, no audit trail)
+    # and mesh heartbeats died until the row was rebuilt with the node's
+    # original secret. Deleting a node with a live agent heartbeat now
+    # requires ?force=true; every deletion writes an AuditLog first.
+    LIVE_AGENT_WINDOW = timedelta(minutes=15)
+
+    @staticmethod
+    def _has_live_agent(server) -> bool:
+        ts = getattr(server, "last_agent_heartbeat_at", None)
+        if not ts:
+            return False
+        return (timezone.now() - ts) < ManagedServerViewSet.LIVE_AGENT_WINDOW
+
+    def destroy(self, request, *args, **kwargs):
+        server = self.get_object()
+        force = str(request.query_params.get("force", "")).lower() in {
+            "1", "true", "yes",
+        }
+        if not force and self._has_live_agent(server):
+            return Response(
+                {
+                    "detail": (
+                        f"Server '{server.name}' has a live agent heartbeat "
+                        f"({server.last_agent_heartbeat_at.isoformat()}). "
+                        "Deleting it will orphan the node: its HMAC calls "
+                        "will 404 until the row is rebuilt. Retry with "
+                        "?force=true to confirm."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        self._audit_server_delete(request, server, forced=force)
+        return super().destroy(request, *args, **kwargs)
+
+    @staticmethod
+    def _audit_server_delete(request, server, forced: bool = False) -> None:
+        try:
+            from apps.core.models.audit import AuditLog
+            user = getattr(request, "user", None)
+            AuditLog.objects.create(
+                user=user if getattr(user, "is_authenticated", False) else None,
+                actor=getattr(user, "username", "system") or "system",
+                action="SERVER_DELETE",
+                target=f"Server: {server.name} ({server.id})",
+                metadata={
+                    "host": server.host,
+                    "node_number": getattr(server, "node_number", None),
+                    "node_type": getattr(server, "node_type", ""),
+                    "forced": forced,
+                },
+                project=getattr(server, "project", None),
+            )
+        except Exception:
+            logger.exception("server delete audit write failed for %s", server.id)
 
     def _start_server_health_sync(self, server):
         has_connection_hint = bool(
