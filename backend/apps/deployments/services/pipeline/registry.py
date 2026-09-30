@@ -241,11 +241,17 @@ class RegistryMixin:
             push_ref = self.image_name
             try:
                 from apps.deployments.services.registry_routing import (
-                    _INTERNAL_HOSTS,
                     _split_ref,
+                    is_master_registry_ref,
                 )
                 _phost, _prest = _split_ref(self.image_name or "")
-                if _phost and _prest and _phost in _INTERNAL_HOSTS:
+                # is_master_registry_ref covers every local address of our
+                # own registry (registry:5000, loopback, WG mesh IP):
+                # pushing a mesh-qualified build name verbatim to the
+                # local target would stack hosts
+                # (`registry:5000/10.100.0.1:5000/ns/...` — invalid
+                # reference, observed live on remote deploys 2026-09-29).
+                if _phost and _prest and is_master_registry_ref(self.image_name or ""):
                     _norm_target = (registry_url or "").split("://")[-1].rstrip("/")
                     if _norm_target and _phost != _norm_target:
                         from apps.cloud.docker_client import get_docker_client
