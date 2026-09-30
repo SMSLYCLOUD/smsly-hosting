@@ -314,6 +314,14 @@ def delete_addon_task(self, addon_id: str) -> None:
 
     if success:
         addon.delete()
+        # Tenant pooler: pools render from live rows — a deleted shared
+        # addon leaves a stale pool (and stale userlist password) until
+        # the next push. Disconnect here, best-effort.
+        try:
+            from apps.addons.services.tenant_pooler import push_tenants_config
+            push_tenants_config()
+        except Exception:
+            logger.debug("tenant pooler push skipped after addon %s delete", addon_id)
     else:
         addon.status = Addon.Status.DELETION_FAILED
         addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."

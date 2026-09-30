@@ -72,6 +72,13 @@ def rotate_addon_credentials_task(self, addon_id) -> None:
             )
         else:
             _logger.info("rotate_addon_credentials_task succeeded for addon %s", addon_id)
+            # Tenant pooler: the userlist carries passwords — a rotation
+            # without a push leaves stale credentials in the pool.
+            try:
+                from apps.addons.services.tenant_pooler import push_tenants_config
+                push_tenants_config()
+            except Exception:
+                _logger.debug("tenant pooler push skipped after rotate %s", addon_id)
     except Exception as exc:
         _logger.error("rotate_addon_credentials_task failed for addon %s: %s", addon_id, exc)
         raise
