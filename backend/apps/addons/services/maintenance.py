@@ -150,6 +150,22 @@ class AddonMaintenanceService:
             except Exception:
                 logger.debug("tenant pooler push skipped for addon %s", addon.id, exc_info=True)
 
+            # Dedicated PgBouncer addons embed the target's password as a
+            # SCRAM verifier — re-render them so they don't go stale.
+            try:
+                if addon_type == 'POSTGRES':
+                    from apps.deployments.models.addons import Addon as _AddonModel
+                    from apps.addons.services.addon_provisioner import addon_provisioner as _prov
+                    for pooler in _AddonModel.objects.filter(
+                            service=addon.service, addon_type='PGBOUNCER').exclude(
+                            status__in=['DELETED', 'DELETION_PENDING']):
+                        try:
+                            _prov.sync_pgbouncer_config(pooler)
+                        except Exception:
+                            logger.warning("PgBouncer resync failed for %s", pooler.id)
+            except Exception:
+                logger.debug("pgbouncer resync skipped for addon %s", addon.id, exc_info=True)
+
             # Re-inject credentials as env vars (mirrors provision_addon_task)
             from apps.deployments.models import EnvironmentVariable
             creds = addon.parsed_credentials

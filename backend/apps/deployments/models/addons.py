@@ -79,6 +79,8 @@ class Addon(TimeStampedModel):
         # ── Agent Browsers (self-hosted browser infrastructure for AI agents) ──
         STEEL = 'STEEL', 'Steel Browser'
         BROWSERLESS = 'BROWSERLESS', 'Browserless Chrome'
+        # ── Connection Pooling ──
+        PGBOUNCER = 'PGBOUNCER', 'PgBouncer'
 
     class Status(models.TextChoices):
         PROVISIONING = 'PROVISIONING', 'Provisioning'
@@ -240,6 +242,13 @@ class Addon(TimeStampedModel):
                 result['POSTGRES_HOST'] = parsed.hostname
             if parsed.port:
                 result['POSTGRES_PORT'] = str(parsed.port)
+
+        elif self.addon_type == self.Type.PGBOUNCER:
+            result['POOLER_URL'] = self.connection_url
+            if parsed.hostname:
+                result['POOLER_HOST'] = parsed.hostname
+            if parsed.port:
+                result['POOLER_PORT'] = str(parsed.port)
 
         elif self.addon_type == self.Type.MYSQL:
             result['MYSQL_URL'] = self.connection_url

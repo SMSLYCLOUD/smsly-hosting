@@ -50,6 +50,7 @@ class AddonProvisioner:
         # compatible) behind the unchanged s3:// contract. See
         # _provision_minio.
         'MINIO': 'dxflrs/garage:v2.4.1',
+        'PGBOUNCER': 'pgbouncer/pgbouncer:1.24.1',
     }
 
     # Default ports for each addon
@@ -62,6 +63,7 @@ class AddonProvisioner:
         'ELASTICSEARCH': 9200,
         'RABBITMQ': 5672,
         'MINIO': 9000,
+        'PGBOUNCER': 6432,
     }
 
     # Environment variable keys for connection URLs
@@ -74,6 +76,7 @@ class AddonProvisioner:
         'ELASTICSEARCH': 'ELASTICSEARCH_URL',
         'RABBITMQ': 'RABBITMQ_URL',
         'MINIO': 'MINIO_URL',
+        'PGBOUNCER': 'POOLER_URL',
     }
 
     GENERIC_ADDONS_CONFIG = {
@@ -889,6 +892,8 @@ class AddonProvisioner:
                 container_id, _ = self._provision_elasticsearch(container_name, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'RABBITMQ':
                 container_id, _ = self._provision_rabbitmq(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
+            elif addon_type == 'PGBOUNCER':
+                container_id, _ = self._provision_pgbouncer(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             else:
                 raise ValueError(f"Unsupported addon type: {addon_type}")
 
@@ -928,6 +933,8 @@ class AddonProvisioner:
             container_id, connection_url = self._provision_elasticsearch(container_name, cast(int, port), alias_name, public_domain=public_domain)
         elif addon_type == 'RABBITMQ':
             container_id, connection_url = self._provision_rabbitmq(container_name, password, cast(int, port), alias_name, public_domain=public_domain)
+        elif addon_type == 'PGBOUNCER':
+            container_id, connection_url = self._provision_pgbouncer(container_name, password, cast(int, port), alias_name, public_domain=public_domain)
         else:
             raise ValueError(f"Unsupported addon type: {addon_type}")
 
@@ -2100,6 +2107,220 @@ metrics = false
 
         self._wait_for_health(container_name, port, timeout=90)
         return container_id, connection_url
+
+    PGBOUNCER_IMAGE = 'pgbouncer/pgbouncer:1.24.1'
+    PGBOUNCER_PORT = 6432
+    PGBOUNCER_SCRAM_ITERATIONS = 4096
+
+    @staticmethod
+    def _scram_verifier(password: str, iterations: int = PGBOUNCER_SCRAM_ITERATIONS) -> str:
+        """SCRAM-SHA-256 verifier string for pgbouncer userlist.txt.
+
+        PgBouncer cannot do SCRAM with plaintext userlist passwords (it
+        needs the stored/server keys), so we precompute them (RFC 5802).
+        """
+        import hashlib
+        import hmac as _hmac
+        import base64 as _b64
+        salt = secrets.token_bytes(16)
+        salted = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, iterations)
+        client_key = _hmac.new(salted, b'Client Key', hashlib.sha256).digest()
+        stored_key = hashlib.sha256(client_key).digest()
+        server_key = _hmac.new(salted, b'Server Key', hashlib.sha256).digest()
+        return (
+            f"SCRAM-SHA-256${iterations}:"
+            f"{_b64.b64encode(salt).decode()}:"
+            f"{_b64.b64encode(stored_key).decode()}:"
+            f"{_b64.b64encode(server_key).decode()}"
+        )
+
+    @staticmethod
+    def _render_pgbouncer_config(db_user: str, db_host: str, db_port: int,
+                                 db_name: str, verifier: str) -> tuple[str, str]:
+        """Render (pgbouncer.ini, userlist.txt) for a single pooled database."""
+        ini = (
+            "[databases]\n"
+            f"{db_name} = host={db_host} port={db_port} dbname={db_name}\n"
+            "\n"
+            "[pgbouncer]\n"
+            "listen_addr = 0.0.0.0\n"
+            "listen_port = 6432\n"
+            "auth_type = scram-sha-256\n"
+            "auth_file = /etc/pgbouncer/userlist.txt\n"
+            "pool_mode = transaction\n"
+            "max_client_conn = 100\n"
+            "default_pool_size = 20\n"
+            "min_pool_size = 0\n"
+            "reserve_pool_size = 2\n"
+            "server_reset_query = DISCARD ALL\n"
+            "server_check_query = select 1\n"
+            "server_check_delay = 30\n"
+            "ignore_startup_parameters = extra\n"
+        )
+        userlist = f'"{db_user}" "{verifier}"\n'
+        return ini, userlist
+
+    def _write_pgbouncer_config(self, container_name: str, ini: str,
+                                userlist: str) -> str:
+        """Write pooler config into a named volume; returns the volume name.
+
+        Files go through a transient helper container (never the host
+        filesystem, never process lists) and land mode 644 so the
+        image's postgres user can read them.
+        """
+        volume = f"{container_name}-config"
+        subprocess.run(['docker', 'volume', 'create', volume],
+                       capture_output=True, check=False, timeout=60)
+        env_file = self._write_env_file({'PGB_INI_B64': base64.b64encode(ini.encode()).decode(),
+                                         'PGB_UL_B64': base64.b64encode(userlist.encode()).decode()})
+        try:
+            subprocess.run(
+                ['docker', 'run', '--rm',
+                 '-v', f'{volume}:/cfg',
+                 '--env-file', env_file,
+                 self.PGBOUNCER_IMAGE,
+                 'sh', '-c',
+                 'echo "$PGB_INI_B64" | base64 -d > /cfg/pgbouncer.ini && '
+                 'echo "$PGB_UL_B64" | base64 -d > /cfg/userlist.txt && '
+                 'chmod 644 /cfg/pgbouncer.ini /cfg/userlist.txt'],
+                capture_output=True, text=True, check=True, timeout=120)
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(env_file)
+        return volume
+
+    def _pgbouncer_target(self, addon) -> tuple[str, int, str, str, str]:
+        """Resolve the DIRECT backend (host, port, user, db, password) for a pooler.
+
+        Pooling a pool is pointless and loops traffic — shared/pooled
+        Postgres addons resolve to the shared server with the same
+        credentials instead of the pooler alias.
+        """
+        from urllib.parse import urlparse as _urlparse
+        from apps.deployments.models.addons import Addon as _Addon
+        target = (_Addon.objects
+                  .filter(service=addon.service, addon_type='POSTGRES')
+                  .exclude(status='DELETED')
+                  .order_by('-updated_at')
+                  .first())
+        if target is None or not (target.connection_url or '').strip():
+            raise ValueError(
+                "PgBouncer needs a POSTGRES addon on the same service to pool. "
+                "Provision PostgreSQL first.")
+        parts = self._parse_connection_url(target.connection_url)
+        host = str(parts.get('hostname') or '').strip()
+        if not host:
+            raise ValueError("Target Postgres URL has no host.")
+        if bool(getattr(target, 'pooler_routed', False)):
+            from apps.addons.services.shared_postgres import SHARED_CONTAINER
+            host = SHARED_CONTAINER
+        return (host,
+                int(parts.get('port') or 5432),
+                str(parts.get('username') or ''),
+                str(parts.get('database') or ''),
+                str(parts.get('password') or ''))
+
+    def _provision_pgbouncer(self, container_name: str,
+                             password: str, port: int,
+                             alias_name: str = '', public_domain: str | None = None,
+                             host_port: int | None = None) -> tuple[str, str]:
+        """Provision a dedicated PgBouncer for the service's Postgres addon.
+
+        ``password`` is unused (the pooler authenticates with the TARGET's
+        credentials); it exists for signature parity with other provisioners.
+        """
+        _ = password
+        target_host, target_port, db_user, db_name, db_password = \
+            self._pgbouncer_target_by_name(container_name, alias_name)
+        if not db_user or not db_password or not db_name:
+            raise ValueError(
+                "Target Postgres credentials incomplete (user/password/database) — "
+                "reprovision it first; the pooler cannot invent auth details.")
+        ini, userlist = self._render_pgbouncer_config(
+            db_user, target_host, target_port, db_name,
+            self._scram_verifier(db_password))
+        volume = self._write_pgbouncer_config(container_name, ini, userlist)
+        cmd = [
+            'docker', 'run', '-d',
+            '--name', container_name,
+            '--network', self.network_name,
+            '--restart', 'unless-stopped',
+            *self.SECURITY_OPTS,
+            '-v', f'{volume}:/etc/pgbouncer:ro',
+        ]
+        if host_port:
+            cmd.extend(self._publish_args(host_port, port))
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.append(self.PGBOUNCER_IMAGE)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
+        container_id = result.stdout.strip()[:12]
+        hostname = alias_name or container_name
+        connection_url = (
+            f"postgresql://{db_user}:{db_password}@{hostname}:{port}/{db_name}")
+        self._wait_for_health(container_name, port, timeout=90)
+        return container_id, connection_url
+
+    def _pgbouncer_target_by_name(self, container_name: str,
+                                  alias_name: str) -> tuple[str, int, str, str, str]:
+        """Target resolution from the stable container-name pattern."""
+        import re as _re
+        from apps.deployments.models.addons import Addon as _Addon
+        m = _re.search(
+            r"smsly-addon-pgbouncer-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+            r"[0-9a-f]{4}-[0-9a-f]{12})$", container_name)
+        if not m:
+            raise ValueError(
+                "PgBouncer container name does not carry its Addon id; "
+                "refusing to guess the target Postgres.")
+        addon = _Addon.objects.filter(id=m.group(1)).first()
+        if addon is None:
+            raise ValueError("PgBouncer Addon row not found; refusing to guess.")
+        return self._pgbouncer_target(addon)
+
+    def sync_pgbouncer_config(self, addon) -> bool:
+        """Re-render a pooler's config from its target's CURRENT password.
+
+        Call after the target Postgres rotates credentials — the pooler
+        embeds a verifier, so it goes stale otherwise. Recreates the
+        container on the same volume/name (config is a file swap away,
+        but recreate is the uniform, race-free path).
+        Returns True when the pooler was refreshed.
+        """
+        import shlex as _shlex
+        container_name = f"smsly-addon-{str(addon.addon_type).lower()}-{addon.id}"
+        try:
+            try:
+                cur = subprocess.run(
+                    ['docker', 'inspect', '-f', '{{.State.Running}}', container_name],
+                    capture_output=True, text=True, timeout=30)
+                was_running = cur.returncode == 0 and cur.stdout.strip() == 'true'
+            except Exception:
+                was_running = False
+            subprocess.run(['docker', 'rm', '-f', container_name],
+                           capture_output=True, check=False, timeout=60)
+            target_host, target_port, db_user, db_name, db_password = \
+                self._pgbouncer_target(addon)
+            ini, userlist = self._render_pgbouncer_config(
+                db_user, target_host, target_port, db_name,
+                self._scram_verifier(db_password))
+            self._write_pgbouncer_config(container_name, ini, userlist)
+            if was_running:
+                subprocess.run(['docker', 'start', container_name],
+                               capture_output=True, check=False, timeout=60)
+            try:
+                self._wait_for_health(container_name, 6432, timeout=60)
+            except Exception as exc:
+                logger.warning("PgBouncer %s refresh health wait failed: %s",
+                               container_name, exc)
+                return False
+            return True
+        except Exception as exc:
+            logger.warning("PgBouncer config sync failed for %s: %s",
+                           getattr(addon, 'id', '?'), exc)
+            return False
 
     def _get_published_host_port(self, container_name: str) -> int | None:
         """Return the first host port published by an existing container.
