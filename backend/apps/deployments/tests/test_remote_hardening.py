@@ -180,6 +180,47 @@ class RemoteHardeningTests(TestCase):
                 manager._push_image()
             self.assertIn("Local fallback is not allowed for remote deployments", str(context.exception))
 
+    @patch('apps.deployments.services.pipeline.registry.log_exhaustive_push_diagnostics')
+    @patch('apps.cloud.docker_client.get_docker_client')
+    @patch('apps.deployments.services.pipeline.registry.NixpacksBuilder.push_image')
+    def test_pipeline_push_strips_mesh_prefix_for_local_registry(
+        self, mock_push, mock_docker_client, mock_diagnostics,
+    ):
+        """A mesh-qualified build name (10.100.0.1:5000/...) pushed to the
+        local registry target must first retag bare — otherwise the push
+        stacks hosts (`registry:5000/10.100.0.1:5000/...`) and Docker
+        rejects it as an invalid reference (live remote-deploy failure
+        2026-09-29)."""
+        import os
+        mock_diagnostics.return_value = True
+        mock_push.return_value = ("registry:5000/smsly/app:tag", None)
+        mock_image = MagicMock()
+        mock_client = MagicMock()
+        mock_client.images.get.return_value = mock_image
+        mock_docker_client.return_value = mock_client
+
+        service = Service.objects.create(
+            name='svc-mesh-strip',
+            owner=self.user,
+            provider=self.local_provider,
+            server=self.local_server,
+            deploy_type='GIT'
+        )
+        deployment = Deployment.objects.create(
+            service=service,
+            commit_hash='abc1234'
+        )
+
+        with patch.object(settings, 'CONTAINER_REGISTRY_URL', 'registry:5000'):
+            with patch.dict(os.environ, {'WIREGUARD_MASTER_MESH_IP': '10.100.0.1'}):
+                manager = PipelineManager(deployment)
+                manager.image_name = "10.100.0.1:5000/smsly/app:tag"
+                manager._push_image()
+        pushed_ref = mock_push.call_args[0][0]
+        self.assertEqual(pushed_ref, "smsly/app:tag")
+        mock_image.tag.assert_called_once_with("smsly/app:tag")
+        self.assertEqual(manager.image_name, "registry:5000/smsly/app:tag")
+
     @patch('apps.deployments.services.ssh_client.SSHClient.connect')
     @patch('apps.deployments.services.ssh_client.paramiko.SSHClient')
     def test_ssh_client_reconnects_if_transport_inactive(self, mock_ssh_class, mock_connect):
