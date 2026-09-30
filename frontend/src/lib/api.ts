@@ -2258,6 +2258,10 @@ export const addonsApi = {
         const res = await api.post(`/addons/${id}/expose/`);
         return res.data;
     },
+    unexpose: async (id: string): Promise<{ public_domain: null; status: string }> => {
+        const res = await api.post(`/addons/${id}/unexpose/`);
+        return res.data;
+    },
     deprovision: async (id: string, confirmation?: string): Promise<{ status: string; message?: string }> => {
         const res = await api.post(`/addons/${id}/deprovision/`, { confirmation: confirmation ?? '' });
         return res.data;

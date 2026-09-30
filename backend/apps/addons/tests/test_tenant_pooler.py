@@ -158,7 +158,7 @@ class PushTests(TestCase):
              mock.patch.object(tp, '_read_remote_file', return_value='stale'), \
              mock.patch.object(tp, '_write_remote_file', return_value={}), \
              mock.patch.object(tp, '_run',
-                               side_effect=[{'error': 'no kill'}, {}]) as runner:
+                               side_effect=[{'error': 'no kill'}, {}, {}]) as runner:
             result = tp.push_tenants_config()
         self.assertTrue(result['ok'])
         self.assertTrue(result['changed'])
@@ -184,3 +184,80 @@ class PushTests(TestCase):
         writer.assert_not_called()
         restart_calls = [c for c in runner.call_args_list if 'restart' in str(c)]
         self.assertEqual(restart_calls, [])
+
+
+class ReconcileTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="tenantrecon", password="x")
+        self.service = Service.objects.create(name="treconsvc", owner=self.user)
+        Addon.objects.create(
+            service=self.service, name="pg-shared", addon_type="POSTGRES",
+            status=Addon.Status.ACTIVE, provision_mode="shared",
+            connection_url="postgresql://u1:pw1@postgres-keep:5432/d1")
+        Addon.objects.create(
+            service=self.service, name="pg-ded", addon_type="POSTGRES",
+            status=Addon.Status.ACTIVE, provision_mode="container",
+            connection_url="postgresql://u2:pw2@postgres-stale:5432/d2")
+
+    def _recon(self, networks, aliases_by_net):
+        calls = []
+
+        def fake_sp_run(cmd, timeout=60):
+            calls.append(cmd)
+            m = mock.Mock()
+            m.returncode = 0
+            m.stderr = b''
+            return m
+
+        with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
+             mock.patch.object(tp, '_pooler_networks', return_value=networks), \
+             mock.patch('apps.addons.services.shared_postgres._endpoint_aliases',
+                        side_effect=lambda c, n: list(aliases_by_net.get(n, []))), \
+             mock.patch('apps.addons.services.shared_postgres._run',
+                        side_effect=fake_sp_run):
+            result = tp.reconcile_pooler_aliases()
+        return result, calls
+
+    def test_strips_dedicated_alias_keeps_shared(self):
+        result, calls = self._recon(
+            ['smsly-net'],
+            {'smsly-net': ['c1', 'pgbouncer-tenants', 'postgres-keep',
+                           'postgres-stale']})
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['stripped'], ['postgres-stale@smsly-net'])
+        reconnects = [c for c in calls if 'connect' in c]
+        self.assertEqual(len(reconnects), 1)
+        flat = ' '.join(reconnects[0])
+        self.assertIn('postgres-keep', flat)
+        self.assertNotIn('postgres-stale', flat)
+
+    def test_detaches_network_with_only_stale_aliases(self):
+        result, calls = self._recon(
+            ['scoped-net'],
+            {'scoped-net': ['postgres-stale']})
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['stripped'], ['postgres-stale@scoped-net'])
+        reconnects = [c for c in calls if 'connect' in c]
+        self.assertEqual(reconnects, [])
+
+    def test_clean_pooler_is_noop(self):
+        result, calls = self._recon(
+            ['smsly-net'],
+            {'smsly-net': ['c1', 'pgbouncer-tenants', 'postgres-keep']})
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['stripped'], [])
+        self.assertEqual(calls, [])
+
+    def test_push_runs_reconcile_even_when_unchanged(self):
+        ini, userlist = _render(tp.list_tenant_pools(with_passwords=True))
+        with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
+             mock.patch.object(tp, 'container_running', return_value=True), \
+             mock.patch.object(tp, '_read_remote_file',
+                               side_effect=[ini, userlist]), \
+             mock.patch.object(tp, '_run', return_value={}), \
+             mock.patch.object(tp, 'reconcile_pooler_aliases',
+                               return_value={'ok': True, 'stripped': []}) as recon:
+            result = tp.push_tenants_config()
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['changed'])
+        recon.assert_called_once_with()

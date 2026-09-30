@@ -177,6 +177,17 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         }
     };
 
+    const handleUnexpose = async (addonId: string) => {
+        if (!await confirm({ title: 'Make Internal?', message: 'This will remove the public domain and return this addon to internal-only networking. The addon container restarts to drop proxy routing (brief downtime, data persists). Continue?' })) return;
+        try {
+            await addonsApi.unexpose(addonId);
+            fetchAddons();
+        } catch (e) {
+            console.error('Failed to unexpose addon:', e);
+            alert("Failed to make addon internal");
+        }
+    };
+
     const handleBackup = async (addonId: string) => {
         try {
             await addonsApi.backup(addonId);
@@ -479,12 +490,21 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                         >
                                                             <Globe size={12} /> {addon.public_domain}
                                                         </span>
+                                                        {(meta as any).has_dashboard && (
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handleUpdatePublicDomain(addon.id, addon.public_domain); }}
+                                                                className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/30 transition-colors h-full"
+                                                                title="Edit Domain"
+                                                            >
+                                                                Edit
+                                                            </button>
+                                                        )}
                                                         <button
-                                                            onClick={(e) => { e.stopPropagation(); handleUpdatePublicDomain(addon.id, addon.public_domain); }}
-                                                            className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/30 transition-colors h-full"
-                                                            title="Edit Domain"
+                                                            onClick={(e) => { e.stopPropagation(); handleUnexpose(addon.id); }}
+                                                            className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-red-500/30 hover:text-red-400 transition-colors h-full"
+                                                            title="Remove public domain and return to internal-only networking"
                                                         >
-                                                            Edit
+                                                            Make Internal
                                                         </button>
                                                     </div>
                                                     {(meta as any).has_dashboard ? (
@@ -498,18 +518,25 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                             <Eye size={12} /> View Dashboard
                                                         </a>
                                                     ) : (
-                                                        <span className="flex items-center gap-2 px-3 py-2 bg-zinc-500/10 text-zinc-400 rounded-lg text-xs font-medium h-full cursor-not-allowed" title="This addon type does not have an HTTP dashboard. Use TCP clients to connect.">
-                                                            <Server size={12} /> TCP Service
+                                                        <span className="flex items-center gap-2 px-3 py-2 bg-zinc-500/10 text-zinc-400 rounded-lg text-xs font-medium h-full" title="TCP-only addon: the public URL never served traffic (HTTP routing only). Use Make Internal to remove it.">
+                                                            <Server size={12} /> TCP: URL inactive
                                                         </span>
                                                     )}
                                                 </div>
-                                            ) : (
+                                            ) : (meta as any).has_dashboard ? (
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); handleUpdatePublicDomain(addon.id, addon.public_domain); }}
                                                     className="flex items-center gap-2 px-3 py-2 bg-muted text-muted-foreground rounded-lg text-xs font-medium hover:bg-muted/80 transition-colors"
                                                 >
                                                     <Globe size={12} /> Expose Publicly
                                                 </button>
+                                            ) : (
+                                                <span
+                                                    className="flex items-center gap-2 px-3 py-2 bg-zinc-500/10 text-zinc-400 rounded-lg text-xs font-medium h-full"
+                                                    title="TCP-only addon: internal-only by design, no public exposure available."
+                                                >
+                                                    <Server size={12} /> Internal Only
+                                                </span>
                                             )}
                                             {addon.status === 'FAILED' || addon.status === 'DELETED' ? (
                                                 <button

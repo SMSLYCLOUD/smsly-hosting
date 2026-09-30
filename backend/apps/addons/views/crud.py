@@ -615,6 +615,15 @@ class AddonViewSet(viewsets.ModelViewSet):
         addon = serializer.save()
         # If public_domain changed, re-provision to update proxy labels
         if 'public_domain' in serializer.validated_data:
+            if serializer.validated_data.get('public_domain'):
+                from ..services.addon_provisioner import AddonProvisioner
+                cfg = (AddonProvisioner.GENERIC_ADDONS_CONFIG or {}).get(addon.addon_type)
+                if not cfg or not cfg.get('dashboard_port'):
+                    addon.public_domain = None
+                    addon.save(update_fields=['public_domain'])
+                    raise serializers.ValidationError(
+                        f'{addon.addon_type} has no HTTP dashboard; public exposure is HTTP-only.'
+                    )
             from ..tasks.crud import provision_addon_task
             ok, _ = _guard_delay(provision_addon_task, str(addon.id))
             if not ok:
@@ -625,9 +634,23 @@ class AddonViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def expose(self, request, pk=None):
-        """Auto-generate and assign a public domain for this addon."""
+        """Auto-generate and assign a public domain for this addon.
+
+        HTTP-dashboard addons only: public routing is an HTTP Host rule
+        pointed at the type's dashboard_port. TCP-only types (postgres,
+        redis, garage/minio, …) have no HTTP interface — exposing them
+        mints a dead URL and pointlessly recreates the container, so the
+        request is refused fail-closed (2026-09-30: dead postgres URL).
+        """
         addon = self.get_object()
         assert_can_write(self.request.user, addon.service, action='expose addon')
+        from ..services.addon_provisioner import AddonProvisioner
+        cfg = (AddonProvisioner.GENERIC_ADDONS_CONFIG or {}).get(addon.addon_type)
+        if not cfg or not cfg.get('dashboard_port'):
+            return Response(
+                {'error': f'{addon.addon_type} has no HTTP dashboard; public exposure is HTTP-only. TCP addons stay internal-only.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         from apps.deployments.models import Service
         base_domain = Service.default_public_base_domain()
 
@@ -648,6 +671,27 @@ class AddonViewSet(viewsets.ModelViewSet):
             )
 
         return Response({'public_domain': generated_domain})
+
+    @action(detail=True, methods=['post'])
+    def unexpose(self, request, pk=None):
+        """Remove the public domain; addon returns to internal-only networking."""
+        addon = self.get_object()
+        assert_can_write(self.request.user, addon.service, action='unexpose addon')
+        if not addon.public_domain:
+            return Response({'public_domain': None, 'status': 'already_internal'})
+
+        addon.public_domain = None
+        addon.save(update_fields=['public_domain'])
+
+        from ..tasks.crud import provision_addon_task
+        ok, _ = _guard_delay(provision_addon_task, str(addon.id))
+        if not ok:
+            return Response(
+                {"error": "Domain cleared, but re-provisioning could not be queued. Use 'reprovision' to retry."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response({'public_domain': None, 'status': 'unexpose_started'})
 
     @action(detail=True, methods=['post'])
     def reprovision(self, request, pk=None):

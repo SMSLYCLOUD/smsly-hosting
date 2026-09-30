@@ -363,7 +363,9 @@ def push_tenants_config():
     current_ini = _read_remote_file(container, TENANTS_INI_PATH)
     current_ul = _read_remote_file(container, TENANTS_USERLIST_PATH)
     if current_ini == ini and current_ul == userlist:
-        return {'ok': True, 'pools': len(pools), 'changed': False, 'restarted': False}
+        return {'ok': True, 'pools': len(pools), 'changed': False,
+                'restarted': False,
+                'alias_reconcile': reconcile_pooler_aliases()}
     res = _write_remote_file(container, ini, TENANTS_INI_PATH, '.ini')
     if res.get('error'):
         return {'ok': False, 'pools': len(pools),
@@ -378,14 +380,105 @@ def push_tenants_config():
     # reload signal itself fails.
     hup = _run(['docker', 'exec', container, 'kill', '-HUP', '1'], timeout=30)
     if not hup.get('error'):
-        return {'ok': True, 'pools': len(pools), 'changed': True, 'restarted': False}
+        return {'ok': True, 'pools': len(pools), 'changed': True,
+                'restarted': False,
+                'alias_reconcile': reconcile_pooler_aliases()}
     logger.warning("tenant pooler: HUP reload failed, restarting: %s",
                    hup.get('error'))
     restart = _run(['docker', 'restart', container], timeout=90)
     if restart.get('error'):
         return {'ok': False, 'pools': len(pools),
                 'error': f'config written but pooler restart failed: {restart["error"]}'}
-    return {'ok': True, 'pools': len(pools), 'changed': True, 'restarted': True}
+    return {'ok': True, 'pools': len(pools), 'changed': True, 'restarted': True,
+            'alias_reconcile': reconcile_pooler_aliases()}
+
+
+POOLER_IDENTITY_ALIASES = ('pgbouncer-tenants',)
+
+
+def _pooler_networks(container):
+    """Networks the pooler container is attached to (names only)."""
+    res = _run(['docker', 'inspect', container, '--format',
+                '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'],
+               timeout=15)
+    if res.get('error'):
+        return []
+    return [n for n in (res.get('output') or '').split() if n]
+
+
+def reconcile_pooler_aliases():
+    """Strip-only alias reconciler: remove pooler aliases nothing should use.
+
+    Root cause of the 2026-09-30 marketer outage: ``attach_pooler_alias``
+    is fail-closed for NEW attaches, but no path ever DETACHES. An addon
+    that moves shared/pooled -> dedicated keeps its alias on the pooler,
+    Docker DNS round-robins between the real container and the pooler
+    (which has no such pool), and the app fails intermittently.
+
+    Runs best-effort at the end of every successful ``push_tenants_config``
+    (even when the ini is unchanged), so any stale alias — pre-guard
+    leftovers, migrate races, manual docker meddling — is removed on the
+    next push instead of shadowing a live database forever.
+
+    Strip-only by design: never attaches (attach flows own that with the
+    guard), never touches other containers, never removes the pooler's
+    own identity aliases. A network left with zero wanted aliases gets a
+    clean detach; otherwise the pooler reconnects carrying the kept set.
+    Never raises: failures are logged and reported, the push stays green.
+    """
+    try:
+        from apps.addons.services.shared_postgres import (
+            _endpoint_aliases, _run as _sp_run)
+    except Exception as exc:
+        return {'ok': False, 'error': f'import failed: {exc}'}
+    container = tenants_container_name()
+    if container is None:
+        return {'ok': False, 'error': 'pooler container not found'}
+    try:
+        wanted = {container, *POOLER_IDENTITY_ALIASES}
+        for pool in list_tenant_pools():
+            if pool.get('alias'):
+                wanted.add(pool['alias'])
+    except Exception as exc:
+        logger.warning("pooler alias reconcile: wanted-set lookup failed: %s", exc)
+        return {'ok': False, 'error': f'wanted-set lookup failed: {exc}'}
+    stripped: list[str] = []
+    networks = 0
+    for network in _pooler_networks(container):
+        try:
+            current = _endpoint_aliases(container, network)
+        except Exception as exc:
+            logger.warning(
+                "pooler alias reconcile: alias lookup failed on %s: %s",
+                network, exc)
+            continue
+        if not current:
+            continue
+        stale = [a for a in current if a not in wanted]
+        if not stale:
+            continue
+        kept = [a for a in current if a in wanted]
+        proc = _sp_run(
+            ['docker', 'network', 'disconnect', network, container], timeout=60)
+        if proc.returncode != 0:
+            logger.warning(
+                "pooler alias reconcile: disconnect failed on %s: %s",
+                network, (proc.stderr or '').strip()[:150])
+            continue
+        if kept:
+            cmd = ['docker', 'network', 'connect']
+            for entry in kept:
+                cmd += ['--alias', entry]
+            cmd += [network, container]
+            proc = _sp_run(cmd, timeout=60)
+            if proc.returncode != 0:
+                logger.warning(
+                    "pooler alias reconcile: reconnect failed on %s: %s",
+                    network, (proc.stderr or '').strip()[:150])
+                continue
+        stripped += [f'{a}@{network}' for a in stale]
+        networks += 1
+    return {'ok': True, 'networks': networks, 'stripped': stripped}
 
 
 def pooler_status():
