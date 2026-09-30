@@ -93,3 +93,21 @@ class RegistryRoutingTests(TestCase):
             self.assertTrue(is_master_registry_ref('10.100.0.1:5000/smsly/app:abc'))
             self.assertFalse(is_master_registry_ref('ghcr.io/smsly/app:v1'))
             self.assertFalse(is_master_registry_ref('evil.example.com:5000/smsly/app:abc'))
+
+    def test_node_url_falls_back_to_local_peer_without_env(self):
+        """master_registry_node_url resolves via the local peer row when
+        no mesh env is set (2026-09-30: the master never had
+        MASTER_MESH_IP in .env, so mesh recognition silently skipped and
+        remote pushes stacked registry prefixes)."""
+        from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+        with self._set_env(WIREGUARD_MASTER_MESH_IP='', MASTER_MESH_IP='',
+                           MASTER_REGISTRY_PUBLIC_URL='', MASTER_PUBLIC_IP=''):
+            mesh = MeshNetwork.objects.create(name='default')
+            WireGuardPeer.objects.create(
+                mesh=mesh, server=None, private_key='x', public_key='y',
+                wg_address='10.100.0.1', is_active=True, is_local=True,
+            )
+            self.assertEqual(master_registry_node_url(), '10.100.0.1:5000')
+            self.assertTrue(
+                is_master_registry_ref('10.100.0.1:5000/smsly/app:abc')
+            )

@@ -57,6 +57,21 @@ def master_registry_node_url() -> str:
     if mesh_ip:
         return f"{mesh_ip}:5000"
 
+    # 2b. Local peer row (no env needed): the installer never writes
+    # MASTER_MESH_IP on the master itself, so env-only resolution
+    # silently returned "" there and every mesh recognition downstream
+    # (push prefix strip, signing) skipped mesh refs (2026-09-30:
+    # remote push stacked `registry:5000/10.100.0.1:5000/...`).
+    try:
+        from apps.deployments.models.mesh import WireGuardPeer
+        local_peer = WireGuardPeer.objects.filter(
+            is_local=True, is_active=True,
+        ).exclude(wg_address="").exclude(wg_address__isnull=True).first()
+        if local_peer and local_peer.wg_address:
+            return f"{local_peer.wg_address}:5000"
+    except Exception:
+        pass
+
     # 3. Public IP fallback
     public = _env("MASTER_REGISTRY_PUBLIC_URL")
     if public:
