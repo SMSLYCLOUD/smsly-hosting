@@ -964,3 +964,36 @@ class SSHClientCallbackTests(TestCase):
         self.assertEqual(callback_calls[0], ("hello", "some error"))
         self.assertEqual(callback_calls[1], (" world", ""))
 
+
+class CandidateApiUrlsTests(TestCase):
+    """Full-node mesh candidates must lead with backend :8000.
+
+    Regression 2026-09-30: the non-lite mesh branch offered only :8090
+    and bare :80 — both hit Caddy, whose :80 308-redirects into a :443
+    TLS handshake that IP-literal SNI can never complete, while the
+    mesh-bound backend :8000 answered fine.
+    """
+
+    def _node(self, **overrides):
+        from types import SimpleNamespace
+        params = dict(
+            api_url="", host="13.60.6.171", wg_address="10.100.0.2",
+            is_lite_agent=False, is_primary=False,
+        )
+        params.update(overrides)
+        return SimpleNamespace(**params)
+
+    def test_full_node_mesh_leads_with_8000(self):
+        from apps.deployments.views.server.helpers import _candidate_api_urls
+        urls = _candidate_api_urls(self._node())
+        self.assertTrue(urls.index("http://10.100.0.2:8000") < urls.index("http://10.100.0.2:8090"))
+        self.assertTrue(urls.index("http://10.100.0.2:8000") < urls.index("http://10.100.0.2"))
+
+    def test_lite_node_unchanged(self):
+        from apps.deployments.views.server.helpers import _candidate_api_urls
+        urls = _candidate_api_urls(self._node(is_lite_agent=True))
+        self.assertEqual(
+            urls[:3],
+            ["http://10.100.0.2:8000", "http://10.100.0.2:8090", "http://10.100.0.2"],
+        )
+
