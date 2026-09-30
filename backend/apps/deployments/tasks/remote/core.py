@@ -517,9 +517,8 @@ def _poll_remote_deployment(
             "The deployment may still be running on the remote node.\n"
         )
         deployment.status = Deployment.Status.FAILED
-        deployment.error = "Remote deployment poller timed out. Check the remote node directly for actual status."
         deployment.finished_at = timezone.now()
-        deployment.save(update_fields=['status', 'error', 'finished_at', 'updated_at'])
+        deployment.save(update_fields=['status', 'finished_at', 'updated_at'])
         update_stage(deployment, 'Remote Deploy', 'failed')
         broadcast_status(deployment)
 
