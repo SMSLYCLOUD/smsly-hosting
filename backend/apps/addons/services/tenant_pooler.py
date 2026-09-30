@@ -45,6 +45,10 @@ TENANT_POOL_SIZE = 8
 # 400 max_connections - headroom fits ~35 pools per shared server; past
 # that, stand up a second shared server and set per-pool `server`
 # (sharding runbook in module docstring) instead of raising this.
+#
+# Both knobs are env-overridable at render time (read inside
+# render_tenants_config, not import time) so tuning needs no rebuild:
+# SMSLY_TENANT_POOL_SIZE, SMSLY_TENANT_MAX_DB_CONNECTIONS.
 TENANT_MAX_DB_CONNECTIONS = 10
 
 # INI-safe tokens: alias is an INI key, user/db travel inside
@@ -152,6 +156,23 @@ def _check_server(value):
     return server
 
 
+def _pool_size() -> int:
+    """Per-pool server-connection target (env-tunable, no rebuild)."""
+    try:
+        return max(1, int(os.getenv("SMSLY_TENANT_POOL_SIZE", "") or TENANT_POOL_SIZE))
+    except ValueError:
+        return TENANT_POOL_SIZE
+
+
+def _max_db_connections() -> int:
+    """Hard ceiling on server connections per pool (env-tunable)."""
+    try:
+        return max(1, int(os.getenv("SMSLY_TENANT_MAX_DB_CONNECTIONS", "")
+                          or TENANT_MAX_DB_CONNECTIONS))
+    except ValueError:
+        return TENANT_MAX_DB_CONNECTIONS
+
+
 def render_tenants_config(pools):
     """Render (pgbouncer.ini, userlist.txt): one transaction pool per alias.
 
@@ -190,7 +211,7 @@ def render_tenants_config(pools):
             seen_db_keys.add(key)
             ini.append(
                 f'{key} = host={server} port=5432 dbname={db} '
-                f'max_db_connections={TENANT_MAX_DB_CONNECTIONS}')
+                f'max_db_connections={_max_db_connections()}')
         users.append((user, password))
     ini += [
         '',
@@ -201,7 +222,7 @@ def render_tenants_config(pools):
         f'auth_file = {TENANTS_USERLIST_PATH}',
         'pool_mode = transaction',
         'max_client_conn = 200',
-        f'default_pool_size = {TENANT_POOL_SIZE}',
+        f'default_pool_size = {_pool_size()}',
         'min_pool_size = 0',
         'reserve_pool_size = 2',
         'reserve_pool_timeout = 3',
