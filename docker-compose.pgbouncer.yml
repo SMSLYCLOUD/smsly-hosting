@@ -1,0 +1,51 @@
+# Standalone PgBouncer tenants pooler — deployable alone.
+#
+#   docker compose -p smsly-hosting -f docker-compose.pgbouncer.yml up -d --build pgbouncer-tenants
+#
+# Couplings (all external — Postgres itself is untouched):
+#   - volume  smsly-hosting_pgbouncer_tenants_config (backend pushes ini/userlist)
+#   - network smsly-net (per-tenant aliases attached by the backend)
+# Config and passwords always come from the backend push, never this file.
+name: smsly-hosting
+
+services:
+  pgbouncer-tenants:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    build:
+      context: ./infrastructure/pgbouncer
+      dockerfile: Dockerfile
+    entrypoint: ["/entrypoint-tenants.sh"]
+    restart: unless-stopped
+    volumes:
+      - pgbouncer_tenants_config:/etc/pgbouncer
+    networks:
+      - smsly-net
+    labels:
+      - managed_by=smsly-hosting
+    healthcheck:
+      # Honest idle state: no backend push yet means "waiting for config"
+      # (healthy), not failure. Unhealthy only when configured but down.
+      test:
+      - CMD-SHELL
+      - sh -c "test ! -s /etc/pgbouncer/pgbouncer.ini || nc -z 127.0.0.1 5432"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${PGBOUNCER_TENANTS_MEMORY_LIMIT:-256M}
+          cpus: "0.50"
+
+networks:
+  smsly-net:
+    external: true
+    name: smsly-net
+
+volumes:
+  pgbouncer_tenants_config:
+    external: true
+    name: smsly-hosting_pgbouncer_tenants_config
