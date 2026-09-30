@@ -155,7 +155,8 @@ def bootstrap_view(request, token):
                     env_lines.append(_env_line("MEDIA_REPO_TOKEN", str(pc.media_repo_token)))
         except Exception:
             pass
-    if is_lite_agent:
+    _needs_mesh_ip = is_lite_agent or install_mode == "node"
+    if _needs_mesh_ip:
         master_mesh_ip = os.environ.get("MASTER_MESH_IP", "")
         if not master_mesh_ip:
             try:
@@ -179,11 +180,17 @@ def bootstrap_view(request, token):
                 _mesh_ok = False
         if _mesh_ok:
             env_lines.append(_env_line("MASTER_MESH_IP", master_mesh_ip))
+            # Full nodes need it too: install_registry_docker_certs
+            # installs the registry CA for ${MASTER_MESH_IP}:5000, without
+            # which node pulls from the mesh registry die on x509
+            # unknown-authority (2026-09-30: every pull to a fresh node
+            # failed this way).
         # Bootstrap must carry everything lib/agent-lite.sh hard-fails
         # without (MASTER_DB_PASSWORD etc.) plus the node identity/queue.
         # build_agent_lite_install_env() provisions the dedicated lite DB
-        # user — the single owner of these values.
-        if server_id:
+        # user — the single owner of these values. Lite-only: full nodes
+        # run their own DB and must not receive these credentials.
+        if is_lite_agent and server_id:
             try:
                 from apps.deployments.models.servers import ManagedServer
                 from apps.deployments.services.provisioner.helpers.server_config import (

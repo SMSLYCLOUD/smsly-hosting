@@ -540,6 +540,29 @@ class LocalAdapter(BaseCloudAdapter):
             # auth_config parameter on pull().
             if settings.REGISTRY_USER and settings.REGISTRY_PASSWORD:
                 registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None) or ''
+                # Log in to the IMAGE's registry host, not just the
+                # configured default: daemon credentials are matched per
+                # hostname, so a mesh-qualified pull (10.100.0.1:5000/...)
+                # with a login for registry:5000 still 401s with "no
+                # basic auth credentials" (2026-09-30: every node pull
+                # failed this way). Restricted to our own registry —
+                # never override the host for third-party registries.
+                try:
+                    from apps.deployments.services.registry_routing import (
+                        _split_ref,
+                        is_master_registry_ref,
+                    )
+                    _img_host, _ = _split_ref(image or "")
+                    # Our registry is the only :5000 in play; the port
+                    # clause covers hosts (nodes) that lack the env/DB
+                    # needed for is_master_registry_ref.
+                    if _img_host and (
+                        is_master_registry_ref(image)
+                        or _img_host.endswith(":5000")
+                    ):
+                        registry_url = _img_host
+                except Exception:
+                    pass
                 try:
                     self.docker_client.login(
                         username=settings.REGISTRY_USER,
