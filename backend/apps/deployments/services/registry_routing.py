@@ -62,13 +62,17 @@ def master_registry_node_url() -> str:
     # silently returned "" there and every mesh recognition downstream
     # (push prefix strip, signing) skipped mesh refs (2026-09-30:
     # remote push stacked `registry:5000/10.100.0.1:5000/...`).
+    # NOTE: no ORM empty-string filter here — GenericIPAddressField
+    # rejects "" lookups with ValidationError, which would silently
+    # disable this entire fallback. Filter NULLs only, check empties
+    # in Python.
     try:
         from apps.deployments.models.mesh import WireGuardPeer
-        local_peer = WireGuardPeer.objects.filter(
+        for _peer in WireGuardPeer.objects.filter(
             is_local=True, is_active=True,
-        ).exclude(wg_address="").exclude(wg_address__isnull=True).first()
-        if local_peer and local_peer.wg_address:
-            return f"{local_peer.wg_address}:5000"
+        ).exclude(wg_address__isnull=True):
+            if _peer.wg_address:
+                return f"{_peer.wg_address}:5000"
     except Exception:
         pass
 

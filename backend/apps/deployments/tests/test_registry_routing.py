@@ -27,11 +27,11 @@ class RegistryRoutingTests(TestCase):
             self.assertEqual(master_registry_node_url(), '10.100.0.1:5000')
 
     def test_public_ip_fallback(self):
-        with self._set_env(WIREGUARD_MASTER_MESH_IP='', MASTER_PUBLIC_IP='203.0.113.10'):
+        with self._set_env(WIREGUARD_MASTER_MESH_IP='', MASTER_MESH_IP='', MASTER_PUBLIC_IP='203.0.113.10'):
             self.assertEqual(master_registry_node_url(), '203.0.113.10:5000')
 
     def test_no_config_returns_empty(self):
-        with self._set_env(WIREGUARD_MASTER_MESH_IP='', MASTER_PUBLIC_IP='', MASTER_REGISTRY_PUBLIC_URL=''):
+        with self._set_env(WIREGUARD_MASTER_MESH_IP='', MASTER_MESH_IP='', MASTER_PUBLIC_IP='', MASTER_REGISTRY_PUBLIC_URL=''):
             url = master_registry_node_url()
             # No PlatformConfig override in tests -> empty
             self.assertEqual(url, '')
@@ -53,7 +53,7 @@ class RegistryRoutingTests(TestCase):
 
     def test_no_rewrite_when_no_routable_url(self):
         # Single-host install: no mesh, no public override -> unchanged
-        with self._set_env(WIREGUARD_MASTER_MESH_IP='', MASTER_PUBLIC_IP='', MASTER_REGISTRY_PUBLIC_URL=''):
+        with self._set_env(WIREGUARD_MASTER_MESH_IP='', MASTER_MESH_IP='', MASTER_PUBLIC_IP='', MASTER_REGISTRY_PUBLIC_URL=''):
             self.assertEqual(
                 image_ref_for_node('registry:5000/smsly/app:abc123'),
                 'registry:5000/smsly/app:abc123',
