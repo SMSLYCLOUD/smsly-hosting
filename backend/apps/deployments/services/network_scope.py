@@ -34,6 +34,9 @@ RULE_TAG_PREFIX = "smsly-egress-"
 # tag already exists without an ESTABLISHED rule — still converge.
 MESH_REPLY_TAG = "smsly-mesh-reply"
 
+# Tag for backend→mesh egress (see ensure_backend_mesh_egress).
+MESH_EGRESS_TAG = "smsly-mesh-egress"
+
 # WireGuard mesh interface wildcard. Node control traffic (agent
 # heartbeats, DNS) arrives over wg0; edge-proxy replies must return
 # the same way.
@@ -665,6 +668,83 @@ def _traefik_container_name() -> str:
     return os.environ.get("TRAEFIK_CONTAINER_NAME", "smsly-hosting-traefik-1")
 
 
+def _backend_container_names() -> list[str]:
+    import os
+    custom = (os.environ.get("BACKEND_CONTAINER_NAME", "") or "").strip()
+    names = [custom] if custom else []
+    names += ["smsly-hosting-backend-1", "backend"]
+    return names
+
+
+def ensure_backend_mesh_egress() -> bool:
+    """Allow the backend's own bridge to open NEW connections into wg.
+
+    The orchestrator (preflight, sync, deploy polling) talks to nodes
+    via their mesh API (http://10.100.0.x:8000). Per-bridge egress
+    blocks end in a terminal DROP with no mesh allowance, and the
+    mesh-reply exception is ESTABLISHED-only — so master-originated
+    control traffic died in DOCKER-USER (2026-09-30: remote deploys
+    failed preflight with mesh :8000 unreachable).
+
+    Inserts (once)::
+
+        iptables -I DOCKER-USER -i <backend-br> -o wg+ -j RETURN
+        # smsly-mesh-egress
+
+    Scoped to the backend container's own bridge (resolved live via the
+    Docker API, so bridge-ID churn is harmless). Tenant bridges are
+    untouched — containers there still cannot initiate to mesh IPs.
+    RETURN is sufficient: Docker's own FORWARD chain ACCEPTs
+    container-originated traffic afterwards.
+
+    Returns True when the rule is present afterwards.
+    """
+    bridge_iface = None
+    try:
+        client = docker.from_env()
+        for cname in _backend_container_names():
+            try:
+                container = client.containers.get(cname)
+            except Exception:
+                continue
+            nets = (
+                (container.attrs or {})
+                .get("NetworkSettings", {})
+                .get("Networks", {})
+            ) or {}
+            net_name = next(iter(nets), "")
+            if net_name:
+                bridge_iface = _get_bridge_interface_name(net_name)
+                if bridge_iface:
+                    break
+    except Exception:
+        logger.debug("backend mesh egress check skipped (docker unavailable)")
+        return False
+    if not bridge_iface:
+        logger.debug("backend mesh egress skipped (backend bridge unknown)")
+        return False
+    try:
+        existing = _list_docker_user_rules()
+    except Exception:
+        logger.debug("backend mesh egress check skipped (firewall unavailable)")
+        return False
+    if any(MESH_EGRESS_TAG in r and bridge_iface in r for r in existing):
+        return True
+    result = _sh([
+        "iptables", "-I", "DOCKER-USER",
+        "-i", bridge_iface, "-o", MESH_IFACE_WILDCARD,
+        "-j", "RETURN",
+        "-m", "comment", "--comment", MESH_EGRESS_TAG,
+    ])
+    if result.returncode == 0 or "already exists" in (result.stderr or ""):
+        return True
+    logger.warning(
+        "backend mesh egress install failed for bridge %s: %s",
+        bridge_iface, (result.stderr or "").strip()[:160],
+    )
+    return False
+
+
 def ensure_router_on_network(network_name: str) -> bool:
     """Attach the edge router (Traefik) to a scoped bridge so it can reach
     app containers on it. Idempotent."""
@@ -811,11 +891,13 @@ def reconcile_network_isolation() -> dict[str, int]:
       missing its tag (closes the recreate-gap: fresh bridge = unrestricted)
     * Ensures the mesh-reply exception on every live scoped bridge
       (edge-proxy answers to node control traffic over wg0)
+    * Ensures backend→mesh egress (master-originated node control
+      traffic over wg0)
     * Ensures the edge router is attached to every scoped bridge
 
     Returns counters for logging/alerting.
     """
-    stats = {"purged_rules": 0, "reapplied": 0, "router_attached": 0, "mesh_reply": 0}
+    stats = {"purged_rules": 0, "reapplied": 0, "router_attached": 0, "mesh_reply": 0, "mesh_egress": 0}
 
     # 1. Purge stale-tagged rules (bridges that no longer exist).
     try:
@@ -863,6 +945,14 @@ def reconcile_network_isolation() -> dict[str, int]:
                 stats["router_attached"] += 1
     except Exception:
         logger.exception("scoped network reconcile failed")
+
+    # 3. Backend→mesh egress (independent of scoped nets: the backend's
+    # own bridge carries the egress block too).
+    try:
+        if ensure_backend_mesh_egress():
+            stats["mesh_egress"] += 1
+    except Exception:
+        logger.exception("backend mesh egress ensure failed")
 
     if any(stats.values()):
         logger.info("network isolation reconcile: %s", stats)

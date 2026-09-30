@@ -749,3 +749,73 @@ class EnsureMeshReplyRuleTests(SimpleTestCase):
         ) as mock_sh:
             self.assertTrue(ns_mod.ensure_mesh_reply_rule("br-mesh1"))
         self.assertEqual(mock_sh.call_count, 1)
+
+
+class EnsureBackendMeshEgressTests(SimpleTestCase):
+    """Backend→mesh egress: master-originated node control traffic.
+
+    Regression 2026-09-30: the backend's own bridge carried the egress
+    block (terminal DROP, no mesh allowance) and the mesh-reply rule is
+    ESTABLISHED-only — remote deploys failed preflight with mesh :8000
+    unreachable. Scoped to the backend container's own bridge; tenant
+    bridges are untouched.
+    """
+
+    def _docker_with_bridge(self, net_name="smsly-net"):
+        mock_client = MagicMock()
+        container = MagicMock()
+        container.attrs = {"NetworkSettings": {"Networks": {net_name: {}}}}
+        mock_client.containers.get.return_value = container
+        fake_net = MagicMock()
+        fake_net.attrs = {"Id": "db41412e8f37-1234-1234-1234-123456789012"}
+        mock_client.networks.get.return_value = fake_net
+        return mock_client
+
+    def test_inserts_return_rule_for_backend_bridge(self):
+        from apps.deployments.services import network_scope as ns_mod
+        with patch.object(
+            ns_mod, "docker", autospec=False,
+        ) as mock_docker, patch.object(
+            ns_mod, "_list_docker_user_rules", return_value=[],
+        ), patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            mock_docker.from_env.return_value = self._docker_with_bridge()
+            self.assertTrue(ns_mod.ensure_backend_mesh_egress())
+        calls = [" ".join(c.args[0]) for c in mock_sh.call_args_list]
+        self.assertEqual(len(calls), 1)
+        rule = calls[0]
+        self.assertIn("-i br-db41412e8f37", rule)
+        self.assertIn("-o wg+", rule)
+        self.assertIn("-j RETURN", rule)
+        self.assertIn("smsly-mesh-egress", rule)
+
+    def test_skips_when_tagged_rule_present(self):
+        from apps.deployments.services import network_scope as ns_mod
+        installed = [
+            "-i br-db41412e8f37 -o wg+ -j RETURN "
+            "-m comment --comment smsly-mesh-egress",
+        ]
+        with patch.object(
+            ns_mod, "docker", autospec=False,
+        ) as mock_docker, patch.object(
+            ns_mod, "_list_docker_user_rules", return_value=installed,
+        ), patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            mock_docker.from_env.return_value = self._docker_with_bridge()
+            self.assertTrue(ns_mod.ensure_backend_mesh_egress())
+        mock_sh.assert_not_called()
+
+    def test_returns_false_when_backend_unknown(self):
+        from apps.deployments.services import network_scope as ns_mod
+        mock_client = MagicMock()
+        mock_client.containers.get.side_effect = Exception("no such container")
+        with patch.object(
+            ns_mod, "docker", autospec=False,
+        ) as mock_docker, patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            mock_docker.from_env.return_value = mock_client
+            self.assertFalse(ns_mod.ensure_backend_mesh_egress())
+        mock_sh.assert_not_called()

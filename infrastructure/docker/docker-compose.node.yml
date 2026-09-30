@@ -151,6 +151,14 @@ services:
       context: ../../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    ports:
+      # Mesh-direct API for master control traffic (preflight, sync,
+      # deploy polling). Bound to the WireGuard address ONLY (default
+      # loopback): a 0.0.0.0 publish would bypass UFW via Docker's
+      # FORWARD chain and expose Django publicly. 2026-09-30: the
+      # orchestrator's mesh candidates (:8000) had nothing to reach
+      # until this existed (backend only listened inside smsly-net).
+      - "${NODE_MESH_BIND_IP:-127.0.0.1}:8000:8000"
     cap_add:
       - SETGID
       - SETUID
