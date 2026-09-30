@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
-import { Database, RotateCcw, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe } from 'lucide-react';
+import { Database, RotateCcw, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe, Play, Square } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { addonsApi, Addon, systemApi } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
@@ -120,6 +120,25 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
             fetchAddons();
         } catch (e) {
             console.error('Failed to retry delete:', e);
+        }
+    };
+
+    const handleStartStop = async (addon: Addon, start: boolean) => {
+        const verb = start ? 'Start' : 'Stop';
+        if (!await confirm({
+            title: `${verb} addon container?`,
+            message: start
+                ? 'Spin up this addon container on demand. Volumes are intact — data is preserved.'
+                : 'Park this addon container to free capacity. Volumes are kept — nothing is deleted. Start it again anytime.',
+            confirmText: verb,
+        })) return;
+        try {
+            if (start) await addonsApi.startContainer(addon.id);
+            else await addonsApi.stopContainer(addon.id);
+            fetchAddons();
+        } catch (e: any) {
+            console.error(`Failed to ${verb.toLowerCase()} addon:`, e);
+            alert(e?.response?.data?.error || `Failed to ${verb.toLowerCase()} addon`);
         }
     };
 
@@ -433,6 +452,24 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                 >
                                                     <Layers size={12} /> Migrate to {addon.provision_mode === 'shared' ? 'Individual' : 'Shared'}
                                                 </button>
+                                            )}
+                                            {addon.provision_mode !== 'shared' && addon.status === 'ACTIVE' && (
+                                                <>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleStartStop(addon, true); }}
+                                                        title="Spin up this addon container on demand (volumes intact)"
+                                                        className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors"
+                                                    >
+                                                        <Play size={12} /> Start
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleStartStop(addon, false); }}
+                                                        title="Park this container to free capacity (volumes kept)"
+                                                        className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 text-amber-400 rounded-lg text-xs font-medium hover:bg-amber-500/20 transition-colors"
+                                                    >
+                                                        <Square size={12} /> Stop
+                                                    </button>
+                                                </>
                                             )}
                                             {addon.public_domain ? (
                                                 <div className="flex items-center gap-2">

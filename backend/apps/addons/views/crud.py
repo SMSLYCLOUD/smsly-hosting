@@ -534,6 +534,55 @@ class AddonViewSet(viewsets.ModelViewSet):
         return Response({'status': 'queued', 'task_id': task_id, 'target_mode': target},
                         status=status.HTTP_202_ACCEPTED)
 
+    @action(detail=True, methods=['post'], url_path='start')
+    def start_container(self, request, pk=None):
+        """Start a stopped addon container (on-demand spin-up).
+
+        Only applies to container-provisioned addons. Shared/pooled addons
+        have no container to start.
+        """
+        instance = self.get_object()
+        assert_can_write(self.request.user, instance.service, action='start addon')
+        try:
+            import docker
+            client = docker.from_env()
+            name = f"smsly-addon-{str(instance.addon_type).lower()}-{instance.id}"
+            container = client.containers.get(name)
+            if container.status == 'running':
+                return Response({'status': 'already_running', 'container': name})
+            container.start()
+            return Response({'status': 'started', 'container': name})
+        except Exception as exc:
+            logger.warning("Addon container start failed for %s: %s", pk, exc)
+            return Response(
+                {'error': 'Start failed (container may not exist for shared addons).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=True, methods=['post'], url_path='stop')
+    def stop_container(self, request, pk=None):
+        """Stop a running addon container (park idle capacity).
+
+        Volumes are kept — nothing is deleted. Start it again later.
+        """
+        instance = self.get_object()
+        assert_can_write(self.request.user, instance.service, action='stop addon')
+        try:
+            import docker
+            client = docker.from_env()
+            name = f"smsly-addon-{str(instance.addon_type).lower()}-{instance.id}"
+            container = client.containers.get(name)
+            if container.status != 'running':
+                return Response({'status': 'already_stopped', 'container': name})
+            container.stop(timeout=30)
+            return Response({'status': 'stopped', 'container': name})
+        except Exception as exc:
+            logger.warning("Addon container stop failed for %s: %s", pk, exc)
+            return Response(
+                {'error': 'Stop failed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     @action(detail=True, methods=['post'], url_path='retry-delete')
     def retry_delete(self, request, pk=None):
         instance = self.get_object()

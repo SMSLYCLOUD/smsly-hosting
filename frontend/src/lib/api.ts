@@ -2282,6 +2282,14 @@ export const addonsApi = {
         const res = await api.post(`/addons/${id}/migrate-mode/`, { mode });
         return res.data;
     },
+    startContainer: async (id: string): Promise<{ status: string; container?: string }> => {
+        const res = await api.post(`/addons/${id}/start/`);
+        return res.data;
+    },
+    stopContainer: async (id: string): Promise<{ status: string; container?: string }> => {
+        const res = await api.post(`/addons/${id}/stop/`);
+        return res.data;
+    },
     sharedPostgresHa: async (): Promise<SharedPostgresHa> => {
         const res = await api.get('/addons/shared-postgres-ha/');
         return res.data;
