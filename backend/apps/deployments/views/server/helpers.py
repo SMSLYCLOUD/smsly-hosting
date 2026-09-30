@@ -334,11 +334,16 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
         # ── Strategy 1: HMAC-based exchange ──
         if gateway_secret:
             try:
+                import secrets as secrets_mod
                 ts = str(int(time.time()))
+                nonce = secrets_mod.token_urlsafe(16)
                 body = json_mod.dumps({"node_name": f"Node-{server.host}"}, sort_keys=True).encode()
                 body_hash = hashlib.sha256(body).hexdigest()
                 path = "/api/v1/auth/node-token-exchange-hmac/"
-                payload = f"POST|{path}|{ts}|{body_hash}"
+                # 5-part nonce-bound scheme — must match the endpoint's
+                # expectation (apps/core/views/node_exchange.py rejects
+                # the old 4-part form with 401 "nonce headers required").
+                payload = f"POST|{path}|{ts}|{nonce}|{body_hash}"
                 sig = hmac_mod.new(gateway_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
                 from apps.deployments.services.tls_verify import (
@@ -353,6 +358,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                         "Content-Type": "application/json",
                         "X-Gateway-Signature-V2": sig,
                         "X-Request-Timestamp": ts,
+                        "X-Request-Nonce": nonce,
                     },
                     timeout=15,
                     verify=verify,
