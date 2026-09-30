@@ -130,6 +130,13 @@ def _candidate_api_urls(server) -> list[str]:
             _append_unique(urls, f"http://{wg_ip}:8090")
             _append_unique(urls, f"http://{wg_ip}")
         else:
+            # Full node: backend :8000 is published on the WireGuard
+            # address (mesh-bind, UFW/DOCKER-USER shielded from public).
+            # Must precede :8090/bare — those hit Caddy, whose :80
+            # 308-redirects into a :443 TLS handshake that IP-literal
+            # SNI can never complete (2026-09-30: health probes and
+            # preflights died here while :8000 answered fine).
+            _append_unique(urls, f"http://{wg_ip}:8000")
             _append_unique(urls, f"http://{wg_ip}:8090")
             _append_unique(urls, f"http://{wg_ip}")
 
