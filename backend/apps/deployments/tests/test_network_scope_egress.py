@@ -819,3 +819,39 @@ class EnsureBackendMeshEgressTests(SimpleTestCase):
             mock_docker.from_env.return_value = mock_client
             self.assertFalse(ns_mod.ensure_backend_mesh_egress())
         mock_sh.assert_not_called()
+
+
+class EnsureEdgeMeshEgressTests(SimpleTestCase):
+    """Edge→mesh egress: master Caddy reverse-proxies node-hosted
+    service domains over the mesh.
+
+    Regression 2026-09-30: the edge bridge carried the terminal-DROP
+    egress block, so proxied requests died in DOCKER-USER and the
+    platform answered 502 for every node-service domain.
+    """
+
+    def test_inserts_return_rule_for_edge_bridge(self):
+        from apps.deployments.services import network_scope as ns_mod
+        mock_client = MagicMock()
+        container = MagicMock()
+        container.attrs = {"NetworkSettings": {"Networks": {"paas-svc-edge": {}}}}
+        mock_client.containers.get.return_value = container
+        fake_net = MagicMock()
+        fake_net.attrs = {"Id": "b2b9ab1acedb-1234-1234-1234-123456789012"}
+        mock_client.networks.get.return_value = fake_net
+        with patch.object(
+            ns_mod, "docker", autospec=False,
+        ) as mock_docker, patch.object(
+            ns_mod, "_list_docker_user_rules", return_value=[],
+        ), patch.object(
+            ns_mod, "_sh", return_value=_fake_completed_process(),
+        ) as mock_sh:
+            mock_docker.from_env.return_value = mock_client
+            self.assertTrue(ns_mod.ensure_edge_mesh_egress())
+        calls = [" ".join(c.args[0]) for c in mock_sh.call_args_list]
+        self.assertEqual(len(calls), 1)
+        rule = calls[0]
+        self.assertIn("-i br-b2b9ab1acedb", rule)
+        self.assertIn("-o wg+", rule)
+        self.assertIn("-j RETURN", rule)
+        self.assertIn("smsly-mesh-egress", rule)

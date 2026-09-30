@@ -234,17 +234,17 @@ class ServiceListSerializer(serializers.ModelSerializer):
         return _get_node_metadata(obj)
 
     def get_node_url(self, obj: Service) -> str | None:
-        from apps.deployments.services.caddy_manager.config_generation import _resolve_effective_server
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
+            node_service_domain,
+        )
         svr = _resolve_effective_server(obj)
         if not svr or getattr(svr, 'is_primary', False):
             return None
         node_number = getattr(svr, 'node_number', None) or 1
         base_domain = Service.default_public_base_domain()
         slug = obj.name.lower().replace(' ', '-')
-        parts = base_domain.split(".")
-        if len(parts) > 2:
-            return f"https://{slug}.grid{node_number}.{'.'.join(parts[1:])}"
-        return f"https://{slug}.grid{node_number}.{base_domain}"
+        return f"https://{node_service_domain(slug, node_number, base_domain)}"
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -575,17 +575,17 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def get_node_url(self, obj: Service) -> str | None:
         """Return the direct node URL if the service is on a full node."""
-        from apps.deployments.services.caddy_manager.config_generation import _resolve_effective_server
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
+            node_service_domain,
+        )
         svr = _resolve_effective_server(obj)
         if not svr or getattr(svr, 'is_primary', False):
             return None
         node_number = getattr(svr, 'node_number', None) or 1
         base_domain = Service.default_public_base_domain()
         slug = obj.name.lower().replace(' ', '-')
-        parts = base_domain.split(".")
-        if len(parts) > 2:
-            return f"https://{slug}.grid{node_number}.{'.'.join(parts[1:])}"
-        return f"https://{slug}.grid{node_number}.{base_domain}"
+        return f"https://{node_service_domain(slug, node_number, base_domain)}"
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
         return _get_latest_deployment(obj)

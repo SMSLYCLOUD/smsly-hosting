@@ -676,6 +676,19 @@ def _backend_container_names() -> list[str]:
     return names
 
 
+def _edge_container_names() -> list[str]:
+    import os
+    custom = (os.environ.get("TRAEFIK_CONTAINER_NAME", "") or "").strip()
+    names = [custom] if custom else []
+    names += [
+        "smsly-hosting-caddy-1",
+        "smsly-hosting-traefik-1",
+        "caddy",
+        "traefik",
+    ]
+    return names
+
+
 def ensure_backend_mesh_egress() -> bool:
     """Allow the backend's own bridge to open NEW connections into wg.
 
@@ -699,34 +712,68 @@ def ensure_backend_mesh_egress() -> bool:
 
     Returns True when the rule is present afterwards.
     """
-    bridge_iface = None
-    try:
-        client = docker.from_env()
-        for cname in _backend_container_names():
-            try:
-                container = client.containers.get(cname)
-            except Exception:
-                continue
-            nets = (
-                (container.attrs or {})
-                .get("NetworkSettings", {})
-                .get("Networks", {})
-            ) or {}
-            net_name = next(iter(nets), "")
-            if net_name:
-                bridge_iface = _get_bridge_interface_name(net_name)
-                if bridge_iface:
-                    break
-    except Exception:
-        logger.debug("backend mesh egress check skipped (docker unavailable)")
-        return False
-    if not bridge_iface:
+    bridges = _infra_bridge_ifaces(_backend_container_names())
+    if not bridges:
         logger.debug("backend mesh egress skipped (backend bridge unknown)")
         return False
+    return all(_ensure_mesh_egress_rule(br) for br in bridges)
+
+
+def ensure_edge_mesh_egress() -> bool:
+    """Allow the edge proxy's bridge(s) to open NEW connections into wg.
+
+    Master Caddy reverse-proxies node-hosted service domains to the
+    node over the mesh (remote_hosts upstream). The edge bridge carries
+    the same terminal-DROP egress block as every other bridge, so
+    proxied requests died in DOCKER-USER with the platform answering
+    502 (2026-09-30: every node-service domain 502'd).
+
+    Same rule shape and tag as backend mesh egress; scoped to the
+    Caddy/Traefik containers' own bridges (resolved live). Tenant
+    bridges are untouched.
+
+    Returns True when the rule is present on every resolved bridge.
+    """
+    bridges = _infra_bridge_ifaces(_edge_container_names())
+    if not bridges:
+        logger.debug("edge mesh egress skipped (edge bridge unknown)")
+        return False
+    return all(_ensure_mesh_egress_rule(br) for br in bridges)
+
+
+def _infra_bridge_ifaces(container_names: list[str]) -> list[str]:
+    """Resolve bridge interfaces for the given containers (deduped)."""
+    found: list[str] = []
+    try:
+        client = docker.from_env()
+    except Exception:
+        logger.debug("mesh egress check skipped (docker unavailable)")
+        return found
+    for cname in container_names:
+        if not cname:
+            continue
+        try:
+            container = client.containers.get(cname)
+        except Exception:
+            continue
+        nets = (
+            (container.attrs or {})
+            .get("NetworkSettings", {})
+            .get("Networks", {})
+        ) or {}
+        for net_name in nets:
+            br = _get_bridge_interface_name(net_name)
+            if br and br not in found:
+                found.append(br)
+    return found
+
+
+def _ensure_mesh_egress_rule(bridge_iface: str) -> bool:
+    """Insert the tagged mesh-egress RETURN for one bridge (idempotent)."""
     try:
         existing = _list_docker_user_rules()
     except Exception:
-        logger.debug("backend mesh egress check skipped (firewall unavailable)")
+        logger.debug("mesh egress check skipped (firewall unavailable)")
         return False
     if any(MESH_EGRESS_TAG in r and bridge_iface in r for r in existing):
         return True
@@ -739,7 +786,7 @@ def ensure_backend_mesh_egress() -> bool:
     if result.returncode == 0 or "already exists" in (result.stderr or ""):
         return True
     logger.warning(
-        "backend mesh egress install failed for bridge %s: %s",
+        "mesh egress install failed for bridge %s: %s",
         bridge_iface, (result.stderr or "").strip()[:160],
     )
     return False
@@ -946,10 +993,14 @@ def reconcile_network_isolation() -> dict[str, int]:
     except Exception:
         logger.exception("scoped network reconcile failed")
 
-    # 3. Backend→mesh egress (independent of scoped nets: the backend's
-    # own bridge carries the egress block too).
+    # 3. Infra→mesh egress (independent of scoped nets: the backend's
+    # own bridge and the edge bridge both carry the egress block).
+    # Backend originates node control traffic; the edge reverse-proxies
+    # node-hosted service domains over the mesh.
     try:
         if ensure_backend_mesh_egress():
+            stats["mesh_egress"] += 1
+        if ensure_edge_mesh_egress():
             stats["mesh_egress"] += 1
     except Exception:
         logger.exception("backend mesh egress ensure failed")
