@@ -334,7 +334,6 @@ export interface Service {
   path_redirects?: { path: string; target: string }[];
   host_aliases?: { host: string; rewrite_root: string }[];
   node_url?: string | null;
-  node_url_nested?: string | null;
   // Wire shape: {domain_name, status, dns_expected, dns_actual,
   // last_error, verified, ssl_active, issued_at, expires_at}
   // (backend serializers/service.py get_domain_instances).
