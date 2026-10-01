@@ -195,6 +195,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
     latest_deployment = serializers.SerializerMethodField()
     node_metadata = serializers.SerializerMethodField()
     node_url = serializers.SerializerMethodField()
+    node_url_nested = serializers.SerializerMethodField()
     running_replicas = serializers.SerializerMethodField()
     # NOTE: no internal_addresses here on purpose — it costs a synchronous
     # Docker inspect per row. The detail serializer serves it (TTL-cached);
@@ -207,6 +208,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             'server', 'public_domain', 'custom_domains', 'internal_port',
             'health_status', 'deploy_type', 'buildpack', 'created_at',
             'updated_at', 'latest_deployment', 'node_metadata', 'node_url',
+            'node_url_nested',
             'wildcard_url_enabled', 'node_url_enabled',
             'wildcard_redirect_custom_domain', 'wildcard_internal_only',
             'path_redirects', 'host_aliases',
@@ -246,6 +248,19 @@ class ServiceListSerializer(serializers.ModelSerializer):
         slug = obj.name.lower().replace(' ', '-')
         return f"https://{node_service_domain(slug, node_number, base_domain)}"
 
+    def get_node_url_nested(self, obj: Service) -> str | None:
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
+            node_service_domain_nested,
+        )
+        svr = _resolve_effective_server(obj)
+        if not svr or getattr(svr, 'is_primary', False):
+            return None
+        node_number = getattr(svr, 'node_number', None) or 1
+        base_domain = Service.default_public_base_domain()
+        slug = obj.name.lower().replace(' ', '-')
+        return f"https://{node_service_domain_nested(slug, node_number, base_domain)}"
+
 
 class ServiceSerializer(serializers.ModelSerializer):
     external_ha_password = serializers.CharField(
@@ -268,6 +283,7 @@ class ServiceSerializer(serializers.ModelSerializer):
     latest_deployment = serializers.SerializerMethodField()
     service_url = serializers.SerializerMethodField()
     node_url = serializers.SerializerMethodField()
+    node_url_nested = serializers.SerializerMethodField()
     internal_addresses = serializers.SerializerMethodField()
     effective_registry = serializers.SerializerMethodField()
     project_name = serializers.CharField(
@@ -543,6 +559,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             # SerializerMethodField / nested fields
             'env_vars', 'server_id',
             'latest_deployment', 'service_url', 'node_url',
+            'node_url_nested',
             'internal_addresses',
             'project_name', 'project_slug', 'project_emoji',
             'estimated_cost', 'node_metadata', 'domain_instances',
@@ -586,6 +603,20 @@ class ServiceSerializer(serializers.ModelSerializer):
         base_domain = Service.default_public_base_domain()
         slug = obj.name.lower().replace(' ', '-')
         return f"https://{node_service_domain(slug, node_number, base_domain)}"
+
+    def get_node_url_nested(self, obj: Service) -> str | None:
+        """Return the grey direct-access node URL (nested form)."""
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
+            node_service_domain_nested,
+        )
+        svr = _resolve_effective_server(obj)
+        if not svr or getattr(svr, 'is_primary', False):
+            return None
+        node_number = getattr(svr, 'node_number', None) or 1
+        base_domain = Service.default_public_base_domain()
+        slug = obj.name.lower().replace(' ', '-')
+        return f"https://{node_service_domain_nested(slug, node_number, base_domain)}"
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
         return _get_latest_deployment(obj)

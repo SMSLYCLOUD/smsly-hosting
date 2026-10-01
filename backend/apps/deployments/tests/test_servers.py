@@ -997,3 +997,19 @@ class CandidateApiUrlsTests(TestCase):
             ["http://10.100.0.2:8000", "http://10.100.0.2:8090", "http://10.100.0.2"],
         )
 
+
+class ServiceNestedUrlFieldTests(TestCase):
+    """node_url_nested must resolve on BOTH service serializers.
+
+    Regression 2026-10-01: the field was listed in ServiceSerializer
+    without a same-class getter/declaration, so every project-services
+    call 500d with ImproperlyConfigured. Field resolution needs no DB.
+    """
+
+    def test_both_serializers_expose_nested_url(self):
+        from ..serializers.service import ServiceListSerializer, ServiceSerializer
+        for cls in (ServiceListSerializer, ServiceSerializer):
+            with self.subTest(serializer=cls.__name__):
+                self.assertIn('node_url_nested', cls().fields)
+                self.assertTrue(hasattr(cls, 'get_node_url_nested'))
+
