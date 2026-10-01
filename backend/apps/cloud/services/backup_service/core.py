@@ -53,6 +53,37 @@ from .cloud import _delete_backup_cloud_object, _download_backup_from_cloud, _up
 logger = logging.getLogger(__name__)
 
 
+def _resolve_backup_target(service):
+    """(is_remote, server_obj, via) for backup/restore routing.
+
+    Primary: runtime metadata (active_target_type/host). Fallback: the
+    service's server FK when it points at a non-primary node — runtime
+    metadata can go stale (never-deployed services, failed promotes),
+    and silently running a REMOTE service's backup against the local
+    daemon 404s every time (2026-10-01: distinction-lab-fe5oi). The
+    fallback is logged loudly so stale metadata gets noticed.
+    """
+    try:
+        from apps.deployments.utils.target import resolve_active_execution_target
+        target = resolve_active_execution_target(service)
+        if target["target_type"] in ("remote", "lite_agent") and target["server_obj"]:
+            return True, target["server_obj"], "runtime-metadata"
+    except Exception as exc:
+        logger.warning(
+            "Target resolution failed for backup/restore of %s: %s — "
+            "trying server FK", service.name, exc)
+    try:
+        server = getattr(service, 'server', None)
+        if server is not None and not getattr(server, 'is_primary', True):
+            logger.warning(
+                "Backup/restore of %s routed via server FK %s (runtime "
+                "metadata missing or local)", service.name, server.name)
+            return True, server, "server-fk"
+    except Exception as exc:
+        logger.debug("Server-FK fallback failed for %s: %s", service.name, exc)
+    return False, None, "local"
+
+
 class BackupService:
     @staticmethod
     def _get_encryption_key():
@@ -398,21 +429,15 @@ class BackupService:
                 db_only=db_only
             )
 
-        try:
-            from apps.deployments.utils.target import resolve_active_execution_target
-            target = resolve_active_execution_target(service)
-            if target["target_type"] in ("remote", "lite_agent") and target["server_obj"]:
-                include_secret_values = str(backup_type or '').upper() in {
-                    'TRANSFER',
-                    'SERVICE_TRANSFER',
-                    'SERVER_TRANSFER',
-                    'PRE_TRANSFER',
-                }
-                return self._backup_remote_service(service, backup, target["server_obj"], include_secret_values)
-        except Exception as e:
-            if backup.status == 'FAILED':
-                raise
-            logger.warning("Target resolution failed for backup: %s", e)
+        is_remote, server_obj, _via = _resolve_backup_target(service)
+        if is_remote:
+            include_secret_values = str(backup_type or '').upper() in {
+                'TRANSFER',
+                'SERVICE_TRANSFER',
+                'SERVER_TRANSFER',
+                'PRE_TRANSFER',
+            }
+            return self._backup_remote_service(service, backup, server_obj, include_secret_values)
 
         if not self.docker_client:
             backup.status = 'FAILED'
@@ -677,16 +702,9 @@ class BackupService:
 
         target_service_id = target_service_id or backup.service_id
         target_service = Service.objects.get(id=target_service_id)
-        try:
-            from apps.deployments.utils.target import resolve_active_execution_target
-            target = resolve_active_execution_target(target_service)
-            is_remote = target["target_type"] in ("remote", "lite_agent") and target["server_obj"]
-        except Exception:
-            is_remote = False
-            server_obj = None
+        is_remote, server_obj, _via = _resolve_backup_target(target_service)
 
         if is_remote:
-            server_obj = target.get("server_obj")
             self.backup_service(target_service.id, backup_type='PRE_TRANSFER')
 
         if not is_remote and not self.docker_client:
