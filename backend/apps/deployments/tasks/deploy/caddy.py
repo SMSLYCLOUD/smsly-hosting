@@ -168,7 +168,7 @@ def push_caddy_to_node(server_id: str) -> dict:
         ssh.exec_command(f"chmod 644 {caddy_path}", timeout=10)
 
         reload_out, reload_err, reload_code = ssh.exec_command(
-            "cd /opt/smsly-hosting && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force",
+            "cd /opt/smsly-hosting && docker compose -f infrastructure/docker/docker-compose.node.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force",
             timeout=30,
             raise_on_error=False,
         )
