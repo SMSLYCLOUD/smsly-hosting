@@ -200,3 +200,67 @@ class RestoreAddonDumpTests(TestCase):
         cmd = ctr.exec_run.call_args[0][0]
         self.assertEqual(cmd[:3], ['psql', '-U', 'u1'])
         self.assertIn('d1', cmd)
+
+
+class SharedServerDumpTests(TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _shared_client(self, dblist, dumps=None):
+        ctr = mock.Mock()
+
+        def _exec(cmd, environment=None, timeout=None):
+            m = mock.Mock()
+            if '-c' in cmd:
+                m.exit_code = 0
+                m.output = dblist
+                return m
+            m.exit_code = 0
+            m.output = (dumps or {}).get(cmd[cmd.index('-d') + 1], b'SQL')
+            return m
+
+        ctr.exec_run.side_effect = _exec
+        client = mock.Mock()
+        client.containers.get.side_effect = lambda n: ctr
+        return client, ctr
+
+    def test_dumps_non_addon_dbs_only(self):
+        client, ctr = self._shared_client(
+            b'postgres\npolicy_db\naddon_db\n')
+        with mock.patch.dict('os.environ',
+                             {'SHARED_POSTGRES_PASSWORD': 'pw'}):
+            manifest = ops._dump_shared_server(
+                self.tmp, docker_client=client,
+                exclude_dbs={'addon_db'})
+        self.assertEqual([e['db'] for e in manifest],
+                         ['postgres', 'policy_db'])
+        self.assertTrue(os.path.exists(
+            os.path.join(self.tmp, 'shared_db_policy_db.sql')))
+
+    def test_missing_password_raises(self):
+        client, _ = self._shared_client(b'postgres\n')
+        with mock.patch.dict('os.environ', {'SHARED_POSTGRES_PASSWORD': ''}):
+            with self.assertRaises(RuntimeError):
+                ops._dump_shared_server(self.tmp, docker_client=client)
+
+    def test_shared_restore_loads_through_postgres_db(self):
+        path = os.path.join(self.tmp, 'shared_db_policy_db.sql')
+        with open(path, 'w') as f:
+            f.write('SELECT 1;')
+        res = mock.Mock()
+        res.exit_code = 0
+        res.output = b''
+        ctr = mock.Mock()
+        ctr.id = 'cid9'
+        ctr.exec_run.return_value = res
+        client = mock.Mock()
+        client.containers.get.side_effect = lambda n: ctr
+        with mock.patch('apps.cloud.services.backup_service.helpers._copy_file_to_container'):
+            ops._restore_shared_db(
+                client, {'db': 'policy_db',
+                         'filename': 'shared_db_policy_db.sql'},
+                self.tmp, 'pw')
+        cmd = ctr.exec_run.call_args[0][0]
+        self.assertEqual(cmd[:6],
+                         ['psql', '-h', '127.0.0.1', '-U', 'postgres', '-d'])
+        self.assertIn('postgres', cmd)

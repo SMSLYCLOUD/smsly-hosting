@@ -482,6 +482,45 @@ def _backup_addon_volumes(service, temp_dir, docker_client=None):
     return manifest, skipped
 
 
+def _restore_shared_db(docker_client, entry, temp_dir, password):
+    """Restore one shared-server database dump (manifest entry).
+
+    The dump was taken with --create/--clean, so it is loaded through
+    the maintenance database. Raises on any failure.
+    """
+    import re as _re_mod
+    fname = (entry or {}).get('filename', '')
+    dbname = (entry or {}).get('db', '')
+    if not fname or not os.path.exists(os.path.join(temp_dir, fname)):
+        raise RuntimeError(
+            f"Shared dump {fname!r} listed in backup metadata is missing "
+            f"from the archive.")
+    if not _re_mod.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', dbname):
+        raise RuntimeError(f"Shared dump has unsafe dbname {dbname!r}.")
+    if not password:
+        raise RuntimeError(
+            'SHARED_POSTGRES_PASSWORD not configured — cannot restore '
+            f'shared database {dbname}.')
+    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+    from apps.cloud.services.backup_service.helpers import (
+        _copy_file_to_container)
+    target = docker_client.containers.get(SHARED_CONTAINER)
+    _copy_file_to_container(
+        docker_client, target.id,
+        os.path.join(temp_dir, fname), '/tmp/restore_shared_dump.sql')
+    res = target.exec_run(
+        ['psql', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'postgres',
+         '-f', '/tmp/restore_shared_dump.sql'],
+        environment={'PGPASSWORD': password},
+        timeout=900,
+    )
+    if res.exit_code != 0:
+        raise RuntimeError(
+            f"Shared restore failed for database {dbname} (exit "
+            f"{res.exit_code}): {(res.output or b'')[:200]}")
+    logger.info("Shared restore successful for database %s", dbname)
+
+
 def _restore_addon_dump(docker_client, target_service, entry, temp_dir):
     """Restore one manifest addon-dump entry into the target service's addon.
 
@@ -541,6 +580,74 @@ def _restore_addon_dump(docker_client, target_service, entry, temp_dir):
             f"Addon restore failed for {aname!r} (exit {res.exit_code}): "
             f"{(res.output or b'')[:200]}")
     logger.info("Addon restore successful for %s", aname)
+
+
+def _dump_shared_server(temp_dir, docker_client=None, exclude_dbs=frozenset()):
+    """Logical per-database dumps of the shared Postgres server.
+
+    Covers shared-host databases with NO platform addon row (platform
+    microservice DBs: policy, gateway, chain, …). Addon logical DBs are
+    dumped per-addon already — pass their dbnames in ``exclude_dbs`` so
+    they are not dumped twice.
+
+    Credentials come from the ``SHARED_POSTGRES_PASSWORD`` env var on
+    the backup worker (never the repo). Absent/unusable creds raise —
+    the server-backup caller records the skip loudly instead of
+    shipping a tarball that silently omits half the platform.
+    """
+    import os as _os
+    password = (_os.environ.get('SHARED_POSTGRES_PASSWORD', '') or '').strip()
+    if not password:
+        raise RuntimeError(
+            'SHARED_POSTGRES_PASSWORD not configured on the backup worker — '
+            'set it in the hosting .env and recreate the backend.')
+    if docker_client is not None:
+        client = docker_client
+    else:
+        client = _docker.from_env()
+    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+    try:
+        target = client.containers.get(SHARED_CONTAINER)
+    except Exception as exc:
+        raise RuntimeError(f"shared server unreachable: {exc}")
+    list_res = target.exec_run(
+        ['psql', '-h', '127.0.0.1', '-U', 'postgres', '-tA',
+         '-c', "SELECT datname FROM pg_database WHERE datistemplate = false;"],
+        environment={'PGPASSWORD': password},
+        timeout=120,
+    )
+    if list_res.exit_code != 0:
+        raise RuntimeError(
+            f"shared db listing failed (exit {list_res.exit_code}): "
+            f"{(list_res.output or b'')[:200]}")
+    import re as _re_mod
+    manifest = []
+    excluded = {str(d).strip() for d in (exclude_dbs or []) if str(d).strip()}
+    for line in (list_res.output or b'').decode('utf-8', 'replace').splitlines():
+        dbname = line.strip()
+        if not dbname or dbname in excluded:
+            continue
+        if not _re_mod.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', dbname):
+            logger.warning("shared dump: skipping odd dbname %r", dbname)
+            continue
+        filename = f'shared_db_{dbname}.sql'
+        dump_path = os.path.join(temp_dir, filename)
+        result = target.exec_run(
+            ['pg_dump', '-h', '127.0.0.1', '-U', 'postgres', '-d', dbname,
+             '--create', '--clean', '--if-exists',
+             '--no-owner', '--no-acl', '--lock-wait-timeout=5000'],
+            environment={'PGPASSWORD': password},
+            timeout=900,
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(
+                f"shared dump failed for database {dbname} (exit "
+                f"{result.exit_code}): {(result.output or b'')[:200]}")
+        with open(dump_path, 'wb') as f:
+            f.write(result.output)
+        logger.info("shared dump successful for database %s", dbname)
+        manifest.append({'db': dbname, 'filename': filename})
+    return manifest
 
 
 def backup_addon(addon_id: str) -> str | None:

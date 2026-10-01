@@ -1256,6 +1256,27 @@ rm -rf {remote_tmp}
                     'service': '_controlplane', 'stage': 'controlplane_dump',
                     'error': str(ce)[:300]})
 
+            # Shared-server databases without an addon row (platform
+            # microservice DBs). Addon logical DBs were dumped per-addon
+            # above — exclude them to avoid dumping twice.
+            metadata['shared_dbs'] = []
+            try:
+                from .operations import _dump_shared_server
+                _covered = {e.get('db', '') for svc in metadata['services']
+                            for e in (svc.get('addon_dumps') or [])
+                            if e.get('provision_mode') == 'shared' and e.get('db')}
+                _shared_manifest = _dump_shared_server(
+                    temp_dir, docker_client=self.docker_client,
+                    exclude_dbs=_covered)
+                metadata['shared_dbs'] = _shared_manifest
+                logger.info("Server backup: %d shared databases dumped",
+                            len(_shared_manifest))
+            except Exception as se:
+                logger.error(f"Server backup shared dump failed: {se}")
+                metadata['failed_services'].append({
+                    'service': '_shared', 'stage': 'shared_dump',
+                    'error': str(se)[:300]})
+
             metadata_json = json.dumps(metadata)
             tarball_name = f"server_backup_{timezone.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
             tarball_path = os.path.join(backups_dir, tarball_name)
@@ -1405,6 +1426,16 @@ rm -rf {remote_tmp}
                         f"Server restore needs service {_svc_name!r} for "
                         f"addon dump {dentry.get('filename')!r}.")
                 _restore_addon_dump(self.docker_client, _svc, dentry, temp_dir)
+
+            # Shared-server databases (no addon row). Same password gate
+            # as the backup side: without it, fail loudly, not silently.
+            import os as _os_mod
+            from .operations import _restore_shared_db
+            _shared_pw = (_os_mod.environ.get('SHARED_POSTGRES_PASSWORD', '')
+                          or '').strip()
+            for sentry in metadata.get('shared_dbs', []):
+                _restore_shared_db(
+                    self.docker_client, sentry, temp_dir, _shared_pw)
 
             if 'controlplane_dump.sql' in extracted:
                 # Deliberately NOT auto-restored: loading a platform-DB
