@@ -16,7 +16,7 @@ def execute_server_transfer_task(self, transfer_id):
         _redact_transfer_text,
     )
 
-    from .models.transfer import ServerTransfer as TransferModel
+    from apps.deployments.models.transfer import ServerTransfer as TransferModel
 
     lock_key = f"server-transfer:{transfer_id}"
     if not cache.add(lock_key, "1", timeout=3600):
