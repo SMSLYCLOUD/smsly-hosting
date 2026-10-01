@@ -258,6 +258,169 @@ def _emergency_restart_remote_container(service, server):
         logger.warning("Emergency remote restart failed for %s on %s: %s", container_name, getattr(server, 'host', '?'), exc)
 
 
+_ADDON_DUMPABLE_TYPES = frozenset({
+    'POSTGRES', 'TIMESCALEDB', 'MYSQL', 'MARIADB', 'REDIS', 'MONGO', 'MONGODB',
+})
+
+
+def _addon_dump_filename(addon_name: str, kind: str) -> str:
+    import re as _re_mod
+    slug = _re_mod.sub(r'[^a-z0-9]+', '-', (addon_name or 'addon').lower()).strip('-')
+    ext = {'REDIS': '.rdb', 'MONGO': '.archive', 'MONGODB': '.archive'}.get(kind, '.sql')
+    return f'addon_{slug or "db"}_dump{ext}'
+
+
+def _dump_service_addons(service, temp_dir, docker_client=None):
+    """Dump every ACTIVE database addon of ``service`` into ``temp_dir``.
+
+    The service-backup dump step (``_dump_container_database``) only
+    handles databases INSIDE the app container. Addon-based services
+    (app + addon postgres, e.g. marketer) silently produced env-only
+    tarballs (2026-10-01: db_only backup with no postgres data).
+
+    Returns a manifest list recorded in backup metadata['addon_dumps']
+    (consumed by the restore path). Raises on any dump failure —
+    shipping a tarball that silently omits an existing database is
+    worse than a failed backup. Services without DB addons return []
+    (stateless backups keep working unchanged).
+    """
+    from urllib.parse import urlparse as _urlparse
+    if docker_client is not None:
+        client = docker_client
+    else:
+        client = _docker.from_env()
+    from apps.deployments.models.addons import Addon
+    addons = list(Addon.objects.filter(
+        service=service, status='ACTIVE',
+        addon_type__in=sorted(_ADDON_DUMPABLE_TYPES),
+    ).order_by('name'))
+    manifest = []
+    for addon in addons:
+        kind = (addon.addon_type or '').upper()
+        filename = _addon_dump_filename(addon.name, kind)
+        dump_path = os.path.join(temp_dir, filename)
+        parsed = _urlparse(addon.connection_url or '')
+        url_user = parsed.username or ''
+        url_db = (parsed.path or '/').lstrip('/') or ''
+        url_password = parsed.password or ''
+        if (addon.provision_mode or '') == 'shared' and kind in ('POSTGRES', 'TIMESCALEDB'):
+            # Logical DB on the shared server: dump through it.
+            from apps.addons.services.shared_postgres import SHARED_CONTAINER
+            try:
+                target = client.containers.get(SHARED_CONTAINER)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Addon dump failed for {addon.name}: shared server unreachable: {exc}")
+            if not (url_user and url_db and url_password):
+                raise RuntimeError(
+                    f"Addon dump failed for {addon.name}: connection_url incomplete")
+            result = target.exec_run(
+                ['pg_dump', '-h', '127.0.0.1', '-U', url_user, '-d', url_db,
+                 '--lock-wait-timeout=5000', '--clean', '--if-exists',
+                 '--no-owner', '--no-acl'],
+                environment={'PGPASSWORD': url_password},
+                timeout=600,
+            )
+            if result.exit_code != 0:
+                raise RuntimeError(
+                    f"Addon dump failed for {addon.name}: pg_dump exit "
+                    f"{result.exit_code}: {(result.output or b'')[:200]}")
+            with open(dump_path, 'wb') as f:
+                f.write(result.output)
+            logger.info("Addon dump successful for %s (shared %s)", addon.name, url_db)
+            manifest.append({'addon': addon.name, 'addon_type': kind,
+                             'provision_mode': 'shared', 'filename': filename,
+                             'db': url_db})
+            continue
+        # Container addon: dump inside its own container. The canonical
+        # dedicated-container name is smsly-addon-<type>-<uuid> (see the
+        # provisioner); container_name is not a model field, so resolve
+        # defensively instead of AttributeError-ing the whole backup.
+        cname = (getattr(addon, 'container_name', None)
+                 or f"smsly-addon-{(addon.addon_type or '').lower()}-{addon.id}")
+        try:
+            ctr = client.containers.get(cname)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Addon dump failed for {addon.name}: container {cname} unreachable: {exc}")
+        c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                 for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                 if '=' in e}
+        if kind in ('POSTGRES', 'TIMESCALEDB'):
+            pg_user = c_env.get('POSTGRES_USER') or url_user or 'postgres'
+            pg_db = c_env.get('POSTGRES_DB') or url_db or 'postgres'
+            pg_password = c_env.get('POSTGRES_PASSWORD') or url_password
+            result = ctr.exec_run(
+                ['pg_dump', '-U', pg_user, '-d', pg_db,
+                 '--lock-wait-timeout=5000', '--clean', '--if-exists',
+                 '--no-owner', '--no-acl'],
+                environment={'PGPASSWORD': pg_password},
+                timeout=600,
+            )
+            if result.exit_code != 0:
+                result = ctr.exec_run(
+                    ['pg_dumpall', '-U', pg_user,
+                     '--clean', '--if-exists', '--no-role-passwords',
+                     '--lock-wait-timeout=5000'],
+                    environment={'PGPASSWORD': pg_password},
+                    timeout=600,
+                )
+                if result.exit_code != 0:
+                    raise RuntimeError(
+                        f"Addon dump failed for {addon.name}: pg_dumpall exit "
+                        f"{result.exit_code}: {(result.output or b'')[:200]}")
+            with open(dump_path, 'wb') as f:
+                f.write(result.output)
+            logger.info("Addon dump successful for %s (db: %s)", addon.name, pg_db)
+            manifest.append({'addon': addon.name, 'addon_type': kind,
+                             'provision_mode': 'container', 'filename': filename,
+                             'db': pg_db})
+        elif kind in ('MYSQL', 'MARIADB'):
+            password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
+            result = ctr.exec_run(
+                ['mysqldump', '--all-databases', '-u', 'root'],
+                environment={'MYSQL_PWD': password},
+                timeout=600,
+            )
+            if result.exit_code != 0:
+                raise RuntimeError(
+                    f"Addon dump failed for {addon.name}: mysqldump exit "
+                    f"{result.exit_code}: {(result.output or b'')[:200]}")
+            with open(dump_path, 'wb') as f:
+                f.write(result.output)
+            manifest.append({'addon': addon.name, 'addon_type': kind,
+                             'provision_mode': 'container', 'filename': filename,
+                             'db': 'all'})
+        elif kind == 'REDIS':
+            ctr.exec_run(['redis-cli', 'SAVE'], timeout=120)
+            time.sleep(2)
+            bits, _ = ctr.get_archive('/data/dump.rdb')
+            if not bits:
+                raise RuntimeError(f"Addon dump failed for {addon.name}: empty dump.rdb")
+            with open(dump_path, 'wb') as f:
+                for chunk in bits:
+                    f.write(chunk)
+            manifest.append({'addon': addon.name, 'addon_type': kind,
+                             'provision_mode': 'container', 'filename': filename,
+                             'db': 'rdb'})
+        elif kind in ('MONGO', 'MONGODB'):
+            result = ctr.exec_run(
+                ['mongodump', '--archive=/tmp/mongo.archive', '--gzip'], timeout=600)
+            if result.exit_code != 0:
+                raise RuntimeError(
+                    f"Addon dump failed for {addon.name}: mongodump exit {result.exit_code}")
+            bits, _ = ctr.get_archive('/tmp/mongo.archive')
+            if not bits:
+                raise RuntimeError(f"Addon dump failed for {addon.name}: empty archive")
+            with open(dump_path, 'wb') as f:
+                for chunk in bits:
+                    f.write(chunk)
+            manifest.append({'addon': addon.name, 'addon_type': kind,
+                             'provision_mode': 'container', 'filename': filename,
+                             'db': 'archive'})
+    return manifest
+
+
 def backup_addon(addon_id: str) -> str | None:
     """Back up a single addon (Postgres/MySQL/Redis/Mongo). Returns path to dump file or None."""
 
@@ -265,7 +428,9 @@ def backup_addon(addon_id: str) -> str | None:
     client = _docker.from_env()
     try:
         addon = Addon.objects.get(id=addon_id, status='ACTIVE')
-        ctr = client.containers.get(addon.container_name or addon.name)
+        cname = (getattr(addon, 'container_name', None)
+                 or f"smsly-addon-{(addon.addon_type or '').lower()}-{addon.id}")
+        ctr = client.containers.get(cname)
         atype = (addon.addon_type or '').lower()
         backup_dir = os.path.join('/app', 'backups', 'addons', str(addon.service.id))
         os.makedirs(backup_dir, exist_ok=True)

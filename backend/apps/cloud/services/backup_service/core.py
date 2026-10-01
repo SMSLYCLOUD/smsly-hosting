@@ -424,6 +424,16 @@ class BackupService:
             container_name = service.name
             _dump_container_database(container_name, image_tag, temp_dir, docker_client=self.docker_client)
 
+            # Addon databases (app + addon-postgres services): the step
+            # above only covers DBs inside the app container. Dump each
+            # ACTIVE DB addon too — otherwise db_only backups ship an
+            # env-only tarball with no postgres data. Raises on failure
+            # (a backup that silently omits a live database is worse
+            # than a failed backup); recorded in metadata for restore.
+            from .operations import _dump_service_addons
+            metadata['addon_dumps'] = _dump_service_addons(
+                service, temp_dir, docker_client=self.docker_client)
+
             volumes = Volume.objects.filter(service=service)
             for vol in volumes:
                 if backup.db_only:
@@ -707,6 +717,66 @@ class BackupService:
                     ctr.exec_run(['redis-cli', 'FLUSHALL'], timeout=60)
                     with open(db_dump_path, 'rb') as f:
                         ctr.exec_run(['redis-cli', '--pipe'], data_input=f.read(), timeout=120)
+
+            # Addon database dumps (metadata['addon_dumps'] manifest).
+            # Each entry restores into the SAME-NAMED addon of the target
+            # service using its LIVE credentials. A manifest entry whose
+            # file or addon is missing fails the restore — silently
+            # skipping a database restore is data loss.
+            import re as _re_mod
+            for entry in (backup.metadata or {}).get('addon_dumps', []):
+                _afname = entry.get('filename', '')
+                _aname = entry.get('addon', '')
+                if not _afname or _afname not in extracted_files:
+                    raise RuntimeError(
+                        f"Addon dump {_afname!r} listed in backup metadata "
+                        f"is missing from the archive.")
+                from apps.deployments.models.addons import Addon as _Addon
+                _addon = _Addon.objects.filter(
+                    service=target_service, name=_aname,
+                    status='ACTIVE').first()
+                if _addon is None:
+                    raise RuntimeError(
+                        f"Restore needs addon {_aname!r} on service "
+                        f"{target_service.name} — recreate it first, then retry.")
+                if not _afname.endswith('.sql'):
+                    raise RuntimeError(
+                        f"Addon dump {_afname!r} needs manual restore "
+                        f"(only .sql restores are automated).")
+                from urllib.parse import urlparse as _urlparse
+                _parsed = _urlparse(_addon.connection_url or '')
+                _user = _parsed.username or ''
+                _db = (_parsed.path or '/').lstrip('/') or ''
+                _pw = _parsed.password or ''
+                if not (_re_mod.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', _user)
+                        and _re_mod.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', _db)
+                        and _pw):
+                    raise RuntimeError(
+                        f"Addon {_aname!r} has no usable live credentials for restore.")
+                _amode = (_addon.provision_mode or '')
+                if _amode == 'shared':
+                    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+                    _ctr = self.docker_client.containers.get(SHARED_CONTAINER)
+                    _host_args = ['-h', '127.0.0.1']
+                else:
+                    _ctr = self.docker_client.containers.get(
+                        getattr(_addon, 'container_name', None)
+                        or f"smsly-addon-{(_addon.addon_type or '').lower()}-{_addon.id}")
+                    _host_args = []
+                _copy_file_to_container(
+                    self.docker_client, _ctr.id,
+                    os.path.join(temp_dir, _afname), '/tmp/restore_addon_dump.sql')
+                _res = _ctr.exec_run(
+                    ['psql', *_host_args, '-U', _user, '-d', _db,
+                     '-f', '/tmp/restore_addon_dump.sql'],
+                    environment={'PGPASSWORD': _pw},
+                    timeout=600,
+                )
+                if _res.exit_code != 0:
+                    raise RuntimeError(
+                        f"Addon restore failed for {_aname!r} (exit "
+                        f"{_res.exit_code}): {(_res.output or b'')[:200]}")
+                logger.info("Addon restore successful for %s", _aname)
 
             vol_files = [f for f in extracted_files if f.startswith('volume_') and f.endswith('.tar.gz')]
             all_vols = list(Volume.objects.filter(service=target_service))
