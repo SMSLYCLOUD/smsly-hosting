@@ -35,7 +35,8 @@ def _master_registry_setup_commands() -> list[str]:
             safe_url = shlex.quote(node_url)
             commands.append(
                 f"printf '%s\\n' {safe_pwd} | docker login --username {safe_user} "
-                f"--password-stdin {safe_url} 2>/dev/null || true"
+                f"--password-stdin {safe_url} || "
+                f"(echo \"docker login failed for {safe_url}\" >&2; exit 1)"
             )
     except Exception:
         return commands
@@ -73,21 +74,24 @@ def _registry_credential_list(server: ManagedServer) -> list:
     return creds
 
 
-def _docker_login_all(ssh, server: ManagedServer) -> None:
+def _docker_login_all(ssh, server: ManagedServer) -> bool:
     """docker login on the node with passwords over the encrypted channel.
 
     Writes each password to the remote docker-login stdin instead of
     interpolating it into argv (argv is visible in `ps` to anyone on the
     node; the SSH channel is not). Logs only outcomes, never secrets.
+
+    Returns True when every registry login succeeded, False otherwise.
     """
     import logging as _logging
     _logger = _logging.getLogger(__name__)
+    all_ok = True
     for url, user, pwd in _registry_credential_list(server):
         try:
             import shlex as _shlex
             stdin, stdout, stderr = ssh.exec_command(
                 f"docker login --username {_shlex.quote(user)} "
-                f"--password-stdin {_shlex.quote(url)} 2>/dev/null || true",
+                f"--password-stdin {_shlex.quote(url)}",
                 timeout=60,
             )
             try:
@@ -102,9 +106,19 @@ def _docker_login_all(ssh, server: ManagedServer) -> None:
             if code == 0:
                 _logger.info("Node docker login succeeded for %s", url)
             else:
-                _logger.warning("Node docker login exited %s for %s", code, url)
+                try:
+                    err_out = stderr.read().decode("utf-8", errors="replace").strip() if stderr else ""
+                except Exception:
+                    err_out = ""
+                _logger.error(
+                    "Node docker login FAILED for registry %s (exit %s)%s",
+                    url, code, f": {err_out}" if err_out else "",
+                )
+                all_ok = False
         except Exception as exc:
-            _logger.warning("Node docker login failed for %s: %s", url, exc)
+            _logger.error("Node docker login failed for registry %s: %s", url, exc)
+            all_ok = False
+    return all_ok
 
 
 def _registry_login_commands(server: ManagedServer) -> str:
@@ -124,7 +138,8 @@ def _registry_login_commands(server: ManagedServer) -> str:
         safe_url = shlex.quote(url)
         commands.append(
             f"printf '%s\\n' {safe_pwd} | docker login --username {safe_user} "
-            f"--password-stdin {safe_url} 2>/dev/null || true"
+            f"--password-stdin {safe_url} || "
+            f"(echo \"docker login failed for {safe_url}\" >&2; exit 1)"
         )
     # Deduplicate identical commands (master entry appears twice).
     seen = set()

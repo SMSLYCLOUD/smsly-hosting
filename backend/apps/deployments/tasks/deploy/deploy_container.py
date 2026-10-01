@@ -92,8 +92,20 @@ def _cancel_previous_staged(deployment: Deployment) -> None:
     client = None
     try:
         client = docker.from_env()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Docker client unavailable in _cancel_previous_staged: %s", exc)
+        client = None
+
+    if client is None:
+        logger.warning(
+            "Docker unavailable — leaving %s prior STAGED/HEALTH_CHECK row(s) for service %s for the sweep",
+            previous.count(), getattr(getattr(deployment, 'service', None), 'name', '?'),
+        )
+        try:
+            append_log(deployment, "[STAGED] Docker unavailable — leaving prior staged rows for the reaper sweep.\n")
+        except Exception:
+            pass
+        return
 
     for old in previous:
         append_log(deployment, f"[STAGED] Replacing prior staged deployment {old.id} (commit {old.commit_hash[:8] if old.commit_hash else 'unknown'})\n")

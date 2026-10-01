@@ -447,12 +447,12 @@ class DeployActionsMixin:
             # Rollback was queued but there is no provider to run it on —
             # fail loudly so the client can attach a provider and retry.
             rollback_deployment.status = Deployment.Status.FAILED
-            rollback_deployment.error_message = (
+            rollback_deployment.ai_diagnosis = (
                 'No active cloud provider available for this service.'
             )
             rollback_deployment.finished_at = timezone.now()
             rollback_deployment.save(
-                update_fields=['status', 'error_message', 'finished_at', 'updated_at'],
+                update_fields=['status', 'ai_diagnosis', 'finished_at', 'updated_at'],
             )
             return _error_response(
                 "ROLLBACK_PERMISSION_DENIED",

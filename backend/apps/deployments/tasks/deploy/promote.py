@@ -121,9 +121,27 @@ def _do_promote(deployment: Deployment, provider: CloudProvider) -> None:
     if provider.provider_type == CloudProvider.ProviderType.LOCAL:
         from .health import _local_route_timeout_seconds, _wait_for_local_route_ready
         route_timeout = _local_route_timeout_seconds(service)
-        _wait_for_local_route_ready(
+        route_ready = _wait_for_local_route_ready(
             deployment, service, timeout_seconds=route_timeout,
         )
+        if not route_ready:
+            # Row is already ACTIVE — do NOT un-ACTIVE it. The container
+            # is healthy; only the edge route lagged (Traefik provider
+            # refresh). Record loudly so it is debuggable.
+            logger.error(
+                "Post-promote route not ready for deployment %s (service %s) — "
+                "row stays ACTIVE; Traefik will register when it refreshes",
+                deployment.id, getattr(service, 'name', '?'),
+            )
+            try:
+                append_log(
+                    deployment,
+                    "[ROUTE-WARN] Post-promote edge route not ready yet — "
+                    "deployment stays ACTIVE; Traefik will register the route "
+                    "when its provider refreshes.\n",
+                )
+            except Exception:
+                pass
 
 
 @shared_task(
@@ -205,6 +223,35 @@ def auto_promote_staged_deployments():
                     logger.exception("Auto-promote: failed to fail deployment %s: %s", deployment.id, inner)
                 continue
             logger.exception("Auto-promote failed for deployment %s: %s", deployment.id, exc)
+            try:
+                append_log(
+                    deployment,
+                    f"[AUTO-PROMOTE] Promote attempt failed: {exc}\n",
+                )
+            except Exception:
+                pass
+            try:
+                meta = deployment.metadata if isinstance(deployment.metadata, dict) else {}
+                attempts = int(meta.get('auto_promote_attempts', 0) or 0) + 1
+                meta['auto_promote_attempts'] = attempts
+                deployment.metadata = meta
+                if attempts >= 5:
+                    deployment.status = Deployment.Status.FAILED
+                    deployment.finished_at = timezone.now()
+                    deployment.save(update_fields=['metadata', 'status', 'finished_at', 'updated_at'])
+                    append_log(
+                        deployment,
+                        f"[AUTO-PROMOTE] Giving up after {attempts} failed attempts "
+                        f"({exc}). Marked FAILED; redeploy to ship a fresh build.\n",
+                    )
+                    logger.warning(
+                        "Auto-promote: giving up on deployment %s after %d attempts — marked FAILED",
+                        deployment.id, attempts,
+                    )
+                else:
+                    deployment.save(update_fields=['metadata', 'updated_at'])
+            except Exception as meta_exc:
+                logger.debug("Auto-promote retry-counter update failed for %s: %s", deployment.id, meta_exc)
 
     return {'promoted': promoted, 'skipped': skipped}
 

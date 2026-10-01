@@ -59,11 +59,49 @@ class AddonMaintenanceService:
             }
 
         from urllib.parse import quote
-        new_password = secrets.token_urlsafe(48)
+        # Tenant-pooler-safe password: userlist.txt cannot quote `"`,
+        # backslash, or control chars (render fails fail-closed), so a
+        # rotation that generated one would move the DB+URL on while the
+        # pooler refuses it. Regenerate boundedly; abort before touching
+        # the DB when nothing passes.
+        new_password = ''
+        for _ in range(5):
+            _candidate = secrets.token_urlsafe(48)
+            if self._pooler_safe_password(_candidate):
+                new_password = _candidate
+                break
+        if not new_password:
+            return {
+                'status': 'failed',
+                'error': (
+                    'Could not generate a pooler-safe password after '
+                    '5 attempts; rotation aborted before touching the database.'
+                ),
+            }
 
         try:
             if addon_type == 'POSTGRES':
-                conn = self.proxy.get_connection()
+                if (getattr(addon, 'provision_mode', '') == 'shared'
+                        and bool(getattr(addon, 'pooler_routed', False))):
+                    # Transaction pooling can break DDL: ALTER USER must
+                    # bypass the pooler alias and hit the shared server
+                    # directly (URL rewritten for this step only).
+                    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+                    import psycopg2 as _psycopg2
+                    _parsed = urlparse(addon.connection_url or '')
+                    _direct_url = urlunparse((
+                        _parsed.scheme,
+                        f"{quote(_parsed.username or '', safe='')}:"
+                        f"{quote(_parsed.password or '', safe='')}@"
+                        f"{SHARED_CONTAINER}:{_parsed.port or 5432}",
+                        _parsed.path or '',
+                        _parsed.params,
+                        _parsed.query,
+                        _parsed.fragment,
+                    ))
+                    conn = _psycopg2.connect(_direct_url, connect_timeout=10)
+                else:
+                    conn = self.proxy.get_connection()
                 try:
                     # Identifiers must be composed, not parameterized:
                     # %s renders a quoted string literal, and
@@ -190,6 +228,13 @@ class AddonMaintenanceService:
         except Exception as e:
             logger.error("Credential rotation failed for addon %s: %s", addon.id, e)
             return {'status': 'failed', 'error': str(e)}
+
+    @staticmethod
+    def _pooler_safe_password(password: str) -> bool:
+        """Mirror of tenant_pooler._check_password: no `"`, no backslash,
+        no control chars, non-empty (userlist.txt cannot quote them)."""
+        return bool(password) and '"' not in password and '\\' not in password and not any(
+            ord(c) < 32 for c in password)
 
     @staticmethod
     def _is_ip_address(value: str) -> bool:

@@ -159,20 +159,31 @@ def sync_addon_env_vars(addon, old_url=""):
 
 
 def _service_container_names(service) -> list[str]:
-    """Running container names owned by the service (label, then name)."""
+    """Running container names owned by the service (label, name, prefix)."""
+    svc_name = str(getattr(service, 'name', '') or '').strip()
     names: list[str] = []
     res = _run(['docker', 'ps', '--format', '{{.Names}}',
                 '--filter', f'label=smsly.service_id={getattr(service, "id", "")}'],
                timeout=30)
     if not res.get('error'):
         names = [n for n in (res.get('output') or '').split() if n]
-    if not names:
-        svc_name = str(getattr(service, 'name', '') or '').strip()
-        if svc_name:
-            res = _run(['docker', 'ps', '--format', '{{.Names}}',
-                        '--filter', f'name=^{svc_name}$'], timeout=30)
-            if not res.get('error'):
-                names = [n for n in (res.get('output') or '').split() if n]
+    if not names and svc_name:
+        res = _run(['docker', 'ps', '--format', '{{.Names}}',
+                    '--filter', f'name=^{svc_name}$'], timeout=30)
+        if not res.get('error'):
+            names = [n for n in (res.get('output') or '').split() if n]
+    if not names and svc_name:
+        # Compose / blue-green writers carry suffixes
+        # (e.g. <service>-green-<hash>) that exact matching misses —
+        # match any running container whose name contains the service name.
+        res = _run(['docker', 'ps', '--format', '{{.Names}}'], timeout=30)
+        if not res.get('error'):
+            all_names = [n for n in (res.get('output') or '').split() if n]
+            names = [n for n in all_names if svc_name in n]
+            if names:
+                logger.info(
+                    "Migration quiesce: substring-matched containers %s "
+                    "for service %r", names, svc_name)
     return names
 
 
@@ -183,6 +194,7 @@ def _stop_service_containers(names: list[str]) -> None:
         res = _run(['docker', 'stop', '--timeout', '30', name], timeout=60)
         if res.get('error'):
             raise RuntimeError(f"Could not stop service container {name}: {res['error']}")
+    logger.info("Migration quiesce: stopped containers %s", names)
 
 
 def _start_service_containers(names: list[str]) -> None:
@@ -219,6 +231,90 @@ def _verify_target_via_exec(container_name: str, url: str, timeout=30) -> bool:
     except Exception as exc:
         logger.debug("Exec verify failed for %s: %s", container_name, exc)
         return False
+
+
+_USER_TABLES_SQL = (
+    "SELECT tablename FROM pg_tables WHERE schemaname "
+    "NOT IN ('pg_catalog', 'information_schema')"
+)
+
+
+def _psql_exec(container_name: str, url: str, sql: str, timeout=60):
+    """Run SQL via `docker exec psql`; return (ok, stdout_or_error)."""
+    from urllib.parse import urlparse as _urlparse
+    import os as _os
+    import subprocess as _sp
+    parsed = _urlparse(url or '')
+    user = parsed.username or 'postgres'
+    db = (parsed.path or '').lstrip('/') or 'postgres'
+    env = dict(_os.environ)
+    if parsed.password:
+        env['PGPASSWORD'] = parsed.password
+    try:
+        result = _sp.run(
+            ['docker', 'exec', container_name, 'psql',
+             '-U', user, '-d', db, '-tAc', sql],
+            capture_output=True, text=True, timeout=timeout, env=env)
+    except Exception as exc:
+        return False, str(exc)[:500]
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or 'psql failed').strip()[:500]
+    return True, (result.stdout or '')
+
+
+def _table_row_counts(container_name: str, url: str):
+    """{table: row_count} for user tables, or (None, error_detail)."""
+    ok, out = _psql_exec(container_name, url, _USER_TABLES_SQL)
+    if not ok:
+        return None, out
+    tables = [line.strip() for line in out.splitlines() if line.strip()]
+    counts = {}
+    for table in tables:
+        ok, out = _psql_exec(
+            container_name, url, f'SELECT count(*) FROM "{table}"')
+        if not ok:
+            return None, f"count failed for {table}: {out}"
+        try:
+            counts[table] = int(out.strip().split()[0])
+        except (ValueError, IndexError):
+            return None, f"unparseable count for {table}: {out.strip()[:200]!r}"
+    return counts, ''
+
+
+def _verify_row_counts(old_url: str, new_url: str,
+                       target_mode: str, container_name: str) -> str:
+    """Compare source vs target row counts per user table.
+
+    Returns '' when every table matches, else a human-readable detail.
+    Queried via `docker exec psql` (the worker is not on project-scoped
+    bridges, so addon DNS names never resolve from here).
+    """
+    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+    if target_mode == 'container':
+        source_container, target_container = SHARED_CONTAINER, container_name
+    else:
+        source_container, target_container = container_name, SHARED_CONTAINER
+    source_counts, err = _table_row_counts(source_container, old_url)
+    if source_counts is None:
+        return f"could not read source row counts: {err}"
+    target_counts, err = _table_row_counts(target_container, new_url)
+    if target_counts is None:
+        return f"could not read target row counts: {err}"
+    mismatches = []
+    for table in sorted(set(source_counts) | set(target_counts)):
+        if table not in target_counts:
+            mismatches.append(f"{table}: missing on target")
+        elif table not in source_counts:
+            mismatches.append(f"{table}: unexpected on target")
+        elif source_counts[table] != target_counts[table]:
+            mismatches.append(
+                f"{table}: source={source_counts[table]} "
+                f"target={target_counts[table]}")
+    if mismatches:
+        return "row-count mismatch (" + "; ".join(mismatches) + ")"
+    logger.info("Migration row-count verification passed (%d tables)",
+                len(source_counts))
+    return ''
 
 
 def _claim_for_migration(addon_id):
@@ -359,6 +455,7 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
 
     new_container_created = False
     new_url_set = False
+    source_container_removed = False
     stripped_nets = []
     source_cleanup_warning = ''
     try:
@@ -414,6 +511,15 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
             )
             if not _verify_target_via_exec(exec_container, new_url):
                 raise RuntimeError("Target database failed verification (SELECT 1).")
+        # 4b. Row-count verification: SELECT 1 proves the target answers,
+        #     not that the restore carried every row (psql without
+        #     ON_ERROR_STOP exits 0 despite per-statement failures).
+        #     Fail the migration when any user table differs.
+        row_detail = _verify_row_counts(
+            old_url, new_url, target_mode, container_name)
+        if row_detail:
+            raise RuntimeError(
+                f"Target failed row-count verification: {row_detail}")
 
         # 5. Remove the old backend + its alias.
         if target_mode == 'container':
@@ -425,10 +531,19 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
                             f"Could not move alias off shared server ({net}): {res['error']}")
                     stripped_nets.append(net)
         else:
-            ok = addon_provisioner.deprovision_dispatch(container_name, addon, container_name)
+            # Verification (SELECT 1 + row counts) has passed — remove the
+            # old container but RETAIN its volume until the final liveness
+            # check below; the retained volume is dropped post-verify.
+            ok = addon_provisioner.deprovision_dispatch(
+                container_name, addon, container_name, retain_volume=True)
             if not ok:
                 raise RuntimeError("Target verified but old container removal failed — "
                                    "remove it manually to clear the duplicate network alias.")
+            source_container_removed = True
+            logger.info(
+                "Migration %s: source container removed, volume %s-data "
+                "retained pending final verification",
+                addon.id, container_name)
 
         # 6. Point app env at the new credentials.
         sync_addon_env_vars(addon, old_url=old_url)
@@ -456,6 +571,20 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
             except Exception as exc:
                 source_cleanup_warning = f"Old logical DB not dropped: {exc}"
                 logger.warning("Migration source cleanup failed for %s: %s", addon.id, exc)
+        else:
+            # Row-count + liveness verification passed — now drop the
+            # retained source volume (its container went at step 5).
+            res = _run(['docker', 'volume', 'rm', f'{container_name}-data'],
+                       timeout=60)
+            if res.get('error'):
+                source_cleanup_warning = (
+                    f"Retained source volume not removed: {res['error']}")
+                logger.warning("Migration source cleanup failed for %s: %s",
+                               addon.id, res['error'])
+            else:
+                logger.info(
+                    "Migration %s: verification passed — removed retained "
+                    "source volume %s-data", addon.id, container_name)
         addon.status = Addon.Status.ACTIVE
         addon.save(update_fields=['status', 'updated_at'])
         logger.info("Migrated addon %s to %s", addon.id, target_mode)
@@ -498,6 +627,22 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
                 result_push_warning = (
                     f"Tenant pooler push skipped ({exc}); run "
                     "shared-pooler-push, then redeploy the service.")
+        elif target_mode == 'container' and old_pooled:
+            # The addon was pooler-routed on shared: the pooler still
+            # serves a stale pool+alias for it. Reconcile best-effort so
+            # the dead pool is removed (never fails the migration).
+            try:
+                from apps.addons.services.tenant_pooler import (
+                    push_tenants_config as _push_after_container_move,
+                )
+                _push_after_container_move()
+                logger.info(
+                    "Migration pooler reconcile for %s: pushed after "
+                    "shared->container move", addon.id)
+            except Exception as exc:
+                logger.warning(
+                    "Migration pooler reconcile skipped for %s: %s",
+                    addon.id, exc)
         result = {
             'status': 'ok',
             'target_mode': target_mode,
@@ -603,6 +748,14 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
                         logger.error("Migration rollback alias strip failed (%s): %s", net, res['error'])
         if new_container_created:
             _run(['docker', 'rm', '-f', container_name], timeout=90)
+        if source_container_removed:
+            # The source container is gone but its volume was retained —
+            # data survives for manual recovery; the row above points back
+            # at the original URL.
+            logger.warning(
+                "Migration rollback for %s: source container removed; "
+                "retained volume %s-data preserved for manual recovery",
+                addon.id, container_name)
         if target_mode == 'shared' and staging_db != old_db:
             # Remove our own staging database so retries start clean.
             # Role untouched — still owns the live source.

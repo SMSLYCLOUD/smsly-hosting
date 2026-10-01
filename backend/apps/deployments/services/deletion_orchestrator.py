@@ -81,10 +81,53 @@ class DeletionOrchestrator:
                 from urllib.parse import urlparse as _urlparse
                 from apps.addons.services.shared_postgres import drop_logical_db
                 parsed = _urlparse(addon.connection_url or '')
+                _alias = parsed.hostname or ''
                 drop_logical_db(
                     parsed.username or '',
                     (parsed.path or '/').lstrip('/'),
                 )
+                # The tenant alias stays on the shared server + pooler
+                # endpoints after the drop — strip it best-effort so no
+                # future database reuses a shadowed name. Never fail the
+                # delete when the strip fails.
+                if _alias:
+                    try:
+                        from apps.addons.services.addon_migrate import (
+                            container_network_aliases as _cna,
+                            strip_alias as _strip,
+                        )
+                        from apps.addons.services.shared_postgres import SHARED_CONTAINER
+                        _targets = [SHARED_CONTAINER]
+                        try:
+                            from apps.addons.services.tenant_pooler import tenants_container_name
+                            _pooler = tenants_container_name()
+                            if _pooler:
+                                _targets.append(_pooler)
+                        except Exception:
+                            pass
+                        _nets = ['smsly-net']
+                        try:
+                            from apps.deployments.models.network_scope import ScopedNetwork as _SN
+                            _project = getattr(getattr(addon, 'service', None), 'project', None)
+                            if _project:
+                                _scoped = _SN.resolve_network_name(_project)
+                                if _scoped and _scoped not in _nets:
+                                    _nets.append(_scoped)
+                        except Exception:
+                            pass
+                        for _target in _targets:
+                            for _net in _nets:
+                                try:
+                                    if _alias in (_cna(_target).get(_net) or []):
+                                        _strip(_target, _net, _alias)
+                                except Exception:
+                                    logger.debug(
+                                        "shared alias strip skipped for %s on %s (%s)",
+                                        _alias, _net, _target, exc_info=True)
+                    except Exception:
+                        logger.warning(
+                            "shared alias strip failed for addon %s; continuing",
+                            addon.id, exc_info=True)
                 return True
             except Exception as e:
                 logger.error("Error dropping shared postgres database for addon %s: %s", addon.id, e)
@@ -301,10 +344,12 @@ class DeletionOrchestrator:
             return volumes
         try:
             all_vols = self.docker_client.volumes.list()
-            expected_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}-data"
+            expected_data = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}-data"
+            expected_config = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}-config"
             for v in all_vols:
                 labels = v.attrs.get('Labels') or {}
-                if labels.get('smsly.addon_id') == str(addon.id) or v.name == expected_name:
+                if labels.get('smsly.addon_id') == str(addon.id) or v.name in (
+                        expected_data, expected_config):
                     volumes.add(v)
         except Exception as e:
             logger.warning(f"Failed to list volumes for addon {addon.id}: {e}")

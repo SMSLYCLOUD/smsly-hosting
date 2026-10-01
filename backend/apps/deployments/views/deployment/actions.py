@@ -546,6 +546,11 @@ class LifecycleActionsMixin:
             _do_promote(deployment, provider)
         except Exception as exc:
             logger.exception("Promote failed for deployment %s: %s", deployment.id, exc)
+            try:
+                from apps.deployments.utils import append_log as _append_log
+                _append_log(deployment, f"\n[PROMOTE-FAILED] Manual promote failed: {exc}\n")
+            except Exception:
+                pass
             return Response(
                 {'error': f'Promote failed: {exc}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR)

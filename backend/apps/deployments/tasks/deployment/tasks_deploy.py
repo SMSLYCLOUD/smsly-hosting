@@ -623,13 +623,17 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
 
     deployment.refresh_from_db()
 
-    from apps.deployments.services.error_resolver import diagnose_runtime_logs
-    results = diagnose_runtime_logs(
-        container_logs,
-        service=service,
-        deployment=deployment,
-        auto_apply=True,
-    )
+    try:
+        from apps.deployments.services.error_resolver import diagnose_runtime_logs
+        results = diagnose_runtime_logs(
+            container_logs,
+            service=service,
+            deployment=deployment,
+            auto_apply=True,
+        )
+    except Exception as diag_exc:
+        logger.warning("Post-deploy diagnose_runtime_logs failed for %s: %s", deployment.id, diag_exc)
+        results = []
 
     auto_fixed = [r for r in results if r.get('auto_fixed')]
 

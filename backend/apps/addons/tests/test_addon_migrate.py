@@ -63,6 +63,14 @@ class MigrateQuiesceTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="migq", password="x")
         self.service = Service.objects.create(name="migqsvc", owner=self.user)
+        # Row-count verification needs live docker; unit tests assume a
+        # matching source/target (dedicated failure-path test below
+        # overrides this).
+        _v = mock.patch(
+            "apps.addons.services.addon_migrate._verify_row_counts",
+            return_value="")
+        _v.start()
+        self.addCleanup(_v.stop)
 
     def _addon(self, **kwargs):
         defaults = dict(
@@ -121,6 +129,31 @@ class MigrateQuiesceTests(TestCase):
         self.assertIn("start", kinds)
         self.assertIn("refresh", kinds)
         self.assertLess(kinds.index("dump"), kinds.index("start"))
+
+    def test_row_count_mismatch_blocks_migration(self):
+        addon = self._addon()
+        prov = self._provisioner()
+        with mock.patch(
+            "apps.addons.services.addon_migrate._service_container_names",
+            return_value=["svc-c1"],
+        ), mock.patch(
+            "apps.addons.services.addon_migrate._stop_service_containers",
+        ), mock.patch(
+            "apps.addons.services.addon_provisioner.addon_provisioner", prov,
+        ), mock.patch(
+            "apps.addons.services.addon_migrate.verify_postgres_url",
+            return_value=True,
+        ), mock.patch(
+            "apps.addons.services.addon_migrate._verify_target_via_exec",
+            return_value=True,
+        ), mock.patch(
+            "apps.addons.services.addon_migrate._verify_row_counts",
+            return_value="users: source=10 target=9",
+        ), mock.patch(
+            "apps.addons.services.addon_migrate._start_service_containers",
+        ):
+            with self.assertRaises(RuntimeError):
+                migrate_addon_mode(str(addon.id), "container")
 
     def test_failed_migration_restarts_stopped_and_restores_row(self):
         addon = self._addon()
@@ -332,8 +365,15 @@ class MigrateQuiesceTests(TestCase):
         ), mock.patch(
             "apps.addons.services.addon_provisioner.addon_provisioner", prov,
         ), mock.patch(
+            "apps.addons.services.shared_postgres.database_exists",
+            return_value=False,
+        ), mock.patch(
+            "apps.addons.services.shared_postgres.recreate_empty_database",
+        ), mock.patch(
             "apps.addons.services.shared_postgres.drop_logical_db",
-        ) as mock_drop:
+        ) as mock_drop, mock.patch(
+            "apps.addons.services.shared_postgres.drop_database_only",
+        ):
             with self.assertRaises(RuntimeError):
                 migrate_addon_mode(str(addon.id), "shared")
         mock_drop.assert_called_once_with("newu", "newdb")
@@ -352,6 +392,11 @@ class MigrateAuthPreservationTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="migcreds", password="x")
         self.service = Service.objects.create(name="migcredsvc", owner=self.user)
+        _v = mock.patch(
+            "apps.addons.services.addon_migrate._verify_row_counts",
+            return_value="")
+        _v.start()
+        self.addCleanup(_v.stop)
 
     def _addon(self, **kwargs):
         defaults = dict(
@@ -438,6 +483,11 @@ class MigrateCredentialPreservationTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="migpres", password="x")
         self.service = Service.objects.create(name="migpressvc", owner=self.user)
+        _v = mock.patch(
+            "apps.addons.services.addon_migrate._verify_row_counts",
+            return_value="")
+        _v.start()
+        self.addCleanup(_v.stop)
 
     def _addon(self, **kwargs):
         defaults = dict(

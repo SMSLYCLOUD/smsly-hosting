@@ -116,15 +116,70 @@ def deprovision_addon_task(self, addon_id: str) -> None:
         except Exception as snap_exc:
             logger.warning("Pre-deprovision snapshot failed for addon %s: %s",
                            addon_id, snap_exc)
+        # HA components (standby/sentinel/proxy) must go before the
+        # primary — mirrors delete_addon_task so deprovision never orphans
+        # them on the network.
+        if getattr(addon, 'ha_enabled', False):
+            try:
+                from apps.addons.services.addon_ha import AddonHaManager
+                _ha_manager = AddonHaManager(
+                    network_name=addon_provisioner.network_name)
+                _ha_manager.teardown(addon)
+            except Exception:
+                logger.warning(
+                    "HA teardown failed for addon %s; continuing with deprovision",
+                    addon_id, exc_info=True,
+                )
         if getattr(addon, 'provision_mode', '') == 'shared' and addon.addon_type == 'POSTGRES':
             # Logical database: DROP role+db, never touch containers.
             from urllib.parse import urlparse as _urlparse
             from apps.addons.services.shared_postgres import drop_logical_db
             parsed = _urlparse(addon.connection_url or '')
+            _shared_alias = parsed.hostname or ''
             drop_logical_db(
                 parsed.username or '',
                 (parsed.path or '/').lstrip('/'),
             )
+            # The alias stays on the shared server + pooler endpoints
+            # after the drop — strip it best-effort (never fail the delete).
+            if _shared_alias:
+                try:
+                    from apps.addons.services.addon_migrate import (
+                        container_network_aliases as _cna,
+                        strip_alias as _strip,
+                    )
+                    from apps.addons.services.shared_postgres import SHARED_CONTAINER
+                    _alias_targets = [SHARED_CONTAINER]
+                    try:
+                        from apps.addons.services.tenant_pooler import tenants_container_name
+                        _pooler_name = tenants_container_name()
+                        if _pooler_name:
+                            _alias_targets.append(_pooler_name)
+                    except Exception:
+                        pass
+                    _alias_nets = [addon_provisioner.network_name]
+                    try:
+                        from apps.deployments.models.network_scope import ScopedNetwork as _SN
+                        _project = getattr(getattr(addon, 'service', None), 'project', None)
+                        if _project:
+                            _scoped = _SN.resolve_network_name(_project)
+                            if _scoped and _scoped not in _alias_nets:
+                                _alias_nets.append(_scoped)
+                    except Exception:
+                        pass
+                    for _target in _alias_targets:
+                        for _net in _alias_nets:
+                            try:
+                                if _shared_alias in (_cna(_target).get(_net) or []):
+                                    _strip(_target, _net, _shared_alias)
+                            except Exception:
+                                logger.debug(
+                                    "shared alias strip skipped for %s on %s (%s)",
+                                    _shared_alias, _net, _target, exc_info=True)
+                except Exception:
+                    logger.warning(
+                        "shared alias strip failed for addon %s; continuing",
+                        addon_id, exc_info=True)
             try:
                 from apps.addons.services.tenant_pooler import push_tenants_config
                 push_tenants_config()
@@ -135,6 +190,14 @@ def deprovision_addon_task(self, addon_id: str) -> None:
             addon_provisioner.deprovision_dispatch(
                 addon.coolify_uuid, addon, container_name, retain_volume=True)
             addon.retired_volume = f"{container_name}-data"
+        # Mesh forwarders are per-addon: remove ours best-effort (never
+        # fail the deprovision if mesh cleanup fails).
+        try:
+            from apps.deployments.services.addon_mesh import cleanup_addon_mesh_forward
+            cleanup_addon_mesh_forward(addon)
+        except Exception as _mesh_exc:
+            logger.debug("mesh forwarder cleanup skipped for addon %s: %s",
+                         addon_id, _mesh_exc)
         addon.status = Addon.Status.DELETED
         addon.deleted_at = timezone.now()
         addon.save(update_fields=['status', 'deleted_at', 'retired_volume', 'updated_at'])
@@ -322,6 +385,13 @@ def delete_addon_task(self, addon_id: str) -> None:
             push_tenants_config()
         except Exception:
             logger.debug("tenant pooler push skipped after addon %s delete", addon_id)
+        # Mesh forwarder orphans: one per addon, left running by design
+        # until the addon goes away — remove it best-effort.
+        try:
+            from apps.deployments.services.addon_mesh import cleanup_addon_mesh_forward
+            cleanup_addon_mesh_forward(addon)
+        except Exception:
+            logger.debug("mesh forwarder cleanup skipped after addon %s delete", addon_id)
     else:
         addon.status = Addon.Status.DELETION_FAILED
         addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."

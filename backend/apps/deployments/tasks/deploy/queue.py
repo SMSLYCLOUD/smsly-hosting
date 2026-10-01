@@ -102,7 +102,8 @@ def recover_stalled_queued_deployments(limit: int = 100) -> dict:
     for deployment in deployments:
         results["seen"] += 1
         try:
-            task_state = AsyncResult(str(deployment.id)).state
+            task_id = getattr(deployment, 'celery_task_id', None) or str(deployment.id)
+            task_state = AsyncResult(str(task_id)).state
         except Exception:
             logger.debug("Could not check task state for %s", deployment.id)
             task_state = None

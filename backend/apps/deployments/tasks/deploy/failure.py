@@ -125,7 +125,7 @@ def _handle_failure(_task: Any, deployment: Deployment | None, error_msg: str, r
                 if os.path.isdir(build_dir):
                     shutil.rmtree(build_dir, ignore_errors=True)
                     logger.info("Cleaned up build directory %s for failed deployment %s", build_dir, deployment.id)
-            except (docker.errors.DockerException, OSError) as e:
+            except Exception as e:
                 logger.warning("Docker client error during failure cleanup: %s", e)
 
             try:

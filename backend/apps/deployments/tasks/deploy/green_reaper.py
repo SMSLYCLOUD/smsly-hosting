@@ -62,7 +62,11 @@ TERMINAL_STATUSES = (
 
 
 def _container_running(container_id: str):
-    """Return the container object when RUNNING, else None (seam for tests)."""
+    """Return the container object when RUNNING, else None (seam for tests).
+
+    An inspection failure is UNKNOWN — the caller must skip reaping that
+    container this pass (it may still be healthy).
+    """
     try:
         from apps.deployments.services.container_runtime import ContainerRuntime
         container = ContainerRuntime().get_container(container_id)
@@ -73,8 +77,12 @@ def _container_running(container_id: str):
         if state == 'running':
             return container, health, started
         return None, health, started
-    except Exception:
-        return None, '', ''
+    except Exception as exc:
+        logger.warning(
+            "Green reaper: cannot inspect container %s — treating as UNKNOWN, skipping this pass: %s",
+            (container_id[:12] if container_id else '?'), exc,
+        )
+        return None, 'unknown', ''
 
 
 def _started_minutes_ago(started_at: str) -> float | None:
@@ -149,7 +157,15 @@ def reap_failed_greens_task(self) -> None:
                         running, health, started = _container_running(cid)
                         if running is None:
                             continue
-                        age = _started_minutes_ago(started) or 0
+                        age = _started_minutes_ago(started)
+                        if age is None:
+                            # Unparseable/missing StartedAt must not yield
+                            # age 0 (never reaped). Fall back to the row's
+                            # created_at so wedged greens still age out.
+                            try:
+                                age = (timezone.now() - dep.created_at).total_seconds() / 60.0
+                            except Exception:
+                                continue
                         if health in ('unhealthy', 'starting') and age >= REAPER_STAGED_SOAK_MINUTES:
                             to_stop.add(cid)
                     candidates = to_stop

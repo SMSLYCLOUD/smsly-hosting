@@ -361,12 +361,12 @@ class AutoRollbackEngine:
                 )
                 rollback.status = Deployment.Status.FAILED
                 rollback.finished_at = timezone.now()
-                rollback.error_message = (
+                rollback.ai_diagnosis = (
                     'Auto-rollback was created but the deployment task '
                     'failed to enqueue. Manual intervention required.'
                 )
                 rollback.save(update_fields=[
-                    'status', 'finished_at', 'error_message', 'updated_at',
+                    'status', 'finished_at', 'ai_diagnosis', 'updated_at',
                 ])
 
             logger.warning(

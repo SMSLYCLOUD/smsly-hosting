@@ -48,7 +48,7 @@ from .helpers import (
     _safe_tar_extractall,
 )
 from .operations import _dump_container_database
-from .cloud import _download_backup_from_cloud, _upload_backup_to_cloud
+from .cloud import _delete_backup_cloud_object, _download_backup_from_cloud, _upload_backup_to_cloud
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +186,7 @@ class BackupService:
         if existing:
             return {'key_id': str(existing.id), 'fingerprint': fingerprint, 'created': False}
         obj = BackupEncryptionKey.objects.create(
-            key_id=uuid.uuid4().hex[:16],
+            key_id=uuid.uuid4().hex[:8],
             fingerprint=fingerprint,
             key_material_encrypted=key_material,
             is_active=True,
@@ -194,11 +194,31 @@ class BackupService:
         return {'key_id': str(obj.id), 'fingerprint': fingerprint, 'created': True}
 
     @staticmethod
-    def lookup_key_by_id(key_id: str) -> str | None:
+    def lookup_key_by_id(key_id: str | int) -> str | None:
         from apps.cloud.models.backup import BackupEncryptionKey
         try:
-            obj = BackupEncryptionKey.objects.get(id=key_id, is_active=True)
-            return obj.key_material_encrypted
+            text = str(key_id or '').strip()
+            if not text:
+                return None
+            candidates = {text, text.lower()}
+            parsed = None
+            for base in (10, 16):
+                try:
+                    parsed = int(text, base)
+                    break
+                except (ValueError, TypeError):
+                    continue
+            if parsed is not None and 0 <= parsed < 2 ** 32:
+                candidates.add(str(parsed))
+                candidates.add(format(parsed, '08x'))
+            values = list(candidates)
+            obj = (
+                BackupEncryptionKey.objects.filter(key_id__in=values, is_active=True).first()
+                or BackupEncryptionKey.objects.filter(key_id__in=values).first()
+                or BackupEncryptionKey.objects.filter(fingerprint__in=values, is_active=True).first()
+                or BackupEncryptionKey.objects.filter(fingerprint__in=values).first()
+            )
+            return obj.key_material_encrypted if obj is not None else None
         except Exception:
             return None
 
@@ -221,26 +241,90 @@ class BackupService:
 
     @staticmethod
     def import_backup_key(
-        backup_key_id: int | str,
-        fingerprint: str,
-        key_material_encrypted: str,
+        backup_key_id: int | str | None = None,
+        fingerprint: str | None = None,
+        key_material_encrypted: str | None = None,
+        *,
+        key_id: int | str | None = None,
+        key_material: str | None = None,
+        label: str = '',
     ) -> dict:
         from apps.cloud.models.backup import BackupEncryptionKey
-        existing = BackupEncryptionKey.objects.filter(key_id=str(backup_key_id)).first()
-        if existing:
-            existing_fp = getattr(existing, 'fingerprint', '') or ''
-            if existing_fp and existing_fp != fingerprint:
-                raise BackupKeyCollisionError(
-                    f"key_id={backup_key_id} already registered with a different fingerprint"
-                )
-            return {'key_id': str(existing.id), 'status': 'already_exists'}
-        obj = BackupEncryptionKey.objects.create(
-            key_id=str(backup_key_id),
-            fingerprint=fingerprint,
-            key_material_encrypted=key_material_encrypted,
-            is_active=True,
-        )
-        return {'key_id': str(obj.id), 'status': 'imported'}
+        try:
+            canonical_id = backup_key_id if backup_key_id is not None else key_id
+            canonical_material = (
+                key_material_encrypted
+                if key_material_encrypted is not None
+                else key_material
+            )
+            if canonical_id is None or canonical_id == '':
+                raise ValueError('key_id is required')
+            if not canonical_material:
+                raise ValueError('key_material is required')
+            if isinstance(canonical_id, int):
+                if not 0 <= canonical_id < 2 ** 32:
+                    raise ValueError('key_id int out of range (must fit in 4 bytes)')
+                hex_id = format(canonical_id, '08x')
+            else:
+                hex_id = str(canonical_id).strip().lower()
+                if hex_id.startswith('0x'):
+                    hex_id = hex_id[2:]
+                if not (
+                    len(hex_id) == 8
+                    and all(c in '0123456789abcdef' for c in hex_id)
+                ):
+                    try:
+                        as_int = int(hex_id, 10)
+                    except (ValueError, TypeError):
+                        as_int = None
+                    if as_int is not None and 0 <= as_int < 2 ** 32:
+                        hex_id = format(as_int, '08x')
+                    else:
+                        raise ValueError(
+                            'key_id must be 8 hex chars (4 bytes)'
+                        )
+            try:
+                Fernet(str(canonical_material))
+            except Exception as exc:
+                raise ValueError(
+                    f'Invalid key_material (expected Fernet key): {exc}'
+                ) from exc
+            computed_fp = BackupService.compute_backup_key_fingerprint(
+                str(canonical_material)
+            )
+            if fingerprint is not None and str(fingerprint).strip().lower() != computed_fp:
+                raise ValueError('fingerprint does not match key_material')
+            existing = BackupEncryptionKey.objects.filter(key_id=hex_id).first()
+            if existing:
+                existing_fp = getattr(existing, 'fingerprint', '') or ''
+                if existing_fp and existing_fp != computed_fp:
+                    raise BackupKeyCollisionError(
+                        f'key_id={hex_id} already registered with a different fingerprint'
+                    )
+                return {
+                    'key_id': hex_id,
+                    'fingerprint': computed_fp,
+                    'source': getattr(existing, 'source', None) or 'IMPORTED',
+                    'created': False,
+                }
+            obj = BackupEncryptionKey.objects.create(
+                key_id=hex_id,
+                fingerprint=computed_fp,
+                key_material_encrypted=str(canonical_material),
+                label=str(label or '')[:100],
+                source='IMPORTED',
+                is_active=False,
+            )
+            return {
+                'key_id': hex_id,
+                'fingerprint': computed_fp,
+                'source': 'IMPORTED',
+                'created': True,
+            }
+        except (ValueError, BackupKeyCollisionError):
+            raise
+        except Exception as exc:
+            raise ValueError(f'Failed to import backup key: {exc}') from exc
 
     def _prepare_archive_for_restore(self, backup) -> tuple[str, str | None]:
         if isinstance(backup, str):
@@ -726,6 +810,7 @@ class BackupService:
                 _restore_addon_dump(
                     self.docker_client, target_service, entry, temp_dir)
 
+            restore_warnings: list = []
             vol_files = [f for f in extracted_files if f.startswith('volume_') and f.endswith('.tar.gz')]
             all_vols = list(Volume.objects.filter(service=target_service))
             for vol_file in vol_files:
@@ -744,7 +829,8 @@ class BackupService:
                         target_vol = v
                         break
                 if not target_vol:
-                    logger.warning(f"No matching volume for {vol_file}, skipping")
+                    logger.error(f"No matching volume for {vol_file}, skipping")
+                    restore_warnings.append(f"volume:{vol_file}:no-matching-volume")
                     continue
 
                 try:
@@ -792,13 +878,16 @@ class BackupService:
                         key = ev.get('key', '').strip()
                         value = ev.get('value')
                         if not key or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
-                            logger.warning("Skipping invalid env key on restore: %r", key)
+                            logger.error("Skipping invalid env key on restore: %r", key)
+                            restore_warnings.append(f"env:{key or '?'}:invalid-key")
                             continue
                         if isinstance(value, str) and (value == '********' or len(value) > 4096):
-                            logger.warning("Skipping masked/oversize env value for %s", key)
+                            logger.error("Skipping masked/oversize env value for %s", key)
+                            restore_warnings.append(f"env:{key}:masked-or-oversize")
                             continue
                         if key in ('LD_PRELOAD', 'PYTHONPATH', 'LD_LIBRARY_PATH'):
-                            logger.warning("Skipping dangerous env key on restore: %s", key)
+                            logger.error("Skipping dangerous env key on restore: %s", key)
+                            restore_warnings.append(f"env:{key}:dangerous-key")
                             continue
                         EnvironmentVariable.objects.update_or_create(
                             service=target_service,
@@ -843,7 +932,7 @@ class BackupService:
             backup.restore_count = (backup.restore_count or 0) + 1
             backup.save(update_fields=['restored_at', 'restore_count'])
 
-            return {'service_id': str(target_service.id), 'status': 'restored'}
+            return {'service_id': str(target_service.id), 'status': 'restored', 'warnings': restore_warnings, 'skipped': list(restore_warnings)}
 
         except Exception as e:
             logger.error("Restore failed for backup %s: %s", backup_id, e)
@@ -890,7 +979,7 @@ for e in env:
     k, v = e.split('=', 1)
     if mask_re.search(k):
         v = '********'
-    print(f'{k}={v}')
+    print(f'{{k}}={{v}}')
 " > env_vars.txt 2>/dev/null || echo "env_vars_skipped"
 
 # Save image
@@ -898,6 +987,8 @@ docker commit "$SERVICE_NAME" "backup_{shlex.quote(service.name)}_img"
 docker save "backup_{shlex.quote(service.name)}_img" -o image.tar
 
 # Dump volumes
+echo "[" > "$BACKUP_DIR/volume_manifest.json"
+FIRST_ENTRY=1
 for vol in $(docker inspect "$SERVICE_NAME" | python3 -c "
 import json,sys
 data = json.load(sys.stdin)
@@ -907,9 +998,17 @@ if data and 'Mounts' in data[0]:
 " 2>/dev/null); do
     [ -z "$vol" ] && continue
     vol_safe=$(echo "$vol" | tr '/' '_' | tr '\\\\' '_')
-    docker run --rm -v "$vol":/v alpine:latest tar -czf "/tmp/vol_${vol_safe}.tar.gz" -C /v . 2>/dev/null || true
-    mv "/tmp/vol_${vol_safe}.tar.gz" "$BACKUP_DIR/" 2>/dev/null || true
+    docker run --rm -v "$vol":/v alpine:latest tar -czf "/tmp/vol_$vol_safe.tar.gz" -C /v . 2>/dev/null || true
+    mv "/tmp/vol_$vol_safe.tar.gz" "$BACKUP_DIR/" 2>/dev/null || true
+    if [ -f "$BACKUP_DIR/vol_$vol_safe.tar.gz" ]; then
+        if [ "$FIRST_ENTRY" -eq 0 ]; then echo "," >> "$BACKUP_DIR/volume_manifest.json"; fi
+        _esc_vol=$(echo "$vol" | sed 's/"/\\"/g')
+        printf '{{"filename":"vol_%s.tar.gz","volume":"%s"}}' "$vol_safe" "$_esc_vol" >> "$BACKUP_DIR/volume_manifest.json"
+        FIRST_ENTRY=0
+    fi
 done
+echo "" >> "$BACKUP_DIR/volume_manifest.json"
+echo "]" >> "$BACKUP_DIR/volume_manifest.json"
 
 # Create tarball
 tar -czf /tmp/backup_artifact.tar.gz -C "$BACKUP_DIR" .
@@ -1023,12 +1122,25 @@ if [ -f image.tar ]; then
 fi
 
 # Restore volumes
-for vol_file in volume_*.tar.gz; do
-    [ -f "$vol_file" ] || continue
-    vol_name=$(echo "$vol_file" | sed 's/^volume_//' | sed 's/\\.tar.gz$//' | tr '_' '/')
-    docker volume create "$vol_name" 2>/dev/null || true
-    docker run --rm -v "$vol_name":/v alpine:latest tar -xzf "/{remote_tmp}/$vol_file" -C /v || true
-done
+if [ -f volume_manifest.json ]; then
+    for vol_file in vol_*.tar.gz; do
+        [ -f "$vol_file" ] || continue
+        vol_name=$(grep -F '"filename":"'"$vol_file"'"' volume_manifest.json | sed 's/.*"volume":"\\([^"]*\\)".*/\\1/' | head -n 1)
+        if [ -z "$vol_name" ]; then
+            echo "WARNING: no manifest entry for $vol_file, skipping"
+            continue
+        fi
+        docker volume create "$vol_name" 2>/dev/null || true
+        docker run --rm -v "$vol_name":/v -v "{remote_tmp}":/backup alpine:latest tar -xzf "/backup/$vol_file" -C /v
+    done
+else
+    for vol_file in vol_*.tar.gz; do
+        [ -f "$vol_file" ] || continue
+        vol_name=$(echo "$vol_file" | sed 's/^vol_//' | sed 's/\\.tar.gz$//' | tr '_' '/')
+        docker volume create "$vol_name" 2>/dev/null || true
+        docker run --rm -v "$vol_name":/v -v "{remote_tmp}":/backup alpine:latest tar -xzf "/backup/$vol_file" -C /v || true
+    done
+fi
 
 # Restore environment
 if [ -f env_vars.txt ]; then
@@ -1357,6 +1469,7 @@ rm -rf {remote_tmp}
 
             metadata = backup.metadata or {}
             services_meta = metadata.get('services', [])
+            restore_warnings: list = []
 
             for svc_meta in services_meta:
                 svc_name = svc_meta.get('name', '')
@@ -1365,14 +1478,21 @@ rm -rf {remote_tmp}
                 try:
                     svc = Service.objects.get(name=svc_name)
                 except Service.DoesNotExist:
-                    logger.warning(f"Service {svc_name} not found in DB, skipping restore")
+                    logger.error(f"Service {svc_name} not found in DB, skipping restore")
+                    restore_warnings.append(f"service:{svc_name}:not-found-in-db")
                     continue
 
-                vol_files = [f for f in extracted if f.startswith(f"vol_{svc_name}")]
-                for vol_file in vol_files:
+                svc_vol_entries = [e for e in metadata.get('volumes', []) if e.get('service') == svc_name]
+                for _ventry in svc_vol_entries:
+                    vol_file = _ventry.get('filename', '')
+                    vol_name = _ventry.get('volume', '')
+                    if not vol_file or not vol_name:
+                        continue
+                    if vol_file not in extracted:
+                        raise RuntimeError(
+                            f"Server restore: volume file {vol_file} for service {svc_name} "
+                            "listed in manifest but missing from archive")
                     vol_path = os.path.join(temp_dir, vol_file)
-                    vol_name = vol_file.replace('vol_', '').replace('.tar.gz', '')
-                    vol_name = vol_name.replace('_', '/', 1) if '/' in vol_name else vol_name
                     try:
                         vol = Volume.objects.get(service=svc, name=vol_name)
                         try:
@@ -1470,7 +1590,7 @@ rm -rf {remote_tmp}
             backup.restore_count = (backup.restore_count or 0) + 1
             backup.save(update_fields=['restored_at', 'restore_count'])
 
-            return {'status': 'restored', 'backup_id': str(backup.id)}
+            return {'status': 'restored', 'backup_id': str(backup.id), 'warnings': restore_warnings, 'skipped': list(restore_warnings)}
         except Exception as e:
             logger.error("Server restore failed: %s", e)
             raise
@@ -1762,9 +1882,23 @@ rm -rf {remote_tmp}
     @staticmethod
     def _prune_old_backups(model_cls, service_id=None):
         retention_days = getattr(settings, 'BACKUP_RETENTION_DAYS', 7)
-        cutoff = timezone.now() - timezone.timedelta(days=retention_days)
-        filters = {'created_at__lt': cutoff, 'status': 'COMPLETED'}
         if service_id:
+            try:
+                from apps.cloud.models.backup import BackupSchedule
+                _sched = BackupSchedule.objects.filter(service_id=service_id, enabled=True).order_by('-retention_days').first()
+                if _sched and getattr(_sched, 'retention_days', None):
+                    retention_days = max(int(retention_days), int(_sched.retention_days))
+            except Exception as exc:
+                logger.debug("Failed to resolve per-schedule retention: %s", exc)
+        cutoff = timezone.now() - timezone.timedelta(days=retention_days)
+        try:
+            _field_names = {f.name for f in model_cls._meta.get_fields()}
+            _attnames = {getattr(f, 'attname', None) for f in model_cls._meta.get_fields()}
+            has_service_field = 'service' in _field_names or 'service_id' in _field_names or 'service_id' in _attnames
+        except Exception:
+            has_service_field = service_id is not None
+        filters = {'created_at__lt': cutoff, 'status': 'COMPLETED'}
+        if service_id and has_service_field:
             filters['service_id'] = service_id
         stale = list(model_cls.objects.filter(**filters).order_by('created_at'))
         # Keep at least one backup per service — don't delete the last restorable copy
@@ -1775,7 +1909,10 @@ rm -rf {remote_tmp}
             by_service[getattr(b, 'service_id', None)].append(b)
         ids_to_delete = []
         for sid, backups in by_service.items():
-            all_completed = list(model_cls.objects.filter(service_id=sid, status='COMPLETED').order_by('-created_at'))
+            if has_service_field:
+                all_completed = list(model_cls.objects.filter(service_id=sid, status='COMPLETED').order_by('-created_at'))
+            else:
+                all_completed = list(model_cls.objects.filter(status='COMPLETED').order_by('-created_at'))
             if len(all_completed) <= 1:
                 continue
             # If all completed are stale, keep the most recent stale one
@@ -1790,6 +1927,16 @@ rm -rf {remote_tmp}
                             os.remove(backup.file_path)
                     except OSError as exc:
                         logger.debug("Failed to remove backup file %s: %s", backup.file_path, exc)
+                    try:
+                        _meta_path = backup.file_path + '.meta'
+                        if os.path.exists(_meta_path):
+                            os.remove(_meta_path)
+                    except OSError as exc:
+                        logger.debug("Failed to remove backup sidecar %s: %s", backup.file_path, exc)
+                    try:
+                        _delete_backup_cloud_object(backup)
+                    except Exception as exc:
+                        logger.warning("Failed to delete cloud object for backup %s: %s", getattr(backup, 'id', '?'), exc)
         if ids_to_delete:
             model_cls.objects.filter(id__in=ids_to_delete).delete()
 
@@ -1835,4 +1982,8 @@ rm -rf {remote_tmp}
             logger.info("Encrypted backup (%d bytes plaintext) -> %s", total, enc_path)
 
         os.remove(path)
+        try:
+            BackupService.resolve_or_register_active_key(key)
+        except Exception as exc:
+            logger.debug("Failed to register active backup key: %s", exc)
         return enc_path

@@ -52,7 +52,7 @@ def sync_caddy_task():
         return {"ok": False, "message": str(exc)}
 
 
-def _regenerate_caddyfile():
+def _regenerate_caddyfile(deployment=None):
     try:
         from apps.deployments.services.caddy_manager.utils import caddy_disabled_mode
         from apps.deployments.models import PlatformConfig
@@ -73,9 +73,22 @@ def _regenerate_caddyfile():
             if result.get('ok'):
                 logger.info("Caddyfile regenerated after deployment")
             else:
-                logger.warning("Caddyfile regeneration failed: %s", result.get('message'))
+                msg = result.get('message')
+                logger.error("Caddyfile regeneration failed: %s", msg)
+                if deployment is not None:
+                    try:
+                        from apps.deployments.utils import append_log
+                        append_log(deployment, f"[CADDY-WARN] Caddyfile regeneration failed: {msg}\n")
+                    except Exception:
+                        pass
     except Exception as exc:
-        logger.warning("Could not regenerate Caddyfile: %s", exc)
+        logger.error("Could not regenerate Caddyfile: %s", exc)
+        if deployment is not None:
+            try:
+                from apps.deployments.utils import append_log
+                append_log(deployment, f"[CADDY-WARN] Could not regenerate Caddyfile: {exc}\n")
+            except Exception:
+                pass
 
 
 def _regenerate_node_caddyfile(config=None):

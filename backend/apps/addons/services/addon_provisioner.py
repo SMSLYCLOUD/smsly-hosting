@@ -219,12 +219,18 @@ class AddonProvisioner:
         except Exception as e:
             logger.error(f"Could not connect {container_name} to proxy network: {e}")
 
-    def _connect_to_service_scoped_network(self, container_name: str, addon) -> None:
+    def _connect_to_service_scoped_network(self, container_name: str, addon) -> bool:
         """Connect the addon container to the service's scoped bridge for DNS resolution.
 
         This allows the service container (on its isolated bridge) to resolve
         the addon's hostname via Docker DNS on that bridge instead of relying
         exclusively on ``smsly-net``.
+
+        Returns True when the container is attached to the scoped bridge
+        with its alias (newly attached or already present). Returns False
+        when no attach happened (no project, no separate scoped network,
+        or the bridge does not exist yet) — callers must NOT treat the
+        addon as scoped in that case.
 
         Raises RuntimeError if the scoped network exists but the connection fails,
         so the operator is alerted to network misconfiguration.
@@ -233,10 +239,20 @@ class AddonProvisioner:
             from apps.deployments.models.network_scope import ScopedNetwork as _Net
             project = getattr(addon.service, 'project', None)
             if not project:
-                return
+                return False
             network_name = _Net.resolve_network_name(project)
             if not network_name or network_name == self.network_name:
-                return
+                return False
+            # Alias MUST match the hostname apps actually dial — the
+            # connection_url host is authoritative (addon.name may diverge,
+            # e.g. after re-anchoring). Fall back to name, then convention.
+            from urllib.parse import urlparse as _urlparse
+            _url_host = _urlparse(str(getattr(addon, 'connection_url', '') or '')).hostname
+            alias = (
+                _url_host
+                or getattr(addon, 'name', None)
+                or f"{addon.addon_type.lower()}-{addon.service.name}"
+            )
             # Verify the network actually exists on this Docker daemon.
             # NOTE: a missing network here is EXPECTED during first deploys —
             # the scoped bridge is created later by _scoped_network_for() at
@@ -253,17 +269,7 @@ class AddonProvisioner:
                     "not attached (will be attached at app spawn)",
                     network_name, container_name, alias,
                 )
-                return
-            # Alias MUST match the hostname apps actually dial — the
-            # connection_url host is authoritative (addon.name may diverge,
-            # e.g. after re-anchoring). Fall back to name, then convention.
-            from urllib.parse import urlparse as _urlparse
-            _url_host = _urlparse(str(getattr(addon, 'connection_url', '') or '')).hostname
-            alias = (
-                _url_host
-                or getattr(addon, 'name', None)
-                or f"{addon.addon_type.lower()}-{addon.service.name}"
-            )
+                return False
             # Check if already connected
             ct_inspect = subprocess.run(
                 ['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}', container_name],
@@ -285,6 +291,7 @@ class AddonProvisioner:
                     )
                 logger.info("Connected %s to scoped network %s (alias: %s)",
                             container_name, network_name, alias)
+            return True
         except RuntimeError:
             raise
         except Exception as exc:
@@ -309,8 +316,8 @@ class AddonProvisioner:
         """
         scoped_attached = False
         try:
-            self._connect_to_service_scoped_network(container_name, addon)
-            scoped_attached = True
+            scoped_attached = bool(
+                self._connect_to_service_scoped_network(container_name, addon))
         except Exception as exc:
             logger.warning("Scoped attach failed for %s: %s", container_name, exc)
         exposed = bool(public_domain or getattr(addon, 'public_domain', None))
@@ -628,11 +635,25 @@ class AddonProvisioner:
         # Duplicate-alias guard: two ACTIVE addons sharing one network alias
         # makes Docker DNS round-robin between them (live + dead = intermittent
         # auth/DNS failures). Refuse instead of silently shadowing.
+        # Hostname equality (not substring): 'postgres-app' must not match
+        # 'postgres-app2'. Tombstoned rows (DELETED + DELETION_PENDING) are
+        # excluded so re-provisioning the same alias after a delete works.
         try:
             from apps.deployments.models.addons import Addon as _AM
-            _dup = _AM.objects.exclude(pk=addon.pk).exclude(status='DELETED').filter(
-                connection_url__icontains=alias_name).exists()
-            if _dup:
+            _taken = False
+            _rows = _AM.objects.exclude(pk=addon.pk).exclude(
+                status__in=[_AM.Status.DELETED, _AM.Status.DELETION_PENDING],
+            ).values_list('connection_url', flat=True)
+            for _row_url in _rows:
+                try:
+                    _host = str(self._parse_connection_url(
+                        str(_row_url or '')).get('hostname') or '')
+                except Exception:
+                    continue
+                if _host and _host == alias_name:
+                    _taken = True
+                    break
+            if _taken:
                 raise ValueError(
                     f"Network alias '{alias_name}' is already used by another ACTIVE addon")
         except ValueError:
@@ -1908,7 +1929,33 @@ metrics = false
                     logger.warning(
                         "Tenant pooler %s not running for %s — "
                         "provisioning direct instead", _pooler, hostname)
+                    # Split-brain guard: the alias may still sit on the
+                    # dead pooler from an earlier pooled provision, so
+                    # DNS would round-robin between it and the shared
+                    # server below. Strip it from the stalled pooler
+                    # best-effort (the shared-server attach next wins).
+                    _stalled_pooler = _pooler
                     _pooler = None
+                    try:
+                        from apps.addons.services.addon_migrate import (
+                            container_network_aliases as _cna,
+                            strip_alias as _strip,
+                        )
+                        for _net in (self.network_name,):
+                            try:
+                                if hostname in (_cna(_stalled_pooler).get(_net) or []):
+                                    _strip(_stalled_pooler, _net, hostname)
+                                    logger.info(
+                                        "Detached stale pooler alias %s from %s on %s",
+                                        hostname, _stalled_pooler, _net)
+                            except Exception as _strip_exc:
+                                logger.warning(
+                                    "Stalled-pooler alias strip skipped for %s on %s: %s",
+                                    hostname, _net, _strip_exc)
+                    except Exception as _detach_exc:
+                        logger.warning(
+                            "Stalled-pooler alias detach skipped for %s: %s",
+                            hostname, _detach_exc)
                 if _pooler:
                     push_tenants_config()
         except Exception as exc:
@@ -2284,30 +2331,49 @@ metrics = false
         """Re-render a pooler's config from its target's CURRENT password.
 
         Call after the target Postgres rotates credentials — the pooler
-        embeds a verifier, so it goes stale otherwise. Recreates the
-        container on the same volume/name (config is a file swap away,
-        but recreate is the uniform, race-free path).
+        embeds a verifier, so it goes stale otherwise. Restart-in-place:
+        the config lives in the mounted ``{container}-config`` volume, so
+        a restart picks it up with no remove/recreate (a ``rm`` here once
+        left the pooler permanently deleted when the follow-up ``start``
+        ran against the removed name). The container is only recreated —
+        through the normal create path — when it is missing entirely.
         Returns True when the pooler was refreshed.
         """
-        import shlex as _shlex
         container_name = f"smsly-addon-{str(addon.addon_type).lower()}-{addon.id}"
         try:
-            try:
-                cur = subprocess.run(
-                    ['docker', 'inspect', '-f', '{{.State.Running}}', container_name],
-                    capture_output=True, text=True, timeout=30)
-                was_running = cur.returncode == 0 and cur.stdout.strip() == 'true'
-            except Exception:
-                was_running = False
-            subprocess.run(['docker', 'rm', '-f', container_name],
-                           capture_output=True, check=False, timeout=60)
+            # Render FIRST: a stale-target failure must never touch the
+            # running container.
             target_host, target_port, db_user, db_name, db_password = \
                 self._pgbouncer_target(addon)
             ini, userlist = self._render_pgbouncer_config(
                 db_user, target_host, target_port, db_name,
                 self._scram_verifier(db_password))
+            try:
+                cur = subprocess.run(
+                    ['docker', 'inspect', '-f', '{{.State.Running}}', container_name],
+                    capture_output=True, text=True, timeout=30)
+                exists = cur.returncode == 0
+                was_running = exists and cur.stdout.strip() == 'true'
+            except Exception:
+                exists, was_running = False, False
+            if not exists:
+                # Gone entirely: recreate with the same volume/image/
+                # labels the create path uses (never `start` a deleted name).
+                alias = str(getattr(addon, 'name', '') or '').strip()
+                self._provision_pgbouncer(
+                    container_name, '', self.PGBOUNCER_PORT, alias,
+                    public_domain=getattr(addon, 'public_domain', None))
+                try:
+                    self._connect_addon_networks(container_name, addon)
+                except Exception as exc:
+                    logger.warning("PgBouncer %s recreate network wiring failed: %s",
+                                   container_name, exc)
+                return True
             self._write_pgbouncer_config(container_name, ini, userlist)
             if was_running:
+                subprocess.run(['docker', 'restart', container_name],
+                               capture_output=True, check=False, timeout=90)
+            else:
                 subprocess.run(['docker', 'start', container_name],
                                capture_output=True, check=False, timeout=60)
             try:
@@ -2628,11 +2694,18 @@ metrics = false
                            capture_output=True, timeout=60)
             subprocess.run(['docker', 'rm', container_id], capture_output=True, timeout=60)
 
-            # Remove associated volume if container_name provided,
-            # unless retention was requested.
+            # Remove associated volumes if container_name provided,
+            # unless retention was requested. PgBouncer config volumes
+            # (`{name}-config`) are covered too — otherwise every
+            # pooler reprovision leaks one.
             if container_name and not retain_volume:
                 subprocess.run(
                     ['docker', 'volume', 'rm', f'{container_name}-data'],
+                    capture_output=True,
+                    timeout=60,
+                )
+                subprocess.run(
+                    ['docker', 'volume', 'rm', f'{container_name}-config'],
                     capture_output=True,
                     timeout=60,
                 )
@@ -3020,7 +3093,7 @@ metrics = false
                             subprocess.run(
                                 ['docker', 'exec', '-i', '--env-file', env_file,
                                  SHARED_CONTAINER,
-                                 'psql', '-U', parsed.username or 'postgres',
+                                 'psql', '-v', 'ON_ERROR_STOP=1', '-U', parsed.username or 'postgres',
                                  '-h', '127.0.0.1',
                                  (parsed.path or '/').lstrip('/') or 'postgres'],
                                 stdin=backup_file,
@@ -3046,6 +3119,8 @@ metrics = false
                                 '-i',
                                 container_name,
                                 'psql',
+                                '-v',
+                                'ON_ERROR_STOP=1',
                                 '-U',
                                 postgres_user,
                                 postgres_db,

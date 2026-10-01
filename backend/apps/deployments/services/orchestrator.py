@@ -173,7 +173,7 @@ class Orchestrator:
             trigger=Trigger.CONSECUTIVE_FAILURES,
             reason_detail=(
                 f"Deployment {self.deployment.id} failed with "
-                f"{self.deployment.error_message or 'unknown error'}"
+                f"{getattr(self.deployment, 'ai_diagnosis', None) or 'unknown error'}"
             ),
             failed_deployment=self.deployment,
         )
