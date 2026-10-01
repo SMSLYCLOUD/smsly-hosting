@@ -376,7 +376,14 @@ services:
   # Handles all internet-facing traffic for the node
   # ============================================================
   caddy:
-    image: caddy:2-alpine
+    # Same custom build as master (Cloudflare DNS plugin for LE certs).
+    # Stock caddy:2-alpine cannot parse `dns cloudflare` blocks, so any
+    # pushed Caddyfile with DNS-challenge TLS fails reload (2026-10-01:
+    # node routes stayed dark after a successful push).
+    image: smsly-hosting-caddy
+    build:
+      context: ../..
+      dockerfile: infrastructure/caddy/Dockerfile
     restart: unless-stopped
     ports:
       - "80:80"
