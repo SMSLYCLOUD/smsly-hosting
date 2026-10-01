@@ -73,8 +73,8 @@ class GenerateNodeCaddyfileTests(TestCase):
         self._svc()
         content = generate_node_caddyfile(self.node)
         # Flat hostname over plain HTTP (master→node proxy path). The
-        # service auto-gets a public_domain, which joins the same block.
-        self.assertIn("http://my-app-grid1.trulay.site", content)
+        # service auto-gets a public_domain, which joins the same set.
+        self.assertIn("my-app-grid1.trulay.site:80 {", content)
         # Nested hostname over HTTPS (direct grey access).
         self.assertIn("my-app.grid1.trulay.site {", content)
 
@@ -91,11 +91,11 @@ class GenerateNodeCaddyfileTests(TestCase):
         svc.save(update_fields=["public_domain"])
         content = generate_node_caddyfile(self.node)
         self.assertIn(
-            "http://my-app-e8ac13.trulay.site {",
+            "my-app-e8ac13.trulay.site:80 {",
             content,
         )
         self.assertIn(
-            "http://my-app-grid1.trulay.site {",
+            "my-app-grid1.trulay.site:80 {",
             content,
         )
 

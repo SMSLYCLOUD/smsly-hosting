@@ -1504,17 +1504,16 @@ def generate_node_caddyfile(node) -> str:
         else:
             tls_lines.append("        on_demand")
 
-        # Flat/public hostnames over plain HTTP, ONE BLOCK PER HOST:
-        # Caddy assigns a default scheme per comma-separated address, so
-        # `http://a, b` silently serves b over HTTPS (2026-10-01: the
-        # preview host landed on the TLS server and the flat host
-        # vanished from :80). Explicit http:// on every block serves
-        # plainly with NO https redirect — this is the master→node
-        # proxy path (a bare-name block with tls would 308 every
-        # proxied request into a loop).
+        # Flat/public hostnames over plain HTTP, ONE BLOCK PER HOST
+        # with an EXPLICIT :80 port (2026-10-01: scheme-only
+        # `http://a, b` lines split per-address defaults unpredictably
+        # and bare `http://a` blocks still migrated to the TLS server
+        # in this Caddy build). An explicit :80 address deterministically
+        # opts out of automatic HTTPS: served plainly with NO https
+        # redirect — this is the master→node proxy path.
         for http_host in http_hosts:
             flat_block = [
-                f"http://{http_host} {{",
+                f"{http_host}:80 {{",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
