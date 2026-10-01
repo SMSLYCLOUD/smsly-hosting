@@ -833,8 +833,11 @@ class BackupService:
                     os.remove(cleanup_archive)
                 except OSError as exc:
                     logger.debug("Failed to remove archive %s: %s", cleanup_archive, exc)
-            from .cloud import _delete_backup_cloud_object
-            _delete_backup_cloud_object(backup)
+
+            # NOTE: the cloud object is deliberately KEPT. An earlier
+            # revision deleted it here — a restore that destroys the
+            # off-site copy defeats the purpose of cloud backups. Cloud
+            # cleanup happens via prune/GDPR paths only.
 
             backup.restored_at = timezone.now()
             backup.restore_count = (backup.restore_count or 0) + 1
@@ -1032,9 +1035,20 @@ if [ -f env_vars.txt ]; then
     echo "Environment backup available at $remote_tmp/env_vars.txt"
 fi
 
-# Restore database dump if present
+# Restore database dump if present. The copy alone is not a
+# restore (2026-10-01: the old script copied db_dump.sql and never
+# loaded it). Credentials come from the target container's own env;
+# without them the dump is left in place with a loud warning instead
+# of pretending the database was restored.
 if [ -f db_dump.sql ]; then
-    docker cp db_dump.sql {shlex.quote(target_service.name)}:/tmp/ 2>/dev/null || true
+    docker cp db_dump.sql {shlex.quote(target_service.name)}:/tmp/restore_dump.sql 2>/dev/null || true
+    PG_USER=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' {shlex.quote(target_service.name)} 2>/dev/null | grep '^POSTGRES_USER=' | cut -d= -f2-)
+    PG_DB=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' {shlex.quote(target_service.name)} 2>/dev/null | grep '^POSTGRES_DB=' | cut -d= -f2-)
+    if [ -n "$PG_USER" ] && [ -n "$PG_DB" ]; then
+        docker exec {shlex.quote(target_service.name)} psql -U "$PG_USER" -d "$PG_DB" -f /tmp/restore_dump.sql
+    else
+        echo "WARNING: db_dump.sql copied to {shlex.quote(target_service.name)}:/tmp/restore_dump.sql but no POSTGRES_USER/POSTGRES_DB in container env — load it manually."
+    fi
 fi
 
 # Start service
@@ -1057,8 +1071,7 @@ rm -rf {remote_tmp}
             except OSError as exc:
                 logger.debug("Failed to remove archive files: %s", exc)
 
-        from .cloud import _delete_backup_cloud_object
-        _delete_backup_cloud_object(backup)
+        # NOTE: cloud object deliberately KEPT (see service restore).
 
         backup.restored_at = timezone.now()
         backup.restore_count = (backup.restore_count or 0) + 1
@@ -1451,8 +1464,7 @@ rm -rf {remote_tmp}
                 except OSError as exc:
                     logger.debug("Failed to remove archive %s: %s", cleanup_archive, exc)
 
-            from .cloud import _delete_backup_cloud_object
-            _delete_backup_cloud_object(backup)
+            # NOTE: cloud object deliberately KEPT (see service restore).
 
             backup.restored_at = timezone.now()
             backup.restore_count = (backup.restore_count or 0) + 1
