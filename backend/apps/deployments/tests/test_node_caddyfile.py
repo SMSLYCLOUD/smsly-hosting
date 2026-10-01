@@ -72,8 +72,9 @@ class GenerateNodeCaddyfileTests(TestCase):
     def test_service_blocks_flat_and_nested(self):
         self._svc()
         content = generate_node_caddyfile(self.node)
-        # Flat hostname over plain HTTP (master→node proxy path).
-        self.assertIn("http://my-app-grid1.trulay.site {", content)
+        # Flat hostname over plain HTTP (master→node proxy path). The
+        # service auto-gets a public_domain, which joins the same block.
+        self.assertIn("http://my-app-grid1.trulay.site", content)
         # Nested hostname over HTTPS (direct grey access).
         self.assertIn("my-app.grid1.trulay.site {", content)
 
