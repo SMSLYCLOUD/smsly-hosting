@@ -1474,6 +1474,28 @@ def generate_node_caddyfile(node) -> str:
         container = (service.name or "").strip() or slug
         port = getattr(service, "internal_port", 8000) or 8000
 
+        # Every public hostname that can arrive here: the flat grid
+        # name, the service's public/custom wildcard domains (master
+        # proxies preview hostnames like x-e8ac13... to the node), and
+        # the nested direct name is covered by its own block below.
+        # Unmatched :80 on Caddy 308-redirects by default — a missing
+        # hostname here becomes an infinite master↔node redirect loop
+        # (2026-10-01: preview domain looped 6+ hops).
+        suffix = f".{base_domain}"
+        extra_hosts: list[str] = []
+        if not getattr(service, "public_domain_hidden", False):
+            for raw_value in [service.public_domain, *(service.custom_domains or [])]:
+                raw = str(raw_value or "").strip()
+                if not raw:
+                    continue
+                try:
+                    value = normalize_domain(raw)
+                except ValueError:
+                    continue
+                if value and value.endswith(suffix) and value not in (flat_domain, nested_domain):
+                    extra_hosts.append(value)
+        http_hosts = ", ".join([flat_domain, *extra_hosts])
+
         tls_lines = [
             "    tls {",
         ]
@@ -1487,7 +1509,7 @@ def generate_node_caddyfile(node) -> str:
         # serves plainly with NO https redirect — a bare-name block
         # with tls would 308 every proxied request into a loop.
         flat_block = [
-            f"http://{flat_domain} {{",
+            f"http://{http_hosts} {{",
             "    log {",
             "        output file /var/log/caddy/access.log",
             "    }",

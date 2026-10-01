@@ -83,6 +83,17 @@ class GenerateNodeCaddyfileTests(TestCase):
         self.assertIn("reverse_proxy my-app:8000 {", content)
         self.assertNotIn("localhost:8000", content)
 
+    def test_preview_host_joins_plain_http_block(self):
+        self._svc()
+        svc = Service.objects.get(name="my-app")
+        svc.public_domain = "my-app-e8ac13.trulay.site"
+        svc.save(update_fields=["public_domain"])
+        content = generate_node_caddyfile(self.node)
+        self.assertIn(
+            "http://my-app-grid1.trulay.site, my-app-e8ac13.trulay.site {",
+            content,
+        )
+
     def test_other_node_services_excluded(self):
         other = ManagedServer.objects.create(
             owner=self.user,
