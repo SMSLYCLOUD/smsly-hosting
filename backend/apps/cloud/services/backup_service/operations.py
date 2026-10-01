@@ -421,6 +421,128 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
     return manifest
 
 
+def _backup_addon_volumes(service, temp_dir, docker_client=None):
+    """Tar every named data volume of the service's ACTIVE addon containers.
+
+    Addon data volumes (e.g. ``smsly-addon-postgres-<id>-data``) are not
+    service-registered ``Volume`` rows, so neither service nor server
+    backups captured them (2026-10-01: server backup had zero DB bytes).
+    Returns (manifest, skipped): skipped names containers that are gone.
+    Raises on tar failures (caller decides fail vs record-and-continue).
+    """
+    if docker_client is not None:
+        client = docker_client
+    else:
+        client = _docker.from_env()
+    from apps.deployments.models.addons import Addon
+    import re as _re_mod
+    manifest, skipped = [], []
+    addons = list(Addon.objects.filter(
+        service=service, status='ACTIVE').order_by('name'))
+    for addon in addons:
+        cname = (getattr(addon, 'container_name', None)
+                 or f"smsly-addon-{(addon.addon_type or '').lower()}-{addon.id}")
+        try:
+            ctr = client.containers.get(cname)
+        except Exception:
+            skipped.append(addon.name)
+            continue
+        mounts = (ctr.attrs.get('Mounts', []) or [])
+        for mount in mounts:
+            if not isinstance(mount, dict) or mount.get('Type') != 'volume':
+                continue
+            vol_name = mount.get('Name', '')
+            dest = mount.get('Destination', '')
+            if not vol_name:
+                continue
+            safe = _re_mod.sub(r'[^A-Za-z0-9_.\-]+', '_', f'{cname}_{dest}')
+            filename = f'addonvol_{safe}.tar.gz'
+            vol_path = os.path.join(temp_dir, filename)
+            helper = client.containers.run(
+                'alpine:latest',
+                command=['tar', '-czf', '-', '-C', '/volume_data', '.'],
+                volumes={vol_name: {'bind': '/volume_data', 'mode': 'ro'}},
+                detach=True, remove=False,
+            )
+            try:
+                with open(vol_path, 'wb') as f:
+                    for chunk in helper.logs(stream=True, stdout=True, stderr=False):
+                        f.write(chunk)
+                manifest.append({'service': getattr(service, 'name', ''),
+                                 'addon': addon.name, 'container': cname,
+                                 'volume': vol_name, 'destination': dest,
+                                 'filename': filename})
+                logger.info("Addon volume backup successful for %s (%s)",
+                            addon.name, vol_name)
+            finally:
+                try:
+                    helper.remove(force=True)
+                except Exception:
+                    pass
+    return manifest, skipped
+
+
+def _restore_addon_dump(docker_client, target_service, entry, temp_dir):
+    """Restore one manifest addon-dump entry into the target service's addon.
+
+    Raises on missing file/addon/credentials/restore failure — silently
+    skipping a database restore is data loss.
+    """
+    import re as _re_mod
+    from urllib.parse import urlparse as _urlparse
+    fname = (entry or {}).get('filename', '')
+    aname = (entry or {}).get('addon', '')
+    if not fname or not os.path.exists(os.path.join(temp_dir, fname)):
+        raise RuntimeError(
+            f"Addon dump {fname!r} listed in backup metadata is missing "
+            f"from the archive.")
+    from apps.deployments.models.addons import Addon as _Addon
+    addon = _Addon.objects.filter(
+        service=target_service, name=aname, status='ACTIVE').first()
+    if addon is None:
+        raise RuntimeError(
+            f"Restore needs addon {aname!r} on service "
+            f"{target_service.name} — recreate it first, then retry.")
+    if not fname.endswith('.sql'):
+        raise RuntimeError(
+            f"Addon dump {fname!r} needs manual restore (only .sql "
+            f"restores are automated).")
+    parsed = _urlparse(addon.connection_url or '')
+    user = parsed.username or ''
+    db = (parsed.path or '/').lstrip('/') or ''
+    pw = parsed.password or ''
+    if not (_re_mod.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', user)
+            and _re_mod.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', db)
+            and pw):
+        raise RuntimeError(
+            f"Addon {aname!r} has no usable live credentials for restore.")
+    if (addon.provision_mode or '') == 'shared':
+        from apps.addons.services.shared_postgres import SHARED_CONTAINER
+        ctr = docker_client.containers.get(SHARED_CONTAINER)
+        host_args = ['-h', '127.0.0.1']
+    else:
+        cname = (getattr(addon, 'container_name', None)
+                 or f"smsly-addon-{(addon.addon_type or '').lower()}-{addon.id}")
+        ctr = docker_client.containers.get(cname)
+        host_args = []
+    from apps.cloud.services.backup_service.helpers import (
+        _copy_file_to_container)
+    _copy_file_to_container(
+        docker_client, ctr.id,
+        os.path.join(temp_dir, fname), '/tmp/restore_addon_dump.sql')
+    res = ctr.exec_run(
+        ['psql', *host_args, '-U', user, '-d', db,
+         '-f', '/tmp/restore_addon_dump.sql'],
+        environment={'PGPASSWORD': pw},
+        timeout=600,
+    )
+    if res.exit_code != 0:
+        raise RuntimeError(
+            f"Addon restore failed for {aname!r} (exit {res.exit_code}): "
+            f"{(res.output or b'')[:200]}")
+    logger.info("Addon restore successful for %s", aname)
+
+
 def backup_addon(addon_id: str) -> str | None:
     """Back up a single addon (Postgres/MySQL/Redis/Mongo). Returns path to dump file or None."""
 

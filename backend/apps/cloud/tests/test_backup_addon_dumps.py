@@ -109,3 +109,94 @@ class AddonDumpTests(TestCase):
                          'addon_postgres-foo-1_dump.sql')
         self.assertEqual(ops._addon_dump_filename('r1', 'REDIS'),
                          'addon_r1_dump.rdb')
+
+
+class AddonVolumeTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="bkpvol", password="x")
+        self.service = Service.objects.create(name="bkpvolsvc", owner=self.user)
+        self.tmp = tempfile.mkdtemp()
+
+    def test_volumes_tarred_with_manifest(self):
+        Addon.objects.create(
+            service=self.service, name="pg-v", addon_type="POSTGRES",
+            status=Addon.Status.ACTIVE, provision_mode="container",
+            connection_url="postgresql://u:p@pg-v:5432/d")
+        helper = mock.Mock()
+        helper.logs.return_value = [b'CHUNK']
+        ctr = mock.Mock()
+        ctr.attrs = {'Mounts': [{'Type': 'volume', 'Name': 'pg-v-data',
+                                 'Destination': '/var/lib/postgresql/data'},
+                                {'Type': 'bind', 'Source': '/x',
+                                 'Destination': '/y'}]}
+        client = mock.Mock()
+        client.containers.get.side_effect = lambda n: ctr
+        client.containers.run.return_value = helper
+        manifest, skipped = ops._backup_addon_volumes(
+            self.service, self.tmp, docker_client=client)
+        self.assertEqual(skipped, [])
+        self.assertEqual(len(manifest), 1)
+        self.assertEqual(manifest[0]['volume'], 'pg-v-data')
+        self.assertTrue(os.path.exists(
+            os.path.join(self.tmp, manifest[0]['filename'])))
+
+    def test_missing_container_recorded_not_raised(self):
+        Addon.objects.create(
+            service=self.service, name="pg-gone", addon_type="POSTGRES",
+            status=Addon.Status.ACTIVE, provision_mode="container",
+            connection_url="postgresql://u:p@pg-gone:5432/d")
+        import docker as _docker_mod
+        client = mock.Mock()
+        client.containers.get.side_effect = _docker_mod.errors.NotFound('nope')
+        manifest, skipped = ops._backup_addon_volumes(
+            self.service, self.tmp, docker_client=client)
+        self.assertEqual(manifest, [])
+        self.assertEqual(skipped, ['pg-gone'])
+
+
+class RestoreAddonDumpTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="bkprs", password="x")
+        self.service = Service.objects.create(name="bkprssvc", owner=self.user)
+        self.tmp = tempfile.mkdtemp()
+        Addon.objects.create(
+            service=self.service, name="pg-r", addon_type="POSTGRES",
+            status=Addon.Status.ACTIVE, provision_mode="container",
+            connection_url="postgresql://u1:pw1@pg-r:5432/d1")
+
+    def _entry(self):
+        path = os.path.join(self.tmp, 'addon_pg-r_dump.sql')
+        with open(path, 'w') as f:
+            f.write('SELECT 1;')
+        return {'addon': 'pg-r', 'filename': 'addon_pg-r_dump.sql'}
+
+    def test_missing_file_raises(self):
+        client = mock.Mock()
+        with self.assertRaises(RuntimeError):
+            ops._restore_addon_dump(
+                client, self.service,
+                {'addon': 'pg-r', 'filename': 'nope.sql'}, self.tmp)
+
+    def test_missing_addon_raises(self):
+        client = mock.Mock()
+        with self.assertRaises(RuntimeError):
+            ops._restore_addon_dump(
+                client, self.service,
+                {'addon': 'pg-nope', 'filename': 'x.sql'}, self.tmp)
+
+    def test_sql_restored_into_addon(self):
+        entry = self._entry()
+        res = mock.Mock()
+        res.exit_code = 0
+        res.output = b''
+        ctr = mock.Mock()
+        ctr.id = 'cid1'
+        ctr.exec_run.return_value = res
+        client = mock.Mock()
+        client.containers.get.side_effect = lambda n: ctr
+        with mock.patch('apps.cloud.services.backup_service.helpers._copy_file_to_container') as cfc:
+            ops._restore_addon_dump(client, self.service, entry, self.tmp)
+        cfc.assert_called_once()
+        cmd = ctr.exec_run.call_args[0][0]
+        self.assertEqual(cmd[:3], ['psql', '-U', 'u1'])
+        self.assertIn('d1', cmd)

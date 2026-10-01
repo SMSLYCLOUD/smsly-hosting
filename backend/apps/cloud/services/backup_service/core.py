@@ -719,64 +719,12 @@ class BackupService:
                         ctr.exec_run(['redis-cli', '--pipe'], data_input=f.read(), timeout=120)
 
             # Addon database dumps (metadata['addon_dumps'] manifest).
-            # Each entry restores into the SAME-NAMED addon of the target
-            # service using its LIVE credentials. A manifest entry whose
-            # file or addon is missing fails the restore — silently
-            # skipping a database restore is data loss.
-            import re as _re_mod
+            # Restored into the same-named addon with live credentials;
+            # missing file/addon fails loudly (silent skip = data loss).
+            from .operations import _restore_addon_dump
             for entry in (backup.metadata or {}).get('addon_dumps', []):
-                _afname = entry.get('filename', '')
-                _aname = entry.get('addon', '')
-                if not _afname or _afname not in extracted_files:
-                    raise RuntimeError(
-                        f"Addon dump {_afname!r} listed in backup metadata "
-                        f"is missing from the archive.")
-                from apps.deployments.models.addons import Addon as _Addon
-                _addon = _Addon.objects.filter(
-                    service=target_service, name=_aname,
-                    status='ACTIVE').first()
-                if _addon is None:
-                    raise RuntimeError(
-                        f"Restore needs addon {_aname!r} on service "
-                        f"{target_service.name} — recreate it first, then retry.")
-                if not _afname.endswith('.sql'):
-                    raise RuntimeError(
-                        f"Addon dump {_afname!r} needs manual restore "
-                        f"(only .sql restores are automated).")
-                from urllib.parse import urlparse as _urlparse
-                _parsed = _urlparse(_addon.connection_url or '')
-                _user = _parsed.username or ''
-                _db = (_parsed.path or '/').lstrip('/') or ''
-                _pw = _parsed.password or ''
-                if not (_re_mod.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', _user)
-                        and _re_mod.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', _db)
-                        and _pw):
-                    raise RuntimeError(
-                        f"Addon {_aname!r} has no usable live credentials for restore.")
-                _amode = (_addon.provision_mode or '')
-                if _amode == 'shared':
-                    from apps.addons.services.shared_postgres import SHARED_CONTAINER
-                    _ctr = self.docker_client.containers.get(SHARED_CONTAINER)
-                    _host_args = ['-h', '127.0.0.1']
-                else:
-                    _ctr = self.docker_client.containers.get(
-                        getattr(_addon, 'container_name', None)
-                        or f"smsly-addon-{(_addon.addon_type or '').lower()}-{_addon.id}")
-                    _host_args = []
-                _copy_file_to_container(
-                    self.docker_client, _ctr.id,
-                    os.path.join(temp_dir, _afname), '/tmp/restore_addon_dump.sql')
-                _res = _ctr.exec_run(
-                    ['psql', *_host_args, '-U', _user, '-d', _db,
-                     '-f', '/tmp/restore_addon_dump.sql'],
-                    environment={'PGPASSWORD': _pw},
-                    timeout=600,
-                )
-                if _res.exit_code != 0:
-                    raise RuntimeError(
-                        f"Addon restore failed for {_aname!r} (exit "
-                        f"{_res.exit_code}): {(_res.output or b'')[:200]}")
-                logger.info("Addon restore successful for %s", _aname)
+                _restore_addon_dump(
+                    self.docker_client, target_service, entry, temp_dir)
 
             vol_files = [f for f in extracted_files if f.startswith('volume_') and f.endswith('.tar.gz')]
             all_vols = list(Volume.objects.filter(service=target_service))
@@ -1168,6 +1116,16 @@ rm -rf {remote_tmp}
                 'created_at': str(timezone.now()),
                 'services': [],
                 'volumes': [],
+                # Completeness bookkeeping (2026-10-01: server backups
+                # silently shipped zero DB bytes — no dumps, no addon
+                # volumes, failures unrecorded). Anything listed under
+                # failed_*/skipped_* did NOT make it into this tarball.
+                'addon_dumps': [],
+                'addon_volumes': [],
+                'failed_services': [],
+                'skipped_volumes': [],
+                'failed_volumes': [],
+                'controlplane_dump': None,
             }
 
             backups_dir = self._get_backups_dir('server')
@@ -1205,6 +1163,9 @@ rm -rf {remote_tmp}
                     try:
                         self.docker_client.volumes.get(vol.name)
                     except docker.errors.NotFound:
+                        metadata['skipped_volumes'].append({
+                            'service': service.name, 'volume': vol.name,
+                            'reason': 'missing on host'})
                         continue
 
                     safe_name = vol.name.replace('/', '_')
@@ -1232,6 +1193,68 @@ rm -rf {remote_tmp}
                             stream_ctr.remove(force=True)
                     except Exception as ve:
                         logger.warning(f"Server backup volume {vol.name} failed: {ve}")
+                        metadata['failed_volumes'].append({
+                            'service': service.name, 'volume': vol.name,
+                            'error': str(ve)[:200]})
+
+                # Addon databases + data volumes for this service. One bad
+                # service must not nuke the whole server backup, so failures
+                # are recorded per service (unlike single-service backups,
+                # which fail hard).
+                try:
+                    from .operations import (
+                        _backup_addon_volumes, _dump_service_addons)
+                    svc_dumps = _dump_service_addons(
+                        service, temp_dir, docker_client=self.docker_client)
+                    for entry in svc_dumps:
+                        entry['service'] = service.name
+                    metadata['addon_dumps'].extend(svc_dumps)
+                    svc_meta['addon_dumps'] = svc_dumps
+                    vol_manifest, vol_skipped = _backup_addon_volumes(
+                        service, temp_dir, docker_client=self.docker_client)
+                    metadata['addon_volumes'].extend(vol_manifest)
+                    svc_meta['addon_volumes'] = vol_manifest
+                    if vol_skipped:
+                        svc_meta['skipped_addons'] = vol_skipped
+                except Exception as ae:
+                    logger.error(
+                        f"Server backup addon stage failed for {service.name}: {ae}")
+                    metadata['failed_services'].append({
+                        'service': service.name, 'stage': 'addons',
+                        'error': str(ae)[:300]})
+
+            # Control-plane database (hosting platform itself): full dump
+            # so a server backup can rebuild the PaaS brain, not just
+            # tenant data. Creds come from the backend's own DATABASE_URL.
+            try:
+                from urllib.parse import urlparse as _urlparse
+                _dur = _urlparse(os.environ.get('DATABASE_URL', ''))
+                _du, _dp = _dur.username or '', _dur.password or ''
+                _dd = (_dur.path or '/').lstrip('/') or ''
+                _primary = self.docker_client.containers.get(
+                    'smsly-postgres-primary')
+                if not (_du and _dp and _dd):
+                    raise RuntimeError('DATABASE_URL incomplete')
+                _res = _primary.exec_run(
+                    ['pg_dumpall', '-U', _du, '--clean', '--if-exists',
+                     '--no-role-passwords', '--lock-wait-timeout=5000'],
+                    environment={'PGPASSWORD': _dp},
+                    timeout=900,
+                )
+                if _res.exit_code != 0:
+                    raise RuntimeError(
+                        f"pg_dumpall exit {_res.exit_code}: "
+                        f"{(_res.output or b'')[:200]}")
+                with open(os.path.join(temp_dir, 'controlplane_dump.sql'), 'wb') as f:
+                    f.write(_res.output)
+                metadata['controlplane_dump'] = 'controlplane_dump.sql'
+                logger.info("Server backup: control-plane dump successful")
+            except Exception as ce:
+                logger.error(f"Server backup control-plane dump failed: {ce}")
+                metadata['controlplane_dump'] = None
+                metadata['failed_services'].append({
+                    'service': '_controlplane', 'stage': 'controlplane_dump',
+                    'error': str(ce)[:300]})
 
             metadata_json = json.dumps(metadata)
             tarball_name = f"server_backup_{timezone.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
@@ -1339,6 +1362,57 @@ rm -rf {remote_tmp}
                             helper.remove(force=True)
                     except Volume.DoesNotExist:
                         logger.warning(f"Volume {vol_name} not found in DB")
+
+            # Addon data volumes (real Docker volume names from manifest).
+            for aventry in metadata.get('addon_volumes', []):
+                _afile = aventry.get('filename', '')
+                _avol = aventry.get('volume', '')
+                if not _afile or _afile not in extracted or not _avol:
+                    continue
+                try:
+                    try:
+                        docker_vol = self.docker_client.volumes.get(_avol)
+                        docker_vol.remove(force=True)
+                    except docker.errors.NotFound:
+                        pass
+                    self.docker_client.volumes.create(name=_avol)
+                    helper = self.docker_client.containers.run(
+                        'alpine:latest',
+                        command=['tar', '-xzf', f'/backup/{_afile}', '-C', '/volume_data'],
+                        volumes={
+                            _avol: {'bind': '/volume_data', 'mode': 'rw'},
+                            temp_dir: {'bind': '/backup', 'mode': 'ro'},
+                        },
+                        detach=True, remove=False,
+                    )
+                    try:
+                        helper.wait(timeout=180)
+                    finally:
+                        helper.remove(force=True)
+                    logger.info("Server restore: addon volume %s restored", _avol)
+                except Exception as exc:
+                    logger.error("Server restore: addon volume %s failed: %s", _avol, exc)
+                    raise
+
+            # Addon database dumps (per-service manifest entries).
+            from .operations import _restore_addon_dump
+            for dentry in metadata.get('addon_dumps', []):
+                _svc_name = dentry.get('service', '')
+                try:
+                    _svc = Service.objects.get(name=_svc_name)
+                except Service.DoesNotExist:
+                    raise RuntimeError(
+                        f"Server restore needs service {_svc_name!r} for "
+                        f"addon dump {dentry.get('filename')!r}.")
+                _restore_addon_dump(self.docker_client, _svc, dentry, temp_dir)
+
+            if 'controlplane_dump.sql' in extracted:
+                # Deliberately NOT auto-restored: loading a platform-DB
+                # dump over the live brain mid-restore risks destroying
+                # the runner itself. Restore manually with psql.
+                logger.warning(
+                    "Server restore: controlplane_dump.sql present — "
+                    "restore manually, auto-restore is disabled by design.")
 
             if cleanup_archive:
                 try:
