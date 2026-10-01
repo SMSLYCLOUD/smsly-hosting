@@ -30,6 +30,14 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     queryset = ServerBackup.objects.all().order_by('-created_at')
 
     def perform_create(self, serializer):
+        # No overlap: a second full server backup while one is queued or
+        # running doubles the heaviest job on the box (and the 2026-10-01
+        # stuck rows came from a 14s-apart double click).
+        if ServerBackup.objects.filter(
+                status__in=('PENDING', 'IN_PROGRESS')).exists():
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError(
+                'A server backup is already queued or running.')
         backup = serializer.save(status='PENDING')
         create_server_backup_task.delay(backup_id=str(backup.id))
 

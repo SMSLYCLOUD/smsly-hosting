@@ -517,6 +517,46 @@ def _make_aware(dt):
     return dt
 
 
+@shared_task(name="apps.deployments.tasks_backup.recover_stalled_backups_task")
+def recover_stalled_backups_task():
+    """Fail backup rows whose worker died without a trace.
+
+    A worker SIGKILL (deploy recreate, OOM) mid-backup leaves the row
+    IN_PROGRESS forever — no FAILED marking, no alert, and the UI
+    spins indefinitely (2026-10-01: three stuck server rows). Sweep
+    rows older than the stall horizon; legit backups never run that
+    long. PENDING rows that were never picked up fail faster.
+    """
+    from datetime import timedelta
+
+    from apps.cloud.models.backup import ServerBackup, ServiceBackup
+    now = timezone.now()
+    failed = {'service': 0, 'server': 0}
+    old_in_progress = now - timedelta(hours=6)
+    old_pending = now - timedelta(hours=2)
+    for model, key in ((ServiceBackup, 'service'), (ServerBackup, 'server')):
+        stale = model.objects.filter(
+            status__in=('IN_PROGRESS', 'PENDING'),
+            created_at__lt=old_in_progress,
+        ) | model.objects.filter(
+            status='PENDING',
+            created_at__lt=old_pending,
+        )
+        for row in stale.distinct().order_by('created_at')[:100]:
+            try:
+                row.status = 'FAILED'
+                row.error_message = (
+                    'Worker died without finishing (stalled row swept). '
+                    'Retry the backup.')
+                row.save(update_fields=['status', 'error_message'])
+                failed[key] += 1
+                logger.warning("Swept stalled %s backup %s to FAILED",
+                               key, row.id)
+            except Exception as exc:
+                logger.debug("Stall sweep failed for %s %s: %s", key, row.id, exc)
+    return failed
+
+
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], name="apps.deployments.tasks_backup.run_scheduled_backups_task")
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""

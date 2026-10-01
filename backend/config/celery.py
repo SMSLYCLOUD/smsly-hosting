@@ -84,6 +84,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.deployments.tasks.deploy.promote  # noqa: F401  # auto_promote_staged_deployments
     import apps.deployments.services.redis_failover_recovery  # noqa: F401
     import apps.addons.tasks.ha_watchdog  # noqa: F401  # check_addon_ha_task
+    import apps.core.services.log_watchdog  # noqa: F401  # watch_log_errors_task (beat sends it; unregistered workers KeyError it)
     # -- Tasks in subpackages not auto-discovered (not {app}.tasks) --
     import apps.deployments.tasks.ai.tasks_ai  # noqa: F401  # analyze_failure_task
     import apps.deployments.tasks.ai.tasks_code_intelligence  # noqa: F401  # deep_scan_and_verify_task
@@ -224,6 +225,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks_backup.purge_user_backups_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.cleanup_old_backups_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.run_scheduled_backups_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_backup.recover_stalled_backups_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.run_scheduled_snapshots_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.create_snapshot_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.archive_old_deployment_logs_task': {'queue': 'deploy'},
@@ -471,6 +473,13 @@ app.conf.beat_schedule = {
     # a deploying ecosystem plan, human-gated AWAITING_APPROVAL, or STAGED.
     'recover-stalled-deployments-every-15m': {
         'task': 'apps.deployments.tasks.recover_stalled_deployments',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
+    # Fail backup rows whose worker died without a trace (deploy
+    # recreate / OOM mid-backup leaves IN_PROGRESS forever).
+    'recover-stalled-backups-every-15m': {
+        'task': 'apps.deployments.tasks_backup.recover_stalled_backups_task',
         'schedule': 900.0,
         'options': {'expires': 900.0},
     },
