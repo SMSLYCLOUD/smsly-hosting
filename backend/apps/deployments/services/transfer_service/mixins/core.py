@@ -86,6 +86,12 @@ class CoreMixin:
                 urls.append(url)
 
         if wg_ip and wg_ip != target_ip:
+            # :8000 first: the node backend serves the API directly.
+            # Bare :80 hits node Caddy, which 301s to https://<ip> —
+            # requests follows into a TLS handshake that IP-literal
+            # SNI can never complete (2026-10-01: every transfer died
+            # here with TLSV1_ALERT_INTERNAL_ERROR).
+            add(f"http://{wg_ip}:8000")
             add(f"http://{wg_ip}")
             add(f"http://{wg_ip}:8090")
 
