@@ -341,15 +341,25 @@ class RemoteClientMixin:
                         and mode == "token"
                         and status in auth_retry_statuses
                         and str(self.server.gateway_secret or "").strip()
-                    ) and self._try_gateway_token_exchange([base_url]):
-                        return self._request(
-                            method_upper,
-                            path,
-                            payload=payload,
-                            params=params,
-                            timeout=timeout,
-                            retry_auth=False,
-                        )
+                    ):
+                        if has_more_modes:
+                            # HMAC-only endpoints (transfer sync, agent
+                            # APIs) reject tokens structurally — try hmac
+                            # next INSTEAD of minting another token.
+                            # Re-exchanging here recursed forever: each new
+                            # token 401d again while hmac never ran
+                            # (2026-10-02: register-incoming spun while
+                            # minting node tokens every round).
+                            break
+                        if self._try_gateway_token_exchange([base_url]):
+                            return self._request(
+                                method_upper,
+                                path,
+                                payload=payload,
+                                params=params,
+                                timeout=timeout,
+                                retry_auth=False,
+                            )
 
                     if has_more_modes and status in auth_retry_statuses:
                         self._set_last_error(

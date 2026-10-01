@@ -41,3 +41,41 @@ class TestRemoteOrchestratorFallbacks(TestCase):
         headers = mock_request.call_args[1].get("headers", {})
         self.assertEqual(headers.get("X-SMSLY-Remote-Sync"), "1")
         self.assertIn("X-Gateway-Signature-V2", headers)
+
+    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    def test_token_401_falls_through_to_hmac_without_exchange(self, mock_request):
+        """A token 401 must try hmac next, not re-exchange in a loop.
+
+        Regression 2026-10-02: HMAC-only endpoints (transfer sync,
+        agent APIs) reject tokens structurally. Re-exchanging on 401
+        recursed forever — minting a fresh token each round — while
+        hmac never ran, so register-incoming never succeeded.
+        """
+        self.server.api_token = "stale-token"
+        self.server.save(update_fields=["api_token"])
+        orch = RemoteOrchestrator(self.server)
+
+        denied = MagicMock()
+        denied.status_code = 401
+        denied.json.return_value = {"error": "Valid node authentication is required."}
+        accepted = MagicMock()
+        accepted.status_code = 200
+        accepted.json.return_value = {"id": "target-1"}
+        mock_request.side_effect = [denied, accepted]
+
+        with patch.object(
+            RemoteOrchestrator, "_try_gateway_token_exchange",
+            side_effect=AssertionError("must not re-exchange while hmac is untried"),
+        ):
+            with patch.object(
+                RemoteOrchestrator, "_candidate_base_urls",
+                return_value=["http://10.100.0.2:8000"],
+            ):
+                resp = orch._request("POST", "/api/v1/transfers/register-incoming/")
+
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(mock_request.call_count, 2)
+        hmac_headers = mock_request.call_args[1].get("headers", {})
+        self.assertIn("X-Gateway-Signature-V2", hmac_headers)
+        self.assertNotIn("Authorization", hmac_headers)
