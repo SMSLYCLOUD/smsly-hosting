@@ -709,14 +709,14 @@ class BackupService:
 
                     result = ctr.exec_run(
                         ['psql', '-U', pg_user, '-d', pg_db,
-                         '-f', db_dest],
-                        timeout=600,
+                         '-f', db_dest]
+                        ,
                     )
                     logger.info(f"psql restore exit: {result.exit_code}, output: {result.output[:200] if result.output else '(none)'}")
                 elif fname == 'redis_dump.rdb':
-                    ctr.exec_run(['redis-cli', 'FLUSHALL'], timeout=60)
+                    ctr.exec_run(['redis-cli', 'FLUSHALL'])
                     with open(db_dump_path, 'rb') as f:
-                        ctr.exec_run(['redis-cli', '--pipe'], data_input=f.read(), timeout=120)
+                        ctr.exec_run(['redis-cli', '--pipe'], data_input=f.read())
 
             # Addon database dumps (metadata['addon_dumps'] manifest).
             # Restored into the same-named addon with live credentials;
@@ -1238,8 +1238,8 @@ rm -rf {remote_tmp}
                 _res = _primary.exec_run(
                     ['pg_dumpall', '-U', _du, '--clean', '--if-exists',
                      '--no-role-passwords', '--lock-wait-timeout=5000'],
-                    environment={'PGPASSWORD': _dp},
-                    timeout=900,
+                    environment={'PGPASSWORD': _dp}
+                    ,
                 )
                 if _res.exit_code != 0:
                     raise RuntimeError(

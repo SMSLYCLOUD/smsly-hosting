@@ -47,8 +47,8 @@ def _dump_container_database(container_name, image_tag, temp_dir, docker_client=
                  '--lock-wait-timeout=5000',
                  '--clean', '--if-exists',
                  '--no-owner', '--no-acl'],
-                environment={'PGPASSWORD': pg_password},
-                timeout=600,
+                environment={'PGPASSWORD': pg_password}
+                ,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -64,8 +64,8 @@ def _dump_container_database(container_name, image_tag, temp_dir, docker_client=
                      '--clean', '--if-exists',
                      '--no-role-passwords',
                      '--lock-wait-timeout=5000'],
-                    environment={'PGPASSWORD': pg_password},
-                    timeout=600,
+                    environment={'PGPASSWORD': pg_password}
+                    ,
                 )
                 if result.exit_code == 0:
                     with open(dump_file, 'wb') as f:
@@ -81,8 +81,8 @@ def _dump_container_database(container_name, image_tag, temp_dir, docker_client=
             password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
             result = ctr.exec_run(
                 ['mysqldump', '--all-databases', '-u', 'root'],
-                environment={'MYSQL_PWD': password},
-                timeout=600,
+                environment={'MYSQL_PWD': password}
+                ,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -92,7 +92,7 @@ def _dump_container_database(container_name, image_tag, temp_dir, docker_client=
                 raise RuntimeError(f"mysqldump failed for {container_name}: {result.output}")
         elif 'redis' in image_lower:
             dump_file = os.path.join(temp_dir, 'redis_dump.rdb')
-            ctr.exec_run(['redis-cli', 'SAVE'], timeout=120)
+            ctr.exec_run(['redis-cli', 'SAVE'])
             time.sleep(2)
             bits, _ = ctr.get_archive('/data/dump.rdb')
             if bits:
@@ -136,7 +136,7 @@ def _stop_service_for_restore(service, is_remote):
             try:
                 ctr = client.containers.get(container_name)
                 ctr.stop(timeout=30)
-                ctr.wait(condition='not-running', timeout=30)
+                ctr.wait(condition='not-running')
             except Exception as stop_err:
                 logger.warning(
                     "Failed to stop container for service %s (may still be running): %s",
@@ -318,8 +318,8 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
                 ['pg_dump', '-h', '127.0.0.1', '-U', url_user, '-d', url_db,
                  '--lock-wait-timeout=5000', '--clean', '--if-exists',
                  '--no-owner', '--no-acl'],
-                environment={'PGPASSWORD': url_password},
-                timeout=600,
+                environment={'PGPASSWORD': url_password}
+                ,
             )
             if result.exit_code != 0:
                 raise RuntimeError(
@@ -354,16 +354,16 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
                 ['pg_dump', '-U', pg_user, '-d', pg_db,
                  '--lock-wait-timeout=5000', '--clean', '--if-exists',
                  '--no-owner', '--no-acl'],
-                environment={'PGPASSWORD': pg_password},
-                timeout=600,
+                environment={'PGPASSWORD': pg_password}
+                ,
             )
             if result.exit_code != 0:
                 result = ctr.exec_run(
                     ['pg_dumpall', '-U', pg_user,
                      '--clean', '--if-exists', '--no-role-passwords',
                      '--lock-wait-timeout=5000'],
-                    environment={'PGPASSWORD': pg_password},
-                    timeout=600,
+                    environment={'PGPASSWORD': pg_password}
+                    ,
                 )
                 if result.exit_code != 0:
                     raise RuntimeError(
@@ -379,8 +379,8 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
             password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
             result = ctr.exec_run(
                 ['mysqldump', '--all-databases', '-u', 'root'],
-                environment={'MYSQL_PWD': password},
-                timeout=600,
+                environment={'MYSQL_PWD': password}
+                ,
             )
             if result.exit_code != 0:
                 raise RuntimeError(
@@ -392,7 +392,7 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
                              'provision_mode': 'container', 'filename': filename,
                              'db': 'all'})
         elif kind == 'REDIS':
-            ctr.exec_run(['redis-cli', 'SAVE'], timeout=120)
+            ctr.exec_run(['redis-cli', 'SAVE'])
             time.sleep(2)
             bits, _ = ctr.get_archive('/data/dump.rdb')
             if not bits:
@@ -405,7 +405,7 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
                              'db': 'rdb'})
         elif kind in ('MONGO', 'MONGODB'):
             result = ctr.exec_run(
-                ['mongodump', '--archive=/tmp/mongo.archive', '--gzip'], timeout=600)
+                ['mongodump', '--archive=/tmp/mongo.archive', '--gzip'])
             if result.exit_code != 0:
                 raise RuntimeError(
                     f"Addon dump failed for {addon.name}: mongodump exit {result.exit_code}")
@@ -511,8 +511,8 @@ def _restore_shared_db(docker_client, entry, temp_dir, password):
     res = target.exec_run(
         ['psql', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'postgres',
          '-f', '/tmp/restore_shared_dump.sql'],
-        environment={'PGPASSWORD': password},
-        timeout=900,
+        environment={'PGPASSWORD': password}
+        ,
     )
     if res.exit_code != 0:
         raise RuntimeError(
@@ -572,8 +572,8 @@ def _restore_addon_dump(docker_client, target_service, entry, temp_dir):
     res = ctr.exec_run(
         ['psql', *host_args, '-U', user, '-d', db,
          '-f', '/tmp/restore_addon_dump.sql'],
-        environment={'PGPASSWORD': pw},
-        timeout=600,
+        environment={'PGPASSWORD': pw}
+        ,
     )
     if res.exit_code != 0:
         raise RuntimeError(
@@ -613,8 +613,8 @@ def _dump_shared_server(temp_dir, docker_client=None, exclude_dbs=frozenset()):
     list_res = target.exec_run(
         ['psql', '-h', '127.0.0.1', '-U', 'postgres', '-tA',
          '-c', "SELECT datname FROM pg_database WHERE datistemplate = false;"],
-        environment={'PGPASSWORD': password},
-        timeout=120,
+        environment={'PGPASSWORD': password}
+        ,
     )
     if list_res.exit_code != 0:
         raise RuntimeError(
@@ -636,8 +636,8 @@ def _dump_shared_server(temp_dir, docker_client=None, exclude_dbs=frozenset()):
             ['pg_dump', '-h', '127.0.0.1', '-U', 'postgres', '-d', dbname,
              '--create', '--clean', '--if-exists',
              '--no-owner', '--no-acl', '--lock-wait-timeout=5000'],
-            environment={'PGPASSWORD': password},
-            timeout=900,
+            environment={'PGPASSWORD': password}
+            ,
         )
         if result.exit_code != 0:
             raise RuntimeError(
@@ -674,8 +674,8 @@ def backup_addon(addon_id: str) -> str | None:
             pg_password = c_env.get('POSTGRES_PASSWORD', '')
             result = ctr.exec_run(
                 ['pg_dump', '-U', pg_user, '-d', pg_db, '--lock-wait-timeout=5000', '-c'],
-                environment={'PGPASSWORD': pg_password},
-                timeout=600,
+                environment={'PGPASSWORD': pg_password}
+                ,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -687,8 +687,8 @@ def backup_addon(addon_id: str) -> str | None:
             )
             result = ctr.exec_run(
                 ['pg_dumpall', '-U', pg_user, '-c', '--lock-wait-timeout=5000'],
-                environment={'PGPASSWORD': pg_password},
-                timeout=600,
+                environment={'PGPASSWORD': pg_password}
+                ,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -703,8 +703,8 @@ def backup_addon(addon_id: str) -> str | None:
             password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
             result = ctr.exec_run(
                 ['mysqldump', '--all-databases', '-u', 'root'],
-                environment={'MYSQL_PWD': password},
-                timeout=600,
+                environment={'MYSQL_PWD': password}
+                ,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -713,7 +713,7 @@ def backup_addon(addon_id: str) -> str | None:
             raise RuntimeError(f"Addon mysqldump failed with exit {result.exit_code}: {result.output}")
         elif 'redis' in atype:
             dump_file = os.path.join(backup_dir, 'redis_dump.rdb')
-            ctr.exec_run(['redis-cli', 'SAVE'], timeout=120)
+            ctr.exec_run(['redis-cli', 'SAVE'])
             time.sleep(1)
             bits, _ = ctr.get_archive('/data/dump.rdb')
             if bits:
@@ -723,7 +723,7 @@ def backup_addon(addon_id: str) -> str | None:
                 return dump_file
         elif 'mongo' in atype:
             dump_file = os.path.join(backup_dir, 'mongo_dump.archive')
-            result = ctr.exec_run(['mongodump', '--archive=/tmp/mongo.archive', '--gzip'], timeout=600)
+            result = ctr.exec_run(['mongodump', '--archive=/tmp/mongo.archive', '--gzip'])
             if result.exit_code == 0:
                 bits, _ = ctr.get_archive('/tmp/mongo.archive')
                 if bits:
