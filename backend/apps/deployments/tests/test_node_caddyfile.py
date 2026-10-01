@@ -84,6 +84,11 @@ class GenerateNodeCaddyfileTests(TestCase):
         self.assertIn("reverse_proxy my-app:8000 {", content)
         self.assertNotIn("localhost:8000", content)
 
+    def test_flat_https_block_for_cf_direct(self):
+        self._svc()
+        content = generate_node_caddyfile(self.node)
+        self.assertIn("my-app-grid1.trulay.site {", content)
+
     def test_preview_host_joins_plain_http_block(self):
         self._svc()
         svc = Service.objects.get(name="my-app")
