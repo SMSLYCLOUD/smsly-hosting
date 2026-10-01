@@ -91,7 +91,11 @@ class GenerateNodeCaddyfileTests(TestCase):
         svc.save(update_fields=["public_domain"])
         content = generate_node_caddyfile(self.node)
         self.assertIn(
-            "http://my-app-grid1.trulay.site, my-app-e8ac13.trulay.site {",
+            "http://my-app-e8ac13.trulay.site {",
+            content,
+        )
+        self.assertIn(
+            "http://my-app-grid1.trulay.site {",
             content,
         )
 

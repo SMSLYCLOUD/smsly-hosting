@@ -1494,7 +1494,7 @@ def generate_node_caddyfile(node) -> str:
                     continue
                 if value and value.endswith(suffix) and value not in (flat_domain, nested_domain):
                     extra_hosts.append(value)
-        http_hosts = ", ".join([flat_domain, *extra_hosts])
+        http_hosts = [flat_domain, *extra_hosts]
 
         tls_lines = [
             "    tls {",
@@ -1504,22 +1504,27 @@ def generate_node_caddyfile(node) -> str:
         else:
             tls_lines.append("        on_demand")
 
-        # Flat hostname over plain HTTP: this is the master→node proxy
-        # path (and any grey direct hit). An explicit http:// block
-        # serves plainly with NO https redirect — a bare-name block
-        # with tls would 308 every proxied request into a loop.
-        flat_block = [
-            f"http://{http_hosts} {{",
-            "    log {",
-            "        output file /var/log/caddy/access.log",
-            "    }",
-            f"    reverse_proxy {container}:{port} {{",
-            "        header_up Host {host}",
-            "    }",
-            "    encode gzip",
-            "}",
-        ]
-        sections.append("\n".join(flat_block))
+        # Flat/public hostnames over plain HTTP, ONE BLOCK PER HOST:
+        # Caddy assigns a default scheme per comma-separated address, so
+        # `http://a, b` silently serves b over HTTPS (2026-10-01: the
+        # preview host landed on the TLS server and the flat host
+        # vanished from :80). Explicit http:// on every block serves
+        # plainly with NO https redirect — this is the master→node
+        # proxy path (a bare-name block with tls would 308 every
+        # proxied request into a loop).
+        for http_host in http_hosts:
+            flat_block = [
+                f"http://{http_host} {{",
+                "    log {",
+                "        output file /var/log/caddy/access.log",
+                "    }",
+                f"    reverse_proxy {container}:{port} {{",
+                "        header_up Host {host}",
+                "    }",
+                "    encode gzip",
+                "}",
+            ]
+            sections.append("\n".join(flat_block))
 
         # Nested hostname over HTTPS with on-demand certs: direct grey
         # access to the node without going through Cloudflare/master.
