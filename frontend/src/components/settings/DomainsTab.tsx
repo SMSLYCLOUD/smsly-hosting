@@ -853,7 +853,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         <div className="mb-3">
                             <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Node Entry Points</h4>
                             <p className="text-xs text-muted-foreground mt-1">
-                                Control which URLs route traffic to this service. Both use the same backend.
+                                Two independent URLs reach this service. Both serve the same backend — pick per use case, or keep both on.
                             </p>
                         </div>
 
@@ -864,6 +864,9 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                     <div className={`h-2 w-2 rounded-full ${service.wildcard_url_enabled !== false ? 'bg-emerald-500' : 'bg-zinc-500'}`} />
                                     <div className="min-w-0 flex-1">
                                         <p className="text-xs font-semibold text-muted-foreground mb-0.5">Wildcard URL (master-proxied)</p>
+                                        <p className="text-[11px] text-muted-foreground mb-1">
+                                            Browser → Cloudflare → master → mesh → node. Use for production: full CF protection (WAF, CDN, SSL) and keeps working for reads even if the dashboard is busy.
+                                        </p>
                                         <span className={`font-mono text-sm ${service.wildcard_url_enabled === false ? 'line-through text-muted-foreground' : ''}`}>
                                             {service.public_domain || `${service.name}.cloud.Trulay.co`}
                                         </span>
@@ -898,6 +901,9 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                     <div className={`h-2 w-2 rounded-full ${service.node_url_enabled !== false ? 'bg-emerald-500' : 'bg-zinc-500'}`} />
                                     <div className="min-w-0 flex-1">
                                         <p className="text-xs font-semibold text-muted-foreground mb-0.5">Direct Node URL</p>
+                                        <p className="text-[11px] text-muted-foreground mb-1">
+                                            Browser → Cloudflare → node directly (exact DNS record, one fewer hop). Use for debugging or region-direct access. Goes dark when the node is offline — the wildcard URL above is the fallback.
+                                        </p>
                                         <span className={`font-mono text-sm ${service.node_url_enabled === false ? 'line-through text-muted-foreground' : ''}`}>
                                             {service.node_url.replace('https://', '')}
                                         </span>
