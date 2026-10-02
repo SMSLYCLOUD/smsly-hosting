@@ -6,8 +6,31 @@ import * as THREE from 'three';
 // useGraphData removed as it's passed as prop
 import { TopologyNode, TopologyNodeData } from '@/types/topology';
 import { Loader2 } from 'lucide-react';
+import { getAddonMetadata } from '@/lib/addonRegistry';
 import { ServiceSidePanel } from '../src/components/topology/ServiceSidePanel';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
+
+// Logo textures for addon nodes (URL -> texture). A failed load leaves
+// the plain status-colored mesh — never break the graph over an image.
+const logoTextureCache = new Map<string, any>();
+function addonLogoTexture(addonType: string | undefined, onReady: () => void): any | null {
+  const url = addonType ? getAddonMetadata(addonType)?.logo : undefined;
+  if (!url) return null;
+  const hit = logoTextureCache.get(url);
+  if (hit) return hit === 'failed' ? null : hit;
+  try {
+    const tex = new THREE.TextureLoader().load(
+      url,
+      () => onReady(),
+      undefined,
+      () => { logoTextureCache.set(url, 'failed'); },
+    );
+    logoTextureCache.set(url, tex);
+    return tex;
+  } catch {
+    return null;
+  }
+}
 
 // Dynamically import ForceGraph3D to avoid SSR issues with window/canvas
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), {
@@ -70,6 +93,13 @@ export function Topology3D({ data, loading, error, refresh }: { data: any, loadi
       transparent: true,
       opacity: 0.9,
     });
+
+    // Addon nodes wear their registry brand mark (cached texture;
+    // plain color when the type has no logo).
+    if ((node.type || '').toLowerCase() === 'addon') {
+      const tex = addonLogoTexture(data.addon_type, () => { material.needsUpdate = true; });
+      if (tex) material.map = tex;
+    }
 
     const nodeType = (node.type || '').toLowerCase();
     let mesh;
