@@ -79,6 +79,16 @@ class Addon(TimeStampedModel):
         # ── Agent Browsers (self-hosted browser infrastructure for AI agents) ──
         STEEL = 'STEEL', 'Steel Browser'
         BROWSERLESS = 'BROWSERLESS', 'Browserless Chrome'
+        # ── AI coding-agent CLIs (internal-only containers with the
+        # vendor CLI preinstalled; configured via cli_config) ──
+        OPENCODE = 'OPENCODE', 'OpenCode CLI'
+        COMMANDCODE = 'COMMANDCODE', 'CommandCode CLI'
+        ANTIGRAVITYCLI = 'ANTIGRAVITYCLI', 'Antigravity CLI'
+        KIMCHI = 'KIMCHI', 'Kimchi CLI'
+        FORGECODE = 'FORGECODE', 'ForgeCode CLI'
+        DEEPAGENTS = 'DEEPAGENTS', 'DeepAgents CLI'
+        QWENCODE = 'QWENCODE', 'Qwen CLI'
+        FACTORYDROID = 'FACTORYDROID', 'Factory Droid CLI'
         # ── Connection Pooling ──
         PGBOUNCER = 'PGBOUNCER', 'PgBouncer'
 
@@ -133,6 +143,11 @@ class Addon(TimeStampedModel):
     deletion_error = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     connection_url = EncryptedCharField(
         max_length=512, blank=True)  # H-1 fix: encrypted at rest
+    # CLI addon configuration (API key + model selection), managed via
+    # the addon cli-config API. Encrypted at rest — never log or return
+    # the raw value; use cli_addons.public_view for reads.
+    cli_config = EncryptedCharField(
+        max_length=4096, blank=True, default='')
 
     # ── High Availability ────────────────────────────────────────────────
     # Opt-in replication for POSTGRES (pg_auto_failover) and REDIS

@@ -190,6 +190,16 @@ def deprovision_addon_task(self, addon_id: str) -> None:
             addon_provisioner.deprovision_dispatch(
                 addon.coolify_uuid, addon, container_name, retain_volume=True)
             addon.retired_volume = f"{container_name}-data"
+        else:
+            # Shared CLI container: never remove it here (siblings may
+            # still use it) — just detach this addon's alias so the
+            # soft-deleted name stops resolving. Reprovision re-attaches.
+            try:
+                from apps.addons.services import cli_addons as _cli
+                if _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+                    _cli.detach_cli_alias(addon)
+            except Exception:
+                logger.debug("CLI alias detach skipped for addon %s", addon_id)
         # Mesh forwarders are per-addon: remove ours best-effort (never
         # fail the deprovision if mesh cleanup fails).
         try:
@@ -363,10 +373,31 @@ def delete_addon_task(self, addon_id: str) -> None:
     server = getattr(addon.service, 'server', None)
     if (server and not server.is_primary
             and not getattr(server, 'is_lite_agent', False)):
-        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-        success = addon_provisioner.deprovision_remote(
-            addon.coolify_uuid or container_name, server, container_name,
-        )
+        try:
+            from apps.addons.services import cli_addons as _cli
+            if _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+                container_name = _cli.resolve_container_name(addon)
+                if _cli.sibling_cli_addons(addon, include_self=False):
+                    # Siblings still use the shared container — detach
+                    # only our alias, never remove it.
+                    _cli.detach_cli_alias_remote(addon, server)
+                    success = True
+                else:
+                    success = addon_provisioner.deprovision_remote(
+                        addon.coolify_uuid or container_name, server,
+                        container_name,
+                    )
+            else:
+                container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+                success = addon_provisioner.deprovision_remote(
+                    addon.coolify_uuid or container_name, server,
+                    container_name,
+                )
+        except Exception:
+            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+            success = addon_provisioner.deprovision_remote(
+                addon.coolify_uuid or container_name, server, container_name,
+            )
     else:
         orchestrator = DeletionOrchestrator()
         success = orchestrator.delete_addon_resources(addon)

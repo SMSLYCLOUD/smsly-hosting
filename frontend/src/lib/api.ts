@@ -2262,6 +2262,20 @@ export const addonsApi = {
         const res = await api.post(`/addons/${id}/unexpose/`);
         return res.data;
     },
+    getCliConfig: async (id: string): Promise<{
+        addon_type: string; binary: string; auth_mode: string; model_file: boolean;
+        configured: boolean; model: string; provider: string; api_key_env: string;
+        api_key_set: boolean; suggested_env: string;
+    }> => {
+        const res = await api.get(`/addons/${id}/cli_config/`);
+        return res.data;
+    },
+    setCliConfig: async (id: string, data: {
+        api_key?: string; api_key_env?: string; model?: string; provider?: string;
+    }): Promise<{ status: string; files_pushed?: string[]; push_error?: string }> => {
+        const res = await api.post(`/addons/${id}/set_cli_config/`, data);
+        return res.data;
+    },
     deprovision: async (id: string, confirmation?: string): Promise<{ status: string; message?: string }> => {
         const res = await api.post(`/addons/${id}/deprovision/`, { confirmation: confirmation ?? '' });
         return res.data;

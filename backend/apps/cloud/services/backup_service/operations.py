@@ -439,9 +439,18 @@ def _backup_addon_volumes(service, temp_dir, docker_client=None):
     manifest, skipped = [], []
     addons = list(Addon.objects.filter(
         service=service, status='ACTIVE').order_by('name'))
+    seen_volumes: set[str] = set()
     for addon in addons:
-        cname = (getattr(addon, 'container_name', None)
-                 or f"smsly-addon-{(addon.addon_type or '').lower()}-{addon.id}")
+        try:
+            from apps.addons.services import cli_addons as _cli
+            if _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+                cname = _cli.resolve_container_name(addon)
+            else:
+                cname = (getattr(addon, 'container_name', None)
+                         or f"smsly-addon-{(addon.addon_type or '').lower()}-{addon.id}")
+        except Exception:
+            cname = (getattr(addon, 'container_name', None)
+                     or f"smsly-addon-{(addon.addon_type or '').lower()}-{addon.id}")
         try:
             ctr = client.containers.get(cname)
         except Exception:
@@ -455,6 +464,11 @@ def _backup_addon_volumes(service, temp_dir, docker_client=None):
             dest = mount.get('Destination', '')
             if not vol_name:
                 continue
+            if vol_name in seen_volumes:
+                # Shared backing container (CLI addons): tar once, not
+                # once per addon row sharing it.
+                continue
+            seen_volumes.add(vol_name)
             safe = _re_mod.sub(r'[^A-Za-z0-9_.\-]+', '_', f'{cname}_{dest}')
             filename = f'addonvol_{safe}.tar.gz'
             vol_path = os.path.join(temp_dir, filename)
@@ -657,6 +671,14 @@ def backup_addon(addon_id: str) -> str | None:
     client = _docker.from_env()
     try:
         addon = Addon.objects.get(id=addon_id, status='ACTIVE')
+        try:
+            from apps.addons.services import cli_addons as _cli
+            if _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+                # CLI addons hold config (in DB) + caches (in the shared
+                # volume, covered by volume backups) — no DB dump applies.
+                return None
+        except Exception:
+            pass
         cname = (getattr(addon, 'container_name', None)
                  or f"smsly-addon-{(addon.addon_type or '').lower()}-{addon.id}")
         ctr = client.containers.get(cname)

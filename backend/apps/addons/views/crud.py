@@ -693,6 +693,71 @@ class AddonViewSet(viewsets.ModelViewSet):
 
         return Response({'public_domain': None, 'status': 'unexpose_started'})
 
+    @action(detail=True, methods=['get'])
+    def cli_config(self, request, pk=None):
+        """Read a CLI addon's config (API key never returned, only flags)."""
+        from ..services import cli_addons as _cli
+        addon = self.get_object()
+        if not _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+            return Response(
+                {'error': 'cli-config is only available for CLI addon types.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        return Response(_cli.public_view(
+            getattr(addon, 'addon_type', ''), _cli.read_stored_config(addon)))
+
+    @action(detail=True, methods=['post'])
+    def set_cli_config(self, request, pk=None):
+        """Save a CLI addon's API key / model and push it live.
+
+        Body: {api_key?, api_key_env?, model?, provider?}. Omitted keys
+        keep their stored values; an empty api_key clears the stored key.
+        Config files are pushed into the running container immediately;
+        a key-env change takes effect on next reprovision (container env
+        is fixed at create time).
+        """
+        import json as _json
+        from ..services import cli_addons as _cli
+        addon = self.get_object()
+        assert_can_write(self.request.user, addon.service, action='configure CLI addon')
+        if not _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+            return Response(
+                {'error': 'cli-config is only available for CLI addon types.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        data = request.data or {}
+        try:
+            update = _cli.validate_cli_config(getattr(addon, 'addon_type', ''), data)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        stored = _cli.read_stored_config(addon)
+        key_env_changed = (
+            'api_key_env' in update
+            and (update.get('api_key_env') or '') != (stored.get('api_key_env') or ''))
+        merged = _cli.merge_stored_config(stored, update)
+        addon.cli_config = _json.dumps(merged)
+        addon.save(update_fields=['cli_config'])
+        pushed: list[str] = []
+        push_error = ''
+        try:
+            from apps.addons.services.addon_provisioner import addon_container_name
+            _cli.push_cli_files(
+                addon_container_name(addon), getattr(addon, 'addon_type', ''), merged)
+            pushed = sorted(_cli.container_files(
+                getattr(addon, 'addon_type', ''), merged).keys())
+        except Exception as exc:
+            push_error = str(exc)[:200]
+        if key_env_changed:
+            from ..tasks.crud import provision_addon_task
+            ok, _ = _guard_delay(provision_addon_task, str(addon.id))
+            if not ok:
+                return Response(
+                    {"error": "Key saved, but re-provisioning for the new key env could not be queued. Use 'reprovision' to retry."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            return Response({'status': 'saved_reprovisioning',
+                             'files_pushed': pushed, 'push_error': push_error})
+        return Response({'status': 'saved', 'files_pushed': pushed,
+                         'push_error': push_error})
+
     @action(detail=True, methods=['post'])
     def reprovision(self, request, pk=None):
         """Manually trigger re-provisioning to update labels or network configuration."""

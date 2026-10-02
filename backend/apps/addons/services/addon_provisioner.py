@@ -27,6 +27,22 @@ from decouple import config
 logger = logging.getLogger(__name__)
 
 
+def addon_container_name(addon) -> str:
+    """Canonical backing container for an addon row.
+
+    CLI addon types share one container per service (see cli_addons);
+    everything else keeps the per-addon name.
+    """
+    try:
+        from apps.addons.services import cli_addons as _cli
+        if _cli.is_cli_addon(getattr(addon, "addon_type", "")):
+            return _cli.resolve_container_name(addon)
+    except Exception:
+        pass
+    return (f"smsly-addon-{str(getattr(addon, 'addon_type', '')).lower()}-"
+            f"{getattr(addon, 'id', '')}")
+
+
 class AddonProvisioner:
     """
     Provisions database addons as Docker containers.
@@ -128,6 +144,9 @@ class AddonProvisioner:
         'BROWSERLESS': {"image": "browserless/chrome:latest", "port": 3000, "env_url": "BROWSERLESS_URL", "scheme": "http", "auth": False, "health_timeout": 90},
     }
 
+    # ── AI coding-agent CLIs (entries built by cli_addons and merged
+    # at class-definition time at the bottom of this module) ────────────
+
     def __init__(self):
         self.network_name = config(
             'DOCKER_NETWORK',
@@ -138,6 +157,7 @@ class AddonProvisioner:
         self._network_checked = False
 
         # Register generic addons so they are recognized across the platform
+        # (CLI entries are merged at class-definition time below).
         for addon, addon_cfg in self.GENERIC_ADDONS_CONFIG.items():
             if addon not in self.ADDON_IMAGES:
                 self.ADDON_IMAGES[addon] = addon_cfg['image']
@@ -600,7 +620,8 @@ class AddonProvisioner:
             )
 
         # Stable container name; do not change across retries.
-        container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"
+        # (CLI types share one container per service.)
+        container_name = addon_container_name(addon)
 
         # Persisted URL is the source of truth for passwords. If we rotate passwords on retries
         # but re-use a persistent volume, the container will keep the original password and
@@ -610,6 +631,20 @@ class AddonProvisioner:
         # Friendly network alias so apps can reach the addon by name, used for first provision
         # and for reconstructing a missing URL.
         alias_name = str(getattr(addon, 'name', '') or f"{addon_type.lower()}-{service_name}").strip()
+
+        # AI CLI addons share ONE container per service (resource
+        # consolidation): every CLI installs into it, each addon row
+        # keeps its own alias/URL/config. Sibling rows reuse the
+        # running container instead of starting their own.
+        _cli_shared = False
+        _cli = None
+        try:
+            from apps.addons.services import cli_addons as _cli_mod
+            _cli = _cli_mod
+            _cli_shared = _cli_mod.is_cli_addon(addon_type)
+        except Exception:
+            _cli = None
+            _cli_shared = False
 
         image = self.ADDON_IMAGES.get(addon_type)
         port = self.ADDON_PORTS.get(addon_type)
@@ -665,6 +700,16 @@ class AddonProvisioner:
         public_domain = getattr(addon, 'public_domain', None)
         router_name = container_name.replace(".", "-").replace("_", "-")
 
+        # Shared CLI container: reuse when present (None = absent, fall
+        # through to the fresh docker-run path below).
+        if _cli_shared:
+            _cli_res = self._provision_cli_shared(
+                addon, addon_type, container_name, alias_name,
+                service_name, cast(int, port), cast(dict, generic_config),
+                public_domain)
+            if _cli_res is not None:
+                return _cli_res
+
         # If the container already exists, never "re-provision" (which would rotate passwords).
         existing_cid, is_running = self._container_status(container_name)
         host_port_for_recreate: int | None = None
@@ -688,9 +733,25 @@ class AddonProvisioner:
                     expected_rule_val = f"Host(`{public_domain}`)" if public_domain else None
                     current_rule_val = labels.get(expected_rule_key)
 
+                    # Shared CLI container: sibling routers (other exposed
+                    # CLI addons of the same service) must all be present
+                    # too, or a recreate would silently drop their URLs.
+                    _cli_extra: list[tuple[str, str]] = []
+                    if _cli_shared:
+                        try:
+                            _cli_extra = _cli.exposed_routers(addon)
+                        except Exception:
+                            _cli_extra = []
+                    _cli_stale = False
+                    for _suffix, _domain in _cli_extra:
+                        _key = f"traefik.http.routers.{router_name}-{_suffix}.rule"
+                        if labels.get(_key) != f"Host(`{_domain}`)":
+                            _cli_stale = True
+                            break
+
                     # If public domain changed, or was added/removed, we must recreate the container to update labels.
                     # Volumes, passwords, and data will persist.
-                    if current_rule_val != expected_rule_val:
+                    if current_rule_val != expected_rule_val or _cli_stale:
                         logger.info(f"Public domain changed for {container_name}. Recreating container to update Traefik labels.")
                         # Preserve the published host port (lite-agent addons
                         # expose their port on the master) so the recreated
@@ -887,7 +948,8 @@ class AddonProvisioner:
             if generic_config:
                 if generic_config.get('auth') and not password:
                     raise ValueError(f"Existing connection_url is missing a password for {addon_type}; refusing to reprovision.")
-                container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), hostname, cast(dict, generic_config), username=username, db_name=db_name, public_domain=public_domain, host_port=host_port_for_recreate)
+                container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), hostname, cast(dict, generic_config), username=username, db_name=db_name, public_domain=public_domain, host_port=host_port_for_recreate, extra_env=self._cli_extra_env(addon), extra_traefik=_cli.exposed_routers(addon) if _cli_shared else None, extra_aliases=_cli.sibling_aliases(addon) if _cli_shared else None)
+                self._seed_cli_files(container_name, addon)
             elif addon_type == 'MINIO':
                 container_id, _ = self._provision_minio(container_name, password, cast(int, port), hostname, username=username, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'POSTGRES':
@@ -931,7 +993,8 @@ class AddonProvisioner:
         password = secrets.token_urlsafe(48) if is_passworded else ''
 
         if generic_config:
-            container_id, connection_url = self._provision_generic(addon_type, container_name, password, cast(int, port), alias_name, cast(dict, generic_config), public_domain=public_domain)
+            container_id, connection_url = self._provision_generic(addon_type, container_name, password, cast(int, port), alias_name, cast(dict, generic_config), public_domain=public_domain, extra_env=self._cli_extra_env(addon), extra_traefik=_cli.exposed_routers(addon) if _cli_shared else None, extra_aliases=_cli.sibling_aliases(addon) if _cli_shared else None)
+            self._seed_cli_files(container_name, addon)
         elif addon_type == 'MINIO':
             # Minio needs a username too, we can auto-generate one or use a default like 'admin'
             username = secrets.token_hex(8)
@@ -1076,7 +1139,7 @@ class AddonProvisioner:
         addon_type = addon.addon_type
         service_name = addon.service.name
         self._ensure_network()
-        container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"
+        container_name = addon_container_name(addon)
         alias_name = str(
             getattr(addon, 'name', '') or f"{addon_type.lower()}-{service_name}"
         ).strip()
@@ -1677,14 +1740,18 @@ metrics = false
 
     def _provision_generic(self, addon_type: str, container_name: str,
                            password: str, port: int, alias_name: str, config: dict,
-                           username: str = '', db_name: str = '', public_domain: str | None = None, host_port: int | None = None) -> tuple[str, str]:
+                           username: str = '', db_name: str = '', public_domain: str | None = None, host_port: int | None = None, extra_env: dict | None = None, extra_traefik: list[tuple[str, str]] | None = None, extra_aliases: list[str] | None = None) -> tuple[str, str]:
         """Provision a generic addon from GENERIC_ADDONS_CONFIG."""
         hostname = alias_name or container_name
         user = username or 'admin'
         db = db_name or 'app_db'
         cluster_id = self._generate_kraft_cluster_id()
 
-        env_file = self._write_env_file(self._build_generic_env(config, password, hostname, cluster_id, user, db))
+        env_vars = self._build_generic_env(config, password, hostname, cluster_id, user, db)
+        for _k, _v in (extra_env or {}).items():
+            if _k and _v is not None:
+                env_vars[str(_k)] = str(_v)
+        env_file = self._write_env_file(env_vars)
 
         cmd = [
             'docker', 'run', '-d',
@@ -1702,9 +1769,19 @@ metrics = false
         if public_domain:
             target_port = cast(int, config.get('dashboard_port', port))
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, target_port)
+        # Shared containers (CLI): sibling routers must be (re)applied
+        # on every recreate or their URLs silently drop.
+        for _suffix, _domain in (extra_traefik or []):
+            target_port = cast(int, config.get('dashboard_port', port))
+            self._append_traefik_labels(
+                cmd, f"{container_name.replace('.', '-').replace('_', '-')}-{_suffix}",
+                _domain, target_port)
 
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
+        for _extra in (extra_aliases or []):
+            if _extra and _extra != alias_name:
+                cmd.extend(['--network-alias', _extra])
 
         if config.get('command'):
             entrypoint, cmd_args = self._render_generic_command(config, password, hostname)
@@ -1802,6 +1879,163 @@ metrics = false
             # _render_generic_command): never on the command line.
             env['SMSLY_APP_PASSWORD'] = password
         return env
+
+    def _cli_extra_env(self, addon) -> dict[str, str]:
+        """Merged API-key env across all ACTIVE CLI siblings (union)."""
+        try:
+            from apps.addons.services import cli_addons as _cli
+            if not _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+                return {}
+            merged = _cli.merged_cli_env(getattr(addon, 'service', None))
+            if merged:
+                return merged
+            return _cli.provision_env(_cli.read_stored_config(addon))
+        except Exception as exc:
+            logger.debug("CLI extra env skipped: %s", exc)
+            return {}
+
+    def _cli_container_env(self, container_name: str) -> dict[str, str]:
+        """Current env of a running container (name -> value)."""
+        try:
+            proc = subprocess.run(
+                ['docker', 'inspect', '-f', '{{json .Config.Env}}', container_name],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            if proc.returncode != 0 or not proc.stdout.strip():
+                return {}
+            import json
+            env: dict[str, str] = {}
+            for entry in json.loads(proc.stdout) or []:
+                if '=' in entry:
+                    key, _, val = entry.partition('=')
+                    env[key] = val
+            return env
+        except Exception:
+            return {}
+
+    def _provision_cli_shared(self, addon, addon_type: str, container_name: str,
+                              alias_name: str, service_name: str, port: int,
+                              generic_config: dict,
+                              public_domain: str | None) -> tuple[str, str] | None:
+        """Reuse path for the per-service shared CLI container.
+
+        Returns (cid, url) when the shared container exists, else None
+        (caller falls through to the fresh ``docker run`` path). A
+        missing API-key env triggers remove + None so the fresh path
+        recreates with the merged sibling env.
+        """
+        from apps.addons.services import cli_addons as _cli
+        existing_cid, is_running = self._container_status(container_name)
+        if not existing_cid:
+            return None
+        if not is_running:
+            logger.info("Starting existing shared CLI container: %s", container_name)
+            self._start_container(container_name)
+            time.sleep(1)
+            existing_cid, _ = self._container_status(container_name)
+            if not existing_cid:
+                raise RuntimeError(f"Shared CLI container {container_name} disappeared after start")
+        # Union env across all ACTIVE CLI siblings (this row included —
+        # callers save cli_config before queueing provision).
+        wanted = _cli.merged_cli_env(getattr(addon, 'service', None))
+        if not wanted:
+            try:
+                wanted = _cli.provision_env(_cli.read_stored_config(addon))
+            except Exception:
+                wanted = {}
+        if wanted:
+            current = self._cli_container_env(container_name)
+            missing = [k for k in wanted if current.get(k) != wanted[k]]
+            if missing:
+                logger.info("Shared CLI container %s missing env %s — recreating with merged env",
+                            container_name, ','.join(missing))
+                subprocess.run(['docker', 'rm', '-f', container_name],
+                               capture_output=True, check=False, timeout=60)
+                return None
+        scheme = str(generic_config.get('scheme', addon_type.lower()))
+        connection_url = f"{scheme}://{alias_name}:{port}/"
+        self._ensure_cli_aliases(container_name, addon)
+        self._seed_cli_files(container_name, addon)
+        self._connect_addon_networks(container_name, addon, public_domain=public_domain)
+        try:
+            addon.connection_url = connection_url
+            addon.save(update_fields=['connection_url', 'updated_at'])
+        except Exception as exc:
+            logger.debug("CLI URL persist skipped: %s", exc)
+        return existing_cid, connection_url
+
+    def _ensure_cli_aliases(self, container_name: str, addon) -> None:
+        """Attach every ACTIVE CLI sibling alias to the shared container."""
+        try:
+            from apps.addons.services import cli_addons as _cli
+            wanted = _cli.sibling_aliases(addon)
+            if not wanted:
+                return
+            networks = [self.network_name]
+            try:
+                from apps.deployments.models.network_scope import ScopedNetwork as _Net
+                project = getattr(getattr(addon, 'service', None), 'project', None)
+                if project:
+                    scoped = _Net.resolve_network_name(project)
+                    if scoped and scoped != self.network_name:
+                        networks.append(scoped)
+            except Exception:
+                pass
+            for network in networks:
+                try:
+                    proc = subprocess.run(
+                        ['docker', 'inspect', '-f',
+                         '{{range $k,$v := .NetworkSettings.Networks}}'
+                         '{{if eq $k "' + network + '"}}{{json $v.Aliases}}{{end}}{{end}}',
+                         container_name],
+                        capture_output=True, text=True, check=False, timeout=30,
+                    )
+                    import json
+                    current = json.loads((proc.stdout or '').strip() or '[]') or []
+                except Exception:
+                    current = []
+                missing = [a for a in wanted if a not in current]
+                if not missing:
+                    continue
+                try:
+                    _np = subprocess.run(
+                        ['docker', 'inspect', '-f',
+                         '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}',
+                         container_name],
+                        capture_output=True, text=True, check=False, timeout=30,
+                    )
+                    attached = network in (_np.stdout or '').split()
+                except Exception:
+                    attached = False
+                if attached:
+                    # Already attached: reconnect carrying the full set.
+                    kept = list(dict.fromkeys([*current, *missing]))
+                    subprocess.run(['docker', 'network', 'disconnect', network, container_name],
+                                   capture_output=True, check=False, timeout=30)
+                    cmd = ['docker', 'network', 'connect']
+                    for entry in kept:
+                        cmd += ['--alias', entry]
+                    cmd += [network, container_name]
+                    subprocess.run(cmd, capture_output=True, check=False, timeout=30)
+                else:
+                    cmd = ['docker', 'network', 'connect']
+                    for entry in missing:
+                        cmd += ['--alias', entry]
+                    cmd += [network, container_name]
+                    subprocess.run(cmd, capture_output=True, check=False, timeout=30)
+        except Exception as exc:
+            logger.warning("CLI alias ensure skipped for %s: %s", container_name, exc)
+
+    def _seed_cli_files(self, container_name: str, addon) -> None:
+        """Best-effort: write CLI config files into a fresh container."""
+        try:
+            from apps.addons.services import cli_addons as _cli
+            if not _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+                return
+            _cli.push_cli_files(container_name, getattr(addon, 'addon_type', ''),
+                                _cli.read_stored_config(addon))
+        except Exception as exc:
+            logger.warning("CLI config seeding skipped for %s: %s", container_name, exc)
 
     def _generate_kraft_cluster_id(self) -> str:
         """Generate a valid 22-char KRaft cluster id."""
@@ -2864,7 +3098,7 @@ metrics = false
         """
         addon_type = addon.addon_type
         service_name = addon.service.name
-        container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"
+        container_name = addon_container_name(addon)
         alias_name = str(getattr(addon, 'name', '') or f"{addon_type.lower()}-{service_name}").strip()
 
         existing_url = str(getattr(addon, 'connection_url', '') or '').strip()
@@ -2964,7 +3198,7 @@ metrics = false
         import os
         from datetime import datetime
 
-        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        container_name = addon_container_name(addon)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         from django.conf import settings
         backup_root = os.path.join(settings.BASE_DIR, "backups", "addons")
@@ -3076,7 +3310,7 @@ metrics = false
         """
         Restore a backup to the addon database.
         """
-        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        container_name = addon_container_name(addon)
         validated_backup_path = self._validate_backup_path(backup_path)
 
         try:
@@ -3164,4 +3398,12 @@ metrics = false
             raise e
 
 # Singleton instance
+try:
+    from apps.addons.services import cli_addons as _cli_addons_mod
+    for _cli_type in sorted(_cli_addons_mod.CLI_ADDON_TYPES):
+        AddonProvisioner.GENERIC_ADDONS_CONFIG.setdefault(
+            _cli_type, _cli_addons_mod.generic_config(_cli_type))
+except Exception as _cli_reg_exc:
+    logger.debug("CLI addon registration skipped: %s", _cli_reg_exc)
+
 addon_provisioner = AddonProvisioner()

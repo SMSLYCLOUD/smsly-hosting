@@ -72,6 +72,16 @@ class DeletionOrchestrator:
         """
         Deletes all runtime resources associated with an Addon.
         """
+        try:
+            from apps.addons.services import cli_addons as _cli
+            if _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+                # Shared per-service container: strip this addon's alias;
+                # remove the container + data volume only when no ACTIVE
+                # CLI sibling remains.
+                return _cli.delete_shared_resources(
+                    addon, self._safe_remove_container)
+        except Exception as exc:
+            logger.debug("CLI delete branch skipped: %s", exc)
         if (getattr(addon, 'addon_type', '') == 'POSTGRES'
                 and getattr(addon, 'provision_mode', '') == 'shared'):
             # Logical database on the shared server: DROP role+db. There

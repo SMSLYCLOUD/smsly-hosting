@@ -13,6 +13,8 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 import { PageHeader } from "@/components/ui/page-header";
 import { DbExplorer } from "@/components/addons/DbExplorer";
 import { AddonLogsViewer } from "@/components/addons/AddonLogsViewer";
+import CliConfigCard from "@/components/addons/CliConfigCard";
+import { CLI_ADDON_TYPES } from "@/lib/addonRegistry";
 import { useToast } from "@/components/ui/use-toast";
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { DASHBOARD_ADDONS } from "@/lib/addonConstants";
@@ -204,6 +206,9 @@ export default function AddonDetailsPage() {
                 </div>
 
                 {/* Tabs for Tools */}
+                {CLI_ADDON_TYPES.includes(addon.addon_type) && (
+                    <CliConfigCard addonId={id as string} addonType={addon.addon_type} />
+                )}
                 <Tabs defaultValue="explorer" className="w-full">
                     <TabsList>
                         <TabsTrigger value="explorer" disabled={addon.addon_type !== 'POSTGRES'}>DB Explorer</TabsTrigger>
