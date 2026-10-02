@@ -799,6 +799,18 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             # bridge and smsly-platform-net (AGENTS.md #15 — docker-py
             # 7.x requires network= + plain-dict networking_config).
             networking_config = None
+            try:
+                client.networks.get(network)
+            except Exception:
+                # Project-scoped bridge names are per-host (master's
+                # smsly-net-<id> never exists on the node) — fall back
+                # to the always-present smsly-net (2026-10-02: deploys
+                # died with "network not found" on every transfer).
+                logger.warning(
+                    "Transfer incoming/deploy: network %s missing on target, "
+                    "falling back to smsly-net", network,
+                )
+                network = 'smsly-net'
             if dual_home:
                 try:
                     from apps.deployments.services.network_scope import ensure_platform_bridge
