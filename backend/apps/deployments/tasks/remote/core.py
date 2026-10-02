@@ -476,7 +476,12 @@ def _poll_remote_deployment(
 
                         deployment.status = Deployment.Status.ACTIVE
                         deployment.finished_at = timezone.now()
-                        deployment.save(update_fields=['status', 'finished_at', 'updated_at', 'verified_target_type', 'verified_host_ip', 'verified_runtime_id', 'verified_at'])
+                        # Truthful routing: the container runs on the node, so
+                        # the row must say so — _resolve_effective_server (node
+                        # Caddy blocks, serializers, health) reads these two.
+                        deployment.target_server = orchestrator.server
+                        deployment.target_is_local = False
+                        deployment.save(update_fields=['status', 'finished_at', 'updated_at', 'verified_target_type', 'verified_host_ip', 'verified_runtime_id', 'verified_at', 'target_server', 'target_is_local'])
 
                         try:
                             node_logs = orchestrator.get_container_logs(remote_container_id or service.name, tail=200)
