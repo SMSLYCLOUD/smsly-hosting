@@ -10,6 +10,11 @@ services:
     environment:
       CONTAINERS: 1
       IMAGES: 1
+      # AUTH must stay enabled: backend docker login (registry pulls on
+      # nodes) goes through this proxy. With AUTH=0 every login 403s,
+      # pulls lose their credentials, and node deployments fail with
+      # "no basic auth credentials" (2026-10-02: all node pulls died).
+      AUTH: 1
       NETWORKS: 1
       VOLUMES: 1
       POST: 1
