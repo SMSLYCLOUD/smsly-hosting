@@ -203,6 +203,30 @@ class LogsActionsMixin:
 
         if target_type in ("remote", "lite_agent") and active_server:
             if not deployment.remote_deployment_id:
+                # Transferred services run on the node without a remote
+                # deployment row (backup-restore path). Fall back to direct
+                # container logs instead of failing closed.
+                try:
+                    from apps.deployments.services.remote_orchestrator import (
+                        RemoteOrchestrator,
+                    )
+                    ref = (
+                        (getattr(deployment, 'verified_runtime_id', '') or '').strip()
+                        or (getattr(service, 'active_runtime_id', '') or '').strip()
+                        or (deployment.container_id or '').strip()
+                        or service.name
+                    )
+                    node_data = RemoteOrchestrator(active_server).get_container_logs(ref, tail=tail)
+                    node_logs = (node_data or {}).get('logs', '') if node_data else ''
+                    if node_logs.strip():
+                        return Response({
+                            'id': str(deployment.id),
+                            'runtime_logs': node_logs,
+                            'source': 'remote_node_container',
+                            'message': '',
+                        })
+                except Exception as exc:
+                    logger.debug("Remote container-log fallback failed: %s", exc)
                 return Response({
                     'id': str(deployment.id),
                     'runtime_logs': '',

@@ -27,6 +27,17 @@ class ExecMixin:
             return self._parse_json_response(resp, "fetching remote container stats")
         return None
 
+    def get_container_networks(self, container_name: str) -> dict | None:
+        """Secrets-free network list for one node container (see node container_networks)."""
+        resp = self._request(
+            "GET",
+            f"/api/v1/node/containers/{quote(str(container_name), safe='')}/networks/",
+            timeout=15,
+        )
+        if resp is not None and resp.status_code == 200:
+            return self._parse_json_response(resp, "fetching remote container networks")
+        return None
+
     def get_node_storage_overview(self) -> dict | None:
         resp = self._request("GET", "/api/v1/node/storage-overview/", timeout=30)
         if resp is not None and resp.status_code == 200:

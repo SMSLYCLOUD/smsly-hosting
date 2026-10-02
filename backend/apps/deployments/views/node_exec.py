@@ -147,6 +147,48 @@ class NodeExecViewSet(viewsets.ViewSet):
             logger.debug("Node container logs failed for %s: %s", name, exc)
             return Response({"logs": "", "status": "error", "message": _scrub_error(exc, 300)})
 
+    @action(detail=False, methods=["get"], url_path=r"containers/(?P<name>[^/]+)/networks")
+    def container_networks(self, request, name=None):
+        """Secrets-free network attachment list for one container.
+
+        Returns ONLY network names, IPs, gateways and aliases — never
+        env vars, mounts, or full inspect output (those carry secrets).
+        Used by master's internal-addresses card for node workloads.
+        """
+        if not name or not _CONTAINER_RE.match(name):
+            return Response({"error": "Invalid container name."}, status=status.HTTP_400_BAD_REQUEST)
+        ok, err = _verify_node_caller(request, container_name=name)
+        if not ok:
+            return err
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = _resolve_container(client, name)
+            if container is None:
+                return Response({"networks": [], "status": "not-found", "message": f"Container {name} not found on this node."})
+            try:
+                container.reload()
+            except Exception:
+                pass
+            nets = ((container.attrs.get("NetworkSettings") or {}).get("Networks")) or {}
+            out = []
+            for net_name, cfg in nets.items():
+                cfg = cfg or {}
+                out.append({
+                    "network": net_name,
+                    "ip": cfg.get("IPAddress", ""),
+                    "gateway": cfg.get("Gateway", ""),
+                    "aliases": list(cfg.get("Aliases") or []),
+                })
+            return Response({
+                "networks": out,
+                "status": getattr(container, "status", "unknown"),
+                "container_id": getattr(container, "short_id", ""),
+            })
+        except Exception as exc:
+            logger.debug("Node container networks failed for %s: %s", name, exc)
+            return Response({"networks": [], "status": "error", "message": _scrub_error(exc, 300)})
+
     @action(detail=False, methods=["get"], url_path=r"containers/(?P<name>[^/]+)/stats")
     def container_stats(self, request, name=None):
         if not name or not _CONTAINER_RE.match(name):

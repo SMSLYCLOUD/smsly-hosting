@@ -896,6 +896,20 @@ class Service(TimeStampedModel):
         the container is on it; that's the recommended value for
         service-to-service env vars.
         """
+        # Remote workloads: the container lives on the node, so local
+        # Docker inspect finds nothing. Ask the node for its (secrets-free)
+        # network list instead; fall through to local on any failure.
+        try:
+            from apps.deployments.utils.target import resolve_active_execution_target
+            target = resolve_active_execution_target(self)
+            if target.get("target_type") in ("remote", "lite_agent") and target.get("server_obj") is not None:
+                remote_addrs = self._generate_remote_internal_addresses(target["server_obj"])
+                if remote_addrs:
+                    return remote_addrs
+        except ValueError:
+            pass
+        except Exception:
+            pass
         try:
             import docker as docker_lib
             from apps.cloud.docker_client import get_docker_client
@@ -943,6 +957,47 @@ class Service(TimeStampedModel):
                     'port': port,
                     'gateway': net_data.get('Gateway') or '',
                     'aliases': list(net_data.get('Aliases') or []),
+                })
+            return out
+        except Exception:
+            return []
+
+    def _generate_remote_internal_addresses(self, server) -> list[dict]:
+        """Node-side internal addresses via the secrets-free networks API."""
+        try:
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            ref = (
+                (getattr(self, 'active_runtime_id', '') or '').strip()
+                or (self.name or '').strip()
+            )
+            data = RemoteOrchestrator(server).get_container_networks(ref)
+            nets = (data or {}).get('networks') or []
+            port = self.internal_port or 8000
+
+            def _net_sort_key(item):
+                name = item.get('network', '')
+                if name.startswith('smsly-net-') and name != 'smsly-net-a5f086aa':
+                    return (0, name)
+                if name == 'smsly-platform-net':
+                    return (1, name)
+                if name == 'smsly-net-a5f086aa':
+                    return (2, name)
+                if name == 'smsly-net':
+                    return (3, name)
+                return (4, name)
+
+            out = []
+            for entry in sorted(nets, key=_net_sort_key):
+                ip = (entry.get('ip') or '').strip()
+                if not ip:
+                    continue
+                out.append({
+                    'network': entry.get('network', ''),
+                    'ip': ip,
+                    'port': port,
+                    'gateway': entry.get('gateway') or '',
+                    'aliases': list(entry.get('aliases') or []),
+                    'node': getattr(server, 'name', ''),
                 })
             return out
         except Exception:
