@@ -23,6 +23,10 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
   const [maxReplicas, setMaxReplicas] = useState(service.max_replicas || 1);
   const [cpuTarget, setCpuTarget] = useState(service.autoscale_cpu_target || 80);
   const [vpaEnabled, setVpaEnabled] = useState(service.vpa_enabled || false);
+  const [edgeJwt, setEdgeJwt] = useState(service.edge_jwt_required || false);
+  const [sablier, setSablier] = useState(service.sablier_enabled || false);
+  const [sablierSession, setSablierSession] = useState(service.sablier_session || '10m');
+  const [wafOptOut, setWafOptOut] = useState(service.waf_opt_out || false);
   const [saving, setSaving] = useState(false);
   const [replicas, setReplicas] = useState<Replica[]>([]);
   const [loadingReplicas, setLoadingReplicas] = useState(false);
@@ -48,11 +52,12 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
     setSpawning(true);
     try {
       await scalingApi.spawnReplica(service.id, 'horizontal');
-      toast({ title: 'Replica spawned', description: 'A new replica is being created.' });
+      toast({ title: 'Replica spawned', description: 'A new replica is being created on this service\u2019s home server.' });
       fetchReplicas();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      toast({ title: 'Failed to spawn replica', description: 'Could not spawn replica.', variant: 'destructive' });
+      const msg = err?.response?.data?.error || err?.response?.data?.hint || 'Could not spawn replica.';
+      toast({ title: 'Failed to spawn replica', description: String(msg), variant: 'destructive' });
     } finally {
       setSpawning(false);
     }
@@ -84,6 +89,10 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         max_replicas: maxReplicas,
         autoscale_cpu_target: cpuTarget,
         vpa_enabled: vpaEnabled,
+        edge_jwt_required: edgeJwt,
+        sablier_enabled: sablier,
+        sablier_session: sablierSession,
+        waf_opt_out: wafOptOut,
       });
       toast({
         title: "Scaling settings updated",
@@ -171,6 +180,11 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
               <CardDescription>
                 Manage running replica containers for this service.
               </CardDescription>
+              <p className="text-[11px] text-muted-foreground mt-1 max-w-[520px]">
+                Spawn Replica scales horizontally on this service&rsquo;s home server
+                {service.node_url ? ' (its node)' : ' (the master)'} — same-server replicas, no extra hop.
+                To place a replica on a different server, use vertical scaling from the Autoscaler page.
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={fetchReplicas} disabled={loadingReplicas}>
@@ -321,6 +335,46 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
               Apply Now
             </Button>
             <Switch checked={vpaEnabled} onCheckedChange={setVpaEnabled} />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Edge: scale-to-zero, JWT gate, WAF */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Edge &amp; Scale-to-Zero</CardTitle>
+          <CardDescription>
+            Sablier sleeps idle containers and wakes them on request. Edge JWT gates the service at Traefik/Caddy. Coraza WAF is on unless opted out.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="text-base">Scale to zero (Sablier)</Label>
+              <p className="text-sm text-muted-foreground">Sleep when idle; wake on first request.</p>
+            </div>
+            <Switch checked={sablier} onCheckedChange={setSablier} />
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="text-base">Idle session</Label>
+              <p className="text-sm text-muted-foreground">How long to stay awake after last request (e.g. 10m, 1h).</p>
+            </div>
+            <input value={sablierSession} onChange={(e) => setSablierSession(e.target.value)} className="w-24 px-2 py-1 text-sm rounded border border-border bg-background font-mono" />
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="text-base">Require edge JWT</Label>
+              <p className="text-sm text-muted-foreground">401 at the edge without a valid edge token.</p>
+            </div>
+            <Switch checked={edgeJwt} onCheckedChange={setEdgeJwt} />
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="text-base">Disable Coraza WAF</Label>
+              <p className="text-sm text-muted-foreground">Opt out of OWASP CRS inspection for this service.</p>
+            </div>
+            <Switch checked={wafOptOut} onCheckedChange={setWafOptOut} />
           </div>
         </CardContent>
       </Card>

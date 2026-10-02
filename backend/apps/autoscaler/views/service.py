@@ -89,9 +89,12 @@ class ScalingViewSet(viewsets.GenericViewSet):
         """Manually spawn a replica.
 
         Query params:
-            mode=horizontal  — local only (same server, no SSH needed)
-            mode=vertical    — remote only (different server, requires SSH)
-            (default)        — local first, then remote fallback
+            mode=horizontal  — home server only: the master when the
+                service lives on the master, or the service's own node
+                when it lives on a node (same-server scaling, no extra
+                hop). No SSH needed for master; node SSH for node homes.
+            mode=vertical    — remote only (a different server, requires SSH)
+            (default)        — home first, then remote fallback
         """
         if request.user.is_superuser:
             service = get_object_or_404(Service, id=pk)
@@ -113,25 +116,62 @@ class ScalingViewSet(viewsets.GenericViewSet):
 
         spawner = SpawningService()
 
-        # --- Horizontal: local only ---
-        if mode != 'vertical':
-            replica = ServiceReplica.objects.create(
-                service=service, node=None, status='SPAWNING',
-                spawn_reason='Manual spawn via API (horizontal)',
+        # Home server for horizontal scaling: the service's effective
+        # server (node when the service lives on a node, else local).
+        home_server = None
+        try:
+            from apps.deployments.services.caddy_manager.config_generation import (
+                _resolve_effective_server,
             )
-            try:
-                spawner.spawn_local(service, replica)
-                return Response(ServiceReplicaSerializer(replica).data)
-            except Exception as exc:
-                logger.warning("Local spawn failed for %s: %s", service.name, exc)
-                replica.status = 'DESTROYED'
-                replica.save(update_fields=['status'])
-                if mode == 'horizontal':
-                    return Response({
-                        'error': f'Local spawn failed: {exc}',
-                        'hint': 'Ensure Docker is running and the service has a docker_image set.',
-                    }, status=500)
-                # else: fall through to remote
+            home_server = _resolve_effective_server(service)
+        except Exception:
+            home_server = getattr(service, 'server', None)
+        home_is_node = bool(
+            home_server is not None and not getattr(home_server, 'is_primary', True)
+        )
+
+        # --- Horizontal: home server only ---
+        if mode != 'vertical':
+            if home_is_node:
+                replica = ServiceReplica.objects.create(
+                    service=service, node=home_server, status='SPAWNING',
+                    spawn_reason='Manual spawn via API (horizontal, on home node)',
+                )
+                try:
+                    spawner.spawn(service, home_server, replica)
+                    return Response(ServiceReplicaSerializer(replica).data)
+                except Exception as exc:
+                    logger.warning("Node-home spawn failed for %s on %s: %s", service.name, home_server.name, exc)
+                    replica.status = 'DESTROYED'
+                    replica.save(update_fields=['status'])
+                    if mode == 'horizontal':
+                        return Response({
+                            'error': f'Node spawn failed on {home_server.name}: {exc}',
+                            'hint': 'The replica spawns on the service\u2019s own node. Check node capacity and SSH health.',
+                        }, status=500)
+                    # else: fall through to remote
+                finally:
+                    spawner.cleanup()
+            else:
+                replica = ServiceReplica.objects.create(
+                    service=service, node=None, status='SPAWNING',
+                    spawn_reason='Manual spawn via API (horizontal)',
+                )
+                try:
+                    spawner.spawn_local(service, replica)
+                    return Response(ServiceReplicaSerializer(replica).data)
+                except Exception as exc:
+                    logger.warning("Local spawn failed for %s: %s", service.name, exc)
+                    replica.status = 'DESTROYED'
+                    replica.save(update_fields=['status'])
+                    if mode == 'horizontal':
+                        return Response({
+                            'error': f'Local spawn failed: {exc}',
+                            'hint': 'Ensure Docker is running and the service has a docker_image set.',
+                        }, status=500)
+                    # else: fall through to remote
+                finally:
+                    spawner.cleanup()
 
         # --- Vertical: remote nodes ---
         allow_control_plane = getattr(
