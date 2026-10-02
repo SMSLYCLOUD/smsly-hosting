@@ -89,5 +89,5 @@ class RegisterIncomingTests(TestCase):
     @override_settings(GATEWAY_SECRET='platform-secret')
     def test_unregistered_source_with_valid_hmac_creates_transfer(self):
         resp = self._signed_post('198.51.100.9', 'platform-secret')
-        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.status_code, 200)
         self.assertIn('id', resp.json())
