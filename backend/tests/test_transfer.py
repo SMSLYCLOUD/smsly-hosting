@@ -208,3 +208,43 @@ class SourceImageResolveTests(TestCase):
         with patch('apps.cloud.docker_client.get_docker_client', return_value=client):
             resolved = engine._resolve_source_registry_image('backup/img-svc-3:deadbeef')
         self.assertEqual(resolved, 'backup/img-svc-3:deadbeef')
+
+
+class ValidateTransferImageTests(TestCase):
+    """_validate_transfer_image must accept every platform-registry address.
+
+    Regression 2026-10-02: the regex only allowed dotted hostnames, so
+    mesh-IP refs (10.100.0.1:5000/...) and short-host refs
+    (registry:5000/...) failed validation and incoming/pull-image 400d
+    every transfer at the image step.
+    """
+
+    def test_platform_registry_forms_accepted(self):
+        from unittest.mock import patch as mock_patch
+        import os
+        from apps.core.views.transfer import _validate_transfer_image
+        for ref in (
+            'registry:5000/smsly/app:tag',
+            '127.0.0.1:5000/smsly/app:tag',
+            'localhost:5000/smsly/app:tag',
+            'nginx:latest',
+            'smsly/app:abc123',
+        ):
+            with self.subTest(ref=ref):
+                self.assertTrue(_validate_transfer_image(ref))
+        # Mesh-IP refs need the node-routable URL resolvable (env on a
+        # real node; MASTER_MESH_IP here stands in for it).
+        with mock_patch.dict(os.environ, {'MASTER_MESH_IP': '10.100.0.1'}):
+            self.assertTrue(_validate_transfer_image(
+                '10.100.0.1:5000/proj-9063c108/smsly-backoffice-web:a79fa9d'))
+
+    def test_dangerous_refs_rejected(self):
+        from apps.core.views.transfer import _validate_transfer_image
+        for ref in (
+            '',
+            'nginx; rm -rf /',
+            'img|cat /etc/passwd',
+            'a b/c:d',
+        ):
+            with self.subTest(ref=ref):
+                self.assertFalse(_validate_transfer_image(ref))

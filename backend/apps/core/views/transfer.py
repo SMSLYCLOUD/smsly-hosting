@@ -42,7 +42,11 @@ ACTIVE_TRANSFER_STATUSES = [
 # attacker from specifying an arbitrary image that could pull malicious code.
 _VALID_IMAGE_RE = re.compile(
     r'^('
-    r'(?:[a-zA-Z0-9._-]+\.)+[a-zA-Z]{2,}'  # registry host (e.g. registry.example.com)
+    r'(?:'
+    r'(?:[a-zA-Z0-9._-]+\.)+[a-zA-Z]{2,}'  # dotted registry hostname
+    r'|\d{1,3}(?:\.\d{1,3}){3}'              # IPv4 literal (mesh/public registries)
+    r'|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'  # single-label host (registry, localhost)
+    r')'
     r'(?::\d+)?'                              # optional port
     r'/)?'                                    # slash (group optional for bare images)
     r'[a-zA-Z0-9][a-zA-Z0-9._/-]*'           # image name
