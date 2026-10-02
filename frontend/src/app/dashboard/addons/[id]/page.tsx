@@ -14,6 +14,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { DbExplorer } from "@/components/addons/DbExplorer";
 import { AddonLogsViewer } from "@/components/addons/AddonLogsViewer";
 import CliConfigCard from "@/components/addons/CliConfigCard";
+import AddonConsole from "@/components/addons/AddonConsole";
 import { CLI_ADDON_TYPES } from "@/lib/addonRegistry";
 import { useToast } from "@/components/ui/use-toast";
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -214,6 +215,7 @@ export default function AddonDetailsPage() {
                         <TabsTrigger value="explorer" disabled={addon.addon_type !== 'POSTGRES'}>DB Explorer</TabsTrigger>
                         <TabsTrigger value="logs">Logs</TabsTrigger>
                         <TabsTrigger value="backups">Backups</TabsTrigger>
+                        <TabsTrigger value="console">Console</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="explorer">
@@ -247,6 +249,10 @@ export default function AddonDetailsPage() {
                             Managed backups are configured automatically. <br/>
                             Point-in-time recovery coming soon.
                         </div>
+                    </TabsContent>
+
+                    <TabsContent value="console">
+                        <AddonConsole addonId={id as string} disabled={addon.status !== 'ACTIVE'} />
                     </TabsContent>
                 </Tabs>
             </div>

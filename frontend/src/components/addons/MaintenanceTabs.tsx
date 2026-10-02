@@ -15,15 +15,16 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   BarChart3, Database, Play, Loader2, Trash2, RotateCcw, Eye, EyeOff, Copy, Check,
-  Clock, HardDrive, Wifi, Activity, Server, Table2, Zap, Shield,
+  Clock, HardDrive, Wifi, Activity, Server, Table2, Zap, Shield, TerminalSquare,
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import AddonConsole from '@/components/addons/AddonConsole';
 
 interface MaintenanceTabsProps {
   addonId: string;
 }
 
-type TabId = 'overview' | 'tables' | 'query' | 'vacuum' | 'credentials';
+type TabId = 'overview' | 'tables' | 'query' | 'vacuum' | 'credentials' | 'console';
 
 export function MaintenanceTabs({ addonId }: MaintenanceTabsProps) {
   const { toast } = useToast();
@@ -174,6 +175,9 @@ export function MaintenanceTabs({ addonId }: MaintenanceTabsProps) {
           </TabsTrigger>
           <TabsTrigger value="credentials" className="flex items-center gap-2">
             <Shield size={14} /> Credentials
+          </TabsTrigger>
+          <TabsTrigger value="console" className="flex items-center gap-2">
+            <TerminalSquare size={14} /> Console
           </TabsTrigger>
         </TabsList>
 
@@ -440,6 +444,10 @@ export function MaintenanceTabs({ addonId }: MaintenanceTabsProps) {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+        {/* ── Console Tab ── */}
+        <TabsContent value="console" className="space-y-4">
+          <AddonConsole addonId={addonId} />
         </TabsContent>
       </Tabs>
     </div>
