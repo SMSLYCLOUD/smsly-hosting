@@ -205,38 +205,28 @@ class AddonTerminalConsumer(TerminalConsumer):
                     if settings.DEBUG:
                         logger.debug("task teardown issue: %s", e)
 
-    def _find_container(self):
-        from apps.cloud.docker_client import get_docker_exec_client
-        from apps.deployments.models.addons import Addon
+    async def _find_container(self):
+        # Must stay awaitable — the base _async_setup / _read_output
+        # paths ``await`` it. The heavy lifting runs in a thread via
+        # database_sync_to_async (ORM + blocking docker calls).
+        return await _find_addon_container(self.addon_id)
+
+    async def _audit_command(self, command: str) -> None:
+        """Persist one executed command without blocking the input path."""
         try:
-            addon = Addon.objects.select_related('service').get(id=self.addon_id)
-            if str(getattr(addon, 'status', '')) in ('DELETED', 'DELETION_PENDING', 'DELETION_FAILED'):
-                logger.warning("Addon terminal refused: addon %s is %s",
-                               self.addon_id, addon.status)
-                return None
-            try:
-                from apps.addons.services.addon_provisioner import addon_container_name
-                name = addon_container_name(addon)
-            except Exception:
-                name = (f"smsly-addon-{str(getattr(addon, 'addon_type', '')).lower()}-"
-                        f"{getattr(addon, 'id', '')}")
-            client = get_docker_exec_client()
-            try:
-                container = client.containers.get(name)
-                container.reload()
-                if getattr(container, 'status', '') == 'running':
-                    return container.id
-                logger.warning("Addon terminal refused: container %s is %s",
-                               name, getattr(container, 'status', 'unknown'))
-                return None
-            except Exception:
-                logger.warning("Addon terminal: container %s not found", name)
-                return None
-        except Addon.DoesNotExist:
-            return None
-        except Exception as e:
-            logger.error("Error finding addon container: %s", e)
-            return None
+            from asgiref.sync import sync_to_async
+            from apps.deployments.utils import log_event
+            await sync_to_async(log_event)(
+                action="ADDON_CONSOLE_COMMAND_EXECUTED",
+                target=f"Addon: {self.addon_id}",
+                actor=self.user,
+                metadata={
+                    "command": command,
+                    "container_id": self.container_id,
+                },
+            )
+        except Exception as exc:
+            logger.debug("Addon console audit write failed: %s", exc)
 
     async def _verify_ownership(self):
         from apps.deployments.models.addons import Addon
@@ -254,6 +244,42 @@ class AddonTerminalConsumer(TerminalConsumer):
             return False
         except Exception:
             return False
+
+
+@database_sync_to_async
+def _find_addon_container(addon_id):
+    """Resolve a RUNNING backing container id for an addon (None if refused)."""
+    from apps.cloud.docker_client import get_docker_exec_client
+    from apps.deployments.models.addons import Addon
+    try:
+        addon = Addon.objects.select_related('service').get(id=addon_id)
+        if str(getattr(addon, 'status', '')) in ('DELETED', 'DELETION_PENDING', 'DELETION_FAILED'):
+            logger.warning("Addon terminal refused: addon %s is %s",
+                           addon_id, addon.status)
+            return None
+        try:
+            from apps.addons.services.addon_provisioner import addon_container_name
+            name = addon_container_name(addon)
+        except Exception:
+            name = (f"smsly-addon-{str(getattr(addon, 'addon_type', '')).lower()}-"
+                    f"{getattr(addon, 'id', '')}")
+        client = get_docker_exec_client()
+        try:
+            container = client.containers.get(name)
+            container.reload()
+            if getattr(container, 'status', '') == 'running':
+                return container.id
+            logger.warning("Addon terminal refused: container %s is %s",
+                           name, getattr(container, 'status', 'unknown'))
+            return None
+        except Exception:
+            logger.warning("Addon terminal: container %s not found", name)
+            return None
+    except Addon.DoesNotExist:
+        return None
+    except Exception as e:
+        logger.error("Error finding addon container: %s", e)
+        return None
 
 
 @database_sync_to_async

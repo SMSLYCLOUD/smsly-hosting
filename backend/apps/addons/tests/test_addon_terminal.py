@@ -64,7 +64,10 @@ class OwnershipTests(TransactionTestCase):
         self.assertTrue(_run(consumer._verify_ownership()))
 
 
-class FindContainerTests(TestCase):
+class FindContainerTests(TransactionTestCase):
+    # TransactionTestCase: _find_container is awaited (runs ORM in a
+    # worker thread), which deadlocks against TestCase's outer atomic
+    # block on sqlite.
     def setUp(self):
         self.user = User.objects.create_user(username="addonfind", password="x")
         self.service = Service.objects.create(name="addonfindsvc", owner=self.user)
@@ -95,7 +98,7 @@ class FindContainerTests(TestCase):
     def test_deleted_addon_refused(self):
         addon = self._addon('OPENCODE', 'opencode-x', status=Addon.Status.DELETED)
         with mock.patch('apps.cloud.docker_client.get_docker_exec_client') as _:
-            self.assertIsNone(self._consumer(addon)._find_container())
+            self.assertIsNone(_run(self._consumer(addon)._find_container()))
 
     def test_cli_uses_shared_container_name(self):
         addon = self._addon('OPENCODE', 'opencode-x')
@@ -104,13 +107,13 @@ class FindContainerTests(TestCase):
         self.assertIn(str(self.service.id), shared)
         with mock.patch('apps.cloud.docker_client.get_docker_exec_client',
                         return_value=self._client({shared: self._running()})):
-            self.assertEqual(self._consumer(addon)._find_container(), 'cid-live')
+            self.assertEqual(_run(self._consumer(addon)._find_container()), 'cid-live')
 
     def test_missing_container_returns_none(self):
         addon = self._addon('REDIS', 'redis-x')
         with mock.patch('apps.cloud.docker_client.get_docker_exec_client',
                         return_value=self._client({})):
-            self.assertIsNone(self._consumer(addon)._find_container())
+            self.assertIsNone(_run(self._consumer(addon)._find_container()))
 
     def test_stopped_container_refused(self):
         addon = self._addon('REDIS', 'redis-x')
@@ -120,4 +123,11 @@ class FindContainerTests(TestCase):
         cname = f"smsly-addon-redis-{addon.id}"
         with mock.patch('apps.cloud.docker_client.get_docker_exec_client',
                         return_value=self._client({cname: ctr})):
-            self.assertIsNone(self._consumer(addon)._find_container())
+            self.assertIsNone(_run(self._consumer(addon)._find_container()))
+
+    def test_find_container_is_awaitable(self):
+        # Regression: the base paths ``await`` this method — a sync
+        # override breaks every console connect with TypeError.
+        import inspect
+        self.assertTrue(inspect.iscoroutinefunction(
+            AddonTerminalConsumer._find_container))
