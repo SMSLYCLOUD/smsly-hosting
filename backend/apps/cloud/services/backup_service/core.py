@@ -53,6 +53,100 @@ from .cloud import _delete_backup_cloud_object, _download_backup_from_cloud, _up
 logger = logging.getLogger(__name__)
 
 
+def build_remote_restore_script(service_name: str, remote_tmp: str) -> str:
+    """Render the node-side restore shell script (pure function, unit-tested).
+
+    Loads image, volumes (via volume_manifest.json), the service DB dump
+    and per-addon dumps (via addon_manifest.json, fail-closed: a missing
+    addon container or failed psql fails the restore, never pretends).
+    """
+    import shlex as _shlex
+    svc = _shlex.quote(service_name)
+    return f"""set -e
+cd {remote_tmp}
+tar -xzf backup_archive.tar.gz
+
+# Stop service
+docker stop {svc} 2>/dev/null || true
+
+# Load image if present
+if [ -f image.tar ]; then
+    docker load -i image.tar
+fi
+
+# Restore volumes
+if [ -f volume_manifest.json ]; then
+    for vol_file in vol_*.tar.gz; do
+        [ -f "$vol_file" ] || continue
+        vol_name=$(grep -F '"filename":"'"$vol_file"'"' volume_manifest.json | sed 's/.*"volume":"\\([^"]*\\)".*/\\1/' | head -n 1)
+        if [ -z "$vol_name" ]; then
+            echo "WARNING: no manifest entry for $vol_file, skipping"
+            continue
+        fi
+        docker volume create "$vol_name" 2>/dev/null || true
+        docker run --rm -v "$vol_name":/v -v "{remote_tmp}":/backup alpine:latest tar -xzf "/backup/$vol_file" -C /v
+    done
+else
+    for vol_file in vol_*.tar.gz; do
+        [ -f "$vol_file" ] || continue
+        vol_name=$(echo "$vol_file" | sed 's/^vol_//' | sed 's/\\.tar.gz$//' | tr '_' '/')
+        docker volume create "$vol_name" 2>/dev/null || true
+        docker run --rm -v "$vol_name":/v -v "{remote_tmp}":/backup alpine:latest tar -xzf "/backup/$vol_file" -C /v || true
+    done
+fi
+
+# Restore environment
+if [ -f env_vars.txt ]; then
+    echo "Environment backup available at $remote_tmp/env_vars.txt"
+fi
+
+# Restore service database dump if present (copy alone is not a
+# restore — credentials come from the target container's own env).
+if [ -f db_dump.sql ]; then
+    docker cp db_dump.sql {svc}:/tmp/restore_dump.sql 2>/dev/null || true
+    PG_USER=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {svc} 2>/dev/null | grep '^POSTGRES_USER=' | cut -d= -f2-)
+    PG_DB=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {svc} 2>/dev/null | grep '^POSTGRES_DB=' | cut -d= -f2-)
+    if [ -n "$PG_USER" ] && [ -n "$PG_DB" ]; then
+        docker exec {svc} psql -U "$PG_USER" -d "$PG_DB" -f /tmp/restore_dump.sql
+    else
+        echo "WARNING: db_dump.sql copied to {svc}:/tmp/restore_dump.sql but no POSTGRES_USER/POSTGRES_DB in container env — load it manually."
+    fi
+fi
+
+# Restore addon database dumps via the manifest (fail-closed: missing
+# container or failed psql fails the whole restore under set -e).
+if [ -f addon_manifest.json ]; then
+    for addon_file in addon_*.sql; do
+        [ -f "$addon_file" ] || continue
+        addon_ctr=$(grep -F '"filename":"'"$addon_file"'"' addon_manifest.json | sed 's/.*"container":"\\([^"]*\\)".*/\\1/' | head -n 1)
+        if [ -z "$addon_ctr" ]; then
+            echo "WARNING: no manifest entry for $addon_file, skipping"
+            continue
+        fi
+        if ! docker inspect "$addon_ctr" >/dev/null 2>&1; then
+            echo "ERROR: addon container $addon_ctr for $addon_file is missing — cannot restore"
+            exit 1
+        fi
+        docker cp "$addon_file" "$addon_ctr":/tmp/restore_addon_dump.sql
+        _A_USER=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' "$addon_ctr" 2>/dev/null | grep '^POSTGRES_USER=' | cut -d= -f2-)
+        _A_DB=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' "$addon_ctr" 2>/dev/null | grep '^POSTGRES_DB=' | cut -d= -f2-)
+        if [ -z "$_A_USER" ] || [ -z "$_A_DB" ]; then
+            echo "ERROR: addon $addon_ctr has no POSTGRES_USER/POSTGRES_DB in container env — cannot restore $addon_file"
+            exit 1
+        fi
+        docker exec "$addon_ctr" psql -U "$_A_USER" -d "$_A_DB" -f /tmp/restore_addon_dump.sql
+        echo "addon restore ok: $addon_file"
+    done
+fi
+
+# Start service
+docker start {svc} 2>/dev/null || true
+
+# Cleanup
+rm -rf {remote_tmp}
+"""
+
+
 def _resolve_backup_target(service):
     """(is_remote, server_obj, via) for backup/restore routing.
 
@@ -82,6 +176,147 @@ def _resolve_backup_target(service):
     except Exception as exc:
         logger.debug("Server-FK fallback failed for %s: %s", service.name, exc)
     return False, None, "local"
+
+
+def _addon_dump_slug(addon_name: str) -> str:
+    import re as _re_mod
+    return _re_mod.sub(r'[^a-z0-9]+', '-', (addon_name or 'addon').lower()).strip('-') or 'db'
+
+
+def build_remote_backup_script(service_name: str, addons: list, mask_secrets: bool = True) -> str:
+    """Render the node-side backup shell script (pure function, unit-tested).
+
+    addons: [{name, container, type}]. mask_secrets=False only for
+    transfer backups (target node needs real values to hydrate).
+    Dump filenames follow the local convention (addon_<slug>_dump.sql)
+    so tarballs restore on either side.
+    """
+    import shlex as _shlex
+    mask_flag = '1' if mask_secrets else '0'
+    svc = _shlex.quote(service_name)
+    addon_blocks = []
+    manifest_entries = []
+    for addon in addons or []:
+        name = addon.get('name', '')
+        container = addon.get('container', '')
+        kind = (addon.get('type') or '').upper()
+        if not (name and container):
+            continue
+        slug = _addon_dump_slug(name)
+        if kind in ('POSTGRES', 'TIMESCALEDB'):
+            filename = f'addon_{slug}_dump.sql'
+            addon_blocks.append(f"""
+# Addon DB dump: {name}
+_ADDON_CTR={_shlex.quote(container)}
+if docker inspect "$_ADDON_CTR" >/dev/null 2>&1; then
+    _PG_USER=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' "$_ADDON_CTR" 2>/dev/null | grep '^POSTGRES_USER=' | cut -d= -f2-)
+    _PG_DB=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' "$_ADDON_CTR" 2>/dev/null | grep '^POSTGRES_DB=' | cut -d= -f2-)
+    _PG_PW=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' "$_ADDON_CTR" 2>/dev/null | grep '^POSTGRES_PASSWORD=' | cut -d= -f2-)
+    if [ -n "$_PG_USER" ] && [ -n "$_PG_DB" ] && [ -n "$_PG_PW" ]; then
+        if docker exec -e PGPASSWORD="$_PG_PW" "$_ADDON_CTR" pg_dump -U "$_PG_USER" -d "$_PG_DB" --clean --if-exists --no-owner --no-acl --lock-wait-timeout=5000 > "{filename}" 2>/dev/null; then
+            echo "addon dump ok: {name}"
+        else
+            echo "WARNING: addon dump failed for {name}"
+        fi
+    else
+        echo "WARNING: addon {name} has no postgres creds in container env — skipped"
+    fi
+else
+    echo "WARNING: addon container {name} missing on node — skipped"
+fi""")
+            manifest_entries.append(
+                f'{{"addon":"{name}","container":"{container}",'
+                f'"filename":"{filename}","type":"{kind}"}}')
+        elif kind in ('MYSQL', 'MARIADB'):
+            filename = f'addon_{slug}_dump.sql'
+            addon_blocks.append(f"""
+if docker inspect {_shlex.quote(container)} >/dev/null 2>&1; then
+    _MY_PW=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {_shlex.quote(container)} 2>/dev/null | grep -E '^MYSQL_(ROOT_)?PASSWORD=' | cut -d= -f2- | head -n 1)
+    docker exec -e MYSQL_PWD="$_MY_PW" {_shlex.quote(container)} mysqldump --all-databases -u root > "{filename}" 2>/dev/null && echo "addon dump ok: {name}" || echo "WARNING: addon dump failed for {name}"
+else
+    echo "WARNING: addon container {name} missing on node — skipped"
+fi""")
+            manifest_entries.append(
+                f'{{"addon":"{name}","container":"{container}",'
+                f'"filename":"{filename}","type":"{kind}"}}')
+        elif kind == 'REDIS':
+            filename = f'addon_{slug}_dump.rdb'
+            addon_blocks.append(f"""
+if docker inspect {_shlex.quote(container)} >/dev/null 2>&1; then
+    docker exec {_shlex.quote(container)} redis-cli SAVE >/dev/null 2>&1 || true
+    docker cp {_shlex.quote(container)}:/data/dump.rdb "{filename}" 2>/dev/null && echo "addon dump ok: {name}" || echo "WARNING: addon rdb copy failed for {name}"
+else
+    echo "WARNING: addon container {name} missing on node — skipped"
+fi""")
+            manifest_entries.append(
+                f'{{"addon":"{name}","container":"{container}",'
+                f'"filename":"{filename}","type":"{kind}"}}')
+    manifest_json = "[" + ",".join(manifest_entries) + "]"
+    addon_section = "\n".join(addon_blocks) if addon_blocks else 'echo "no addon DBs to dump"'
+    return f"""set -e
+BACKUP_DIR=/tmp/smsly_backup_$(date +%s)
+mkdir -p "$BACKUP_DIR"
+cd "$BACKUP_DIR"
+
+SERVICE_NAME={svc}
+
+# Dump env vars. Non-transfer backups mask ALL values (keys kept for
+# shape); transfer backups keep real values to hydrate the target.
+# (The old name-heuristic mask leaked e.g. DATABASE_URL while breaking
+# transfers that needed the secrets.)
+export MASK_SECRETS={mask_flag}
+docker inspect "$SERVICE_NAME" 2>/dev/null | python3 -c "
+import json,sys,os
+data = json.load(sys.stdin)
+env = data[0]['Config']['Env'] if data else []
+mask = os.environ.get('MASK_SECRETS','1') == '1'
+for e in env:
+    if '=' not in e:
+        continue
+    k, v = e.split('=', 1)
+    if mask:
+        v = '********'
+    print(f'{{k}}={{v}}')
+" > env_vars.txt 2>/dev/null || echo "env_vars_skipped"
+
+# Save image
+docker commit "$SERVICE_NAME" "backup_{svc}_img"
+docker save "backup_{svc}_img" -o image.tar
+
+# Dump addon databases
+{addon_section}
+echo '{manifest_json}' > addon_manifest.json
+
+# Dump volumes
+echo "[" > "$BACKUP_DIR/volume_manifest.json"
+FIRST_ENTRY=1
+for vol in $(docker inspect "$SERVICE_NAME" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+if data and 'Mounts' in data[0]:
+    for m in data[0]['Mounts']:
+        print(m.get('Name','') or m.get('Source',''))
+" 2>/dev/null); do
+    [ -z "$vol" ] && continue
+    vol_safe=$(echo "$vol" | tr '/' '_' | tr '\\\\' '_')
+    docker run --rm -v "$vol":/v alpine:latest tar -czf "/tmp/vol_$vol_safe.tar.gz" -C /v . 2>/dev/null || true
+    mv "/tmp/vol_$vol_safe.tar.gz" "$BACKUP_DIR/" 2>/dev/null || true
+    if [ -f "$BACKUP_DIR/vol_$vol_safe.tar.gz" ]; then
+        if [ "$FIRST_ENTRY" -eq 0 ]; then echo "," >> "$BACKUP_DIR/volume_manifest.json"; fi
+        _esc_vol=$(echo "$vol" | sed 's/"/\\\\"/g')
+        printf '{{"filename":"vol_%s.tar.gz","volume":"%s"}}' "$vol_safe" "$_esc_vol" >> "$BACKUP_DIR/volume_manifest.json"
+        FIRST_ENTRY=0
+    fi
+done
+echo "" >> "$BACKUP_DIR/volume_manifest.json"
+echo "]" >> "$BACKUP_DIR/volume_manifest.json"
+
+# Create tarball
+tar -czf /tmp/backup_artifact.tar.gz -C "$BACKUP_DIR" .
+
+# Output the path
+echo "BACKUP_PATH=/tmp/backup_artifact.tar.gz"
+"""
 
 
 class BackupService:
@@ -973,67 +1208,22 @@ class BackupService:
         )
         ssh.connect()
 
-        remote_backup_script = f"""  # noqa: F821
-set -e
-BACKUP_DIR=/tmp/smsly_backup_$(date +%s)
-mkdir -p "$BACKUP_DIR"
-cd "$BACKUP_DIR"
-
-SERVICE_NAME={shlex.quote(service.name)}
-
-# Dump env vars — MASK secret-looking keys. The local backup path masks
-# secrets (********) unless the backup_type is a transfer; the remote
-# path previously dumped raw `docker inspect Config.Env`, writing
-# plaintext credentials into the (unencrypted) artifact.
-# Heuristic: mask keys that look like secrets (token/password/secret/key).
-docker inspect "$SERVICE_NAME" 2>/dev/null | python3 -c "
-import json,sys,re
-data = json.load(sys.stdin)
-env = data[0]['Config']['Env'] if data else []
-mask_re = re.compile(r'(token|password|passwd|secret|key|credential|api)[a-z0-9_]*$', re.I)
-for e in env:
-    if '=' not in e:
-        continue
-    k, v = e.split('=', 1)
-    if mask_re.search(k):
-        v = '********'
-    print(f'{{k}}={{v}}')
-" > env_vars.txt 2>/dev/null || echo "env_vars_skipped"
-
-# Save image
-docker commit "$SERVICE_NAME" "backup_{shlex.quote(service.name)}_img"
-docker save "backup_{shlex.quote(service.name)}_img" -o image.tar
-
-# Dump volumes
-echo "[" > "$BACKUP_DIR/volume_manifest.json"
-FIRST_ENTRY=1
-for vol in $(docker inspect "$SERVICE_NAME" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-if data and 'Mounts' in data[0]:
-    for m in data[0]['Mounts']:
-        print(m.get('Name','') or m.get('Source',''))
-" 2>/dev/null); do
-    [ -z "$vol" ] && continue
-    vol_safe=$(echo "$vol" | tr '/' '_' | tr '\\\\' '_')
-    docker run --rm -v "$vol":/v alpine:latest tar -czf "/tmp/vol_$vol_safe.tar.gz" -C /v . 2>/dev/null || true
-    mv "/tmp/vol_$vol_safe.tar.gz" "$BACKUP_DIR/" 2>/dev/null || true
-    if [ -f "$BACKUP_DIR/vol_$vol_safe.tar.gz" ]; then
-        if [ "$FIRST_ENTRY" -eq 0 ]; then echo "," >> "$BACKUP_DIR/volume_manifest.json"; fi
-        _esc_vol=$(echo "$vol" | sed 's/"/\\"/g')
-        printf '{{"filename":"vol_%s.tar.gz","volume":"%s"}}' "$vol_safe" "$_esc_vol" >> "$BACKUP_DIR/volume_manifest.json"
-        FIRST_ENTRY=0
-    fi
-done
-echo "" >> "$BACKUP_DIR/volume_manifest.json"
-echo "]" >> "$BACKUP_DIR/volume_manifest.json"
-
-# Create tarball
-tar -czf /tmp/backup_artifact.tar.gz -C "$BACKUP_DIR" .
-
-# Output the path
-echo "BACKUP_PATH=/tmp/backup_artifact.tar.gz"
-"""
+        # Node-side script is built by the unit-tested builder (addon DB
+        # dumps + manifest, transfer-aware secret masking).
+        from apps.deployments.models.addons import Addon as _AddonModel
+        _specs = []
+        for _a in _AddonModel.objects.filter(
+                service=service, status='ACTIVE',
+                addon_type__in=('POSTGRES', 'TIMESCALEDB', 'MYSQL',
+                                'MARIADB', 'REDIS')).order_by('name'):
+            _specs.append({
+                'name': _a.name,
+                'container': (getattr(_a, 'container_name', None)
+                              or f"smsly-addon-{(_a.addon_type or '').lower()}-{_a.id}"),
+                'type': _a.addon_type,
+            })
+        remote_backup_script = build_remote_backup_script(
+            service.name, _specs, mask_secrets=not include_secret_values)
         result = ssh.exec_command(remote_backup_script, timeout=600)
         output = result.get('stdout', '')
         error_out = result.get('stderr', '')
@@ -1126,67 +1316,8 @@ echo "BACKUP_PATH=/tmp/backup_artifact.tar.gz"
         remote_archive = f"{remote_tmp}/backup_archive.tar.gz"
         ssh.upload_file(archive_path, remote_archive)
 
-        remote_restore_script = f"""
-set -e
-cd {remote_tmp}
-tar -xzf backup_archive.tar.gz
-
-# Stop service
-docker stop {shlex.quote(target_service.name)} 2>/dev/null || true
-
-# Load image if present
-if [ -f image.tar ]; then
-    docker load -i image.tar
-fi
-
-# Restore volumes
-if [ -f volume_manifest.json ]; then
-    for vol_file in vol_*.tar.gz; do
-        [ -f "$vol_file" ] || continue
-        vol_name=$(grep -F '"filename":"'"$vol_file"'"' volume_manifest.json | sed 's/.*"volume":"\\([^"]*\\)".*/\\1/' | head -n 1)
-        if [ -z "$vol_name" ]; then
-            echo "WARNING: no manifest entry for $vol_file, skipping"
-            continue
-        fi
-        docker volume create "$vol_name" 2>/dev/null || true
-        docker run --rm -v "$vol_name":/v -v "{remote_tmp}":/backup alpine:latest tar -xzf "/backup/$vol_file" -C /v
-    done
-else
-    for vol_file in vol_*.tar.gz; do
-        [ -f "$vol_file" ] || continue
-        vol_name=$(echo "$vol_file" | sed 's/^vol_//' | sed 's/\\.tar.gz$//' | tr '_' '/')
-        docker volume create "$vol_name" 2>/dev/null || true
-        docker run --rm -v "$vol_name":/v -v "{remote_tmp}":/backup alpine:latest tar -xzf "/backup/$vol_file" -C /v || true
-    done
-fi
-
-# Restore environment
-if [ -f env_vars.txt ]; then
-    echo "Environment backup available at $remote_tmp/env_vars.txt"
-fi
-
-# Restore database dump if present. The copy alone is not a
-# restore (2026-10-01: the old script copied db_dump.sql and never
-# loaded it). Credentials come from the target container's own env;
-# without them the dump is left in place with a loud warning instead
-# of pretending the database was restored.
-if [ -f db_dump.sql ]; then
-    docker cp db_dump.sql {shlex.quote(target_service.name)}:/tmp/restore_dump.sql 2>/dev/null || true
-    PG_USER=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' {shlex.quote(target_service.name)} 2>/dev/null | grep '^POSTGRES_USER=' | cut -d= -f2-)
-    PG_DB=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' {shlex.quote(target_service.name)} 2>/dev/null | grep '^POSTGRES_DB=' | cut -d= -f2-)
-    if [ -n "$PG_USER" ] && [ -n "$PG_DB" ]; then
-        docker exec {shlex.quote(target_service.name)} psql -U "$PG_USER" -d "$PG_DB" -f /tmp/restore_dump.sql
-    else
-        echo "WARNING: db_dump.sql copied to {shlex.quote(target_service.name)}:/tmp/restore_dump.sql but no POSTGRES_USER/POSTGRES_DB in container env — load it manually."
-    fi
-fi
-
-# Start service
-docker start {shlex.quote(target_service.name)} 2>/dev/null || true
-
-# Cleanup
-rm -rf {remote_tmp}
-"""
+        remote_restore_script = build_remote_restore_script(
+            target_service.name, remote_tmp)
         result = ssh.exec_command(remote_restore_script, timeout=600)
         error_out = result.get('stderr', '')
         if error_out:
