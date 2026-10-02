@@ -332,6 +332,16 @@ def entrypoint_script(addon_type: str = "") -> str:
         parts.append(
             f"if ! command -v {binary} >/dev/null 2>&1; then {spec['install']}; fi")
     parts += [
+        # Symlink every CLI into /usr/local/bin: `docker exec` (console,
+        # health probes, backup scripts) uses the default PATH, which does
+        # not include ~/.opencode/bin, ~/.local/bin or /data/bin. Without
+        # this the CLIs only resolve inside the entrypoint itself.
+        "for _b in opencode cmd agy kimchi forge deepagents qwen droid; do",
+        "  _p=$(command -v \"$_b\" 2>/dev/null || true);",
+        '  if [ -n "$_p" ] && [ "$_p" != /usr/local/bin/* ]; then ln -sf "$_p" /usr/local/bin/"$_b"; fi;',
+        "done",
+    ]
+    parts += [
         "cat > /data/cli-status.js <<'CLI_STATUS_EOF'",
         _STATUS_JS.rstrip("\n"),
         "CLI_STATUS_EOF",

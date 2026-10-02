@@ -56,6 +56,15 @@ class RegistryTests(SimpleTestCase):
         self.assertEqual(cli.entrypoint_script('OPENCODE'),
                          cli.entrypoint_script('QWENCODE'))
 
+    def test_entrypoint_links_binaries_onto_default_path(self):
+        # `docker exec` uses the default PATH (no ~/.opencode/bin,
+        # ~/.local/bin, /data/bin) — without symlinks the console and
+        # probes cannot resolve the CLIs.
+        script = cli.entrypoint_script()
+        self.assertIn('/usr/local/bin/', script)
+        for type_ in EXPECTED_TYPES:
+            self.assertIn(cli.cli_binary(type_), script)
+
     def test_status_specs_cover_all_types(self):
         specs = json.loads(cli.status_specs_json())
         self.assertEqual({s['type'] for s in specs}, EXPECTED_TYPES)
