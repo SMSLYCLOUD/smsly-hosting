@@ -712,8 +712,36 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         network = request.data.get('network', 'smsly-net')
         restart_policy = request.data.get('restart_policy', 'unless-stopped')
         dual_home = request.data.get('dual_home', False)
+        volumes = request.data.get('volumes', [])
         if not image or not container_name:
             return Response({'error': 'image and container_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        # Volumes: named Docker volumes only (never host paths).
+        # Transfer uses this to pre-create addon containers with their
+        # data volumes attached before dumps are loaded into them.
+        volume_binds = {}
+        if volumes:
+            if not isinstance(volumes, list):
+                return Response({'error': 'volumes must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+            for entry in volumes:
+                if not isinstance(entry, str):
+                    return Response({'error': 'volume entries must be strings'}, status=status.HTTP_400_BAD_REQUEST)
+                parts = entry.split(':')
+                if len(parts) not in (2, 3) or not parts[0] or not parts[1].startswith('/'):
+                    return Response(
+                        {'error': f'Invalid volume (want name:/container/path[:ro]): {entry[:60]}'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if parts[0].startswith(('.', '/')) or '..' in parts[0]:
+                    return Response(
+                        {'error': f'Host paths are not allowed as volumes: {entry[:60]}'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if len(parts) == 3 and parts[2] not in ('ro', 'rw'):
+                    return Response(
+                        {'error': f'Invalid volume mode in: {entry[:60]}'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                volume_binds[parts[0]] = {'bind': parts[1], 'mode': parts[2] if len(parts) == 3 else 'rw'}
         if not _validate_transfer_image(image):
             return Response(
                 {'error': 'Image name rejected: must match platform registry or be a valid Docker Hub library image.'},
@@ -760,6 +788,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 'cap_add': ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
                 'pids_limit': 1024,
             }
+            if volume_binds:
+                run_kwargs['volumes'] = volume_binds
             if networking_config:
                 run_kwargs['network'] = network
                 run_kwargs['networking_config'] = networking_config

@@ -94,14 +94,14 @@ export const ADDON_REGISTRY: AddonRegistryItem[] = [
     // ── AI Coding-Agent CLIs (AI) ──
     // Internal-only by default; each shares one container per service.
     // Exposing one serves its status/API page as a URL.
-    { id: 'opencode', addon_type: 'OPENCODE', name: 'OpenCode CLI', description: 'Terminal coding agent with provider/model config. API key + model managed from Grid.', category: 'AI', logo: '/logos/addons/cli.svg', color: 'text-emerald-400', has_dashboard: true },
-    { id: 'commandcode', addon_type: 'COMMANDCODE', name: 'CommandCode CLI', description: 'Coding agent for open models. API key + model managed from Grid.', category: 'AI', logo: '/logos/addons/cli.svg', color: 'text-cyan-400', has_dashboard: true },
-    { id: 'antigravity', addon_type: 'ANTIGRAVITYCLI', name: 'Antigravity CLI', description: 'Google terminal agent (interactive auth). Status page exposable as URL.', category: 'AI', logo: '/logos/addons/cli.svg', color: 'text-blue-400', has_dashboard: true },
-    { id: 'kimchi', addon_type: 'KIMCHI', name: 'Kimchi CLI', description: 'Open-model harness on Cast AI. API key + config managed from Grid.', category: 'AI', logo: '/logos/addons/cli.svg', color: 'text-orange-400', has_dashboard: true },
-    { id: 'forgecode', addon_type: 'FORGECODE', name: 'ForgeCode CLI', description: 'Top-ranked coding harness. Interactive login + model picker.', category: 'AI', logo: '/logos/addons/cli.svg', color: 'text-violet-400', has_dashboard: true },
-    { id: 'deepagents', addon_type: 'DEEPAGENTS', name: 'DeepAgents CLI', description: 'LangChain long-running agents with memory. Provider keys via env.', category: 'AI', logo: '/logos/addons/cli.svg', color: 'text-lime-400', has_dashboard: true },
-    { id: 'qwencode', addon_type: 'QWENCODE', name: 'Qwen CLI', description: 'Alibaba terminal coding agent, multi-protocol. Interactive auth.', category: 'AI', logo: '/logos/addons/cli.svg', color: 'text-purple-400', has_dashboard: true },
-    { id: 'factory-droid', addon_type: 'FACTORYDROID', name: 'Factory Droid CLI', description: 'Factory software-engineering agent. API key + model managed from Grid.', category: 'AI', logo: '/logos/addons/cli.svg', color: 'text-rose-400', has_dashboard: true },
+    { id: 'opencode', addon_type: 'OPENCODE', name: 'OpenCode CLI', description: 'Terminal coding agent with provider/model config. API key + model managed from Grid.', category: 'AI', logo: '/logos/addons/opencode.svg', color: 'text-emerald-400', has_dashboard: true },
+    { id: 'commandcode', addon_type: 'COMMANDCODE', name: 'CommandCode CLI', description: 'Coding agent for open models. API key + model managed from Grid.', category: 'AI', logo: '/logos/addons/commandcodeai.png', color: 'text-cyan-400', has_dashboard: true },
+    { id: 'antigravity', addon_type: 'ANTIGRAVITYCLI', name: 'Antigravity CLI', description: 'Google terminal agent (interactive auth). Status page exposable as URL.', category: 'AI', logo: '/logos/addons/antigravity.svg', color: 'text-blue-400', has_dashboard: true },
+    { id: 'kimchi', addon_type: 'KIMCHI', name: 'Kimchi CLI', description: 'Open-model harness on Cast AI. API key + config managed from Grid.', category: 'AI', logo: '/logos/addons/getkimchi.png', color: 'text-orange-400', has_dashboard: true },
+    { id: 'forgecode', addon_type: 'FORGECODE', name: 'ForgeCode CLI', description: 'Top-ranked coding harness. Interactive login + model picker.', category: 'AI', logo: '/logos/addons/tailcallhq.png', color: 'text-violet-400', has_dashboard: true },
+    { id: 'deepagents', addon_type: 'DEEPAGENTS', name: 'DeepAgents CLI', description: 'LangChain long-running agents with memory. Provider keys via env.', category: 'AI', logo: '/logos/addons/langchain-ai.png', color: 'text-lime-400', has_dashboard: true },
+    { id: 'qwencode', addon_type: 'QWENCODE', name: 'Qwen CLI', description: 'Alibaba terminal coding agent, multi-protocol. Interactive auth.', category: 'AI', logo: '/logos/addons/qwenlm.png', color: 'text-purple-400', has_dashboard: true },
+    { id: 'factory-droid', addon_type: 'FACTORYDROID', name: 'Factory Droid CLI', description: 'Factory software-engineering agent. API key + model managed from Grid.', category: 'AI', logo: '/logos/addons/factory-ai.png', color: 'text-rose-400', has_dashboard: true },
 ];
 
 export const getAddonMetadata = (addonType: string): AddonRegistryItem | undefined => {

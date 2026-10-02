@@ -294,15 +294,21 @@ def provision_env(stored: dict) -> dict[str, str]:
     return {}
 
 
+_STATUS_FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#0b0f14"/><path d="m6 9 3 3-3 3" stroke="#5ec8f2" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><line x1="11" y1="15" x2="18" y2="15" stroke="#5ec8f2" stroke-width="2" stroke-linecap="round"/></svg>"""
+
+
 _STATUS_JS = """const http=require('http');
+const fs=require('fs');
+let FAVICON='';
+try{FAVICON=fs.readFileSync('/data/favicon.svg','utf8')}catch(e){}
 const {execFileSync}=require('child_process');
 const PORT=parseInt(process.env.CLI_PORT||'8686',10);
 const SPECS=JSON.parse(process.env.CLI_SPECS||'[]');
 function probe(bin,ready){try{const a=String(ready||'--version').split(' ').filter(Boolean);if(!bin)return null;const out=execFileSync(bin,a.slice(1),{timeout:8000}).toString().trim().slice(0,120);return out||'?'}catch(e){return null}}
 function state(){return {status:'ok',clis:SPECS.map(s=>{const v=probe(s.binary,s.ready);return {type:s.type,binary:s.binary,version:v,installed:v!==null}})}}
 const DOCS={OPENCODE:'https://opencode.ai/docs',COMMANDCODE:'https://commandcode.ai/docs',ANTIGRAVITYCLI:'https://antigravity.google/docs/cli/overview/',KIMCHI:'https://docs.kimchi.dev/docs/kimchi-cli',FORGECODE:'https://forgecode.dev/docs/',DEEPAGENTS:'https://docs.langchain.com/oss/python/deepagents/',QWENCODE:'https://github.com/QwenLM/qwen-code',FACTORYDROID:'https://docs.factory.com/droid-cli/overview'};
-function page(){const s=state();const rows=s.clis.map(c=>`<tr><td>${c.type}</td><td><code>${c.binary}</code></td><td>${c.installed?('✅ '+(c.version||'installed')):'⏳ installing…'}</td><td><a href="${DOCS[c.type]||'#'}">docs</a></td></tr>`).join('');return `<!doctype html><html><head><meta charset=utf8><title>Grid CLI Runners</title><style>body{font-family:system-ui;background:#0b0f14;color:#dbe4ee;padding:32px}table{border-collapse:collapse}td,th{border:1px solid #26313d;padding:8px 12px}a{color:#5ec8f2}code{background:#141b24;padding:2px 6px;border-radius:4px}</style></head><body><h1>🤖 Grid CLI Runners</h1><p>Internal-only AI coding agents managed by Grid. Configure API keys &amp; models from the Grid dashboard (addon → CLI config).</p><table><tr><th>Addon</th><th>Binary</th><th>Status</th><th>Docs</th></tr>${rows}</table><p><a href="/api/status">JSON API</a></p></body></html>`}
-http.createServer((q,r)=>{if(q.url==='/api/status'){const s=state();const any=s.clis.some(c=>c.installed);r.writeHead(any?200:503,{'content-type':'application/json'});r.end(JSON.stringify(s));return}r.writeHead(200,{'content-type':'text/html'});r.end(page())}).listen(PORT);
+function page(){const s=state();const rows=s.clis.map(c=>`<tr><td>${c.type}</td><td><code>${c.binary}</code></td><td>${c.installed?('✅ '+(c.version||'installed')):'⏳ installing…'}</td><td><a href="${DOCS[c.type]||'#'}">docs</a></td></tr>`).join('');return `<!doctype html><html><head><meta charset=utf8><title>Grid CLI Runners</title><link rel="icon" href="/favicon.ico"><style>body{font-family:system-ui;background:#0b0f14;color:#dbe4ee;padding:32px}table{border-collapse:collapse}td,th{border:1px solid #26313d;padding:8px 12px}a{color:#5ec8f2}code{background:#141b24;padding:2px 6px;border-radius:4px}</style></head><body><h1>🤖 Grid CLI Runners</h1><p>Internal-only AI coding agents managed by Grid. Configure API keys &amp; models from the Grid dashboard (addon → CLI config).</p><table><tr><th>Addon</th><th>Binary</th><th>Status</th><th>Docs</th></tr>${rows}</table><p><a href="/api/status">JSON API</a></p></body></html>`}
+http.createServer((q,r)=>{if(q.url==='/favicon.ico'){r.writeHead(200,{'content-type':'image/svg+xml'});r.end(FAVICON);return}if(q.url==='/api/status'){const s=state();const any=s.clis.some(c=>c.installed);r.writeHead(any?200:503,{'content-type':'application/json'});r.end(JSON.stringify(s));return}r.writeHead(200,{'content-type':'text/html'});r.end(page())}).listen(PORT);
 """
 
 
@@ -329,6 +335,9 @@ def entrypoint_script(addon_type: str = "") -> str:
         "cat > /data/cli-status.js <<'CLI_STATUS_EOF'",
         _STATUS_JS.rstrip("\n"),
         "CLI_STATUS_EOF",
+        "cat > /data/favicon.svg <<'CLI_FAVICON_EOF'",
+        _STATUS_FAVICON_SVG.rstrip("\n"),
+        "CLI_FAVICON_EOF",
         f"CLI_SPECS='{status_specs_json()}' CLI_PORT={CLI_STATUS_PORT} "
         "exec node /data/cli-status.js",
     ]
