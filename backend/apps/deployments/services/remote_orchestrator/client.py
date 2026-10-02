@@ -156,6 +156,22 @@ class RemoteClientMixin:
                 append(f"http://{wg_ip}:8090")
                 append(f"http://{wg_ip}")
 
+        # Node DNS domain (e.g. grid1.trulay.site): valid LE cert via the
+        # node's own Caddy, stable DNS. Robust fallback when the mesh
+        # probe flaps under load or the public IP only serves Caddy
+        # (which 308s unknown hosts into an https/IP-cert dead end).
+        # Fail-closed: only plain DNS names, never IPs.
+        try:
+            import ipaddress as _ipmod
+            _nd = str(getattr(self.server, "node_domain", "") or "").strip().lower().rstrip(".")
+            if _nd and "." in _nd:
+                try:
+                    _ipmod.ip_address(_nd)
+                except ValueError:
+                    append(f"https://{_nd}")
+        except Exception:
+            pass
+
         if not host_port:
             return urls
 

@@ -932,20 +932,19 @@ class Service(TimeStampedModel):
             container.reload()
             nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
             port = self.internal_port or 8000
-            # Project-scoped bridge first (smsly-net-<id>), then the
+            # Project-scoped bridge first (smsly-net-<scopeid>), then the
             # platform-wide bridge (smsly-platform-net by convention),
             # then anything else.
             def _net_sort_key(item):
+                import re as _re
                 name, _ = item
-                if name.startswith('smsly-net-') and name != 'smsly-net-a5f086aa':
+                if _re.fullmatch(r'smsly-net-[0-9a-fA-F]{8}', name or ''):
                     return (0, name)
                 if name == 'smsly-platform-net':
                     return (1, name)
-                if name == 'smsly-net-a5f086aa':
-                    return (2, name)
                 if name == 'smsly-net':
-                    return (3, name)
-                return (4, name)
+                    return (2, name)
+                return (3, name)
             out = []
             for net_name, net_data in sorted(nets.items(), key=_net_sort_key):
                 ip = net_data.get('IPAddress') or ''
@@ -975,16 +974,15 @@ class Service(TimeStampedModel):
             port = self.internal_port or 8000
 
             def _net_sort_key(item):
+                import re as _re
                 name = item.get('network', '')
-                if name.startswith('smsly-net-') and name != 'smsly-net-a5f086aa':
+                if _re.fullmatch(r'smsly-net-[0-9a-fA-F]{8}', name or ''):
                     return (0, name)
                 if name == 'smsly-platform-net':
                     return (1, name)
-                if name == 'smsly-net-a5f086aa':
-                    return (2, name)
                 if name == 'smsly-net':
-                    return (3, name)
-                return (4, name)
+                    return (2, name)
+                return (3, name)
 
             out = []
             for entry in sorted(nets, key=_net_sort_key):
