@@ -7,6 +7,8 @@ import { addonsApi, Addon } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
 import { MaintenanceTabs } from '@/components/addons/MaintenanceTabs';
 import { AddonHaCard } from '@/components/addons/AddonHaCard';
+import CliConfigCard from '@/components/addons/CliConfigCard';
+import { CLI_ADDON_TYPES } from '@/lib/addonRegistry';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
@@ -145,6 +147,9 @@ export default function AddonDetailPage() {
 
       <div className="flex-1 container mx-auto py-8 space-y-6">
         <AddonHaCard addon={addon} onChanged={setAddon} />
+        {CLI_ADDON_TYPES.includes(addon.addon_type) && (
+          <CliConfigCard addonId={addon.id} addonType={addon.addon_type} />
+        )}
         {addon.status === 'ACTIVE' ? (
           <MaintenanceTabs addonId={addon.id} />
         ) : (
