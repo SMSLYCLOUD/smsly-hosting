@@ -394,9 +394,18 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
         elif kind == 'REDIS':
             ctr.exec_run(['redis-cli', 'SAVE'])
             time.sleep(2)
-            bits, _ = ctr.get_archive('/data/dump.rdb')
+            try:
+                bits, _ = ctr.get_archive('/data/dump.rdb')
+            except Exception:
+                bits = None
             if not bits:
-                raise RuntimeError(f"Addon dump failed for {addon.name}: empty dump.rdb")
+                # No RDB on disk (persistence off / custom dbfilename):
+                # nothing durable to back up — skip truthfully instead
+                # of failing the whole backup over ephemeral cache.
+                logger.warning(
+                    "Addon dump skipped for %s: no dump.rdb "
+                    "(redis persistence off?)", addon.name)
+                continue
             with open(dump_path, 'wb') as f:
                 for chunk in bits:
                     f.write(chunk)

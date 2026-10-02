@@ -98,6 +98,16 @@ class AddonDumpTests(TestCase):
             ops._dump_service_addons(
                 self.service, self.tmp, docker_client=self._client(ctr))
 
+    def test_redis_without_rdb_skips_truthfully(self):
+        # Persistence off / custom dbfilename: no durable bytes exist,
+        # so the addon is skipped (not failed).
+        self._addon('cache', 'REDIS', url='redis://:pw@cache:6379/0')
+        ctr = _mk_container()
+        ctr.get_archive.side_effect = Exception('no such file')
+        manifest = ops._dump_service_addons(
+            self.service, self.tmp, docker_client=self._client(ctr))
+        self.assertEqual(manifest, [])
+
     def test_stateless_service_returns_empty(self):
         self._addon('files', 'MINIO')
         manifest = ops._dump_service_addons(
