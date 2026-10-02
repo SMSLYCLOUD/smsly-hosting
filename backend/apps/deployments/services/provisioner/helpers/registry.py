@@ -75,44 +75,32 @@ def _registry_credential_list(server: ManagedServer) -> list:
 
 
 def _docker_login_all(ssh, server: ManagedServer) -> bool:
-    """docker login on the node with passwords over the encrypted channel.
+    """docker login on the node without leaking passwords.
 
-    Writes each password to the remote docker-login stdin instead of
-    interpolating it into argv (argv is visible in `ps` to anyone on the
-    node; the SSH channel is not). Logs only outcomes, never secrets.
-
+    The SSH wrapper returns ``(out, err, code)`` tuples (no stdin
+    channel), so the password travels inside a base64 pipe evaluated
+    on the NODE. Logs only outcomes, never secrets.
     Returns True when every registry login succeeded, False otherwise.
     """
+    import base64 as _b64
     import logging as _logging
     _logger = _logging.getLogger(__name__)
     all_ok = True
     for url, user, pwd in _registry_credential_list(server):
         try:
             import shlex as _shlex
-            stdin, stdout, stderr = ssh.exec_command(
-                f"docker login --username {_shlex.quote(user)} "
+            blob = _b64.b64encode(pwd.encode("utf-8")).decode("ascii")
+            out, err, code = ssh.exec_command(
+                f"echo {blob} | base64 -d | docker login --username {_shlex.quote(user)} "
                 f"--password-stdin {_shlex.quote(url)}",
                 timeout=60,
             )
-            try:
-                stdin.write(pwd + "\n")
-                stdin.flush()
-            finally:
-                try:
-                    stdin.channel.shutdown_write()
-                except Exception:
-                    pass
-            code = stdout.channel.recv_exit_status()
             if code == 0:
                 _logger.info("Node docker login succeeded for %s", url)
             else:
-                try:
-                    err_out = stderr.read().decode("utf-8", errors="replace").strip() if stderr else ""
-                except Exception:
-                    err_out = ""
                 _logger.error(
                     "Node docker login FAILED for registry %s (exit %s)%s",
-                    url, code, f": {err_out}" if err_out else "",
+                    url, code, f": {(err or out).strip()[:200]}" if (err or out) else "",
                 )
                 all_ok = False
         except Exception as exc:
