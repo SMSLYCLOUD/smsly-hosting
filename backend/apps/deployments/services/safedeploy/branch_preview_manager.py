@@ -142,7 +142,12 @@ class BranchPreviewManager:
         safe_app = re.sub(r'[^a-z0-9]+', '-', service.name.lower()).strip('-')[:30]
 
         try:
-            base_domain = service.default_public_base_domain()
+            server = getattr(service, 'server', None)
+            node_domain = (getattr(server, 'node_domain', '') or '').strip() if server is not None else ''
+            if node_domain:
+                base_domain = node_domain
+            else:
+                base_domain = service.default_public_base_domain()
         except Exception:
             base_domain = "cloud.smsly.cloud"
 

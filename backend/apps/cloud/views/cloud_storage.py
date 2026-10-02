@@ -132,8 +132,61 @@ class CloudStorageViewSet(viewsets.ModelViewSet):
         success = destination.upload_test_file()
         if success:
             return Response({'status': 'ok', 'message': 'Test file uploaded successfully'})
+        server_id = (request.query_params.get("server") or request.data.get("server") or "").strip() if hasattr(request, "data") else ""
+        if server_id:
+            node_result = self._test_from_node(destination, server_id)
+            if node_result is not None:
+                return node_result
         return Response({'status': 'error', 'message': 'Upload failed — check credentials and endpoint'},
                         status=status.HTTP_400_BAD_REQUEST)
+
+    def _test_from_node(self, destination, server_id):
+        from apps.deployments.models.servers import ManagedServer
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+
+        try:
+            server = ManagedServer.objects.filter(id=server_id).first()
+            if server is None or server.is_primary:
+                return None
+            # Credentials travel only over the authenticated orchestrator
+            # channel (token/HMAC + TLS verify). Never log this payload;
+            # node side uses a transient object and scrubbed errors.
+            result = RemoteOrchestrator(server).test_remote_storage({
+                "provider": destination.provider,
+                "bucket": destination.bucket,
+                "region": destination.region,
+                "endpoint": destination.endpoint,
+                "access_key": destination.access_key,
+                "secret_key": destination.secret_key,
+            })
+            if result is None:
+                return Response(
+                    {'status': 'error', 'message': f'Node {server.name} did not respond.'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+            if result.get("error"):
+                import re as _re
+                safe = _re.sub(
+                    r"(?i)((?:authorization|api[_-]?key|token|secret|password|access[_-]?key)\s*[:=]\s*)[^\s,;}{]+",
+                    r"\1***",
+                    str(result["error"])[:200],
+                )
+                return Response(
+                    {'status': 'error', 'message': f"Node upload failed: {safe}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return Response({'status': 'ok', 'message': f'Test file uploaded successfully from node {server.name}.'})
+        except Exception as exc:
+            import re as _re2
+            safe = _re2.sub(
+                r"(?i)((?:authorization|api[_-]?key|token|secret|password|access[_-]?key)\s*[:=]\s*)[^\s,;}{]+",
+                r"\1***",
+                str(exc)[:200],
+            )
+            return Response(
+                {'status': 'error', 'message': f'Node test failed: {safe}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
     @action(detail=False, methods=['get'],
             throttle_classes=[CloudStorageTemplatesRateThrottle])

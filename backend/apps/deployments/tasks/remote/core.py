@@ -244,6 +244,11 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
     deployment.started_at = deployment.started_at or timezone.now()
     deployment.save(update_fields=['remote_deployment_id', 'status', 'started_at', 'updated_at'])
     append_log(deployment, f"Remote deployment triggered: {remote_dep_id}\n")
+
+    try:
+        _enforce_remote_runtime_policy(service, orchestrator)
+    except Exception as policy_exc:
+        append_log(deployment, f"[Remote] Runtime policy ensure skipped: {policy_exc}\n")
     _poll_remote_deployment(
         deployment,
         orchestrator,
@@ -297,6 +302,32 @@ def _resume_remote_deployment(deployment, server):
         remote_service_id=remote_svc_id,
     )
 
+def _enforce_remote_runtime_policy(service, orchestrator) -> None:
+    try:
+        from apps.deployments.models.network_scope import ScopedNetwork
+        scope_obj = getattr(service, "project", None) or getattr(service, "team", None) or getattr(service, "organization", None)
+        if scope_obj is not None:
+            cfg = ScopedNetwork.resolve_network_config(scope_obj)
+            name = str(cfg.get("name", "") or "").strip()
+            if name:
+                egress = list(cfg.get("allowed_egress_networks") or ["0.0.0.0/0"])
+                orchestrator.ensure_remote_network({"network_name": name, "egress": egress})
+    except Exception as exc:
+        logger.debug("Remote network ensure failed: %s", exc)
+    try:
+        from apps.mtls.models import MtlsConfig
+        mtls = MtlsConfig.objects.filter(service=service).first()
+        if mtls is not None and mtls.enabled:
+            orchestrator.ensure_remote_mtls({
+                "service_id": str(service.id),
+                "service_name": service.name,
+                "trust_domain": str(getattr(mtls, "trust_domain", "") or ""),
+                "sidecar_enabled": bool(getattr(mtls, "sidecar_enabled", False)),
+            })
+    except Exception as exc:
+        logger.debug("Remote mTLS ensure failed: %s", exc)
+
+
 def _copy_remote_deployment_fields(deployment, remote_status: dict):
     """Mirror useful remote deployment fields onto the controller row."""
     update_fields = []
@@ -315,6 +346,9 @@ def _copy_remote_deployment_fields(deployment, remote_status: dict):
     if remote_status.get("vulnerability_report") and remote_status.get("vulnerability_report") != deployment.vulnerability_report:
         deployment.vulnerability_report = remote_status.get("vulnerability_report") or {}
         update_fields.append("vulnerability_report")
+    if remote_status.get("runtime_logs") and remote_status.get("runtime_logs") != deployment.runtime_logs:
+        deployment.runtime_logs = remote_status.get("runtime_logs") or ""
+        update_fields.append("runtime_logs")
     if remote_status.get("runtime_logs_url") and remote_status.get("runtime_logs_url") != deployment.runtime_logs_url:
         deployment.runtime_logs_url = remote_status.get("runtime_logs_url")
         update_fields.append("runtime_logs_url")
@@ -443,6 +477,16 @@ def _poll_remote_deployment(
                         deployment.status = Deployment.Status.ACTIVE
                         deployment.finished_at = timezone.now()
                         deployment.save(update_fields=['status', 'finished_at', 'updated_at', 'verified_target_type', 'verified_host_ip', 'verified_runtime_id', 'verified_at'])
+
+                        try:
+                            node_logs = orchestrator.get_container_logs(remote_container_id or service.name, tail=200)
+                            if node_logs and node_logs.get("logs"):
+                                deployment.runtime_logs = (deployment.runtime_logs or "") + (
+                                    f"\n--- Remote Node Initial Logs ---\n{node_logs['logs'][-4000:]}\n--- End Remote Logs ---\n"
+                                )
+                                deployment.save(update_fields=["runtime_logs", "updated_at"])
+                        except Exception as log_exc:
+                            logger.debug("Failed to seed remote runtime logs: %s", log_exc)
 
                         # Promote to Active Service
                         service = deployment.service

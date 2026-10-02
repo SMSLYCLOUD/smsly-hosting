@@ -334,6 +334,7 @@ ALLOWED_PROXY_METHODS = {'GET', 'HEAD'}
 ALLOWED_PROXY_PATHS = (
     '/api/v1/health',
     '/api/v1/metrics',
+    '/api/v1/node',
 )
 
 

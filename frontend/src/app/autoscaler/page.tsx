@@ -15,7 +15,7 @@ import {
 } from 'recharts';
 import { ChartContainer } from '@/components/ui/chart-container';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { autoscalerApi, scalingApi, servicesApi, type Service, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService, type AutoscalerServiceReplica } from '@/lib/api';
+import { autoscalerApi, scalingApi, servicesApi, type Service, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService, type AutoscalerServiceReplica, type AutoscalerNode } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -99,6 +99,22 @@ export default function AutoscalerPage() {
   const [powerBusy, setPowerBusy] = useState<string | null>(null);
   const [timerMinutes, setTimerMinutes] = useState(30);
   const [pendingTimer, setPendingTimer] = useState<{ task_id: string; fires_at: string; actor: string } | null>(null);
+  const [nodes, setNodes] = useState<AutoscalerNode[]>([]);
+  const [nodeBusy, setNodeBusy] = useState<string | null>(null);
+
+  const handleDrainNode = async (nodeId: string, nodeName: string) => {
+    if (!await confirm({ title: `Drain node ${nodeName}?`, message: 'Destroys all replicas on this node and stops new placements.', confirmText: 'Drain', variant: 'destructive' })) return;
+    setNodeBusy(nodeId);
+    try {
+      const res = await autoscalerApi.drainNode(nodeId);
+      toast({ title: 'Node drained', description: `${res.drained_replicas} replica(s) removed from ${nodeName}` });
+      await fetchData();
+    } catch (err: any) {
+      toast({ title: 'Drain failed', description: err?.response?.data?.error || err.message, variant: 'destructive' });
+    } finally {
+      setNodeBusy(null);
+    }
+  };
 
   const handleManualScaleUp = async (serviceId: string, svcName: string) => {
     setScalingServiceId(serviceId);
@@ -230,14 +246,16 @@ export default function AutoscalerPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [s, h, svcList] = await Promise.all([
+      const [s, h, svcList, nodeList] = await Promise.all([
         autoscalerApi.getStatus(),
         autoscalerApi.getHistory(historyDuration),
         servicesApi.list(),
+        autoscalerApi.getNodes().catch(() => [] as AutoscalerNode[]),
       ]);
       setStatus(s);
       setHistory(h);
       setServicesList(svcList);
+      setNodes(nodeList);
       refreshTimer().catch(() => {});
 
       // Initialize local config from status if not edited
@@ -837,6 +855,58 @@ export default function AutoscalerPage() {
                 </div>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Nodes ────────────────────────────────────────────────────────── */}
+        <Card className="border-border/50">
+          <CardHeader className="pb-3 border-b border-border/50">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Server size={16} className="text-emerald-500" />
+              Nodes
+              <span className="text-xs font-normal text-muted-foreground">({nodes.length} remote node{nodes.length === 1 ? '' : 's'} — score, capacity, replicas, storage)</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            {nodes.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground text-sm">No remote nodes registered. Add a node under Servers to scale beyond this host.</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 p-4">
+                {nodes.map((node) => (
+                  <div key={node.id} className="p-4 rounded-xl border border-border/50 bg-card/80 space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="font-bold text-sm font-mono">{node.name}</div>
+                        <div className="text-[11px] text-muted-foreground font-mono">{node.host}{node.is_lite_agent ? ' • lite' : ''}{node.node_type ? ` • ${node.node_type}` : ''}</div>
+                      </div>
+                      <span className={cn(
+                        "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase",
+                        node.status === 'ONLINE' ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+                      )}>
+                        {node.status}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center font-mono text-xs">
+                      <div className="p-2 rounded bg-muted/30">
+                        <div className="font-bold">{node.score >= 0 ? node.score.toFixed(0) : '—'}</div>
+                        <div className="text-[9px] text-muted-foreground uppercase">Score</div>
+                      </div>
+                      <div className="p-2 rounded bg-muted/30">
+                        <div className="font-bold">{node.replica_count}</div>
+                        <div className="text-[9px] text-muted-foreground uppercase">Replicas</div>
+                      </div>
+                      <div className="p-2 rounded bg-muted/30">
+                        <div className="font-bold">{node.storage ? `${node.storage.used_percent.toFixed(0)}%` : '—'}</div>
+                        <div className="text-[9px] text-muted-foreground uppercase">Disk</div>
+                      </div>
+                    </div>
+                    <Button variant="outline" size="sm" className="w-full h-7 text-xs gap-1 hover:bg-red-500/10 hover:text-red-400" disabled={nodeBusy === node.id} onClick={() => handleDrainNode(node.id, node.name)}>
+                      {nodeBusy === node.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Drain Node
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 

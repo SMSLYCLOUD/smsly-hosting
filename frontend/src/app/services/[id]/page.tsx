@@ -649,17 +649,43 @@ export default function ServiceDetailPage() {
                                 </a>
                             </div>
                             {service.node_url && (
-                                <div className="flex justify-between border-b border-border pb-3">
-                                    <span className="text-muted-foreground font-medium">Direct Domain</span>
-                                    <a
-                                        href={service.node_url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="font-mono text-primary hover:underline flex items-center gap-1"
-                                    >
-                                        <Globe className="w-3 h-3" />
-                                        {service.node_url.replace('https://', '')}
-                                    </a>
+                                <div className="border-b border-border pb-3">
+                                    <div className="flex justify-between gap-4">
+                                        <span className="text-muted-foreground font-medium">Node Domain (flat)</span>
+                                        <a
+                                            href={service.node_domains?.flat_url || service.node_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="font-mono text-primary hover:underline flex items-center gap-1"
+                                        >
+                                            <Globe className="w-3 h-3" />
+                                            {(service.node_domains?.flat || service.node_url.replace('https://', '')).replace('https://', '')}
+                                        </a>
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground mt-1">Proxiable by Cloudflare (orange cloud) on free plans. Use this for public traffic to the node.</p>
+                                </div>
+                            )}
+                            {(service.node_domains?.deep || (service as { node_url_nested?: string }).node_url_nested) && (
+                                <div className="border-b border-border pb-3">
+                                    <div className="flex justify-between gap-4">
+                                        <span className="text-muted-foreground font-medium">Node Domain (deep)</span>
+                                        <a
+                                            href={service.node_domains?.deep_url || (service as { node_url_nested?: string }).node_url_nested}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="font-mono text-primary hover:underline flex items-center gap-1"
+                                        >
+                                            <Globe className="w-3 h-3" />
+                                            {(service.node_domains?.deep || ((service as { node_url_nested?: string }).node_url_nested || '').replace('https://', '')).replace('https://', '')}
+                                        </a>
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground mt-1">Direct grey access (DNS-only) on free plans — cannot be orange-proxied. {service.node_domains?.deep_proxiable ? 'Paid certificates enabled: proxying allowed.' : 'Enable paid certificates to allow Cloudflare proxying.'}</p>
+                                </div>
+                            )}
+                            {service.internal_endpoints && ((service.internal_endpoints.cross_node_flat || service.internal_endpoints.cross_node_via_master)) && (
+                                <div className="border-b border-border pb-3">
+                                    <span className="text-muted-foreground font-medium">Internal Communication</span>
+                                    <p className="text-[10px] text-muted-foreground mt-1">Same host: use {service.internal_endpoints.same_host_bridge || 'service-name.default.svc'}. Across servers/nodes (same project): use HTTPS via the master or flat node domain above — Docker bridges are host-local and never span nodes.</p>
                                 </div>
                             )}
                             <div className="flex justify-between border-b border-border pb-3 gap-4">
@@ -681,6 +707,10 @@ export default function ServiceDetailPage() {
                                         ))
                                     )}
                                 </div>
+                            </div>
+                            <div className="border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Custom Domain Setup</span>
+                                <p className="text-[10px] text-muted-foreground mt-1">Point your domain at any of the three platform hostnames above: CNAME subdomains to the master or flat node domain, or A-record apexes to the server IP. Deep node domains accept CNAME but stay DNS-only unless paid certificates are enabled. Verification passes via public DNS quorum, HTTP proof, or Cloudflare DNS record — a Cloudflare miss alone never fails the check.</p>
                             </div>
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Domain Verification</span>

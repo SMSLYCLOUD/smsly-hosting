@@ -284,6 +284,8 @@ class ServiceSerializer(serializers.ModelSerializer):
     service_url = serializers.SerializerMethodField()
     node_url = serializers.SerializerMethodField()
     node_url_nested = serializers.SerializerMethodField()
+    node_domains = serializers.SerializerMethodField()
+    internal_endpoints = serializers.SerializerMethodField()
     internal_addresses = serializers.SerializerMethodField()
     effective_registry = serializers.SerializerMethodField()
     project_name = serializers.CharField(
@@ -559,7 +561,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             # SerializerMethodField / nested fields
             'env_vars', 'server_id',
             'latest_deployment', 'service_url', 'node_url',
-            'node_url_nested',
+            'node_url_nested', 'node_domains', 'internal_endpoints',
             'internal_addresses',
             'project_name', 'project_slug', 'project_emoji',
             'estimated_cost', 'node_metadata', 'domain_instances',
@@ -617,6 +619,42 @@ class ServiceSerializer(serializers.ModelSerializer):
         base_domain = Service.default_public_base_domain()
         slug = obj.name.lower().replace(' ', '-')
         return f"https://{node_service_domain_nested(slug, node_number, base_domain)}"
+
+    def get_node_domains(self, obj: Service) -> dict | None:
+        """Three-domain set: master + flat node + deep node, with proxy guidance."""
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
+            node_domain_proxy_info,
+            node_service_domain,
+            node_service_domain_nested,
+        )
+        svr = _resolve_effective_server(obj)
+        if not svr or getattr(svr, 'is_primary', False):
+            return None
+        node_number = getattr(svr, 'node_number', None) or 1
+        base_domain = Service.default_public_base_domain()
+        slug = (obj.slug or obj.name.lower().replace(' ', '-')).strip()
+        flat = node_service_domain(slug, node_number, base_domain)
+        deep = node_service_domain_nested(slug, node_number, base_domain)
+        proxy = node_domain_proxy_info(slug, node_number, base_domain)
+        return {
+            "master": (obj.public_domain or "").strip() or None,
+            "flat": flat,
+            "flat_url": f"https://{flat}",
+            "flat_proxiable": True,
+            "deep": deep,
+            "deep_url": f"https://{deep}",
+            "deep_proxiable": bool(proxy.get("deep_proxiable", False)),
+            "deep_default": "dns-only",
+            "node_number": int(node_number),
+        }
+
+    def get_internal_endpoints(self, obj: Service) -> dict:
+        try:
+            from apps.deployments.services.network_scope import cross_node_internal_endpoints
+            return cross_node_internal_endpoints(obj)
+        except Exception:
+            return {}
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
         return _get_latest_deployment(obj)

@@ -96,6 +96,51 @@ def _collect_container_stats(container_id: str, cpu_limit_override=None):
         return None
 
 
+def _collect_remote_container_stats(service, latest):
+    """Remote equivalent of _collect_container_stats (units: MB, cores).
+
+    Node returns mem_usage_mb / mem_limit_mb (see node_exec container_stats),
+    matching local MB convention — no byte conversion here.
+    """
+    try:
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+        from apps.deployments.utils.target import resolve_active_execution_target
+        target = resolve_active_execution_target(service)
+        if target.get("target_type") not in ("remote", "lite_agent"):
+            return None
+        server = target.get("server_obj")
+        if server is None:
+            return None
+        ref = (
+            (getattr(latest, "verified_runtime_id", "") or "").strip()
+            or (getattr(service, "active_runtime_id", "") or "").strip()
+            or (getattr(latest, "container_id", "") or "").strip()
+            or service.name
+        )
+        data = RemoteOrchestrator(server).get_container_stats(ref)
+        if not data or data.get("cpu_usage") is None:
+            return None
+        try:
+            cpu_limit = float(service.cpu_cores or data.get("cpu_limit") or 1)
+        except (TypeError, ValueError):
+            cpu_limit = float(data.get("cpu_limit") or 1)
+        return {
+            "cpu_usage": float(data.get("cpu_usage") or 0),
+            "cpu_limit": cpu_limit,
+            "memory_usage": int(data.get("memory_usage") or 0),
+            "memory_limit": int(data.get("memory_limit") or service.memory_mb or 512),
+            "network_rx_bytes": int(data.get("network_rx_bytes") or 0),
+            "network_tx_bytes": int(data.get("network_tx_bytes") or 0),
+            "disk_read_bytes": int(data.get("disk_read_bytes") or 0),
+            "disk_write_bytes": int(data.get("disk_write_bytes") or 0),
+        }
+    except ValueError:
+        return None
+    except Exception as exc:
+        logger.debug("Remote stats collection failed for %s: %s", getattr(service, "name", "?"), exc)
+        return None
+
+
 def _simulate_stats(service):  # UNUSED
     """Generate simulated metrics when Docker stats are unavailable."""
     cpu_limit = float(service.cpu_cores)
@@ -120,11 +165,10 @@ def collect_metrics_task() -> None:
     Tries real Docker stats first, falls back to simulation.
     """
     now = timezone.now()
-    services = Service.objects.only("id", "cpu_cores", "memory_mb", "owner__id")
+    services = Service.objects.only("id", "cpu_cores", "memory_mb", "owner__id", "name")
     collected = 0
 
     for service in services:
-        # Find latest active deployment to get container_id
         latest = (
             Deployment.objects.filter(
                 service=service, status=Deployment.Status.ACTIVE
@@ -132,11 +176,9 @@ def collect_metrics_task() -> None:
         )
         container_id = getattr(latest, 'container_id', None) if latest else None
 
-        # Only store real Docker stats — never synthetic data.
-        # The live Docker fallback in the metrics API handles the case
-        # where Docker is available but Prometheus is not. Synthetic data
-        # would mislead dashboards and alerting.
-        stats = _collect_container_stats(container_id, service.cpu_cores)
+        stats = _collect_remote_container_stats(service, latest) if latest else None
+        if stats is None:
+            stats = _collect_container_stats(container_id, service.cpu_cores)
         if stats is None:
             continue
 

@@ -1028,6 +1028,44 @@ def _purge_stale_only() -> int:
                 logger.info("Purged stale DOCKER-USER rules for dead bridge %s", iface)
     return removed
 
+def cross_node_internal_endpoints(service, base_domain: str = "") -> dict:
+    """Same-project cross-node internal reachability (fail-closed, no I/O).
+
+    Docker bridges are host-local, so two containers on different servers
+    can never share a bridge. Same-project services across servers/nodes
+    must talk via L7 through Caddy over the WireGuard mesh — never via
+    bare container-name DNS. Returns the stable endpoint set callers
+    should use depending on where they run.
+    """
+    try:
+        from apps.deployments.models.service import Service as _Svc
+        base = (base_domain or "").strip() or _Svc.default_public_base_domain()
+    except Exception:
+        base = (base_domain or "").strip()
+    name = (getattr(service, "name", "") or "").strip()
+    slug = (getattr(service, "slug", "") or name or "").strip().lower().replace(" ", "-")
+    server = getattr(service, "server", None)
+    node_number = getattr(server, "node_number", None) or 1
+    is_node = bool(server is not None and not getattr(server, "is_primary", True))
+    try:
+        from apps.deployments.services.caddy_manager.config_generation import (
+            node_service_domain,
+            node_service_domain_nested,
+        )
+        flat = node_service_domain(slug, node_number, base) if base else ""
+        deep = node_service_domain_nested(slug, node_number, base) if base else ""
+    except Exception:
+        flat, deep = "", ""
+    public = (getattr(service, "public_domain", "") or "").strip()
+    return {
+        "same_host_bridge": f"{name}.default.svc",
+        "cross_node_via_master": f"https://{public}" if public else "",
+        "cross_node_flat": f"https://{flat}" if (flat and is_node) else "",
+        "cross_node_deep": f"https://{deep}" if (deep and is_node) else "",
+        "note": "Cross-node = HTTPS via Caddy over mesh; same-host = bridge DNS.",
+    }
+
+
 def ensure_platform_bridge() -> str:
     """Ensure the platform-wide shared bridge exists.
 

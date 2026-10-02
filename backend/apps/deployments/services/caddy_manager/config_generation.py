@@ -24,14 +24,28 @@ _MAX_HOST_ALIASES_PER_SERVICE = 10
 
 
 def node_service_domain(slug: str, node_number, base_domain: str) -> str:
-    """Flat per-node service hostname: ``{slug}-grid{N}.{zone}``.
+    """Flat per-node service hostname: ``{slug}-node{N}.{zone}``.
 
     Second-level under the platform zone on purpose: Cloudflare
     Universal SSL covers second-level names, so these ride the
-    platform wildcard behind CF protection with zero per-host DNS.
-    The nested ``{slug}.grid{N}...`` form is third-level and can never
-    get CF certs (kept only for direct grey access).
+    platform wildcard behind CF protection (orange-cloud capable)
+    with zero per-host DNS. The deep ``{slug}.node{N}...`` form is
+    third-level and cannot be proxied on Cloudflare free plans
+    (kept grey by default; orange only with paid Advanced Certificates).
     """
+    slug = (slug or "").strip().lower().replace(" ", "-")
+    try:
+        node_number = int(node_number or 1)
+    except (TypeError, ValueError):
+        node_number = 1
+    base = (base_domain or "").strip()
+    parts = base.split(".")
+    rest = ".".join(parts[1:]) if len(parts) > 2 else base
+    return f"{slug}-node{node_number}.{rest}"
+
+
+def node_service_domain_legacy_flat(slug: str, node_number, base_domain: str) -> str:
+    """Legacy flat hostname (``{slug}-grid{N}.{zone}``) — served for compat."""
     slug = (slug or "").strip().lower().replace(" ", "-")
     try:
         node_number = int(node_number or 1)
@@ -44,6 +58,19 @@ def node_service_domain(slug: str, node_number, base_domain: str) -> str:
 
 
 def node_service_domain_nested(slug: str, node_number, base_domain: str) -> str:
+    """Direct-access hostname: ``{slug}.node{N}.{zone}`` (grey by default)."""
+    slug = (slug or "").strip().lower().replace(" ", "-")
+    try:
+        node_number = int(node_number or 1)
+    except (TypeError, ValueError):
+        node_number = 1
+    base = (base_domain or "").strip()
+    parts = base.split(".")
+    rest = ".".join(parts[1:]) if len(parts) > 2 else base
+    return f"{slug}.node{node_number}.{rest}"
+
+
+def node_service_domain_legacy_nested(slug: str, node_number, base_domain: str) -> str:
     """Legacy direct-access hostname: ``{slug}.grid{N}.{zone}`` (grey)."""
     slug = (slug or "").strip().lower().replace(" ", "-")
     try:
@@ -54,6 +81,28 @@ def node_service_domain_nested(slug: str, node_number, base_domain: str) -> str:
     parts = base.split(".")
     rest = ".".join(parts[1:]) if len(parts) > 2 else base
     return f"{slug}.grid{node_number}.{rest}"
+
+
+def node_domain_proxy_info(slug: str, node_number, base_domain: str) -> dict:
+    """Return the 3-domain set with Cloudflare proxy guidance (fail-closed).
+
+    - master: platform-issued public_domain (orange capable).
+    - flat: ``{slug}-node{N}.{zone}`` — second-level, orange capable.
+    - deep: ``{slug}.node{N}.{zone}`` — third-level, grey-only on free
+      plans; orange only when the operator enables paid certs
+      (PlatformConfig.edge_proxy_wildcards).
+    """
+    try:
+        from apps.deployments.models import PlatformConfig
+        cfg = PlatformConfig.load()
+        paid_proxy = bool(getattr(cfg, "edge_proxy_wildcards", False))
+    except Exception:
+        paid_proxy = False
+    return {
+        "flat_proxiable": True,
+        "deep_proxiable": paid_proxy,
+        "deep_default": "dns-only",
+    }
 
 
 def _resolve_effective_server(service):
@@ -1467,6 +1516,8 @@ def generate_node_caddyfile(node) -> str:
         slug = (service.slug or service.name.lower().replace(" ", "-")).strip()
         flat_domain = node_service_domain(slug, node_number, base_domain)
         nested_domain = node_service_domain_nested(slug, node_number, base_domain)
+        legacy_flat = node_service_domain_legacy_flat(slug, node_number, base_domain)
+        legacy_nested = node_service_domain_legacy_nested(slug, node_number, base_domain)
         # App container name follows the service name (same convention
         # as _local_upstream_for_service on master). The Caddy container
         # shares smsly-net with app containers, so plain container-name
@@ -1474,10 +1525,11 @@ def generate_node_caddyfile(node) -> str:
         container = (service.name or "").strip() or slug
         port = getattr(service, "internal_port", 8000) or 8000
 
-        # Every public hostname that can arrive here: the flat grid
-        # name, the service's public/custom wildcard domains (master
-        # proxies preview hostnames like x-e8ac13... to the node), and
-        # the nested direct name is covered by its own block below.
+        # Every public hostname that can arrive here: the flat node
+        # name (+ legacy grid alias), the service's public/custom wildcard
+        # domains (master proxies preview hostnames like x-e8ac13... to
+        # the node), and the nested direct name is covered by its own
+        # block below.
         # Unmatched :80 on Caddy 308-redirects by default — a missing
         # hostname here becomes an infinite master↔node redirect loop
         # (2026-10-01: preview domain looped 6+ hops).
@@ -1492,9 +1544,9 @@ def generate_node_caddyfile(node) -> str:
                     value = normalize_domain(raw)
                 except ValueError:
                     continue
-                if value and value.endswith(suffix) and value not in (flat_domain, nested_domain):
+                if value and value.endswith(suffix) and value not in (flat_domain, nested_domain, legacy_flat, legacy_nested):
                     extra_hosts.append(value)
-        http_hosts = [flat_domain, *extra_hosts]
+        http_hosts = [flat_domain, legacy_flat, *extra_hosts]
 
         tls_lines = [
             "    tls {",
@@ -1527,20 +1579,23 @@ def generate_node_caddyfile(node) -> str:
 
         # Nested hostname over HTTPS with on-demand certs: direct grey
         # access to the node without going through Cloudflare/master.
-        nested_block = [
-            f"{nested_domain} {{",
-            *tls_lines,
-            "    }",
-            "    log {",
-            "        output file /var/log/caddy/access.log",
-            "    }",
-            f"    reverse_proxy {container}:{port} {{",
-            "        header_up Host {host}",
-            "    }",
-            "    encode gzip",
-            "}",
-        ]
-        sections.append("\n".join(nested_block))
+        # Deep names stay DNS-only on free plans; orange only with paid
+        # Advanced Certificates (edge_proxy_wildcards).
+        for _nested in dict.fromkeys([nested_domain, legacy_nested]):
+            nested_block = [
+                f"{_nested} {{",
+                *tls_lines,
+                "    }",
+                "    log {",
+                "        output file /var/log/caddy/access.log",
+                "    }",
+                f"    reverse_proxy {container}:{port} {{",
+                "        header_up Host {host}",
+                "    }",
+                "    encode gzip",
+                "}",
+            ]
+            sections.append("\n".join(nested_block))
 
         # Flat hostname over HTTPS: exact DNS records point flat names
         # at the NODE IP (orange), so Cloudflare terminates browsers

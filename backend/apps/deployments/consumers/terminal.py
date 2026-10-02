@@ -75,6 +75,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._accepted = False
         self._last_activity = time.time()
         self._keepalive_timeout_seconds = self._resolve_keepalive_timeout()
+        self._remote_server = None
+        self._remote_container_ref = ""
+        self._remote_ws = None
+        self._remote_relay_task = None
 
     def _resolve_keepalive_timeout(self) -> float:
         raw_value = os.getenv("TERMINAL_WS_KEEPALIVE_SECONDS", "20")
@@ -182,6 +186,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
+            if self._remote_server is not None:
+                await self._setup_remote_relay()
+                return
+
             logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
             await asyncio.sleep(0.5)
 
@@ -262,6 +270,16 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._raw_sock = None
         self.exec_socket = None
         self.exec_id = None
+        relay = self._remote_relay_task
+        self._remote_relay_task = None
+        if relay is not None and not relay.done():
+            relay.cancel()
+        ws = self._remote_ws
+        self._remote_ws = None
+        if ws is not None:
+            with contextlib.suppress(Exception):
+                loop = asyncio.get_running_loop()
+                loop.create_task(ws.close())
 
     async def receive(self, text_data=None, bytes_data=None):
         if settings.DEBUG:
@@ -283,6 +301,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 return
             if data.get('type') == 'resize':
                 await self._handle_resize(data)
+                if self._remote_ws is not None:
+                    await self._forward_resize_to_remote(data)
                 return
             if data.get('type') == 'input' and data.get('payload'):
                 try:
@@ -300,8 +320,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             for char in text_data:
                 if char in ('\r', '\n'):
                     if self._cmd_buffer.strip():
-                        # Fire-and-forget: audit must never stall
-                        # keystroke forwarding under DB load.
                         audit_task = asyncio.create_task(
                             self._audit_command(self._cmd_buffer.strip()))
                         audit_task.add_done_callback(_swallow_audit_error)
@@ -311,6 +329,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 else:
                     self._cmd_buffer += char
 
+        if self._remote_ws is not None:
+            await self._forward_to_remote(text_data)
+            return
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._send_to_shell, text_data)
@@ -562,7 +583,25 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         try:
             dep = Deployment.objects.select_related('service').get(
                 id=self.deployment_id)
-            service_name = dep.service.name
+            service = dep.service
+            service_name = service.name
+
+            try:
+                from apps.deployments.utils.target import resolve_active_execution_target
+                target = resolve_active_execution_target(service)
+                if target.get("target_type") in ("remote", "lite_agent") and target.get("server_obj") is not None:
+                    self._remote_server = target["server_obj"]
+                    self._remote_container_ref = (
+                        (getattr(dep, "verified_runtime_id", "") or "").strip()
+                        or (getattr(service, "active_runtime_id", "") or "").strip()
+                        or (dep.container_id or "").strip()
+                        or service_name
+                    )
+                    return f"remote:{self._remote_container_ref}"
+            except ValueError:
+                pass
+            except Exception as exc:
+                logger.debug("Terminal remote target resolve failed: %s", exc)
 
             client = get_docker_exec_client()
             containers = client.containers.list(
@@ -637,3 +676,141 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     async def _verify_ownership(self):
         return await verify_deployment_ownership(self.user, self.deployment_id)
+
+    async def _setup_remote_relay(self):
+        from asgiref.sync import sync_to_async
+
+        try:
+            remote_dep_id, node_base, headers = await sync_to_async(self._resolve_remote_ws_target)()
+        except Exception as exc:
+            logger.error("Terminal remote resolve failed: %s", exc)
+            await self._out_queue.put({'message': self._encode_terminal_error("Could not resolve remote node session.")})
+            return
+        if not remote_dep_id or not node_base:
+            await self._out_queue.put({'message': self._encode_terminal_error("Remote deployment not found on node.")})
+            return
+        # Ownership was verified in connect() before _async_setup(); the relay
+        # reuses the same deployment_id, and the node re-authenticates the
+        # exchanged token on its own terminal endpoint.
+        try:
+            import websockets
+            ws_url = f"{node_base}/ws/terminal/{remote_dep_id}/"
+            token_value = headers.get("Authorization", "").replace("Token ", "").replace("Bearer ", "")
+            extra = {k: v for k, v in dict(headers).items() if v}
+            connect_kwargs = dict(
+                subprotocols=["token", token_value] if token_value else ["token"],
+                max_size=4 * 1024 * 1024,
+                open_timeout=10,
+                close_timeout=5,
+                ping_interval=20,
+                ping_timeout=20,
+            )
+            try:
+                self._remote_ws = await websockets.connect(
+                    ws_url, additional_headers=[(k, v) for k, v in extra.items()], **connect_kwargs,
+                )
+            except TypeError:
+                # websockets>=15 renamed additional_headers -> extra_headers
+                self._remote_ws = await websockets.connect(
+                    ws_url, extra_headers=[(k, v) for k, v in extra.items()], **connect_kwargs,
+                )
+        except Exception as exc:
+            logger.error("Terminal remote WS connect failed: %s", exc)
+            self._remote_ws = None
+            await self._out_queue.put({'message': self._encode_terminal_error("Could not open shell on remote node.")})
+            return
+        banner = (
+            "\r\n\x1b[32m[connected to remote node container]\x1b[0m\r\n"
+            "\x1b[90m--------------------------------------------------\x1b[0m\r\n"
+            f"\x1b[90mDeployment ID: {self.deployment_id}\x1b[0m\r\n"
+            f"\x1b[90mRemote ref:    {self._remote_container_ref[:24]}\x1b[0m\r\n"
+            "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
+        )
+        await self._out_queue.put({'message': base64.b64encode(banner.encode('utf-8')).decode('utf-8')})
+        await self._out_queue.put({'type': 'pong'})
+        self._remote_relay_task = asyncio.create_task(self._relay_remote_output())
+
+    def _encode_terminal_error(self, text: str) -> dict:
+        msg = f"\r\n\x1b[31m[error] {text}\x1b[0m\r\n"
+        return {'message': base64.b64encode(msg.encode('utf-8')).decode('utf-8')}
+
+    async def _forward_resize_to_remote(self, data: dict) -> None:
+        ws = self._remote_ws
+        if ws is None:
+            return
+        try:
+            await ws.send(json.dumps({"type": "resize", "cols": data.get("cols"), "rows": data.get("rows")}))
+        except Exception as exc:
+            logger.debug("Terminal remote resize forward failed: %s", exc)
+
+    def _resolve_remote_ws_target(self):
+        from urllib.parse import urlparse
+
+        from apps.deployments.models import Deployment
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+
+        server = self._remote_server
+        orchestrator = RemoteOrchestrator(server)
+        dep = Deployment.objects.select_related('service').get(id=self.deployment_id)
+        remote_dep_id = dep.remote_deployment_id or ""
+        if not remote_dep_id:
+            try:
+                remote_svc_id = orchestrator.find_remote_service_id(dep.service)
+                if remote_svc_id:
+                    results = orchestrator.list_remote_deployments(remote_svc_id, limit=1)
+                    if results and isinstance(results[0], dict):
+                        remote_dep_id = str(results[0].get("id") or "")
+            except Exception as exc:
+                logger.debug("Terminal remote deployment lookup failed: %s", exc)
+        base = (server.api_url or f"http://{server.host}").rstrip('/')
+        parsed = urlparse(base)
+        candidates = []
+        try:
+            candidates = orchestrator.node_ws_bases()
+        except Exception:
+            candidates = []
+        node_base = ""
+        for candidate in candidates:
+            try:
+                cparsed = urlparse(candidate)
+                if cparsed.hostname:
+                    scheme = "wss" if cparsed.scheme == "https" else "ws"
+                    node_base = f"{scheme}://{cparsed.netloc}"
+                    break
+            except Exception:
+                continue
+        if not node_base:
+            scheme = "wss" if parsed.scheme == "https" else "ws"
+            node_base = f"{scheme}://{parsed.netloc}" if parsed.netloc else ""
+        headers = orchestrator.ws_auth_headers(remote_dep_id)
+        return remote_dep_id, node_base, headers
+
+    async def _forward_to_remote(self, text_data):
+        ws = self._remote_ws
+        if ws is None or not text_data:
+            return
+        try:
+            if isinstance(text_data, str) and text_data.startswith("{"):
+                await ws.send(text_data)
+            else:
+                payload = base64.b64encode(text_data.encode('utf-8')).decode('utf-8')
+                await ws.send(json.dumps({"type": "input", "payload": payload}))
+        except Exception as exc:
+            logger.debug("Terminal remote forward failed: %s", exc)
+
+    async def _relay_remote_output(self):
+        ws = self._remote_ws
+        if ws is None:
+            return
+        try:
+            async for message in ws:
+                if self.is_disconnected:
+                    break
+                try:
+                    await self.send(text_data=message if isinstance(message, str) else message.decode('utf-8', errors='replace'))
+                except Exception:
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.debug("Terminal remote relay ended: %s", exc)

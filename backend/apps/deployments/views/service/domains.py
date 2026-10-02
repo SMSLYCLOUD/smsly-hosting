@@ -94,17 +94,42 @@ class DomainActionsMixin:
 
         # ── Platform-assigned hostnames need no DNS proof ──────────
         # The platform itself issued this exact hostname to this service
-        # (generated public_domain or staging_domain), so ownership is
-        # established by the DB record — not by DNS propagation. Without
-        # this, ecosystem deploys flap: verification runs before DNS
-        # propagates (or when the record is Cloudflare-proxied, whose edge
-        # IPs are deliberately rejected by the quorum check), fails, and
-        # actively CLEARS the verified flag below. Custom (user-owned)
-        # domains still go through full DNS quorum verification.
+        # (generated public_domain, staging_domain, or any of the three
+        # node hostnames: master public + flat node + deep node), so
+        # ownership is established by the DB record — not by DNS
+        # propagation. Without this, ecosystem deploys flap: verification
+        # runs before DNS propagates (or when the record is
+        # Cloudflare-proxied, whose edge IPs are deliberately rejected
+        # by the quorum check), fails, and actively CLEARS the verified
+        # flag below. Custom (user-owned) domains still go through full
+        # DNS quorum verification.
         assigned_domains = {
             (service.public_domain or '').strip().lower(),
             (service.staging_domain or '').strip().lower(),
         } - {''}
+        try:
+            from apps.deployments.services.caddy_manager.config_generation import (
+                _resolve_effective_server,
+                node_service_domain,
+                node_service_domain_legacy_flat,
+                node_service_domain_legacy_nested,
+                node_service_domain_nested,
+            )
+            from apps.deployments.models.service import Service as _Svc
+            _svr = _resolve_effective_server(service)
+            if _svr is not None and not getattr(_svr, 'is_primary', True):
+                _nn = getattr(_svr, 'node_number', None) or 1
+                _base = _Svc.default_public_base_domain()
+                _slug = (getattr(service, 'slug', '') or service.name or '').strip().lower().replace(' ', '-')
+                if _slug and _base:
+                    assigned_domains |= {
+                        node_service_domain(_slug, _nn, _base).lower(),
+                        node_service_domain_nested(_slug, _nn, _base).lower(),
+                        node_service_domain_legacy_flat(_slug, _nn, _base).lower(),
+                        node_service_domain_legacy_nested(_slug, _nn, _base).lower(),
+                    }
+        except Exception:
+            pass
         if domain in assigned_domains:
             is_staging = bool(service.staging_domain) and domain == service.staging_domain
             if is_staging:

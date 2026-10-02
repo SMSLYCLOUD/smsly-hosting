@@ -75,6 +75,55 @@ def ensure_verification_token(domain_obj) -> str:
     return token or ""
 
 
+def verify_cloudflare_dns_proof(domain: str, expected_cnames: set[str], acceptable_ips: set[str]) -> tuple:
+    """Best-effort Cloudflare API proof (conditional — never fails closed).
+
+    When a Cloudflare API token is configured, checks whether the zone
+    has a DNS record for ``domain`` pointing at the platform (A to origin
+    IP or CNAME into the platform). Returns (ok, detail). Any error,
+    missing token, or missing zone returns (False, reason) — callers must
+    treat this as an additional PASS path only, never as a fail condition.
+    Deep third-level names (slug.nodeN.zone) are expected grey/DNS-only
+    on free plans, so a grey A record here is a PASS, not a failure.
+    """
+    host = _clean_hostname(domain or "")
+    if not host:
+        return False, "invalid domain"
+    try:
+        from apps.deployments.models import PlatformConfig
+        cfg = PlatformConfig.load()
+        token = (getattr(cfg, "cloudflare_api_token", "") or "").strip()
+    except Exception:
+        return False, "no platform config"
+    if not token:
+        return False, "no cloudflare token"
+    try:
+        from apps.domains.services.dns import _get_zone_id, _get_records
+        import tldextract as _tldextract
+        ext = _tldextract.extract(host)
+        zone = ".".join(p for p in [ext.domain, ext.suffix] if p)
+        if not zone:
+            return False, "no zone"
+        zone_id = _get_zone_id(token, zone)
+        if not zone_id:
+            return False, "zone not found"
+        for rtype in ("A", "AAAA", "CNAME"):
+            try:
+                records = _get_records(token, zone_id, host, rtype) or []
+            except Exception:
+                continue
+            for rec in records:
+                content = str((rec or {}).get("content", "") or "").strip().lower().rstrip(".")
+                if rtype == "CNAME" and content and content in {c.lower() for c in expected_cnames}:
+                    return True, f"CF {rtype} {content}"
+                if rtype in ("A", "AAAA") and content and content in {i.lower() for i in acceptable_ips}:
+                    proxied = bool((rec or {}).get("proxied", False))
+                    return True, f"CF {rtype} {content} ({'proxied' if proxied else 'dns-only'})"
+        return False, "no matching CF record"
+    except Exception as exc:
+        return False, f"cf check skipped: {str(exc)[:80]}"
+
+
 def verify_http_proof(domain_obj, timeout: float = 10, attempts: int = 3) -> tuple:
     """Fetch the row's challenge token over the PUBLIC edge.
 
@@ -291,6 +340,27 @@ def _expected_targets(domain_obj, config) -> tuple[set[str], set[str]]:
     service_domain = _clean_hostname(getattr(service, "public_domain", "") or "")
     if service_domain:
         cnames.add(service_domain)
+    # Node-served services: custom domains may CNAME to any of the
+    # three platform hostnames (master public, flat node, deep node).
+    # Without these, every node-service custom domain fails quorum.
+    if service is not None:
+        try:
+            from apps.deployments.services.caddy_manager.config_generation import (
+                _resolve_effective_server,
+                node_service_domain,
+                node_service_domain_nested,
+            )
+            from apps.deployments.models.service import Service as _Svc
+            svr = _resolve_effective_server(service)
+            if svr is not None and not getattr(svr, "is_primary", True):
+                node_number = getattr(svr, "node_number", None) or 1
+                base = _Svc.default_public_base_domain()
+                slug = (getattr(service, "slug", "") or getattr(service, "name", "") or "").strip().lower().replace(" ", "-")
+                if slug and base:
+                    cnames.add(_clean_hostname(node_service_domain(slug, node_number, base)))
+                    cnames.add(_clean_hostname(node_service_domain_nested(slug, node_number, base)))
+        except Exception:
+            pass
 
     platform_domain = _clean_hostname(getattr(config, "domain", "") or "")
     if platform_domain:
@@ -373,20 +443,25 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
     deadline = _time.monotonic() + VERIFY_OVERALL_TIMEOUT
     dns_result: tuple | None = None
     http_result: tuple | None = None
+    cf_result: tuple | None = None
 
     def _run_http():
         if not http_url:
             return False, "no token"
         return verify_http_proof(domain_obj)
 
+    def _run_cf():
+        return verify_cloudflare_dns_proof(domain, expected_cnames, acceptable_ips)
+
     pool = _futures.ThreadPoolExecutor(
-        max_workers=2, thread_name_prefix="verify",
+        max_workers=3, thread_name_prefix="verify",
     )
     try:
         fut_dns = pool.submit(
             _dns_quorum_votes, domain, expected_cnames, acceptable_ips)
         fut_http = pool.submit(_run_http)
-        pending = {fut_dns, fut_http}
+        fut_cf = pool.submit(_run_cf)
+        pending = {fut_dns, fut_http, fut_cf}
         while pending:
             remaining = max(0.0, deadline - _time.monotonic())
             done, pending = _futures.wait(
@@ -397,16 +472,22 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
                 try:
                     if fut is fut_dns:
                         dns_result = fut.result()
-                    else:
+                    elif fut is fut_http:
                         http_result = fut.result()
+                    else:
+                        cf_result = fut.result()
                 except Exception as exc:
                     if fut is fut_dns:
                         dns_result = (0, "", [], set())
-                    else:
+                    elif fut is fut_http:
                         http_result = (False, f"fetch failed: {exc!s}"[:160])
+                    else:
+                        cf_result = (False, f"cf skipped: {exc!s}"[:120])
             if dns_result is not None and dns_result[0] >= VERIFICATION_QUORUM:
                 break
             if http_result is not None and http_result[0]:
+                break
+            if cf_result is not None and cf_result[0]:
                 break
             if not remaining:
                 break
@@ -445,6 +526,22 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
             matched_by=f"HTTP proof ({http_detail})",
         )
 
+    # Cloudflare API proof (conditional PASS path): proves the zone record
+    # steers at us even when public DNS is still propagating or when a
+    # deep third-level name is grey-only on free plans. A CF miss never
+    # fails the pass on its own — it only passes.
+    if cf_result is None:
+        cf_ok, cf_detail = False, "cf proof did not finish in time"
+    else:
+        cf_ok, cf_detail = cf_result
+    if cf_ok:
+        return DnsVerificationResult(
+            verified=True,
+            expected=expected,
+            actual=f"Cloudflare DNS: {cf_detail}",
+            matched_by=f"Cloudflare DNS ({cf_detail})",
+        )
+
     if agreeing == 1:
         return DnsVerificationResult(
             verified=False,
@@ -461,5 +558,5 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
         verified=False,
         expected=expected,
         actual=actual,
-        error=f"Expected {expected} but got {actual} (checked via {len(PUBLIC_VERIFICATION_RESOLVERS)} independent resolvers; HTTP proof: {http_detail}).",
+        error=f"Expected {expected} but got {actual} (checked via {len(PUBLIC_VERIFICATION_RESOLVERS)} independent resolvers; HTTP proof: {http_detail}; CF DNS: {cf_detail}).",
     )

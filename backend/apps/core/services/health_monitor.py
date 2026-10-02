@@ -548,7 +548,7 @@ def monitor_health_task(self) -> None:
 
 
 
-def _probe_container_state(container_id: str) -> dict:
+def _probe_container_state(container_id: str, service=None, runtime_id: str | None = None) -> dict:
     """Fetch container status, exit code, and restart metadata from Docker.
 
     Returns a dict:
@@ -563,6 +563,16 @@ def _probe_container_state(container_id: str) -> dict:
     """
     from apps.deployments.services.docker_client import get_docker_client
 
+    if service is not None:
+        try:
+            from apps.deployments.utils.target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            if target.get("target_type") in ("remote", "lite_agent") and target.get("server_obj") is not None:
+                return _probe_remote_container_state(target["server_obj"], service, runtime_id or container_id)
+        except ValueError:
+            pass
+        except Exception:
+            pass
     if not container_id:
         return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
     try:
@@ -581,6 +591,18 @@ def _probe_container_state(container_id: str) -> dict:
         }
     except docker.errors.NotFound:
         return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": ""}
+    except Exception:
+        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
+
+
+def _probe_remote_container_state(server, service, container_ref: str) -> dict:
+    try:
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+        stats = RemoteOrchestrator(server).get_container_stats(container_ref or service.name)
+        if not stats:
+            return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": ""}
+        status = str(stats.get("status", "running") or "running").lower()
+        return {"status": status, "exit_code": 0 if status == "running" else None, "restart_count": 0, "started_at": ""}
     except Exception:
         return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
 
@@ -618,7 +640,8 @@ def _check_service_health(service: object, Deployment: object) -> None:
 
     # Check Docker container state: if the container is dead, fast-fail.
     container_id = (active.container_id or "").strip()
-    state_info = _probe_container_state(container_id)
+    runtime_ref = (getattr(active, "verified_runtime_id", "") or "").strip() or (getattr(service, "active_runtime_id", "") or "").strip()
+    state_info = _probe_container_state(container_id, service=service, runtime_id=runtime_ref)
     state = state_info["status"]
     exit_code = state_info["exit_code"]
     restart_count = state_info["restart_count"]
@@ -726,7 +749,28 @@ def _fetch_container_logs(service) -> str:
         from apps.deployments.services.docker_client import get_docker_client
         from apps.deployments.models import Deployment as D
         active = D.objects.filter(service=service, status=D.Status.ACTIVE).order_by("-created_at").first()
-        if not active or not active.container_id:
+        if not active:
+            return ""
+        try:
+            from apps.deployments.utils.target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            if target.get("target_type") in ("remote", "lite_agent") and target.get("server_obj") is not None:
+                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                ref = (
+                    (getattr(active, "verified_runtime_id", "") or "").strip()
+                    or (getattr(service, "active_runtime_id", "") or "").strip()
+                    or (active.container_id or "").strip()
+                    or service.name
+                )
+                data = RemoteOrchestrator(target["server_obj"]).get_container_logs(ref, tail=200)
+                if data and data.get("logs"):
+                    return data["logs"]
+                return ""
+        except ValueError:
+            pass
+        except Exception:
+            return ""
+        if not active.container_id:
             return ""
         client = get_docker_client()
         container = client.containers.get(active.container_id)

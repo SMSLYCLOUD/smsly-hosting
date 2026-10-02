@@ -140,6 +140,33 @@ class ServiceSyncMixin:
             "max_replicas": service.max_replicas,
             "vpa_enabled": service.vpa_enabled,
         }
+        try:
+            from apps.deployments.models.network_scope import ScopedNetwork
+            from apps.deployments.models.registry_scope import ScopedRegistry
+            scope_obj = getattr(service, "project", None) or getattr(service, "team", None) or getattr(service, "organization", None)
+            if scope_obj is not None:
+                try:
+                    payload["network"] = ScopedNetwork.resolve_network_config(scope_obj)
+                except Exception:
+                    pass
+                try:
+                    payload["registry_hosts"] = ScopedRegistry.resolve_allowed_hosts(scope_obj)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            from apps.mtls.models import MtlsConfig
+            mtls = MtlsConfig.objects.filter(service=service).first()
+            if mtls is not None:
+                payload["mtls"] = {
+                    "enabled": bool(mtls.enabled),
+                    "trust_domain": str(getattr(mtls, "trust_domain", "") or ""),
+                    "sidecar_enabled": bool(getattr(mtls, "sidecar_enabled", False)),
+                    "service_id": str(service.id),
+                }
+        except Exception:
+            pass
         return payload
 
     def _sync_remote_service_config(self, service: Service, remote_service_id: str) -> bool:

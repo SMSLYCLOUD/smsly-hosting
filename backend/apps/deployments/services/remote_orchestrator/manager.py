@@ -9,6 +9,7 @@ from apps.deployments.models import (
 from .auth import AuthMixin
 from .client import RemoteClientMixin, _safe_error_snippet
 from .error_handling import ErrorHandlingMixin
+from .exec_mixin import ExecMixin
 from .service_sync import ServiceSyncMixin
 from .deployment import DeploymentMixin
 from .deletion import DeletionMixin
@@ -28,6 +29,7 @@ class RemoteOrchestrator(
     RemoteClientMixin,
     AuthMixin,
     ErrorHandlingMixin,
+    ExecMixin,
     ServiceSyncMixin,
     DeploymentMixin,
     DeletionMixin,

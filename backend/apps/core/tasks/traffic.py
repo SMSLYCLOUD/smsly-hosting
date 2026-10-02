@@ -211,62 +211,108 @@ def _extract_log_fields(entry: dict) -> tuple[str, str, str, int]:
 def collect_traefik_logs(self) -> None:
     """Tail Traefik / Caddy access.log (JSON format), map RequestHost -> Service,
     and upsert ServiceTrafficLog rows. Runs every ~15 seconds."""
-    if not _is_traffic_geo_enabled():
-        return
-    log_path = _get_active_access_log()
-    if not log_path:
-        return
-
-    offset = _read_offset(log_path)
-    file_size = log_path.stat().st_size
-
-    if file_size < offset:
-        offset = 0
-
-    if offset == file_size:
-        return
-
     try:
-        with open(log_path, 'r', buffering=8192) as fh:
-            fh.seek(offset)
-            new_lines = 0
-            while True:
-                line = fh.readline()
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        if not _is_traffic_geo_enabled():
+            return
+        log_path = _get_active_access_log()
+        if not log_path:
+            return
 
-                client_ip, request_host, request_uri, status = _extract_log_fields(entry)
-                if not client_ip or not request_host:
-                    continue
+        offset = _read_offset(log_path)
+        file_size = log_path.stat().st_size
 
-                path = request_uri.split('?')[0] if request_uri else ''
-                if path in SKIP_PATHS:
-                    continue
+        if file_size < offset:
+            offset = 0
 
-                if status >= 400:
-                    continue
+        if offset == file_size:
+            return
 
+        try:
+            with open(log_path, 'r', buffering=8192) as fh:
+                fh.seek(offset)
+                new_lines = 0
+                while True:
+                    line = fh.readline()
+                    if not line:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    client_ip, request_host, request_uri, status = _extract_log_fields(entry)
+                    if not client_ip or not request_host:
+                        continue
+
+                    path = request_uri.split('?')[0] if request_uri else ''
+                    if path in SKIP_PATHS:
+                        continue
+
+                    if status >= 400:
+                        continue
+
+                    _upsert_traffic_row(client_ip, request_host)
+                    new_lines += 1
+
+                    if new_lines % 100 == 0:
+                        _write_offset(log_path, fh.tell())
+
+                _write_offset(log_path, fh.tell())
+
+            if new_lines:
+                logger.debug("Access log collector: processed %d new entries", new_lines)
+
+        except Exception as exc:
+            logger.warning("Access log collector error: %s", exc, exc_info=True)
+            raise self.retry(countdown=5, exc=exc)
+    finally:
+        # Single remote fan-out per tick (not per early-return branch).
+        try:
+            collect_remote_traffic()
+        except Exception:
+            pass
+
+
+def collect_remote_traffic() -> None:
+    """Pull access-log tails from remote nodes (bounded, fail-closed)."""
+    try:
+        from apps.deployments.models.servers import ManagedServer
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+    except Exception:
+        return
+    try:
+        servers = list(ManagedServer.objects.filter(is_primary=False).only("id", "name")[:20])
+    except Exception:
+        return
+    for server in servers:
+        try:
+            data = RemoteOrchestrator(server).get_remote_access_log_tail(lines=200)
+            entries = (data or {}).get("entries") or []
+        except Exception:
+            continue
+        for item in entries:
+            line = (item or {}).get("line", "") if isinstance(item, dict) else str(item or "")
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            client_ip, request_host, request_uri, status_code = _extract_log_fields(entry)
+            if not client_ip or not request_host:
+                continue
+            path = request_uri.split('?')[0] if request_uri else ''
+            if path in SKIP_PATHS:
+                continue
+            if status_code >= 400:
+                continue
+            try:
                 _upsert_traffic_row(client_ip, request_host)
-                new_lines += 1
-
-                if new_lines % 100 == 0:
-                    _write_offset(log_path, fh.tell())
-
-            _write_offset(log_path, fh.tell())
-
-        if new_lines:
-            logger.debug("Access log collector: processed %d new entries", new_lines)
-
-    except Exception as exc:
-        logger.warning("Access log collector error: %s", exc, exc_info=True)
-        raise self.retry(countdown=5, exc=exc)
+            except Exception:
+                continue
 
 
 # ---------------------------------------------------------------------------

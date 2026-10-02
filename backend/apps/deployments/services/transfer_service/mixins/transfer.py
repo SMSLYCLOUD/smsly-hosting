@@ -262,8 +262,18 @@ class TransferMixin:
         fields = []
         svc = self.transfer.service
         old_domain = (svc.public_domain or '').strip()
+        transfer_tag = f"transfer-{str(getattr(self.transfer, 'id', '') or '')[:8]}"
 
         new_base = (self.transfer.target_public_domain or '').strip()
+
+        # Node targets: prefer the node's DNS domain over its IP so the
+        # generated URL stays DNS-attached (TLS-capable). IP-based
+        # public_domains break wildcard TLS and Cloudflare proxying.
+        node_base = ''
+        if target_server is not None and not getattr(target_server, 'is_primary', True):
+            node_base = (getattr(target_server, 'node_domain', '') or '').strip()
+        if not new_base and node_base:
+            new_base = node_base
 
         if not new_base:
             try:
@@ -276,6 +286,27 @@ class TransferMixin:
             except Exception as exc:
                 logger.debug("Failed to resolve target domain: %s", exc)
 
+        # Prefer a DNS base over a bare IP. Only fall back to the host IP
+        # when no domain is known anywhere (master base included).
+        import ipaddress as _ip
+        new_base_is_ip = False
+        if new_base:
+            try:
+                _ip.ip_address(new_base)
+                new_base_is_ip = True
+            except ValueError:
+                new_base_is_ip = False
+        if (not new_base or new_base_is_ip) and node_base:
+            new_base = node_base
+            new_base_is_ip = False
+        if not new_base or new_base_is_ip:
+            try:
+                master_base = svc.default_public_base_domain()
+            except Exception:
+                master_base = ''
+            if master_base:
+                new_base = master_base
+                new_base_is_ip = False
         if not new_base and target_server:
             new_base = target_server.host or ''
 
@@ -291,7 +322,7 @@ class TransferMixin:
         if new_domain != old_domain:
             svc.public_domain = new_domain
             fields.append('public_domain')
-            self._log(f"Domain remapped: {old_domain} → {new_domain}")
+            self._log(f"Domain remapped [{transfer_tag}]: {old_domain} → {new_domain}")
 
         return fields
 

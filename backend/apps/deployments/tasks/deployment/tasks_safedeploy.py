@@ -171,7 +171,7 @@ def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service
             if update_fields:
                 new_addon.save(update_fields=list(set(update_fields)))
 
-            cid, url = addon_provisioner.provision(new_addon)
+            cid, url = addon_provisioner.provision_dispatch(new_addon)
             new_addon.connection_url = url
             new_addon.coolify_uuid = cid
             new_addon.status = Addon.Status.ACTIVE
@@ -184,7 +184,7 @@ def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service
         if update_fields:
             new_addon.save(update_fields=list(set(update_fields)))
 
-        cid, url = addon_provisioner.provision(new_addon)
+        cid, url = addon_provisioner.provision_dispatch(new_addon)
         new_addon.connection_url = url
         new_addon.coolify_uuid = cid
         new_addon.status = Addon.Status.ACTIVE
@@ -674,8 +674,33 @@ def destroy_preview_environment_job(preview_id: str):
                     if pg_addon.coolify_uuid:
                         addon_provisioner.deprovision_dispatch(pg_addon.coolify_uuid, pg_addon)
                     else:
-                        container_name = f"smsly-addon-{pg_addon.addon_type.lower()}-{pg_addon.id}"
-                        subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False)
+                        target_server = getattr(transient_service, 'server', None)
+                        if target_server is not None and not target_server.is_primary:
+                            from apps.deployments.services.ssh_client import SSHClient
+                            ssh = None
+                            try:
+                                ssh = SSHClient(
+                                    ip=target_server.host,
+                                    key_content=getattr(target_server, 'ssh_key', '') or '',
+                                    password=getattr(target_server, 'ssh_password', '') or '',
+                                    user=getattr(target_server, 'ssh_user', 'root') or 'root',
+                                    port=getattr(target_server, 'ssh_port', 22) or 22,
+                                    key_passphrase=getattr(target_server, 'ssh_key_passphrase', '') or '',
+                                    wg_address=getattr(target_server, 'wg_address', '') or '',
+                                )
+                                container_name = f"smsly-addon-{pg_addon.addon_type.lower()}-{pg_addon.id}"
+                                ssh.exec_command(f"docker rm -f {container_name}", timeout=30)
+                            except Exception:
+                                pass
+                            finally:
+                                if ssh is not None:
+                                    try:
+                                        ssh.close()
+                                    except Exception:
+                                        pass
+                        else:
+                            container_name = f"smsly-addon-{pg_addon.addon_type.lower()}-{pg_addon.id}"
+                            subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False)
                 except Exception as deprovision_exc:
                     logger.warning("Failed to deprovision preview PG addon %s: %s", pg_addon.id, deprovision_exc)
 

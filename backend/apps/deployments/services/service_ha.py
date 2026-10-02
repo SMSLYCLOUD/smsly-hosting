@@ -254,22 +254,26 @@ class ServiceHAManager:
         return {"failovers": failovers}
 
     def _find_failover_target(self, service):
-        """Find the best node to failover a service to."""
+        """Find the best node to failover a service to (scorer-ranked)."""
         from apps.deployments.models import ManagedServer
 
         current_node = getattr(service, 'server', None)
 
-        candidates = ManagedServer.objects.filter(
+        candidates = list(ManagedServer.objects.filter(
             status='ONLINE',
         ).exclude(
             id=current_node.id if current_node else None,
-        ).order_by('?')  # random for load spreading
-
-        for node in candidates:
-            if self._node_is_responsive(node):
-                return node
-
-        return None
+        )[:50])
+        responsive = [n for n in candidates if self._node_is_responsive(n)]
+        if not responsive:
+            return None
+        try:
+            from apps.deployments.services.node_scorer import NodeScorer
+            scored = NodeScorer().score(responsive)
+            scored.sort(key=lambda item: item[1], reverse=True)
+            return scored[0][0]
+        except Exception:
+            return responsive[0]
 
     def _node_is_responsive(self, node) -> bool:
         """Quick responsiveness check — recent heartbeat or successful probe."""

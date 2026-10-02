@@ -28,7 +28,7 @@ from ..views import (
     SystemConfigView,
     PlatformStorageOverviewView,
 )
-from apps.core.views.system import BeatHealView, DatabaseHaToggleView, RouteFallbackView
+from apps.core.views.system import BeatHealView, DatabaseHaToggleView, RouteFallbackView, StorageFleetView
 from ..views.addons import AddonViewSet, service_addons_unified
 from ..views.analysis import RepoAnalysisView
 from ..views.autoscale import ScalingViewSet
@@ -76,6 +76,7 @@ from ..views.integrations import (
     integrations_overview,
 )
 from ..views.mesh import MeshNetworkViewSet
+from ..views.node_exec import NodeExecViewSet
 from ..views.metrics import MetricsViewSet
 from ..views.network_scope import ScopedNetworkViewSet
 from ..views.node_exchange import node_token_exchange, node_token_exchange_via_gateway
@@ -133,6 +134,7 @@ router.register(r'registry-credentials', RegistryCredentialViewSet, basename='re
 router.register(r'registry-scopes', ScopedRegistryViewSet, basename='registry-scope')
 router.register(r'network-scopes', ScopedNetworkViewSet, basename='network-scope')
 router.register(r'platform-config', PlatformConfigViewSet, basename='platform-config')
+router.register(r'node', NodeExecViewSet, basename='node-exec')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/
@@ -208,6 +210,7 @@ urlpatterns = [
     path('system/security-events/', SecurityEventsView.as_view(), name='security-events'),
     path('system/security-analysis/', SecurityAnalysisView.as_view(), name='security-analysis'),
     path('system/storage-overview/', PlatformStorageOverviewView.as_view(), name='platform-storage-overview'),
+    path('system/storage-fleet/', StorageFleetView.as_view(), name='platform-storage-fleet'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
     path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),
     path('platform/resources/', PlatformResourcesView.as_view(), name='platform-resources'),

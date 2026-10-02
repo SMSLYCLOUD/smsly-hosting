@@ -22,6 +22,110 @@ from apps.deployments.views._helpers import EmptySerializer, MAINTENANCE_ACTIONS
 logger = logging.getLogger(__name__)
 
 
+def build_storage_overview() -> dict:
+    import shutil
+
+    from django.utils import timezone
+
+    try:
+        total, used, free = shutil.disk_usage("/")
+        used_pct = round((used / total) * 100, 1) if total > 0 else 0.0
+        disk_info = {
+            "total_gb": round(total / (1024 ** 3), 2),
+            "used_gb": round(used / (1024 ** 3), 2),
+            "free_gb": round(free / (1024 ** 3), 2),
+            "used_percent": used_pct,
+            "status": "critical" if used_pct >= 90 else ("warning" if used_pct >= 80 else "healthy"),
+        }
+    except Exception as exc:
+        logger.debug("Failed to read disk usage: %s", exc)
+        disk_info = {
+            "total_gb": 0.0,
+            "used_gb": 0.0,
+            "free_gb": 0.0,
+            "used_percent": 0.0,
+            "status": "unknown",
+        }
+
+    docker_info = {
+        "available": False,
+        "images": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
+        "containers": {"count": 0, "size_gb": 0.0},
+        "volumes": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
+        "build_cache": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
+        "total_docker_gb": 0.0,
+        "total_reclaimable_gb": 0.0,
+    }
+
+    try:
+        client = _storage_docker_client()
+        df = cache.get("smsly:storage:df:v1")
+        if df is None:
+            df = client.df()
+            try:
+                cache.set("smsly:storage:df:v1", df, 600)
+            except Exception:
+                pass
+        docker_info["available"] = True
+
+        imgs = df.get("Images") or []
+        imgs_size = sum(img.get("Size", 0) for img in imgs)
+        imgs_reclaimable = sum(img.get("Size", 0) for img in imgs if img.get("Containers", 0) == 0)
+        docker_info["images"] = {
+            "count": len(imgs),
+            "size_gb": round(imgs_size / (1024 ** 3), 2),
+            "reclaimable_gb": round(imgs_reclaimable / (1024 ** 3), 2),
+        }
+
+        cntrs = df.get("Containers") or []
+        cntrs_size = sum(c.get("SizeRw", 0) for c in cntrs)
+        docker_info["containers"] = {
+            "count": len(cntrs),
+            "size_gb": round(cntrs_size / (1024 ** 3), 2),
+        }
+
+        vols = df.get("Volumes") or []
+        vols_size = sum((v.get("UsageData") or {}).get("Size", 0) for v in vols)
+        vols_reclaimable = sum(
+            (v.get("UsageData") or {}).get("Size", 0)
+            for v in vols
+            if (v.get("UsageData") or {}).get("RefCount", 0) == 0
+        )
+        docker_info["volumes"] = {
+            "count": len(vols),
+            "size_gb": round(vols_size / (1024 ** 3), 2),
+            "reclaimable_gb": round(vols_reclaimable / (1024 ** 3), 2),
+        }
+
+        bc = df.get("BuildCache") or []
+        bc_size = sum(b.get("Size", 0) for b in bc)
+        bc_reclaimable = sum(b.get("Size", 0) for b in bc if not b.get("InUse", False))
+        docker_info["build_cache"] = {
+            "count": len(bc),
+            "size_gb": round(bc_size / (1024 ** 3), 2),
+            "reclaimable_gb": round(bc_reclaimable / (1024 ** 3), 2),
+        }
+
+        total_dock = imgs_size + cntrs_size + vols_size + bc_size
+        total_reclaim = imgs_reclaimable + vols_reclaimable + bc_reclaimable
+        docker_info["total_docker_gb"] = round(total_dock / (1024 ** 3), 2)
+        docker_info["total_reclaimable_gb"] = round(total_reclaim / (1024 ** 3), 2)
+    except Exception as exc:
+        logger.debug("Docker df query failed or unavailable: %s", exc)
+
+    return {
+        "disk": disk_info,
+        "docker": docker_info,
+        "timestamp": timezone.now().isoformat(),
+    }
+
+
+def _storage_docker_client():
+    import docker
+
+    return docker.from_env(timeout=25)
+
+
 class SystemConfigView(GenericAPIView):
     """
     Expose safe server configuration to the frontend.
@@ -1327,102 +1431,16 @@ class PlatformStorageOverviewView(GenericAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        import shutil
         from django.utils import timezone
 
-        # 1. Host Root Partition Metrics
-        try:
-            total, used, free = shutil.disk_usage("/")
-            used_pct = round((used / total) * 100, 1) if total > 0 else 0.0
-            disk_info = {
-                "total_gb": round(total / (1024 ** 3), 2),
-                "used_gb": round(used / (1024 ** 3), 2),
-                "free_gb": round(free / (1024 ** 3), 2),
-                "used_percent": used_pct,
-                "status": "critical" if used_pct >= 90 else ("warning" if used_pct >= 80 else "healthy"),
-            }
-        except Exception as exc:
-            logger.debug("Failed to read disk usage: %s", exc)
-            disk_info = {
-                "total_gb": 0.0,
-                "used_gb": 0.0,
-                "free_gb": 0.0,
-                "used_percent": 0.0,
-                "status": "unknown",
-            }
-
-        # 2. Docker Engine Storage Breakdown
-        docker_info = {
-            "available": False,
-            "images": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
-            "containers": {"count": 0, "size_gb": 0.0},
-            "volumes": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
-            "build_cache": {"count": 0, "size_gb": 0.0, "reclaimable_gb": 0.0},
-            "total_docker_gb": 0.0,
-            "total_reclaimable_gb": 0.0,
-        }
-
-        try:
-            import docker
-            # NOTE: df takes ~5s idle and 10s+ while builds hammer the
-            # daemon (seen live 2026-09-23: tile flipped Offline/N/A on a
-            # busy daemon). Generous timeout plus a 10-min cache so the
-            # tile only reads Offline when df never succeeds.
-            # (fail-open throughout; timestamp shows data age).
-            client = docker.from_env(timeout=25)
-            df = cache.get("smsly:storage:df:v1")
-            if df is None:
-                df = client.df()
-                try:
-                    cache.set("smsly:storage:df:v1", df, 600)
-                except Exception:
-                    pass
-            docker_info["available"] = True
-
-            imgs = df.get("Images") or []
-            imgs_size = sum(img.get("Size", 0) for img in imgs)
-            imgs_reclaimable = sum(img.get("Size", 0) for img in imgs if img.get("Containers", 0) == 0)
-            docker_info["images"] = {
-                "count": len(imgs),
-                "size_gb": round(imgs_size / (1024 ** 3), 2),
-                "reclaimable_gb": round(imgs_reclaimable / (1024 ** 3), 2),
-            }
-
-            cntrs = df.get("Containers") or []
-            cntrs_size = sum(c.get("SizeRw", 0) for c in cntrs)
-            docker_info["containers"] = {
-                "count": len(cntrs),
-                "size_gb": round(cntrs_size / (1024 ** 3), 2),
-            }
-
-            vols = df.get("Volumes") or []
-            vols_size = sum((v.get("UsageData") or {}).get("Size", 0) for v in vols)
-            vols_reclaimable = sum(
-                (v.get("UsageData") or {}).get("Size", 0)
-                for v in vols
-                if (v.get("UsageData") or {}).get("RefCount", 0) == 0
-            )
-            docker_info["volumes"] = {
-                "count": len(vols),
-                "size_gb": round(vols_size / (1024 ** 3), 2),
-                "reclaimable_gb": round(vols_reclaimable / (1024 ** 3), 2),
-            }
-
-            bc = df.get("BuildCache") or []
-            bc_size = sum(b.get("Size", 0) for b in bc)
-            bc_reclaimable = sum(b.get("Size", 0) for b in bc if not b.get("InUse", False))
-            docker_info["build_cache"] = {
-                "count": len(bc),
-                "size_gb": round(bc_size / (1024 ** 3), 2),
-                "reclaimable_gb": round(bc_reclaimable / (1024 ** 3), 2),
-            }
-
-            total_dock = imgs_size + cntrs_size + vols_size + bc_size
-            total_reclaim = imgs_reclaimable + vols_reclaimable + bc_reclaimable
-            docker_info["total_docker_gb"] = round(total_dock / (1024 ** 3), 2)
-            docker_info["total_reclaimable_gb"] = round(total_reclaim / (1024 ** 3), 2)
-        except Exception as exc:
-            logger.debug("Docker df query failed or unavailable: %s", exc)
+        server_id = (request.query_params.get("server") or "").strip()
+        if server_id:
+            if not (request.user and request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser)):
+                return Response({"error": "Admin privileges required."}, status=status.HTTP_403_FORBIDDEN)
+            node_payload = self._remote_storage_overview(server_id)
+            if node_payload is not None:
+                return Response(node_payload)
+        overview = build_storage_overview()
 
         # 3. Artifacts / Logs Breakdown
         artifacts_info = {
@@ -1444,11 +1462,96 @@ class PlatformStorageOverviewView(GenericAPIView):
             logger.debug("Artifacts telemetry failed: %s", exc)
 
         return Response({
-            "disk": disk_info,
-            "docker": docker_info,
+            "disk": overview["disk"],
+            "docker": overview["docker"],
             "artifacts": artifacts_info,
-            "timestamp": timezone.now().isoformat(),
+            "timestamp": overview["timestamp"],
         })
+
+    def _remote_storage_overview(self, server_id: str) -> dict | None:
+        from apps.deployments.models.servers import ManagedServer
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+
+        try:
+            server = ManagedServer.objects.filter(id=server_id).first()
+            if server is None or server.is_primary:
+                return None
+            data = RemoteOrchestrator(server).get_node_storage_overview()
+            if not data:
+                return {
+                    "error": f"Node {server.name} did not return storage data.",
+                    "server_id": str(server.id),
+                }
+            data["server_id"] = str(server.id)
+            data["server_name"] = server.name
+            return data
+        except Exception as exc:
+            logger.debug("Remote storage overview failed: %s", exc)
+            return None
+
+
+class StorageFleetView(GenericAPIView):
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from apps.deployments.models.servers import ManagedServer
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+
+        if not (request.user and request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser)):
+            return Response({"error": "Admin privileges required."}, status=status.HTTP_403_FORBIDDEN)
+        cached = cache.get("smsly:storage:fleet:v1")
+        if cached is not None:
+            return Response(cached)
+        nodes = list(ManagedServer.objects.filter(is_primary=False).only("id", "name", "status")[:50])
+        local = build_storage_overview()
+        payload = {
+            "local": local,
+            "nodes": [],
+            "totals": {
+                "total_gb": local["disk"]["total_gb"],
+                "used_gb": local["disk"]["used_gb"],
+                "free_gb": local["disk"]["free_gb"],
+                "docker_gb": local["docker"]["total_docker_gb"],
+            },
+        }
+
+        def _fetch(server):
+            try:
+                data = RemoteOrchestrator(server).get_node_storage_overview()
+                if not data:
+                    return {"server_id": str(server.id), "server_name": server.name, "error": "no data"}
+                data["server_id"] = str(server.id)
+                data["server_name"] = server.name
+                return data
+            except Exception as exc:
+                return {"server_id": str(server.id), "server_name": server.name, "error": str(exc)[:200]}
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(_fetch, s): s for s in nodes}
+            for fut in as_completed(futures, timeout=60):
+                try:
+                    row = fut.result(timeout=8)
+                except Exception as exc:
+                    s = futures[fut]
+                    row = {"server_id": str(s.id), "server_name": s.name, "error": str(exc)[:200]}
+                payload["nodes"].append(row)
+                disk = (row.get("disk") or {})
+                docker = (row.get("docker") or {})
+                try:
+                    payload["totals"]["total_gb"] += float(disk.get("total_gb") or 0)
+                    payload["totals"]["used_gb"] += float(disk.get("used_gb") or 0)
+                    payload["totals"]["free_gb"] += float(disk.get("free_gb") or 0)
+                    payload["totals"]["docker_gb"] += float(docker.get("total_docker_gb") or 0)
+                except (TypeError, ValueError):
+                    pass
+        try:
+            cache.set("smsly:storage:fleet:v1", payload, 60)
+        except Exception:
+            pass
+        return Response(payload)
 
     def post(self, request):
         if not (request.user and request.user.is_authenticated and request.user.is_staff):

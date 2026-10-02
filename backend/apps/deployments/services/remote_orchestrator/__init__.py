@@ -14,6 +14,7 @@ from .client import (
 )
 from .auth import AuthMixin
 from .error_handling import ErrorHandlingMixin
+from .exec_mixin import ExecMixin
 from .service_sync import ServiceSyncMixin
 from .deployment import DeploymentMixin
 from .deletion import DeletionMixin
@@ -31,6 +32,7 @@ __all__ = [
     "RemoteClientMixin",
     "AuthMixin",
     "ErrorHandlingMixin",
+    "ExecMixin",
     "ServiceSyncMixin",
     "DeploymentMixin",
     "DeletionMixin",

@@ -21,5 +21,5 @@ from apps.core.views.security import (
 from .server_backup import ServerBackupViewSet
 from .service import ServiceViewSet
 from .snapshot import ServiceSnapshotViewSet
-from apps.core.views.system import SystemConfigView, PlatformStorageOverviewView
+from apps.core.views.system import SystemConfigView, PlatformStorageOverviewView, StorageFleetView
 

@@ -639,6 +639,23 @@ def reconcile_network_isolation_task():
         from apps.deployments.services.network_scope import reconcile_network_isolation
         stats = reconcile_network_isolation()
         logger.info("network isolation reconcile: %s", stats)
+        try:
+            from apps.deployments.models.servers import ManagedServer
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            remotes = list(ManagedServer.objects.filter(is_primary=False)[:50])
+            fanout_ok = 0
+            fanout_fail = 0
+            for node in remotes:
+                try:
+                    if RemoteOrchestrator(node).reconcile_remote_network():
+                        fanout_ok += 1
+                    else:
+                        fanout_fail += 1
+                except Exception:
+                    fanout_fail += 1
+            stats = {**stats, "remote_ok": fanout_ok, "remote_fail": fanout_fail}
+        except Exception as fanout_exc:
+            logger.debug("network isolation remote fan-out skipped: %s", fanout_exc)
         return {"status": "ok", **stats}
     except Exception as e:
         logger.error("network isolation reconcile failed: %s", e)

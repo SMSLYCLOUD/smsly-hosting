@@ -154,7 +154,22 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
         from apps.deployments.models import Deployment
         from apps.deployments.views.deployment.logs import _find_container_for_logs
         try:
-            dep = Deployment.objects.get(id=self.deployment_id)
+            dep = Deployment.objects.select_related('service').get(id=self.deployment_id)
+            remote = self._resolve_remote_target(dep)
+            if remote is not None:
+                server, ref = remote
+                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                data = RemoteOrchestrator(server).get_container_logs(ref, tail=tail)
+                logs = (data or {}).get("logs", "") if data else ""
+                if not logs.strip():
+                    logs = getattr(dep, 'runtime_logs', '') or ''
+                return {
+                    'logs': logs,
+                    'status': dep.status,
+                    'container_id': ref,
+                    'container_status': (data or {}).get("status", "running") if data else "unknown",
+                    'source': 'remote_node',
+                }
             container, source = _find_container_for_logs(dep)
 
             if not container:
@@ -226,8 +241,12 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
             )
 
             dep = await database_sync_to_async(
-                Deployment.objects.get
-            )(id=self.deployment_id)
+                lambda: Deployment.objects.select_related('service').get(id=self.deployment_id)
+            )()
+            remote = await database_sync_to_async(self._resolve_remote_target)(dep)
+            if remote is not None:
+                await self._stream_remote_logs(remote)
+                return
             container, source = await database_sync_to_async(
                 _find_container_for_logs
             )(dep)
@@ -293,3 +312,51 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
 
     async def _authenticate_token(self, token_key):
         return await authenticate_ws_token(token_key)
+
+    def _resolve_remote_target(self, dep):
+        try:
+            from apps.deployments.utils.target import resolve_active_execution_target
+            target = resolve_active_execution_target(dep.service)
+            if target.get("target_type") in ("remote", "lite_agent") and target.get("server_obj") is not None:
+                ref = (
+                    (getattr(dep, "verified_runtime_id", "") or "").strip()
+                    or (getattr(dep.service, "active_runtime_id", "") or "").strip()
+                    or (dep.container_id or "").strip()
+                    or dep.service.name
+                )
+                return target["server_obj"], ref
+        except ValueError:
+            pass
+        except Exception as exc:
+            logger.debug("RuntimeLog remote resolve failed: %s", exc)
+        return None
+
+    async def _stream_remote_logs(self, remote):
+        from asgiref.sync import sync_to_async
+
+        server, ref = remote
+        seen = set()
+        failures = 0
+        while not self._disconnected:
+            try:
+                data = await sync_to_async(self._fetch_remote_logs)(server, ref)
+                failures = 0
+            except Exception:
+                failures += 1
+                if failures >= 5:
+                    break
+                await asyncio.sleep(5)
+                continue
+            for line in (data or "").splitlines():
+                if not line or line in seen:
+                    continue
+                seen.add(line)
+                if len(seen) > 2000:
+                    seen.clear()
+                await self.send(text_data=json.dumps({'type': 'log', 'log': line, 'timestamp': ''}))
+            await asyncio.sleep(2)
+
+    def _fetch_remote_logs(self, server, ref):
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+        data = RemoteOrchestrator(server).get_container_logs(ref, tail=100)
+        return (data or {}).get("logs", "") if data else ""

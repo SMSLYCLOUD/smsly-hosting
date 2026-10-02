@@ -768,11 +768,23 @@ def backup_addon(addon_id: str) -> str | None:
     return None
 
 
-def _remap_domain_on_restore(service, metadata):
-    """If restoring to a different platform, remap the service's public_domain."""
+def _remap_domain_on_restore(service, metadata, target_server=None, is_transfer=False, transfer_id=""):
+    """If restoring to a different platform, remap the service's public_domain.
+
+    Shared by backup restore and transfer restore (transfer restores call
+    BackupService on the target). When restoring to a node server, prefer
+    the node's DNS domain over a bare IP so the URL stays DNS-attached.
+    """
     try:
         current_domain = os.environ.get('DOMAIN', '').strip()
+        # Node-aware base: explicit target server node_domain wins over env
+        # when this is a transfer onto a node.
+        if target_server is not None and not getattr(target_server, 'is_primary', True):
+            node_base = (getattr(target_server, 'node_domain', '') or '').strip()
+            if node_base:
+                current_domain = node_base
         old_domain = (metadata or {}).get('platform_domain', '')
+        tag = f" [transfer-{str(transfer_id or (metadata or {}).get('transfer_id', ''))[:8]}]" if (is_transfer or (metadata or {}).get('transfer_id')) else ""
         if not current_domain or not old_domain or current_domain == old_domain:
             return
 
@@ -787,7 +799,7 @@ def _remap_domain_on_restore(service, metadata):
         if old_domain in svc_domain:
             new_domain = svc_domain.replace(old_domain, current_domain)
             service.public_domain = new_domain
-            logger.info("Domain remapped on restore: %s → %s", svc_domain, new_domain)
+            logger.info("Domain remapped on restore%s: %s → %s", tag, svc_domain, new_domain)
     except Exception as exc:
         logger.warning("Failed to remap domain during restore: %s", exc)
 

@@ -334,6 +334,25 @@ export interface Service {
   path_redirects?: { path: string; target: string }[];
   host_aliases?: { host: string; rewrite_root: string }[];
   node_url?: string | null;
+  node_url_nested?: string | null;
+  node_domains?: {
+    master?: string | null;
+    flat?: string;
+    flat_url?: string;
+    flat_proxiable?: boolean;
+    deep?: string;
+    deep_url?: string;
+    deep_proxiable?: boolean;
+    deep_default?: string;
+    node_number?: number;
+  } | null;
+  internal_endpoints?: {
+    same_host_bridge?: string;
+    cross_node_via_master?: string;
+    cross_node_flat?: string;
+    cross_node_deep?: string;
+    note?: string;
+  } | null;
   // Wire shape: {domain_name, status, dns_expected, dns_actual,
   // last_error, verified, ssl_active, issued_at, expires_at}
   // (backend serializers/service.py get_domain_instances).
@@ -2638,7 +2657,34 @@ export const autoscalerApi = {
     const { data } = await api.post('/autoscaler/trigger/');
     return data;
   },
+  getNodes: async (): Promise<AutoscalerNode[]> => {
+    const { data } = await api.get('/autoscaler/nodes/');
+    return data.nodes || data;
+  },
+  drainNode: async (nodeId: string): Promise<{ ok: boolean; drained_replicas: number }> => {
+    const { data } = await api.post(`/autoscaler/nodes/${nodeId}/drain/`);
+    return data;
+  },
+  cordonNode: async (nodeId: string, allow: boolean): Promise<{ ok: boolean }> => {
+    const { data } = await api.post(`/autoscaler/nodes/${nodeId}/cordon/`, { allow_user_workloads: allow });
+    return data;
+  },
 };
+
+export interface AutoscalerNode {
+  id: string;
+  name: string;
+  host: string;
+  status: string;
+  node_type: string;
+  is_lite_agent: boolean;
+  score: number;
+  resources: Record<string, unknown>;
+  replica_count: number;
+  replicas: { id: string; service: string; status: string }[];
+  storage: { used_percent: number; free_gb: number; total_gb: number } | null;
+  last_heartbeat: string | null;
+}
 
 // ─── Scaling API ────────────────────────────────────────────────────────────
 

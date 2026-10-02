@@ -276,6 +276,17 @@ def apply_vpa_limits_task(self) -> dict[str, int]:
 
             container_name = service.name
 
+            replica_names = [service.name]
+            try:
+                from apps.autoscaler.models.replica import ServiceReplica
+                replica_names += [
+                    r.container_name for r in
+                    ServiceReplica.objects.filter(service=service).exclude(status="DESTROYED")
+                    if r.container_name
+                ]
+            except Exception:
+                pass
+
             if service.server_id:
                 node = service.server
 
@@ -291,12 +302,13 @@ def apply_vpa_limits_task(self) -> dict[str, int]:
                         wg_address=getattr(node, 'wg_address', '') or '',
                     )
                     try:
-                        cmd = f"docker update {' '.join(update_parts)} {container_name}"
-                        stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
-                        if exit_code == 0:
-                            updated += 1
-                        else:
-                            logger.warning("VPA: docker update failed for %s on %s: %s", service.name, node.name, stderr)
+                        for target_name in dict.fromkeys(replica_names):
+                            cmd = f"docker update {' '.join(update_parts)} {target_name}"
+                            stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
+                            if exit_code == 0:
+                                updated += 1
+                            else:
+                                logger.warning("VPA: docker update failed for %s on %s: %s", target_name, node.name, stderr)
                     except Exception as exc:
                         logger.warning("VPA: SSH failed for %s on %s: %s", service.name, node.name, exc)
                     finally:
@@ -338,21 +350,25 @@ def apply_vpa_limits_task(self) -> dict[str, int]:
                 )
                 skipped += 1
             else:
-                # Local container
+                # Local containers (primary + local replicas)
                 try:
                     client = docker_lib.from_env()
-                    container = client.containers.get(container_name)
-                    update_kwargs = {}
-                    if memory and memory > 0:
-                        update_kwargs['mem_reservation'] = f"{memory}m"
-                        update_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
-                    if cpu and cpu > 0:
-                        update_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
-                        update_kwargs['cpu_period'] = 100000
-                        update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
-                    container.update(**update_kwargs)
-                    updated += 1
-                except docker_lib.errors.NotFound:
+                    for target_name in dict.fromkeys(replica_names):
+                        try:
+                            container = client.containers.get(target_name)
+                        except docker_lib.errors.NotFound:
+                            continue
+                        update_kwargs = {}
+                        if memory and memory > 0:
+                            update_kwargs['mem_reservation'] = f"{memory}m"
+                            update_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
+                        if cpu and cpu > 0:
+                            update_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
+                            update_kwargs['cpu_period'] = 100000
+                            update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
+                        container.update(**update_kwargs)
+                        updated += 1
+                except Exception:
                     pass
 
         except Exception as exc:
