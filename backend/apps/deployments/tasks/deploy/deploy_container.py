@@ -224,17 +224,24 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             deployment.staging_url = service.generate_staging_url()
             deployment.save(update_fields=['staging_url'])
 
-        # Explicitly pull image before deployment to avoid 404/Not Found
-        append_log(deployment, f"Pulling image {image_name}...\n")
-        if not compute.pull_image(image_name):
-            append_log(deployment, f"Warning: Registry pull failed for {image_name}. "
+        # Explicitly pull image before deployment to avoid 404/Not Found.
+        # Master-side operations always use the INTERNAL registry ref:
+        # the image_name may already be rewritten to the node-routable
+        # mesh address for remote delegation, which the master's docker
+        # cannot verify (no mesh cert dir) — pulling that form here fails
+        # even though the image exists (2026-10-02: braid fe18dae).
+        from apps.deployments.services.registry_routing import image_ref_for_internal
+        pull_ref = image_ref_for_internal(image_name)
+        append_log(deployment, f"Pulling image {pull_ref}...\n")
+        if not compute.pull_image(pull_ref):
+            append_log(deployment, f"Warning: Registry pull failed for {pull_ref}. "
                                    "Attempting deployment using local cache...\n")
             image_available_after_pull_failure = False
             local_cache_error = ""
             try:
                 _client = docker.from_env()
                 try:
-                    _client.images.get(image_name)
+                    _client.images.get(pull_ref)
                     image_available_after_pull_failure = True
                 except docker.errors.ImageNotFound:
                     # The image may exist in the local cache under ANY of

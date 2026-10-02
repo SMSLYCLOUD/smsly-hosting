@@ -189,6 +189,30 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
     append_log(deployment, f"Delegating deployment to remote server: {server.name} ({server.host})\n")
     update_stage(deployment, 'Remote Sync', 'running')
 
+    # Self-heal the node's registry trust + login BEFORE delegating:
+    # self-bootstrapped nodes never got the CA/login, and rotations
+    # stale it — without this the node pull fails (2026-10-02 braid).
+    # Best-effort: a healer failure never blocks the deploy, the pull
+    # error surfaces below with the node logs.
+    try:
+        from apps.deployments.services.provisioner.helpers.registry import (
+            ensure_node_registry,
+        )
+        _reg_heal = ensure_node_registry(server)
+        if _reg_heal.get("repaired"):
+            append_log(
+                deployment,
+                f"[Remote] Node registry repaired: "
+                f"{', '.join(_reg_heal['repaired'])}\n",
+            )
+        elif _reg_heal.get("error"):
+            append_log(
+                deployment,
+                f"[Remote] Node registry check: {_reg_heal['error']}\n",
+            )
+    except Exception as _reg_exc:
+        append_log(deployment, f"[Remote] Node registry check skipped: {_reg_exc}\n")
+
     remote_svc_id = orchestrator.sync_service(service)
     if not remote_svc_id:
         _remote_deploy_failed(

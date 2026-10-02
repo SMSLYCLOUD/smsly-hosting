@@ -149,6 +149,22 @@ def check_managed_servers_health_task():
             checked += 1
         except Exception as exc:
             logger.warning("Health check failed for %s (%s): %s", server.name, server.host, exc)
+        # Registry self-heal for full-stack nodes (not lite agents):
+        # repairs missing CA trust + stale logins from rotations or
+        # self-bootstrap gaps. Best-effort; never fails the health pass.
+        try:
+            if not getattr(server, 'is_primary', False) and not getattr(
+                    server, 'is_lite_agent', False):
+                from apps.deployments.services.provisioner.helpers.registry import (
+                    ensure_node_registry,
+                )
+                _healed = ensure_node_registry(server)
+                if _healed.get("repaired"):
+                    logger.info("Node %s registry repaired: %s", server.name,
+                                ",".join(_healed["repaired"]))
+        except Exception as exc:
+            logger.debug("Node registry self-heal skipped for %s: %s",
+                         server.name, exc)
 
     # Refresh Prometheus target files. Agent deployment (docker-labels, Promtail,
     # cAdvisor, Node Exporter) is handled by node_watchdog_task to avoid redundant
