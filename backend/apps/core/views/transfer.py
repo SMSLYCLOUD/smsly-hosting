@@ -933,6 +933,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 output_text = output.decode() if isinstance(output, bytes) else str(output)
                 return Response({'stdout': output_text, 'exit_code': exit_code})
             else:
+                result = subprocess.run(
                     ['python3', '-c', script],
                     capture_output=True, text=True, timeout=300,
                 )
