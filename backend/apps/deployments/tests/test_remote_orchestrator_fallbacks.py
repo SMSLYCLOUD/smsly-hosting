@@ -26,7 +26,7 @@ class TestRemoteOrchestratorFallbacks(TestCase):
         self.server.delete()
         self.user.delete()
 
-    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    @patch("apps.deployments.services.remote_orchestrator.client.requests.request")
     def test_request_tries_hmac_when_token_missing(self, mock_request):
         orch = RemoteOrchestrator(self.server)
 
@@ -42,7 +42,7 @@ class TestRemoteOrchestratorFallbacks(TestCase):
         self.assertEqual(headers.get("X-SMSLY-Remote-Sync"), "1")
         self.assertIn("X-Gateway-Signature-V2", headers)
 
-    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    @patch("apps.deployments.services.remote_orchestrator.client.requests.request")
     def test_token_401_falls_through_to_hmac_without_exchange(self, mock_request):
         """A token 401 must try hmac next, not re-exchange in a loop.
 
