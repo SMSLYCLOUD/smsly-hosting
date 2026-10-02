@@ -847,6 +847,22 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             else:
                 run_kwargs['network'] = network
 
+            # Idempotency: retries must not die on a stale same-named
+            # container left by an earlier partial transfer (2026-10-02:
+            # every retry 409'd on the leftover). Stop + remove first.
+            try:
+                stale = client.containers.get(container_name)
+                logger.info(
+                    "Transfer incoming/deploy: removing stale container %s (%s)",
+                    container_name, stale.id[:12],
+                )
+                with contextlib.suppress(Exception):
+                    stale.stop(timeout=10)
+                with contextlib.suppress(Exception):
+                    stale.remove(force=True)
+            except Exception:
+                pass
+
             container = client.containers.run(**run_kwargs)
             return Response({'container_id': container.id, 'status': 'running'})
         except Exception:
@@ -865,6 +881,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
             return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+        import subprocess
         script = request.data.get('script')
         shell = request.data.get('shell', False)
         container = request.data.get('container', '')
@@ -877,7 +894,6 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         )
         try:
             if shell:
-                import subprocess
                 # SECURITY: Use shell=False with shlex.split to prevent
                 # shell injection. If the command requires shell features,
                 # the caller must break it into safe components.
@@ -889,6 +905,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 )
             elif container:
                 from apps.cloud.docker_client import get_docker_client
+                from docker.errors import APIError as _DockerAPIError
                 client = get_docker_client()
                 try:
                     target = client.containers.get(container)
@@ -901,12 +918,21 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                         )
                     target = targets[0]
                 # Use list-form command so docker-py doesn't shlex.split() multi-line scripts
-                exit_code, output = target.exec_run(["python3", "-c", script])
+                try:
+                    exit_code, output = target.exec_run(["python3", "-c", script])
+                except _DockerAPIError as api_exc:
+                    # Stopped container (e.g. leftover from an earlier
+                    # partial transfer): report structured failure, not 500.
+                    if getattr(api_exc, 'status_code', None) == 409:
+                        return Response(
+                            {'stdout': '', 'exit_code': 127,
+                             'error': f'Container "{container}" is not running'},
+                            status=status.HTTP_409_CONFLICT,
+                        )
+                    raise
                 output_text = output.decode() if isinstance(output, bytes) else str(output)
                 return Response({'stdout': output_text, 'exit_code': exit_code})
             else:
-                import subprocess
-                result = subprocess.run(
                     ['python3', '-c', script],
                     capture_output=True, text=True, timeout=300,
                 )
