@@ -11,6 +11,28 @@ import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import api from '@/lib/api';
 import { addonsApi } from '@/lib/api';
+import { getAddonMetadata } from '@/lib/addonRegistry';
+
+/* Logo texture cache (URL -> texture): addon spheres wear their brand
+   mark; cache so re-renders don't refetch. */
+const logoTextureCache = new Map<string, any>();
+function logoTexture(url: string | undefined, onReady: () => void): any | null {
+  if (!url) return null;
+  const hit = logoTextureCache.get(url);
+  if (hit) return hit === 'failed' ? null : hit;
+  try {
+    const tex = new THREE.TextureLoader().load(
+      url,
+      () => onReady(),
+      undefined,
+      () => { logoTextureCache.set(url, 'failed'); },
+    );
+    logoTextureCache.set(url, tex);
+    return tex;
+  } catch {
+    return null;
+  }
+}
 
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
 
@@ -53,6 +75,15 @@ const COLORS: Record<string, string> = {
   MONGODB: '#4ade80',
   ELASTICSEARCH: '#38bdf8',
   RABBITMQ: '#fb923c',
+  // AI coding-agent CLIs (match registry accents)
+  OPENCODE: '#34d399',
+  COMMANDCODE: '#22d3ee',
+  ANTIGRAVITYCLI: '#60a5fa',
+  KIMCHI: '#fb923c',
+  FORGECODE: '#a78bfa',
+  DEEPAGENTS: '#a3e635',
+  QWENCODE: '#c084fc',
+  FACTORYDROID: '#fb7185',
   MINIO: '#f472b6',
   QDRANT: '#a78bfa',
   volume: '#eab308',
@@ -71,25 +102,44 @@ function createNode3D(node: GraphNode): any {
   const color = getColor(node);
 
   let geometry;
+  let logoMeshAdded = false;
   if (node.nodeType === 'service') {
     // Nucleus: large glowing sphere
     geometry = new THREE.SphereGeometry(10, 32, 32);
   } else if (node.nodeType === 'addon') {
-    // Electron: smaller, faceted
+    // Electron: smaller, faceted — wearing the addon's brand logo as
+    // a texture when the registry has one (falls back to plain color).
     geometry = new THREE.SphereGeometry(5, 16, 16);
+    const logo = getAddonMetadata(node.subType || '')?.logo;
+    if (logo) {
+      const mat = new THREE.MeshPhongMaterial({
+        color: new THREE.Color('#ffffff'),
+        emissive: new THREE.Color(color),
+        emissiveIntensity: 0.25,
+        transparent: true,
+        opacity: 0.95,
+        shininess: 120,
+      });
+      const tex = logoTexture(logo, () => { mat.needsUpdate = true; });
+      if (tex) mat.map = tex;
+      group.add(new THREE.Mesh(geometry, mat));
+      logoMeshAdded = true;
+    }
   } else {
     geometry = new THREE.BoxGeometry(5, 5, 5);
   }
 
-  const material = new THREE.MeshPhongMaterial({
-    color: new THREE.Color(color),
-    emissive: new THREE.Color(color),
-    emissiveIntensity: node.nodeType === 'service' ? 0.5 : 0.35,
-    transparent: true,
-    opacity: 0.9,
-    shininess: 120,
-  });
-  group.add(new THREE.Mesh(geometry, material));
+  if (!logoMeshAdded) {
+    const material = new THREE.MeshPhongMaterial({
+      color: new THREE.Color(color),
+      emissive: new THREE.Color(color),
+      emissiveIntensity: node.nodeType === 'service' ? 0.5 : 0.35,
+      transparent: true,
+      opacity: 0.9,
+      shininess: 120,
+    });
+    group.add(new THREE.Mesh(geometry, material));
+  }
 
   // Outer glow shell
   const glowSize = node.nodeType === 'service' ? 14 : 7;
@@ -295,13 +345,17 @@ export function ServiceTopologyTab({ serviceId, serviceName }: { serviceId: stri
               { color: COLORS.service, label: 'Service' },
               ...graphData.nodes
                 .filter(n => n.nodeType === 'addon')
-                .map(n => ({ color: getColor(n), label: (n.subType || 'addon').toUpperCase() }))
+                .map(n => ({ color: getColor(n), label: (n.subType || 'addon').toUpperCase(), logo: getAddonMetadata(n.subType || '')?.logo }))
                 .filter((v, i, a) => a.findIndex(x => x.label === v.label) === i),
               ...(graphData.nodes.some(n => n.nodeType === 'volume')
                 ? [{ color: COLORS.volume, label: 'Volume' }] : []),
-            ].map(({ color, label }) => (
+            ].map(({ color, label, logo }: any) => (
               <div key={label} className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                {logo ? (
+                  <img src={logo} alt={label} className="w-3 h-3 object-contain" />
+                ) : (
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                )}
                 <span className="text-[10px] text-zinc-300">{label}</span>
               </div>
             ))}
