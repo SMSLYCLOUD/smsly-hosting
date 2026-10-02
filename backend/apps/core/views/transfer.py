@@ -244,13 +244,19 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 {'error': 'Valid node authentication is required.'},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-        # Verify the source IP corresponds to a known ManagedServer
+        # The HMAC above (platform GATEWAY_SECRET) IS the authentication.
+        # A missing ManagedServer row must not hard-fail: nodes never
+        # carry a row for the master itself, so every legitimate
+        # platform-initiated sync would 401 here (2026-10-02: all
+        # transfers died in pre-flight with "Unknown source node").
+        # Owner resolution below already falls back to the first admin.
         if not ManagedServer.objects.filter(
             Q(host=source_ip) | Q(private_ip=source_ip)
         ).exists():
-            return Response(
-                {'error': 'Unknown source node. Register the server first.'},
-                status=status.HTTP_401_UNAUTHORIZED,
+            logger.warning(
+                "register-incoming from unregistered source %s "
+                "(HMAC valid — proceeding with admin fallback owner)",
+                source_ip,
             )
 
         try:
