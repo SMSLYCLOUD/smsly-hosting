@@ -923,6 +923,15 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         if not dest_path.startswith('/tmp/'):
             return Response({'error': 'Only /tmp/ paths are allowed'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Size probe for resumable uploads: returns bytes present so
+        # the sender can continue from offset instead of restarting.
+        if isinstance(request.data, dict) and request.data.get('query_size'):
+            try:
+                size = os.path.getsize(dest_path) if os.path.exists(dest_path) else 0
+            except OSError:
+                size = 0
+            return Response({'status': 'size', 'path': dest_path, 'size': size})
+
         if content_base64:
             try:
                 raw = base64.b64decode(content_base64)

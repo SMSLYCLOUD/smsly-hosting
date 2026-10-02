@@ -54,16 +54,23 @@ class UploadMixin:
     def _upload_backup_to_target(self, local_path: str, remote_path: str) -> int:
         """POST a local file to the target's incoming/upload-file in chunks.
 
-        Returns total bytes written. Raises on any chunk failure —
-        fail loud here rather than with a confusing missing-file error
-        in the restore step.
+        Resumes from the remote partial size (the endpoint answers a
+        size probe) so a transient mid-upload failure doesn't restart a
+        multi-hundred-MB transfer from zero. Returns total bytes
+        present afterwards. Raises on any chunk failure — fail loud
+        here rather than with a confusing missing-file error in the
+        restore step.
         """
         import base64
 
         size = os.path.getsize(local_path)
-        self._log(f"Uploading backup to target ({size} bytes, chunked)...")
-        offset = 0
+        offset = self._remote_partial_size(remote_path, size)
+        if offset:
+            self._log(f"Resuming upload at byte {offset}/{size}...")
+        else:
+            self._log(f"Uploading backup to target ({size} bytes, chunked)...")
         with open(local_path, 'rb') as handle:
+            handle.seek(offset)
             while True:
                 data = handle.read(self.UPLOAD_CHUNK_BYTES)
                 if not data:
@@ -84,6 +91,30 @@ class UploadMixin:
             raise RuntimeError(f"Upload incomplete: wrote {offset} of {size} bytes")
         self._log(f"Upload complete: {offset} bytes to {remote_path}")
         return offset
+
+    def _remote_partial_size(self, remote_path: str, local_size: int) -> int:
+        """Return resumable remote offset, chunk-aligned, or 0."""
+        try:
+            resp = self._node_api_request(
+                'incoming/upload-file',
+                body={'path': remote_path, 'query_size': True},
+                timeout=60,
+            )
+        except Exception as exc:
+            logger.debug("Upload size probe failed, starting from 0: %s", exc)
+            return 0
+        try:
+            remote = int((resp or {}).get('size', 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+        if remote <= 0 or remote >= local_size:
+            return 0
+        # Rewind torn trailing bytes: only chunk-aligned prefixes are
+        # guaranteed complete (a final partial chunk may be truncated).
+        aligned = (remote // self.UPLOAD_CHUNK_BYTES) * self.UPLOAD_CHUNK_BYTES
+        if aligned != remote:
+            logger.info("Upload resume rewound %d torn bytes", remote - aligned)
+        return aligned
 
     def _export_backup_key(self) -> str | None:
         if self.transfer.transfer_type != 'FULL':

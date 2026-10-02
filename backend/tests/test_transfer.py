@@ -144,6 +144,44 @@ class ChunkedUploadTests(TestCase):
         finally:
             os.unlink(path)
 
+    def test_resume_continues_from_remote_size(self):
+        import base64
+        import tempfile
+        import os
+        from unittest.mock import MagicMock, patch
+        from apps.deployments.models.transfer import ServerTransfer
+        from apps.deployments.services.transfer_service import ServerTransferService
+        from django.contrib.auth import get_user_model
+
+        payload = bytes(range(256)) * 3000  # ~768KB, under one chunk
+        fd, path = tempfile.mkstemp(suffix='.tar.gz')
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(payload)
+            user = get_user_model().objects.create_user(username='resumer', password='x')
+            transfer = ServerTransfer.objects.create(
+                owner=user, source_server_ip='198.51.100.1',
+                target_server_ip='203.0.113.2', transfer_type='SERVICE',
+            )
+            svc = ServerTransferService(transfer)
+            sent = []
+
+            def fake_request(action, body=None, **kwargs):
+                if body.get('query_size'):
+                    return {'status': 'size', 'size': 0}
+                sent.append(body)
+                return {'status': 'written', 'size': len(body['content_base64'])}
+
+            svc._node_api_request = fake_request
+            total = svc._upload_backup_to_target(path, '/tmp/test-resume.tar.gz')
+            self.assertEqual(total, len(payload))
+            # Size probe + one data chunk.
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0]['offset'], 0)
+            self.assertFalse(sent[0]['append'])
+        finally:
+            os.unlink(path)
+
 
 class SourceImageResolveTests(TestCase):
     """Backup-local tags must resolve to the source running image.

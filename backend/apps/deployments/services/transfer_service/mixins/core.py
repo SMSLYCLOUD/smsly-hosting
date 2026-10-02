@@ -150,7 +150,22 @@ class CoreMixin:
         for base_url in candidate_urls:
             url = f"{base_url.rstrip('/')}{path}"
             try:
-                resp = requests.request(method, url, headers=headers, json=body, params=params, timeout=timeout)
+                # Never follow redirects: node Caddy answers :80 with a
+                # 301 into IP-literal https://, whose TLS handshake can
+                # never complete — following turns a fast skip into a
+                # slow SSLError death (2026-10-02: a 73MB upload died at
+                # 52MB this way). A 3xx means "wrong candidate", move on.
+                resp = requests.request(
+                    method, url, headers=headers, json=body,
+                    params=params, timeout=timeout, allow_redirects=False,
+                )
+                if 300 <= resp.status_code < 400:
+                    last_error = RuntimeError(
+                        f"{base_url} redirected {method} {path} "
+                        f"(HTTP {resp.status_code}) — skipping candidate"
+                    )
+                    self._log(f"  -> {base_url} redirected, skipping")
+                    continue
                 resp.raise_for_status()
                 return resp.json()
             except requests.RequestException as e:
