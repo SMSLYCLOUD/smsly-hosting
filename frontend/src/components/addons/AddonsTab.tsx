@@ -6,6 +6,9 @@ import { Database, RotateCcw, Plus, Trash2, RefreshCw, Download, Shield, Loader2
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { addonsApi, Addon, systemApi } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
+import { CLI_ADDON_TYPES } from '@/lib/addonRegistry';
+import CliConfigCard from '@/components/addons/CliConfigCard';
+import AddonConsole from '@/components/addons/AddonConsole';
 import { AddonLogsViewer } from '@/components/addons/AddonLogsViewer';
 
 
@@ -665,6 +668,19 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                     ))}
                                                 </div>
                                             )}
+                                        </div>
+
+                                        {/* CLI Config */}
+                                        {CLI_ADDON_TYPES.includes(addon.addon_type) && (
+                                            <div onClick={(e) => e.stopPropagation()}>
+                                                <CliConfigCard addonId={addon.id} addonType={addon.addon_type} />
+                                            </div>
+                                        )}
+
+                                        {/* Console */}
+                                        <div onClick={(e) => e.stopPropagation()}>
+                                            <h5 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Console</h5>
+                                            <AddonConsole addonId={addon.id} disabled={addon.status !== 'ACTIVE'} />
                                         </div>
 
                                         {/* Logs */}
