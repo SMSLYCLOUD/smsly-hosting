@@ -90,8 +90,12 @@ apply_lockdown() {
     # host itself — without an explicit accept the drop-direct rule below
     # swallows container/host-local traffic (2026-09-17: backend health
     # probes hung the full timeout, false "unhealthy" + restart churn).
-    # Honors this script's contract that Docker bridges are NOT touched.
-    for _iface in lo docker0 'br+'; do
+    # WireGuard mesh control traffic (node registrar heartbeats dial the
+    # edge over the mesh with SNI override) needs the same pass
+    # (2026-10-02: node heartbeats timed out on 443 via wg0 while the
+    # tunnel itself was healthy). Honors this script's contract that
+    # Docker bridges are NOT touched.
+    for _iface in lo docker0 'br+' wg0 'wg+'; do
         iptables -I "$CHAIN" "$rule_no" -i "$_iface" -p tcp -m multiport --dports 80,443 -m comment --comment "$TAG allow-internal" -j ACCEPT 2>/dev/null && rule_no=$((rule_no+1))
     done
 
