@@ -151,27 +151,38 @@ def _resolve_backup_target(service):
     """(is_remote, server_obj, via) for backup/restore routing.
 
     Primary: runtime metadata (active_target_type/host). Fallback: the
-    service's server FK when it points at a non-primary node — runtime
-    metadata can go stale (never-deployed services, failed promotes),
-    and silently running a REMOTE service's backup against the local
-    daemon 404s every time (2026-10-01: distinction-lab-fe5oi). The
+    service's server FK — ONLY when runtime metadata is missing/blank
+    (never-deployed services) or names a remote node we cannot resolve
+    (stale host). An explicit local runtime is trusted even when the
+    server FK points elsewhere (2026-10-02: braid runs locally with a
+    stale remote FK — routing it remote 404s on the node). The
     fallback is logged loudly so stale metadata gets noticed.
     """
+    explicit_local = (getattr(service, 'active_target_type', None) == 'local')
     try:
         from apps.deployments.utils.target import resolve_active_execution_target
         target = resolve_active_execution_target(service)
         if target["target_type"] in ("remote", "lite_agent") and target["server_obj"]:
             return True, target["server_obj"], "runtime-metadata"
+        if target["target_type"] in ("remote", "lite_agent"):
+            logger.warning(
+                "Backup/restore of %s names remote host %s but no server "
+                "row matched — trying server FK",
+                service.name, target.get("host_ip"))
+        elif explicit_local:
+            return False, None, "local"
     except Exception as exc:
         logger.warning(
             "Target resolution failed for backup/restore of %s: %s — "
             "trying server FK", service.name, exc)
+    if explicit_local:
+        return False, None, "local"
     try:
         server = getattr(service, 'server', None)
         if server is not None and not getattr(server, 'is_primary', True):
             logger.warning(
                 "Backup/restore of %s routed via server FK %s (runtime "
-                "metadata missing or local)", service.name, server.name)
+                "metadata missing or unresolvable)", service.name, server.name)
             return True, server, "server-fk"
     except Exception as exc:
         logger.debug("Server-FK fallback failed for %s: %s", service.name, exc)
@@ -1224,9 +1235,13 @@ class BackupService:
             })
         remote_backup_script = build_remote_backup_script(
             service.name, _specs, mask_secrets=not include_secret_values)
-        result = ssh.exec_command(remote_backup_script, timeout=600)
-        output = result.get('stdout', '')
-        error_out = result.get('stderr', '')
+        out, err, exit_status = ssh.exec_command(remote_backup_script, timeout=600)
+        output = out or ''
+        error_out = err or ''
+        if exit_status != 0:
+            raise RuntimeError(
+                f"Remote backup failed for {service.name}: node script "
+                f"exit {exit_status}: {(error_out or output)[:500]}")
         if error_out:
             logger.info("Remote backup stderr: %s", error_out[:500])
 
@@ -1318,8 +1333,12 @@ class BackupService:
 
         remote_restore_script = build_remote_restore_script(
             target_service.name, remote_tmp)
-        result = ssh.exec_command(remote_restore_script, timeout=600)
-        error_out = result.get('stderr', '')
+        out, err, exit_status = ssh.exec_command(remote_restore_script, timeout=600)
+        error_out = err or ''
+        if exit_status != 0:
+            raise RuntimeError(
+                f"Remote restore failed for {target_service.name}: node "
+                f"script exit {exit_status}: {(error_out or out)[:500]}")
         if error_out:
             logger.info("Remote restore stderr: %s", error_out[:500])
         ssh.close()

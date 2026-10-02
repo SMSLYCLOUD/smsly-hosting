@@ -20,10 +20,39 @@ class ResolveBackupTargetTests(SimpleTestCase):
         server.is_primary = False
         svc = mock.Mock()
         svc.name = 'node-svc'
+        svc.active_target_type = None
         svc.server = server
         with mock.patch(
                 'apps.deployments.utils.target.resolve_active_execution_target',
                 side_effect=ValueError('no metadata')):
+            self.assertEqual(_resolve_backup_target(svc),
+                             (True, server, 'server-fk'))
+
+    def test_explicit_local_trusts_runtime_despite_remote_fk(self):
+        server = mock.Mock()
+        server.name = 'node-1'
+        server.is_primary = False
+        svc = mock.Mock()
+        svc.name = 'stale-fk-svc'
+        svc.active_target_type = 'local'
+        svc.server = server
+        with mock.patch(
+                'apps.deployments.utils.target.resolve_active_execution_target',
+                side_effect=ValueError('no metadata')):
+            self.assertEqual(_resolve_backup_target(svc), (False, None, 'local'))
+
+    def test_remote_unresolvable_falls_back_to_fk(self):
+        server = mock.Mock()
+        server.name = 'node-1'
+        server.is_primary = False
+        svc = mock.Mock()
+        svc.name = 'remote-svc'
+        svc.active_target_type = 'remote'
+        svc.server = server
+        with mock.patch(
+                'apps.deployments.utils.target.resolve_active_execution_target',
+                return_value={'target_type': 'remote', 'server_obj': None,
+                              'host_ip': '10.9.9.9'}):
             self.assertEqual(_resolve_backup_target(svc),
                              (True, server, 'server-fk'))
 
