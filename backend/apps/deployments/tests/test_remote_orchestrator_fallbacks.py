@@ -35,7 +35,14 @@ class TestRemoteOrchestratorFallbacks(TestCase):
         response_mock.json.return_value = {"id": "test"}
         mock_request.return_value = response_mock
 
-        orch._request("GET", "/api/v1/test/")
+        # Bypass the TCP pre-filter: documentation networks are
+        # unreachable from CI, and _filter_reachable would drop every
+        # candidate (no fallback) so the main loop never runs.
+        with patch.object(
+            RemoteOrchestrator, "_filter_reachable",
+            side_effect=lambda urls, probe_timeout=1.0: list(urls),
+        ):
+            orch._request("GET", "/api/v1/test/")
         self.assertTrue(mock_request.called)
 
         headers = mock_request.call_args[1].get("headers", {})
@@ -71,7 +78,13 @@ class TestRemoteOrchestratorFallbacks(TestCase):
                 RemoteOrchestrator, "_candidate_base_urls",
                 return_value=["http://10.100.0.2:8000"],
             ):
-                resp = orch._request("POST", "/api/v1/transfers/register-incoming/")
+                # Deterministic regardless of live mesh reachability
+                # from the test runner.
+                with patch.object(
+                    RemoteOrchestrator, "_filter_reachable",
+                    side_effect=lambda urls, probe_timeout=1.0: list(urls),
+                ):
+                    resp = orch._request("POST", "/api/v1/transfers/register-incoming/")
 
         self.assertIsNotNone(resp)
         self.assertEqual(resp.status_code, 200)
