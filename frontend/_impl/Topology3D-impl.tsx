@@ -10,26 +10,54 @@ import { getAddonMetadata } from '@/lib/addonRegistry';
 import { ServiceSidePanel } from '../src/components/topology/ServiceSidePanel';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 
-// Logo textures for addon nodes (URL -> texture). A failed load leaves
-// the plain status-colored mesh — never break the graph over an image.
+// Logo textures for addon nodes (URL -> texture). Brand marks are SVGs,
+// which decode to 0x0 without intrinsic dimensions — uploading one
+// straight to the GPU throws texSubImage2D every frame. So rasterize
+// through a fixed-size canvas first and only hand out fully-backed
+// textures. A failed load leaves the plain status-colored mesh — never
+// break the graph over an image.
 const logoTextureCache = new Map<string, any>();
-function addonLogoTexture(addonType: string | undefined, onReady: () => void): any | null {
+const logoLoadStarted = new Set<string>();
+function addonLogoTexture(addonType: string | undefined, onReady: (tex: any) => void): any | null {
   const url = addonType ? getAddonMetadata(addonType)?.logo : undefined;
   if (!url) return null;
   const hit = logoTextureCache.get(url);
   if (hit) return hit === 'failed' ? null : hit;
+  if (typeof document === 'undefined' || logoLoadStarted.has(url)) return null;
+  logoLoadStarted.add(url);
   try {
-    const tex = new THREE.TextureLoader().load(
-      url,
-      () => onReady(),
-      undefined,
-      () => { logoTextureCache.set(url, 'failed'); },
-    );
-    logoTextureCache.set(url, tex);
-    return tex;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width || 0;
+        const h = img.naturalHeight || img.height || 0;
+        if (!w || !h) throw new Error('empty image');
+        const size = 128;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('no 2d context');
+        const scale = Math.min(size / w, size / h);
+        const dw = Math.max(1, Math.floor(w * scale));
+        const dh = Math.max(1, Math.floor(h * scale));
+        ctx.clearRect(0, 0, size, size);
+        ctx.drawImage(img, Math.floor((size - dw) / 2), Math.floor((size - dh) / 2), dw, dh);
+        const tex = new THREE.CanvasTexture(canvas);
+        if ('colorSpace' in tex) (tex as any).colorSpace = THREE.SRGBColorSpace;
+        logoTextureCache.set(url, tex);
+        onReady(tex);
+      } catch {
+        logoTextureCache.set(url, 'failed');
+      }
+    };
+    img.onerror = () => { logoTextureCache.set(url, 'failed'); };
+    img.src = url;
   } catch {
-    return null;
+    logoTextureCache.set(url, 'failed');
   }
+  return null;
 }
 
 // Dynamically import ForceGraph3D to avoid SSR issues with window/canvas
@@ -94,10 +122,13 @@ export function Topology3D({ data, loading, error, refresh }: { data: any, loadi
       opacity: 0.9,
     });
 
-    // Addon nodes wear their registry brand mark (cached texture;
-    // plain color when the type has no logo).
+    // Addon nodes wear their registry brand mark (fully-rasterized
+    // texture only; plain color until the logo is ready or has none).
     if ((node.type || '').toLowerCase() === 'addon') {
-      const tex = addonLogoTexture(data.addon_type, () => { material.needsUpdate = true; });
+      const tex = addonLogoTexture(data.addon_type, (readyTex) => {
+        material.map = readyTex;
+        material.needsUpdate = true;
+      });
       if (tex) material.map = tex;
     }
 
