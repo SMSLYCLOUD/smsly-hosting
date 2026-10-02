@@ -11,6 +11,11 @@ logger = logging.getLogger(__name__)
 
 
 class UploadMixin:
+    # Raw bytes per upload chunk. Base64 inflates ~33%, keeping each
+    # JSON body around ~1.8MB — safely below gunicorn/proxy limits
+    # while keeping chunk counts sane for multi-hundred-MB backups.
+    UPLOAD_CHUNK_BYTES = 1024 * 1024
+
     def _upload(self):
         self._update(40, 'Preparing backup for restore...')
 
@@ -37,7 +42,48 @@ class UploadMixin:
         remote_path = f"/tmp/{_safe_backup_basename(local_path)}"
         self._uploaded_remote_backup_path = local_path if self._target_is_local() else remote_path
 
-        self._log(f"Backup prepared at {local_path} (node will pull via restore script)")
+        if self._target_is_local():
+            self._log(f"Backup prepared at {local_path} (local transfer — no upload needed)")
+            return
+
+        # Ship the archive to the target over the node API (chunked —
+        # the restore step only reads the file, nothing else delivers
+        # it; 2026-10-02: every transfer died with No such file on /tmp).
+        self._upload_backup_to_target(local_path, remote_path)
+
+    def _upload_backup_to_target(self, local_path: str, remote_path: str) -> int:
+        """POST a local file to the target's incoming/upload-file in chunks.
+
+        Returns total bytes written. Raises on any chunk failure —
+        fail loud here rather than with a confusing missing-file error
+        in the restore step.
+        """
+        import base64
+
+        size = os.path.getsize(local_path)
+        self._log(f"Uploading backup to target ({size} bytes, chunked)...")
+        offset = 0
+        with open(local_path, 'rb') as handle:
+            while True:
+                data = handle.read(self.UPLOAD_CHUNK_BYTES)
+                if not data:
+                    break
+                body = {
+                    'path': remote_path,
+                    'content_base64': base64.b64encode(data).decode('ascii'),
+                    'offset': offset,
+                    'append': offset > 0,
+                }
+                resp = self._node_api_request('incoming/upload-file', body=body, timeout=180)
+                if not isinstance(resp, dict) or resp.get('status') != 'written':
+                    raise RuntimeError(f"Target upload failed at offset {offset}: {resp}")
+                offset += len(data)
+                if offset % (10 * self.UPLOAD_CHUNK_BYTES) == 0:
+                    self._log(f"Upload progress: {offset}/{size} bytes...")
+        if offset != size:
+            raise RuntimeError(f"Upload incomplete: wrote {offset} of {size} bytes")
+        self._log(f"Upload complete: {offset} bytes to {remote_path}")
+        return offset
 
     def _export_backup_key(self) -> str | None:
         if self.transfer.transfer_type != 'FULL':

@@ -91,3 +91,55 @@ class RegisterIncomingTests(TestCase):
         resp = self._signed_post('198.51.100.9', 'platform-secret')
         self.assertEqual(resp.status_code, 200)
         self.assertIn('id', resp.json())
+
+
+class ChunkedUploadTests(TestCase):
+    """_upload_backup_to_target must ship every byte in order.
+
+    Regression 2026-10-02: _upload only computed a /tmp path and
+    logged "node will pull" — nothing ever delivered the file, so
+    every transfer died with No such file in the restore step.
+    """
+
+    def test_chunks_reassemble_exactly(self):
+        import base64
+        import tempfile
+        import os
+        from apps.deployments.models.transfer import ServerTransfer
+        from apps.deployments.services.transfer_service import ServerTransferService
+        from django.contrib.auth import get_user_model
+
+        payload = bytes(range(256)) * 20000  # ~5MB, multi-chunk
+        fd, path = tempfile.mkstemp(suffix='.tar.gz')
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(payload)
+            user = get_user_model().objects.create_user(username='uploader', password='x')
+            transfer = ServerTransfer.objects.create(
+                owner=user, source_server_ip='198.51.100.1',
+                target_server_ip='203.0.113.2', transfer_type='SERVICE',
+            )
+            svc = ServerTransferService(transfer)
+            received = bytearray()
+            calls = []
+
+            def fake_request(action, body=None, **kwargs):
+                self.assertEqual(action, 'incoming/upload-file')
+                calls.append(body)
+                raw = base64.b64decode(body['content_base64'])
+                if body['offset'] == 0:
+                    self.assertFalse(body['append'])
+                    received.extend(raw)
+                else:
+                    self.assertTrue(body['append'])
+                    self.assertEqual(body['offset'], len(received))
+                    received.extend(raw)
+                return {'status': 'written', 'size': len(raw)}
+
+            svc._node_api_request = fake_request
+            total = svc._upload_backup_to_target(path, '/tmp/test-upload.tar.gz')
+            self.assertEqual(total, len(payload))
+            self.assertEqual(bytes(received), payload)
+            self.assertGreater(len(calls), 1)
+        finally:
+            os.unlink(path)
