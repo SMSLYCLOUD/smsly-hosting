@@ -143,3 +143,68 @@ class ChunkedUploadTests(TestCase):
             self.assertGreater(len(calls), 1)
         finally:
             os.unlink(path)
+
+
+class SourceImageResolveTests(TestCase):
+    """Backup-local tags must resolve to the source running image.
+
+    Regression 2026-10-02: metadata carries backup/{name}:{uuid}
+    (source-daemon-only); the target tried docker.io and every
+    transfer failed at the image pull.
+    """
+
+    def _svc(self, name='img-svc'):
+        from apps.deployments.models import Service
+        from django.contrib.auth import get_user_model
+        user = get_user_model().objects.create_user(username=f'{name}-owner', password='x')
+        return Service.objects.create(name=name, owner=user)
+
+    def test_backup_tag_resolves_to_running_image(self):
+        from unittest.mock import MagicMock, patch
+        from apps.deployments.models.transfer import ServerTransfer
+        from apps.deployments.services.transfer_service import ServerTransferService
+        svc = self._svc()
+        transfer = ServerTransfer.objects.create(
+            owner=svc.owner, source_server_ip='198.51.100.1',
+            target_server_ip='203.0.113.2', transfer_type='SERVICE', service=svc,
+        )
+        engine = ServerTransferService(transfer)
+        ctr = MagicMock()
+        ctr.attrs = {'Config': {'Image': 'registry:5000/svc/img:abc123'}}
+        client = MagicMock()
+        client.containers.get.return_value = ctr
+        with patch('apps.cloud.docker_client.get_docker_client', return_value=client):
+            resolved = engine._resolve_source_registry_image('backup/img-svc:4589bba1')
+        self.assertEqual(resolved, 'registry:5000/svc/img:abc123')
+        client.containers.get.assert_called_once_with('img-svc')
+
+    def test_non_backup_ref_passes_through(self):
+        from unittest.mock import MagicMock, patch
+        from apps.deployments.models.transfer import ServerTransfer
+        from apps.deployments.services.transfer_service import ServerTransferService
+        svc = self._svc(name='img-svc-2')
+        transfer = ServerTransfer.objects.create(
+            owner=svc.owner, source_server_ip='198.51.100.1',
+            target_server_ip='203.0.113.2', transfer_type='SERVICE', service=svc,
+        )
+        engine = ServerTransferService(transfer)
+        with patch('apps.cloud.docker_client.get_docker_client') as mock_client:
+            resolved = engine._resolve_source_registry_image('registry:5000/svc/img:abc123')
+        self.assertEqual(resolved, 'registry:5000/svc/img:abc123')
+        mock_client.assert_not_called()
+
+    def test_uninspectable_container_keeps_backup_tag(self):
+        from unittest.mock import MagicMock, patch
+        from apps.deployments.models.transfer import ServerTransfer
+        from apps.deployments.services.transfer_service import ServerTransferService
+        svc = self._svc(name='img-svc-3')
+        transfer = ServerTransfer.objects.create(
+            owner=svc.owner, source_server_ip='198.51.100.1',
+            target_server_ip='203.0.113.2', transfer_type='SERVICE', service=svc,
+        )
+        engine = ServerTransferService(transfer)
+        client = MagicMock()
+        client.containers.get.side_effect = Exception('no such container')
+        with patch('apps.cloud.docker_client.get_docker_client', return_value=client):
+            resolved = engine._resolve_source_registry_image('backup/img-svc-3:deadbeef')
+        self.assertEqual(resolved, 'backup/img-svc-3:deadbeef')

@@ -9,6 +9,36 @@ logger = logging.getLogger(__name__)
 
 
 class SingleServiceRestoreMixin:
+    def _resolve_source_registry_image(self, image):
+        """Replace a backup-local tag with the source's running image.
+
+        Backups commit the running container as ``backup/{name}:{uuid}``
+        and record that tag in metadata. The tag exists only in the
+        source daemon — the target cannot pull it (2026-10-02: every
+        transfer died resolving ``docker.io/backup/...``). The
+        source's running container image is registry-routable; prefer
+        it. Non-backup refs pass through untouched, as does anything
+        when the local container cannot be inspected.
+        """
+        if not image or not str(image).startswith('backup/'):
+            return image
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            container_name = getattr(self.transfer.service, 'name', '') or ''
+            if not container_name:
+                return image
+            ctr = get_docker_client().containers.get(container_name)
+            running = (ctr.attrs.get('Config', {}).get('Image', '') or '').strip()
+            if running and not running.startswith('backup/'):
+                logger.info(
+                    "Transfer image resolved %s -> %s (source running image)",
+                    image, running,
+                )
+                return running
+        except Exception as exc:
+            logger.debug("Source image resolve failed, keeping backup tag: %s", exc)
+        return image
+
     def _restore_single_service(self, remote_backup_path):
         target_server = self._target_server_record()
         is_lite_agent = getattr(target_server, 'is_lite_agent', False) if target_server else False
@@ -30,6 +60,7 @@ class SingleServiceRestoreMixin:
         metadata = self.transfer.source_backup.metadata
         image = metadata.get('docker_image') or self.transfer.service.docker_image
         if image:
+            image = self._resolve_source_registry_image(image)
             self._update(85, 'Pulling service image on target...')
             # The stored ref is qualified with the SOURCE master's
             # internal registry address (registry:5000 / loopback) which
@@ -136,6 +167,7 @@ class SingleServiceRestoreMixin:
         image = metadata.get('docker_image') or self.transfer.service.docker_image
 
         if image:
+            image = self._resolve_source_registry_image(image)
             self._update(75, 'Pulling service image on lite agent...')
             # Same internal-registry rewrite as the FULL target path —
             # registry:5000 does not resolve on a lite-agent node.
