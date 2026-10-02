@@ -97,6 +97,24 @@ def orphan_addon_gc_task(dry_run: bool = False):
     keep = set()
     for a in Addon.objects.exclude(status='DELETED'):
         keep.add(f"smsly-addon-{a.addon_type.lower()}-{a.id}")
+    # Shared per-service CLI containers (smsly-addon-cli-<service-id>)
+    # are backed by N addon rows, not one — keep them while any ACTIVE
+    # CLI addon of the service remains (2026-10-02: the GC removed a
+    # live shared container because no single row matched its name).
+    try:
+        from apps.addons.services import cli_addons as _cli
+        _cli_rows = Addon.objects.filter(
+            status=Addon.Status.ACTIVE,
+            addon_type__in=sorted(_cli.CLI_ADDON_TYPES),
+        ).select_related('service')
+        _seen_services: set[str] = set()
+        for _row in _cli_rows:
+            _sid = str(getattr(getattr(_row, 'service', None), 'id', ''))
+            if _sid and _sid not in _seen_services:
+                _seen_services.add(_sid)
+                keep.add(_cli.shared_container_name(_row.service))
+    except Exception as exc:
+        logger.debug("CLI shared keep-set skipped: %s", exc)
 
     out = _sh(['docker', 'ps', '-a', '--format', '{{.Names}}\t{{.Status}}'])
     removed, skipped = [], []
