@@ -1399,13 +1399,20 @@ class BackupService:
                 backup_type='SERVER',
             )
 
-        services = Svc.objects.filter(is_ai_router=False)
+        # The is_ai_router model field was retired in favor of the
+        # image/name heuristic (ai_router.is_ai_router_service); the old
+        # ORM filter crashed EVERY server backup with FieldError
+        # (2026-10-02: rows stuck IN_PROGRESS, zero bytes).
+        from apps.deployments.services.ai_router import (
+            is_ai_router_service as _is_ai_router,
+        )
+        services = [s for s in Svc.objects.all() if not _is_ai_router(s)]
 
         temp_dir = tempfile.mkdtemp()
         try:
             metadata = {
                 'server_backup': True,
-                'services_count': services.count(),
+                'services_count': len(services),
                 'created_at': str(timezone.now()),
                 'services': [],
                 'volumes': [],

@@ -59,9 +59,11 @@ class RegistryTests(SimpleTestCase):
     def test_entrypoint_links_binaries_onto_default_path(self):
         # `docker exec` uses the default PATH (no ~/.opencode/bin,
         # ~/.local/bin, /data/bin) — without symlinks the console and
-        # probes cannot resolve the CLIs.
+        # probes cannot resolve the CLIs. `case` (not `[ != ]`) because
+        # dash chokes on unquoted globs and would skip every link.
         script = cli.entrypoint_script()
         self.assertIn('/usr/local/bin/', script)
+        self.assertIn('case "$_p" in', script)
         for type_ in EXPECTED_TYPES:
             self.assertIn(cli.cli_binary(type_), script)
 

@@ -99,6 +99,36 @@ def from_env(**kwargs) -> docker.DockerClient:
     return get_docker_client(**kwargs)
 
 
+def login_for_image(client: docker.DockerClient, image) -> bool:
+    """docker login for an image's registry host (best-effort).
+
+    Daemon credentials are matched per registry hostname: pulling a
+    mesh-qualified ref (10.100.0.1:5000/...) with only a
+    registry:5000 login in place dies with "no basic auth
+    credentials" (2026-10-02: every node pull failed this way).
+    Failures only log — callers proceed to pull anyway (public
+    images, pre-seeded daemons).
+    """
+    try:
+        from django.conf import settings as dj_settings
+    except Exception:
+        return False
+    user = str(getattr(dj_settings, 'REGISTRY_USER', '') or '').strip()
+    password = str(getattr(dj_settings, 'REGISTRY_PASSWORD', '') or '').strip()
+    ref = str(image or '')
+    if not user or not password or '/' not in ref:
+        return False
+    host = ref.split('/')[0]
+    if '.' not in host and ':' not in host and host != 'localhost':
+        return False
+    try:
+        client.login(username=user, password=password, registry=host)
+        return True
+    except Exception as exc:
+        logger.debug("Docker login for pull failed (%s); trying pull anyway", exc)
+        return False
+
+
 # Patch docker.from_env so any direct call across the codebase inherits resilience
 _original_from_env = docker.from_env
 def _resilient_from_env(**kwargs):

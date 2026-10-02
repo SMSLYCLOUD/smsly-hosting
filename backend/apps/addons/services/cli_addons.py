@@ -336,9 +336,11 @@ def entrypoint_script(addon_type: str = "") -> str:
         # health probes, backup scripts) uses the default PATH, which does
         # not include ~/.opencode/bin, ~/.local/bin or /data/bin. Without
         # this the CLIs only resolve inside the entrypoint itself.
+        # NOTE: `case` (not `[ != pattern ]`) — dash's `[` chokes on
+        # unquoted globs and would skip every link.
         "for _b in opencode cmd agy kimchi forge deepagents qwen droid; do",
         "  _p=$(command -v \"$_b\" 2>/dev/null || true);",
-        '  if [ -n "$_p" ] && [ "$_p" != /usr/local/bin/* ]; then ln -sf "$_p" /usr/local/bin/"$_b"; fi;',
+        '  case "$_p" in ""|/usr/local/bin/*) ;; *) ln -sf "$_p" "/usr/local/bin/$_b" && echo "linked $_b";; esac;',
         "done",
     ]
     parts += [
