@@ -770,8 +770,30 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             transfer.id, container_name, image, network, dual_home,
         )
         try:
+            from django.conf import settings as dj_settings
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
+            # Rewrite master-internal refs to the node-routable form and
+            # log in first: containers.run() pulls implicitly without
+            # auth, which dies with "no basic auth credentials"
+            # (2026-10-02: transfer deploys failed here).
+            try:
+                from apps.deployments.services.registry_routing import image_ref_for_node
+                image = image_ref_for_node(image)
+            except Exception:
+                pass
+            _reg_user = str(getattr(dj_settings, 'REGISTRY_USER', '') or '').strip()
+            _reg_pass = str(getattr(dj_settings, 'REGISTRY_PASSWORD', '') or '').strip()
+            if _reg_user and _reg_pass and '/' in image:
+                _img_host = image.split('/')[0]
+                if '.' in _img_host or ':' in _img_host or _img_host == 'localhost':
+                    try:
+                        client.login(
+                            username=_reg_user, password=_reg_pass,
+                            registry=_img_host,
+                        )
+                    except Exception as login_exc:
+                        logger.warning("Incoming deploy login failed (%s); trying anyway", login_exc)
 
             # DUAL-HOMING: when requested, attach to BOTH the project
             # bridge and smsly-platform-net (AGENTS.md #15 — docker-py
