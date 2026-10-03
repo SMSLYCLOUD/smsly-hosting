@@ -15,6 +15,13 @@
 //     Legacy DRF/APIToken fallback is NOT supported at the edge — those
 //     need Django by design. Edge JWT is the only gate token.
 //   - fail-closed everywhere: missing secret/file/token => deny.
+//   - listen is 0.0.0.0:8971 by default, NOT loopback: Caddy and Traefik
+//     run as Docker containers and reach the sidecar via
+//     host.docker.internal:host-gateway, which arrives on the bridge
+//     gateway IP — a 127.0.0.1 bind would refuse them. The port is
+//     unauthenticated only for /health ("ok"); /ask is gated by
+//     CADDY_ASK_SECRET when configured and /auth-verify needs a valid
+//     edge JWT. Do not publish this port in compose or open it in UFW.
 package main
 
 import (
@@ -279,7 +286,7 @@ func getenv(key, def string) string {
 
 func main() {
 	var cfg config
-	flag.StringVar(&cfg.listen, "listen", getenv("EDGE_SIDECAR_LISTEN", "127.0.0.1:8971"), "loopback listen address")
+	flag.StringVar(&cfg.listen, "listen", getenv("EDGE_SIDECAR_LISTEN", "0.0.0.0:8971"), "listen address (0.0.0.0: containers arrive via bridge gateway IP)")
 	flag.StringVar(&cfg.allowFile, "allow-file", getenv("EDGE_SIDECAR_ALLOW_FILE", "/opt/smsly-hosting/caddy-config/.tls-allow-list.json"), "allow-list JSON path")
 	flag.StringVar(&cfg.secretFile, "secret-file", getenv("EDGE_JWT_SECRET_FILE", ""), "file holding EDGE_JWT_SECRET")
 	flag.IntVar(&cfg.pollSecs, "poll-secs", 5, "allow-list/secret poll interval seconds")

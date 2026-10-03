@@ -261,8 +261,9 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             )
 
         # EDGE-SIDECAR GUARD (SPOF): request-time edge deps must bypass
-        # Django — ask and forwardAuth point at 127.0.0.1:8971, never
-        # backend:8000. Refuse content that reintroduces the coupling.
+        # Django — ask and forwardAuth point at host.docker.internal:8971
+        # (sidecar on the host), never backend:8000. Refuse content that
+        # reintroduces the coupling.
         try:
             from .validation import validate_edge_sidecar_endpoints
             edge_errors = validate_edge_sidecar_endpoints(content)

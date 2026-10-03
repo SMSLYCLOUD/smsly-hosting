@@ -195,15 +195,14 @@ class ComposeNetworkingMixin:
             svc_flags = getattr(self, "service", None)
             if svc_flags is not None:
                 if bool(getattr(svc_flags, "sablier_enabled", False)):
+                    from apps.deployments.services.traefik_labels import (
+                        sablier_service_labels,
+                    )
                     session = str(getattr(svc_flags, "sablier_session", "") or "10m").strip() or "10m"
                     group = str(getattr(svc_flags, "name", "") or router)
-                    labels[f"traefik.http.middlewares.{router}-sablier.plugin.sablier.group"] = group
-                    labels[f"traefik.http.middlewares.{router}-sablier.plugin.sablier.sablierUrl"] = "http://sablier:10000"
-                    labels[f"traefik.http.middlewares.{router}-sablier.plugin.sablier.sessionDuration"] = session
-                    labels[f"traefik.http.middlewares.{router}-sablier.plugin.sablier.dynamic.displayName"] = group
-                    labels["sablier.enable"] = "true"
-                    labels["sablier.group"] = group
-                    labels["traefik.docker.allownonrunning"] = "true"
+                    labels.update(sablier_service_labels(
+                        router_name=router, group=group, session=session,
+                    ))
                     chain.append(f"{router}-sablier")
                 if bool(getattr(svc_flags, "edge_jwt_required", False)):
                     chain.append("edge-forward-auth@file")

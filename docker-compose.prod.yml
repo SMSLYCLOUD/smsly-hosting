@@ -1516,6 +1516,10 @@ services:
   traefik:
     image: traefik:v3.6
     restart: unless-stopped
+    # Edge sidecar reachability (SPOF fix): forwardAuth targets a host
+    # systemd unit via host.docker.internal. Never publish :8971.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     security_opt:
     - no-new-privileges:true
     - apparmor:docker-default
@@ -1711,6 +1715,11 @@ services:
   caddy:
     security_opt:
       - apparmor:docker-default
+    # Edge sidecar reachability (SPOF fix): smsly-edge-sidecar is a host
+    # systemd unit, so the Caddy `ask` URL uses host.docker.internal.
+    # Never publish :8971 — the sidecar binds host-local only.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: .
       dockerfile: infrastructure/caddy/Dockerfile

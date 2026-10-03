@@ -225,18 +225,22 @@ def validate_edge_sidecar_endpoints(content: str) -> list[str]:
     """Fail-closed: request-time edge deps must bypass Django.
 
     Caddy `ask` and any forward-auth-shaped reference must point at
-    127.0.0.1:8971 (smsly-edge-sidecar), never backend:8000 — otherwise
-    a Django outage breaks TLS issuance and gated routing for all
-    services (SPOF). Returns error strings, empty when compliant.
+    host.docker.internal:8971 (smsly-edge-sidecar on the host — Caddy and
+    Traefik are containers, so container-loopback 127.0.0.1 would be
+    themselves), never backend:8000 — otherwise a Django outage breaks
+    TLS issuance and gated routing for all services (SPOF). Returns
+    error strings, empty when compliant.
     """
     text = str(content or "")
     errors: list[str] = []
     if "backend:8000/api/v1/services/check-domain" in text:
-        errors.append("Caddyfile ask still points at backend:8000 — must use 127.0.0.1:8971/ask.")
+        errors.append("Caddyfile ask still points at backend:8000 — must use host.docker.internal:8971/ask.")
     if "backend:8000/api/v1/edge/auth-verify" in text:
-        errors.append("forwardAuth still points at backend:8000 — must use 127.0.0.1:8971/auth-verify.")
-    if "ask " in text and "127.0.0.1:8971/ask" not in text:
+        errors.append("forwardAuth still points at backend:8000 — must use host.docker.internal:8971/auth-verify.")
+    if "ask " in text and "host.docker.internal:8971/ask" not in text:
         errors.append("Caddyfile has an ask directive not pointing at the edge sidecar.")
+    if "authorize with edge_jwt" in text:
+        errors.append("Caddyfile uses stale `authorize with edge_jwt` (caddy-security) — regenerate: edge JWT now uses forward_auth to the sidecar.")
     return errors
 
 

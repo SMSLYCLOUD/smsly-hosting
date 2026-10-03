@@ -36,7 +36,10 @@ http:
           Permissions-Policy: "camera=(), microphone=(), geolocation=()"
     edge-forward-auth:
       forwardAuth:
-        address: "http://127.0.0.1:8971/auth-verify"
+        # Traefik runs containerized; the sidecar is a host systemd unit.
+        # host.docker.internal resolves via extra_hosts: host-gateway on
+        # the traefik service. 127.0.0.1 here would be Traefik itself.
+        address: "http://host.docker.internal:8971/auth-verify"
         authResponseHeaders:
           - "X-User-Id"
           - "X-Edge-Scope"

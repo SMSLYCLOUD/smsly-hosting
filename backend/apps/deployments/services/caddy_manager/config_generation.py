@@ -42,6 +42,20 @@ CORAZA_SNIPPET = """(coraza_waf) {
     }
 }"""
 
+# Edge JWT gating via the host sidecar (smsly-edge-sidecar), NOT via the
+# caddy-security plugin: Caddy has no safe native HS256 gate matching our
+# edge tokens, and a second verification path would drift from the sidecar
+# (the single verifier shared with Traefik forwardAuth). forward_auth
+# passes the client's Authorization header through and only proxies when
+# the sidecar answers 2xx, copying the identity headers downstream.
+EDGE_SIDECAR_HOST = "host.docker.internal:8971"
+EDGE_JWT_FORWARD_AUTH_LINES = [
+    f"    forward_auth {EDGE_SIDECAR_HOST} {{",
+    "        uri /auth-verify",
+    "        copy_headers X-User-Id X-Edge-Scope",
+    "    }",
+]
+
 # Host aliases (accounts.google.com pattern): extra hostnames that serve the app
 _ALIAS_REWRITE_ROOT_RE = re.compile(r"^/[A-Za-z0-9/_.-]{0,100}$")
 _MAX_HOST_ALIASES_PER_SERVICE = 10
@@ -560,7 +574,7 @@ def _build_service_domain_block(
     if not waf_opt_out:
         lines.append("    import coraza_waf")
     if edge_jwt_required:
-        lines.append("    authorize with edge_jwt")
+        lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
 
     if upstream_url:
         _append_reverse_proxy(lines, upstream_url, upstream_host or domain)
@@ -718,7 +732,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     if not bool(getattr(service, "waf_opt_out", False)):
                         lines.append("    import coraza_waf")
                     if bool(getattr(service, "edge_jwt_required", False)):
-                        lines.append("    authorize with edge_jwt")
+                        lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
                     lines.append("    tls {")
                     lines.append("        on_demand")
                     lines.append("    }")
@@ -1684,7 +1698,11 @@ def generate_caddyfile(config) -> str:
         logger.debug("Failed to load PlatformConfig for Caddy ask secret: %s", exc)
     if not _ask_secret:
         _ask_secret = str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
-    _ask_url = "http://127.0.0.1:8971/ask"
+    # Caddy runs containerized; the sidecar is a host systemd unit, so the
+    # ask URL must use host.docker.internal (extra_hosts: host-gateway on
+    # the caddy service). 127.0.0.1 here would be the Caddy container
+    # itself and TLS issuance would break for every domain.
+    _ask_url = "http://host.docker.internal:8971/ask"
     if _ask_secret:
         # Pass the secret via Caddy env var interpolation to avoid
         # embedding it in plaintext in the Caddyfile.
@@ -1732,17 +1750,6 @@ def generate_caddyfile(config) -> str:
 
     sections.append(SECURE_HEADERS_SNIPPET)
     sections.append(CORAZA_SNIPPET)
-    sections.append(
-        "security {\n"
-        "    edge_jwt {\n"
-        "        jwt {\n"
-        "            primary yes\n"
-        "            trusted_public_key {env.EDGE_JWT_SECRET}\n"
-        "            allow iss \"\"\n"
-        "        }\n"
-        "    }\n"
-        "}"
-    )
 
     _FAKE_TOKENS = {
         "fake", "changeme", "your_cloudflare_api_token", "test", "",

@@ -12,6 +12,38 @@ import os
 import re
 
 
+# Sablier scale-to-zero endpoint (docker DNS; the sablier service shares a
+# network with traefik — see docker-compose.prod.yml).
+SABLIER_URL = "http://sablier:10000"
+
+
+def sablier_middleware_ref(router_name: str) -> str:
+    """Router-chain entry for a service's Sablier middleware."""
+    return f"{router_name}-sablier"
+
+
+def sablier_service_labels(
+    router_name: str, group: str, session: str = "10m",
+) -> dict[str, str]:
+    """Single source of truth for Sablier scale-to-zero labels.
+
+    Every generator (traefik_labels, local adapter, pipeline
+    compose_networking) must use this — a drifted group name or URL
+    means wake-on-request silently stops working for that path.
+    """
+    session = str(session or "10m").strip() or "10m"
+    group = str(group or router_name or "").strip() or router_name
+    return {
+        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.group": group,
+        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sablierUrl": SABLIER_URL,
+        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sessionDuration": session,
+        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.displayName": group,
+        "sablier.enable": "true",
+        "sablier.group": group,
+        "traefik.docker.allownonrunning": "true",
+    }
+
+
 def _normalize_health_path(path: str) -> str:
     value = str(path or "/").strip()
     if not value.startswith("/"):
@@ -148,15 +180,10 @@ def generate_traefik_labels(
 
     extra_chain = []
     if sablier_on:
-        group = service_name
-        labels[f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.group"] = group
-        labels[f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sablierUrl"] = "http://sablier:10000"
-        labels[f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sessionDuration"] = session
-        labels[f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.displayName"] = service_name
-        labels["sablier.enable"] = "true"
-        labels["sablier.group"] = group
-        labels["traefik.docker.allownonrunning"] = "true"
-        extra_chain.append(f"{router_name}-sablier")
+        labels.update(sablier_service_labels(
+            router_name=router_name, group=service_name, session=session,
+        ))
+        extra_chain.append(sablier_middleware_ref(router_name))
     if jwt_on:
         extra_chain.append("edge-forward-auth@file")
     if extra_chain:

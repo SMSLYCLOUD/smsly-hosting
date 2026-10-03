@@ -15,7 +15,12 @@ TimeoutStartSec=30
 TimeoutStopSec=10
 
 # The binary reads these; the installer writes them from .env.
-Environment=EDGE_SIDECAR_LISTEN=127.0.0.1:8971
+# LISTEN is 0.0.0.0 on purpose: Caddy/Traefik are Docker containers that
+# reach the sidecar via host.docker.internal (bridge gateway IP), which a
+# loopback bind would refuse. The port stays host-local in practice: never
+# publish it in compose, never open it in UFW. /ask is secret-gated and
+# /auth-verify needs a valid edge JWT.
+Environment=EDGE_SIDECAR_LISTEN=0.0.0.0:8971
 Environment=EDGE_SIDECAR_ALLOW_FILE=/opt/smsly-hosting/caddy-config/.tls-allow-list.json
 EnvironmentFile=-/etc/smsly/edge-sidecar.env
 
@@ -25,7 +30,7 @@ SyslogIdentifier=smsly-edge-sidecar
 LogRateLimitIntervalSec=30s
 LogRateLimitBurst=100
 
-# Hardening. No Docker, no network beyond loopback listen, read-only
+# Hardening. No Docker, no published port, read-only
 # except the allow-list dir (read-only too — Django writes it).
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -41,10 +46,10 @@ MemoryDenyWriteExecute=yes
 ReadOnlyPaths=/opt/smsly-hosting/caddy-config
 ReadWritePaths=/run/smsly
 
-# Run unprivileged: loopback high-port bind needs no capabilities.
+# Run unprivileged with an ephemeral UID: a high-port bind needs no
+# capabilities. DynamicUser alone (no explicit User=/Group= — systemd
+# rejects the combination).
 DynamicUser=yes
-User=nobody
-Group=nogroup
 
 [Install]
 WantedBy=multi-user.target

@@ -504,17 +504,16 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception:
             svc = None
         if svc is not None and getattr(svc, "sablier_enabled", False):
+            from apps.deployments.services.traefik_labels import (
+                sablier_middleware_ref,
+                sablier_service_labels,
+            )
             session = str(getattr(svc, "sablier_session", "") or "10m").strip() or "10m"
-            group = name
-            labels[f'traefik.http.middlewares.{router_name}-sablier.plugin.sablier.group'] = group
-            labels[f'traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sablierUrl'] = "http://sablier:10000"
-            labels[f'traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sessionDuration'] = session
-            labels[f'traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.displayName'] = name
-            labels["sablier.enable"] = "true"
-            labels["sablier.group"] = group
-            labels["traefik.docker.allownonrunning"] = "true"
-            if f"{router_name}-sablier" not in existing:
-                existing.append(f"{router_name}-sablier")
+            labels.update(sablier_service_labels(
+                router_name=router_name, group=name, session=session,
+            ))
+            if sablier_middleware_ref(router_name) not in existing:
+                existing.append(sablier_middleware_ref(router_name))
         if svc is not None and getattr(svc, "edge_jwt_required", False):
             if "edge-forward-auth@file" not in existing:
                 existing.append("edge-forward-auth@file")
