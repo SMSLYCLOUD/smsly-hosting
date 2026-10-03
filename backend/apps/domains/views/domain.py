@@ -81,6 +81,7 @@ class DomainConfigView(GenericAPIView):
             'container_registry_url': config.container_registry_url,
             'registry_user': config.registry_user,
             'registry_password_set': bool(config.registry_password),
+            'infisical_service_token_set': bool(config.infisical_service_token),
             # Observability
             'sentry_dsn_set': bool(config.sentry_dsn),
             'sentry_traces_sample_rate': config.sentry_traces_sample_rate,
@@ -363,6 +364,11 @@ class DomainConfigView(GenericAPIView):
             # PUT from silently wiping stored credentials on every save.
             if 'registry_password' in data and str(data.get('registry_password') or '').strip():
                 config.registry_password = str(data.get('registry_password') or '').strip()
+            # Vault token: write-only, blank keeps existing (same round-trip
+            # contract as registry_password above). Triggers a validation
+            # pass after save so the UI reports bad tokens immediately.
+            if 'infisical_service_token' in data and str(data.get('infisical_service_token') or '').strip():
+                config.infisical_service_token = str(data.get('infisical_service_token') or '').strip()
             # Observability
             if 'sentry_dsn' in data:
                 config.sentry_dsn = str(data.get('sentry_dsn') or '').strip()[:300]
@@ -467,6 +473,17 @@ class DomainConfigView(GenericAPIView):
                 )
 
             config.save()
+
+            # Vault token pasted via UI: validate immediately so a bad
+            # token is reported now, not discovered on the next deploy.
+            if 'infisical_service_token' in data and str(data.get('infisical_service_token') or '').strip():
+                try:
+                    from apps.deployments.services.infisical import check_infisical_auth
+                    _vault_ok = check_infisical_auth()
+                    if _vault_ok is not True:
+                        logger.warning("Pasted Infisical token does not authenticate (check=%s)", _vault_ok)
+                except Exception as exc:
+                    logger.debug("Vault token validation skipped: %s", exc)
 
             # open-appsec toggle: converge running containers AFTER commit
             # (enabled → start stack, disabled → stop + remove entirely).

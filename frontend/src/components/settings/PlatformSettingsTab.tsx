@@ -92,7 +92,7 @@ export function PlatformSettingsTab() {
         <SecurityScanningCard config={config} onChange={handleChange} />
         <CrowdSecBlocksCard />
         <DeviceTrustCard config={config} onChange={handleChange} />
-        <InfisicalCard />
+        <InfisicalCard config={config} onChange={handleChange} />
       </div>
     </div>
   );
