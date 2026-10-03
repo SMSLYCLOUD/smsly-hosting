@@ -66,12 +66,17 @@ scrape_configs:
   # mapped-file/failcnt). Dashboards + autoscaler only read cpu_usage
   # and memory_usage_bytes — verified against platform-overview.json
   # and backend PromQL before dropping.
+  # 2026-10-04: node cadvisor feeds ~4k container-series per metric
+  # (vs ~50 local) — 96k head series, 460MB/512MB. Invert to a
+  # keep-list: only autoscaler/dashboard-consumed cadvisor metrics
+  # survive (cpu, memory, net, existence); the per-cpu/blkio/fs/tcp/
+  # pressure long tail is dropped for both local + remote targets.
   - job_name: 'cadvisor'
     scrape_interval: 30s
     metric_relabel_configs:
       - source_labels: [__name__]
-        regex: 'container_tasks_state|container_memory_failures_total|container_memory_mapped_file|container_memory_failcnt'
-        action: drop
+        regex: 'container_cpu_usage_seconds_total|container_memory_usage_bytes|container_network_(receive|transmit)_bytes_total|container_last_seen|container_start_time_seconds|machine_.*|cadvisor_.*|go_.*|process_.*|promhttp_.*|up'
+        action: keep
     static_configs:
       - targets: ['cadvisor:8080']
         labels:

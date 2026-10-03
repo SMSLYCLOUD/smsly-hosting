@@ -2133,10 +2133,12 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       # Retention is the main driver of prometheus disk + head-chunk RAM
-      # growth. Default keeps 30d of history; small hosts can set
-      # PROMETHEUS_RETENTION=7d to flatten growth (trades history depth,
-      # nothing else).
-      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}'
+      # growth. Default keeps 7d of history with a disk cap (2026-10-04:
+      # 30d uncapped held 2.6GB + 96k head series / 460MB RSS from node
+      # cadvisor cardinality); small hosts can still override via
+      # PROMETHEUS_RETENTION / PROMETHEUS_RETENTION_SIZE.
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}'
+      - '--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-8GB}'
     networks:
       - smsly-net
     healthcheck:
