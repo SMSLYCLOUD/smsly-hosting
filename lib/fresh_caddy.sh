@@ -131,6 +131,26 @@ EOF
         fi
     fi
 
+    # ─── napd + tier sleep mechanism (infra scale-to-zero) ─────────────
+    # Same pattern as the sidecar above: host systemd units, warn-only.
+    # Installs the mechanism only — no tier is enabled or started here
+    # (opt-in per host). Skipped on agent-lite/node modes with Caddy:
+    # tiers.d targets the master compose project.
+    if [ -f "$INSTALL_DIR/lib/napd.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/napd.sh" || true
+        if command -v smsly_napd_install >/dev/null 2>&1; then
+            smsly_napd_install || true
+        fi
+    fi
+    if [ -f "$INSTALL_DIR/lib/tiers_sleep.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/tiers_sleep.sh" || true
+        if command -v smsly_tiers_install >/dev/null 2>&1; then
+            smsly_tiers_install || true
+        fi
+    fi
+
     set_checkpoint "caddy_configured"
 fi
 fi # end Caddy skip for agent-lite/node modes

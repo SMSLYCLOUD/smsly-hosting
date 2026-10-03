@@ -449,6 +449,23 @@ SMSLY_WORKERS_EOF
         fi
     fi
 
+    # ─── napd refresh + tier mechanism refresh (warn-only) ─────────────
+    # Same as the sidecar block above: rebuild/reinstall, never abort.
+    if [ -f "$INSTALL_DIR/lib/napd.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/napd.sh" || true
+        if command -v smsly_napd_install >/dev/null 2>&1; then
+            smsly_napd_install || true
+        fi
+    fi
+    if [ -f "$INSTALL_DIR/lib/tiers_sleep.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/tiers_sleep.sh" || true
+        if command -v smsly_tiers_install >/dev/null 2>&1; then
+            smsly_tiers_install || true
+        fi
+    fi
+
     # ─── Tier sleep restore (update wakes everything — re-sleep) ───────
     # Any `docker compose up -d` starts default-profile services again,
     # including tiers deliberately stopped. Restore recorded sleep state.

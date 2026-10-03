@@ -835,6 +835,10 @@ services:
   backend:
     security_opt:
       - apparmor:docker-default
+    # napd reachability: backend wakes sleeping infra tiers via the host
+    # napd unit (cooperative wake hooks in services/tiers.py).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     cap_add:
       - SETGID
       - SETUID
@@ -964,6 +968,9 @@ services:
   celery:
     security_opt:
       - apparmor:docker-default
+    # napd reachability (cooperative tier wake from worker tasks).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     cap_add:
       - SETGID
       - SETUID
@@ -1056,6 +1063,9 @@ services:
   celery-beat:
     security_opt:
       - apparmor:docker-default
+    # napd reachability (cooperative tier wake from worker tasks).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     cap_add:
       - SETGID
       - SETUID
@@ -1167,6 +1177,9 @@ services:
   celery-fast:
     security_opt:
       - apparmor:docker-default
+    # napd reachability (cooperative tier wake from worker tasks).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     cap_add:
       - SETGID
       - SETUID
@@ -1252,6 +1265,9 @@ services:
   celery-deploy:
     security_opt:
       - apparmor:docker-default
+    # napd reachability: builds wake the buildcache tier from this worker.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     cap_add:
       - SETGID
       - SETUID

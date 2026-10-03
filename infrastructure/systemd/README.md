@@ -18,6 +18,9 @@
 #   scripts/smsly-tier.sh resleep                 # re-apply after an update
 #
 # ── Install ───────────────────────────────────────────────────────────────
+# Preferred: the installer does all of this (lib/tiers_sleep.sh +
+# lib/napd.sh, warn-only, opt-in — no tier is started).
+# Manual equivalent:
 #   install -m 0755 scripts/smsly-tier.sh          /opt/smsly-hosting/scripts/
 #   install -m 0644 infrastructure/systemd/smsly-* /etc/systemd/system/
 #   install -m 0644 infrastructure/systemd/tiers/* /etc/smsly/tiers.d/
@@ -25,6 +28,19 @@
 #   systemctl enable --now smsly-paas.target
 #   systemctl enable --now smsly-tier@buildcache.service
 #   systemctl enable --now smsly-tier-autowake@buildcache.timer   # if AUTOWAKE=1
+#
+# ── napd: on-demand wake + idle reaper ──────────────────────────────────
+# smsly-napd (napd/, host systemd unit) wakes tiers over HTTP and sleeps
+# idle ones:  GET /wake?tier=X | GET /sleep?tier=X | GET /status
+# (X-Napd-Secret header, fail-closed without NAPD_SHARED_SECRET).
+# The backend wakes tiers cooperatively before using them
+# (backend/apps/deployments/services/tiers.py: `secrets` before Infisical
+# calls, `buildcache` before builds) — a sleeping tier degrades to the
+# usual connection error, never to a new failure mode.
+# Idle sleep is DURATION-based, not activity-based: tiers with
+# SMSLY_TIER_AUTOSLEEP=1 + SMSLY_TIER_IDLE_SECS=N are stopped after N
+# seconds awake. Only interruptible tiers may opt in (caches: 2h,
+# dashboards: 30m). /sleep refuses non-autosleep tiers without force=1.
 #
 # ── Safety properties ─────────────────────────────────────────────────────
 # • Never runs `compose down` and never passes `--remove-orphans`. `down`

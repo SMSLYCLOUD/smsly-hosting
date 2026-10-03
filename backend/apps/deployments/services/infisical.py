@@ -209,7 +209,17 @@ def get_infisical_client(for_remote: bool = False) -> InfisicalClient | None:
     Token: PlatformConfig DB first, INFISICAL_SERVICE_TOKEN env fallback
     (no backend restart needed after rotation). URL: remote callers use
     the mesh forwarder, local callers keep Docker DNS behavior.
+
+    Cooperative wake: local callers ensure the `secrets` tier is awake
+    via napd first (warn-only — a sleeping Infisical surfaces as the
+    usual connection error, not a new failure mode).
     """
+    if not for_remote:
+        try:
+            from apps.deployments.services.tiers import ensure_tier_awake
+            ensure_tier_awake("secrets", timeout=120)
+        except Exception:
+            pass
     token = resolve_service_token()
     if for_remote:
         base_url = f"{resolve_api_url(for_remote=True)}/api/v1"

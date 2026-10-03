@@ -45,13 +45,22 @@ def _remote_upstream_url_for_service(service) -> str:
         if url and url not in upstreams:
             upstreams.append(url)
 
+    # HTTPS over the mesh with per-host SNI (callers emit
+    # tls_server_name): plain-http upstreams let https-forcing apps
+    # 301-loop forever (browser on https, proxy chain on http).
+    # SMSLY_REMOTE_UPSTREAM_SCHEME=http reverts to legacy plaintext.
+    scheme = os.environ.get("SMSLY_REMOTE_UPSTREAM_SCHEME", "https").strip().lower()
+    if scheme != "https":
+        scheme = "http"
+    port = "443" if scheme == "https" else "80"
+
     mesh_ip = _remote_server_mesh_ip(server)
     if mesh_ip:
-        append(f"http://{mesh_ip}")
+        append(f"{scheme}://{mesh_ip}:{port}")
 
     host = str(server.host or "").strip()
     if host:
-        append(f"http://{host}")
+        append(f"{scheme}://{host}:{port}")
 
     return " ".join(upstreams)
 

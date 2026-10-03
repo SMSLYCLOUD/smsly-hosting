@@ -150,6 +150,7 @@ def _resolve_gateway_secret() -> str:
 
 GATEWAY_SECRET = _resolve_gateway_secret()
 EDGE_JWT_SECRET = str(config('EDGE_JWT_SECRET', default='')).strip()
+NAPD_SHARED_SECRET = str(config('NAPD_SHARED_SECRET', default='')).strip()
 # Owner edition: all tier gates disabled — all features unlocked.
 # SECURITY (Issue 21): the flag is audit-logged on the first
 # consult per process via ``_check_tier_gates_disabled()`` in

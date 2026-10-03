@@ -1,0 +1,42 @@
+[Unit]
+Description=SMSLY napd (infra tier sleep/wake daemon)
+Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
+After=docker.service network.target
+Wants=network.target
+Requires=docker.service
+ConditionPathExists=/opt/smsly-hosting
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/smsly-napd
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# The binary reads these; the installer writes NAPD_SHARED_SECRET from .env.
+Environment=NAPD_LISTEN=0.0.0.0:8972
+Environment=SMSLY_INSTALL_DIR=/opt/smsly-hosting
+Environment=SMSLY_TIER_DIR=/etc/smsly/tiers.d
+Environment=SMSLY_TIER_STATE_DIR=/var/lib/smsly/tiers
+Environment=SMSLY_TIER_WAKE_DIR=/run/smsly/tier-wake
+EnvironmentFile=-/etc/smsly/napd.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=smsly-napd
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+# napd shells to docker + scripts/smsly-tier.sh (same needs as the
+# smsly-tier@ units: compose files, docker socket, tier state).
+# ProtectHome is deliberately NOT set: docker compose reads
+# /root/.docker/config.json, and blanking HOME breaks the CLI.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/smsly-hosting /var/lib/docker /var/lib/smsly /run/smsly /root/.docker
+
+[Install]
+WantedBy=multi-user.target

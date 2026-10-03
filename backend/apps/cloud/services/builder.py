@@ -155,6 +155,15 @@ class NixpacksBuilder:
         if not os.path.exists(source_dir):
             raise FileNotFoundError(f"Source directory {source_dir} not found")
 
+        # Cooperative wake: builds consume apt-cacher/verdaccio over docker
+        # DNS — if the buildcache tier sleeps, every apt-get/npm fetch
+        # fails. Wake it first (warn-only; proceeds even if napd is away).
+        try:
+            from apps.deployments.services.tiers import ensure_tier_awake
+            ensure_tier_awake("buildcache", timeout=180)
+        except Exception:
+            pass
+
         # Ensure cache directory exists
         effective_cache_dir = cache_dir or NixpacksBuilder.CACHE_DIR
         os.makedirs(effective_cache_dir, exist_ok=True)

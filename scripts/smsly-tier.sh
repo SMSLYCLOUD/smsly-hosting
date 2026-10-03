@@ -35,6 +35,7 @@ note() { printf 'smsly-tier: %s\n' "$*"; }
 PROFILE_ARGS=()
 SMSLY_TIER_COMPOSE_FILE=""
 SMSLY_TIER_SERVICES=""
+SMSLY_TIER_PROJECT=""
 TIER_NAME=""
 TIER_RECREATE=0
 
@@ -43,10 +44,20 @@ load_tier() {
   local conf="$TIER_DIR/${1:-}.conf"
   [ -n "$tier" ] || die "tier name required"
   [ -f "$conf" ] || die "unknown tier '$tier' (expected $conf)"
+  # Reset everything first: resleep() loads many tiers in one process and
+  # sourcing must not leak one tier's file/project/profiles into the next.
+  SMSLY_TIER_COMPOSE_FILE=""
+  SMSLY_TIER_PROJECT=""
+  SMSLY_TIER_PROFILES=""
+  SMSLY_TIER_RECREATE=0
+  SMSLY_TIER_SERVICES=""
+  SMSLY_TIER_AUTOSLEEP=""
+  SMSLY_TIER_IDLE_SECS=""
   # shellcheck disable=SC1090
   . "$conf" || die "failed to load $conf"
   [ -n "$SMSLY_TIER_SERVICES" ] || die "tier '$tier' defines no SMSLY_TIER_SERVICES"
   SMSLY_TIER_COMPOSE_FILE="${SMSLY_TIER_COMPOSE_FILE:-docker-compose.prod.yml}"
+  SMSLY_TIER_PROJECT="${SMSLY_TIER_PROJECT:-}"
   TIER_RECREATE="${SMSLY_TIER_RECREATE:-0}"
   PROFILE_ARGS=()
   local p
@@ -58,8 +69,17 @@ load_tier() {
 compose() {
   [ -d "$INSTALL_DIR" ] || die "install dir not found: $INSTALL_DIR"
   cd "$INSTALL_DIR" || die "cannot cd $INSTALL_DIR"
-  docker compose -f "$SMSLY_TIER_COMPOSE_FILE" \
-    ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "$@"
+  # SMSLY_TIER_PROJECT pins the compose project name when the tier lives
+  # in a separate compose file brought up with -p (e.g. smsly-infisical).
+  # Without it compose derives the project from the file's parent dir and
+  # `up` would create DUPLICATE containers next to the installer's ones.
+  if [ -n "$SMSLY_TIER_PROJECT" ]; then
+    docker compose -p "$SMSLY_TIER_PROJECT" -f "$SMSLY_TIER_COMPOSE_FILE" \
+      ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "$@"
+  else
+    docker compose -f "$SMSLY_TIER_COMPOSE_FILE" \
+      ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "$@"
+  fi
 }
 
 no_recreate_supported() {
