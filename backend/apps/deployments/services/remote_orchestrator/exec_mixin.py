@@ -84,6 +84,18 @@ class ExecMixin:
             return self._parse_json_response(resp, "testing remote storage")
         return None
 
+    def upsert_remote_service(self, payload: dict) -> dict | None:
+        """Idempotent create-or-update of the Service row by exact name.
+
+        Used when the owner-scoped search misses a row that CREATE then
+        rejects as already-existing (transfer-restored rows). Returns the
+        parsed body (with id) on success, None otherwise. Never logs.
+        """
+        resp = self._request("POST", "/api/v1/node/service-upsert/", payload=payload, timeout=60)
+        if resp is not None and resp.status_code < 400:
+            return self._parse_json_response(resp, "upserting remote service")
+        return None
+
     # -- Public terminal-relay helpers (stable API for consumers) --
     def find_remote_service_id(self, service, path: str = "/api/v1/services/") -> str:
         try:

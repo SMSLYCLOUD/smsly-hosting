@@ -65,6 +65,16 @@ class FileBrowserActionsMixin:
             orchestrator = RemoteOrchestrator(active_server)
             remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
             if not remote_id:
+                # Transfer-restored rows are invisible to owner-scoped
+                # search; recover via idempotent upsert by exact name.
+                try:
+                    upserted = orchestrator.upsert_remote_service(
+                        orchestrator._service_sync_payload(service)
+                    )
+                    remote_id = (upserted or {}).get('id') or ''
+                except Exception:
+                    remote_id = ''
+            if not remote_id:
                 return Response(
                     {'error': f'Service not found on remote node {active_server.name or active_server.host}'},
                     status=status.HTTP_404_NOT_FOUND,

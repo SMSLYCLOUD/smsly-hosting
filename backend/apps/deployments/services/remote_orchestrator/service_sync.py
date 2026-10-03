@@ -101,6 +101,19 @@ class ServiceSyncMixin:
                 return remote_id
 
             if resp is not None:
+                body = ''
+                try:
+                    body = (resp.text or '')[:500]
+                except Exception:
+                    pass
+                if resp.status_code == 400 and 'already exists' in body:
+                    # Owner-scoped search missed a row that CREATE rejects
+                    # (transfer-restored rows). Recover via idempotent
+                    # upsert keyed by exact name instead of failing.
+                    upserted = self.upsert_remote_service(payload)
+                    if upserted and upserted.get('id'):
+                        self.sync_env_vars(service, upserted['id'])
+                        return upserted['id']
                 self._set_last_error("Failed to create service on remote.", response=resp)
             logger.error(self.last_error)
         except Exception as e:

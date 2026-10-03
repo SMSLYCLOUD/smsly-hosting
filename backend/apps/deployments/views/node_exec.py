@@ -397,6 +397,70 @@ class NodeExecViewSet(viewsets.ViewSet):
                 continue
         return Response({"ok": True, "stored": stored})
 
+    @action(detail=False, methods=["post"], url_path="service-upsert")
+    def service_upsert(self, request):
+        """Idempotent create-or-update of a Service row by exact name.
+
+        Transfer-restored services exist on the node but are invisible to
+        owner-scoped API searches, so master sync CREATEs 400 with
+        "already exists" while the row stays unreachable. This HMAC-only
+        endpoint matches by exact name (globally unique) instead: update
+        in place when present, create otherwise. Owner is never changed
+        on update (fail-closed against row hijack).
+        """
+        ok, err = _verify_node_caller(request, require_privileged=True)
+        if not ok:
+            return err
+        data = request.data if isinstance(request.data, dict) else {}
+        name = str(data.get("name", "") or "").strip()
+        if not name or not _CONTAINER_RE.match(name):
+            return Response({"error": "Valid service name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from apps.deployments.models import Service
+            from django.contrib.auth import get_user_model
+            svc = Service.objects.filter(name=name).first()
+            fields = {}
+            for key in (
+                "deploy_type", "repository_url", "branch", "docker_image",
+                "internal_port", "is_public", "buildpack",
+                "public_domain", "public_domain_hidden",
+                "build_command", "start_command", "root_directory",
+                "deploy_mode", "compose_file", "compose_main_service",
+                "health_check_path", "health_check_port",
+                "health_check_interval", "health_check_timeout",
+                "health_check_retries", "restart_policy",
+                "cpu_cores", "memory_mb", "min_replicas", "max_replicas",
+                "vpa_enabled",
+            ):
+                if key in data:
+                    fields[key] = data[key]
+            customs = data.get("custom_domains")
+            if isinstance(customs, list):
+                fields["custom_domains"] = [str(d) for d in customs[:20]]
+            if svc is None:
+                owner = getattr(request, "user", None)
+                if owner is None or not getattr(owner, "is_authenticated", False):
+                    User = get_user_model()
+                    owner = User.objects.filter(is_superuser=True).first() or User.objects.first()
+                if owner is None:
+                    return Response({"error": "No owner available on this node."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                fields["owner"] = owner
+                svc = Service.objects.create(name=name, **fields)
+                created = True
+            else:
+                for key, value in fields.items():
+                    setattr(svc, key, value)
+                try:
+                    svc.full_clean(exclude=["owner"])
+                except Exception:
+                    pass
+                svc.save()
+                created = False
+            return Response({"ok": True, "id": str(svc.id), "created": created, "name": svc.name})
+        except Exception as exc:
+            logger.warning("Node service upsert failed for %s: %s", name, _scrub_error(exc, 120))
+            return Response({"error": _scrub_error(exc, 200)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     @action(detail=False, methods=["post"], url_path="storage/test")
     def storage_test(self, request):
         # Privileged-only: payload carries cloud credentials. Transport is the
