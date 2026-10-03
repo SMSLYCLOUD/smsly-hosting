@@ -149,6 +149,7 @@ def _resolve_gateway_secret() -> str:
 
 
 GATEWAY_SECRET = _resolve_gateway_secret()
+EDGE_JWT_SECRET = str(config('EDGE_JWT_SECRET', default='')).strip()
 # Owner edition: all tier gates disabled — all features unlocked.
 # SECURITY (Issue 21): the flag is audit-logged on the first
 # consult per process via ``_check_tier_gates_disabled()`` in
@@ -434,6 +435,26 @@ if DOMAIN and DOMAIN != 'localhost':
     _grid_wildcard = f'.{DOMAIN}'
     if _grid_wildcard not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(_grid_wildcard)
+# 2026-10-03: also honor the DB PlatformConfig domain. Installer flows
+# have written bare IPs into .env DOMAIN on nodes (grid1 then 400s on
+# its own DNS names); the DB domain is the operator-curated platform
+# domain and survives .env rewrites. Fail-closed: DNS names only,
+# never IPs, validated before appending.
+try:
+    from apps.deployments.models.core import PlatformConfig as _PC
+    _db_domain = (_PC.load().domain or '').strip().lower().rstrip('.')
+    if _db_domain and _db_domain != 'localhost':
+        import ipaddress as _ip
+        try:
+            _ip.ip_address(_db_domain)
+        except ValueError:
+            _db_wildcard = f'.{_db_domain}'
+            if _db_wildcard not in ALLOWED_HOSTS:
+                ALLOWED_HOSTS.append(_db_wildcard)
+            if _db_domain not in ALLOWED_HOSTS:
+                ALLOWED_HOSTS.append(_db_domain)
+except Exception:
+    pass
 
 # Internal grid services (e.g. smsly-frontend-node1-a37373.grid.smsly.cloud)
 _GRID_DOMAIN = config('GRID_DOMAIN', default='grid.smsly.cloud')
