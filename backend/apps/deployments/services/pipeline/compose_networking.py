@@ -188,6 +188,16 @@ class ComposeNetworkingMixin:
                 f"traefik.http.routers.{router}.entrypoints": "web",
             }
         )
+        # The chain below references secure-headers-strict@file /
+        # edge-forward-auth@file (file provider). Ensure edge-shared.yml
+        # exists first — a missing file drops the whole router.
+        try:
+            from apps.deployments.services.traefik_manager.edge_shared_file import (
+                ensure_edge_shared_file,
+            )
+            ensure_edge_shared_file()
+        except Exception:
+            logger.warning("Edge shared file ensure failed for %s", router)
         chain = ["secure-headers-strict@file"]
         if enable_crowdsec_waf:
             chain.insert(0, "crowdsec-bouncer")

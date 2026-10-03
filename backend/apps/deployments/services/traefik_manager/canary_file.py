@@ -430,6 +430,15 @@ def write_canary_file(service, live_weight: int, staging_weight: int) -> dict:
 
     path = canary_file_path(service)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    # The file router mirrors live middlewares incl. @file refs — make
+    # sure edge-shared.yml exists or the canary router is stillborn.
+    try:
+        from apps.deployments.services.traefik_manager.edge_shared_file import (
+            ensure_edge_shared_file,
+        )
+        ensure_edge_shared_file()
+    except Exception as exc:
+        logger.warning("Canary file: edge shared ensure failed: %s", exc)
     # Atomic replace so a failed write can never leave a half-written
     # live file behind (a transient provider hiccup on the .tmp name is
     # harmless — the previous good config stays loaded).

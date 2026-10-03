@@ -491,7 +491,22 @@ class LocalAdapter(BaseCloudAdapter):
     def _apply_edge_middlewares(
         self, labels: dict[str, str], name: str,
     ) -> None:
-        """Attach shared secure-headers + opt-in sablier/forward-auth."""
+        """Attach shared secure-headers + opt-in sablier/forward-auth.
+
+        The ``secure-headers-strict@file`` / ``edge-forward-auth@file``
+        refs resolve via edge-shared.yml (file provider). That file is
+        ensured here — labels must never reference middlewares that do
+        not exist, or Traefik drops the whole router (fail-closed on
+        the write itself: a failed ensure only logs; the router
+        degrades to route-fallback rather than half-deploying).
+        """
+        try:
+            from apps.deployments.services.traefik_manager.edge_shared_file import (
+                ensure_edge_shared_file,
+            )
+            ensure_edge_shared_file()
+        except Exception:
+            logger.warning("Edge shared file ensure failed for %s", name)
         router_name = name.replace('.', '-').replace('_', '-')
         key = f'traefik.http.routers.{router_name}.middlewares'
         existing = [m.strip() for m in str(labels.get(key, "") or "").split(",") if m.strip()]

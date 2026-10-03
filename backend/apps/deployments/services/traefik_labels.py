@@ -150,6 +150,15 @@ def generate_traefik_labels(
     # Middlewares chain: crowdsec (platform default) + shared strict
     # secure-headers bundle (file provider, always discovered) +
     # per-router ratelimit. Opt-in sablier/forward-auth appended.
+    # Ensure the file-provider bundle exists — a missing edge-shared.yml
+    # drops every router carrying these refs.
+    try:
+        from apps.deployments.services.traefik_manager.edge_shared_file import (
+            ensure_edge_shared_file,
+        )
+        ensure_edge_shared_file()
+    except Exception:
+        pass
     middlewares = ["secure-headers-strict@file"]
     try:
         from apps.deployments.models.core import PlatformConfig
