@@ -1767,6 +1767,10 @@ def generate_caddyfile(config) -> str:
         "    on_demand_tls {",
         f"        ask {_ask_url}",
         "    }",
+        "    # Coraza WAF is a custom HTTP handler with no built-in order —",
+        "    # without this, any site importing coraza_waf fails to adapt",
+        "    # ('not an ordered HTTP handler'). WAF runs before proxying.",
+        "    order coraza_waf before reverse_proxy",
     ]
 
     # Edge Shield: when records are Cloudflare-proxied, ALL inbound

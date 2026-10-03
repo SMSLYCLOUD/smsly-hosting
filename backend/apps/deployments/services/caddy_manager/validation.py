@@ -241,6 +241,8 @@ def validate_edge_sidecar_endpoints(content: str) -> list[str]:
         errors.append("Caddyfile has an ask directive not pointing at the edge sidecar.")
     if "authorize with edge_jwt" in text:
         errors.append("Caddyfile uses stale `authorize with edge_jwt` (caddy-security) — regenerate: edge JWT now uses forward_auth to the sidecar.")
+    if "import coraza_waf" in text and "order coraza_waf" not in text:
+        errors.append("Caddyfile imports coraza_waf without a global `order coraza_waf` — adapt refuses unordered custom handlers.")
     return errors
 
 
