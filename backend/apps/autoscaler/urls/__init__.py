@@ -8,10 +8,12 @@ from rest_framework.routers import DefaultRouter
 from .. import views
 from ..views.service import ScalingViewSet
 from ..views.nodes import AutoscalerNodesViewSet
+from ..views.tiers import InfraTiersViewSet
 
 router = DefaultRouter()
 router.register(r'services', ScalingViewSet, basename='autoscaler-services')
 router.register(r'nodes', AutoscalerNodesViewSet, basename='autoscaler-nodes')
+router.register(r'tiers', InfraTiersViewSet, basename='autoscaler-tiers')
 
 urlpatterns = [
     path('status/', views.autoscaler_status),

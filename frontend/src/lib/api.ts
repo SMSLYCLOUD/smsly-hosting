@@ -2674,7 +2674,28 @@ export const autoscalerApi = {
     const { data } = await api.post(`/autoscaler/nodes/${nodeId}/cordon/`, { allow_user_workloads: allow });
     return data;
   },
+  getInfraTiers: async (): Promise<{ napd_available: boolean; tiers: Record<string, InfraTier> }> => {
+    const { data } = await api.get('/autoscaler/tiers/');
+    return { napd_available: !!data.napd_available, tiers: data.tiers || {} };
+  },
+  wakeInfraTier: async (tier: string): Promise<{ ok: boolean; tier: string }> => {
+    const { data } = await api.post('/autoscaler/tiers/wake/', { tier });
+    return data;
+  },
+  sleepInfraTier: async (tier: string): Promise<{ ok: boolean; tier: string }> => {
+    const { data } = await api.post('/autoscaler/tiers/sleep/', { tier });
+    return data;
+  },
 };
+
+export interface InfraTier {
+  awake: boolean;
+  asleep_mark: boolean;
+  autosleep: boolean;
+  idle_secs: number;
+  last_wake: string | null;
+  services: string[];
+}
 
 export const edgeApi = {
   mintToken: async (scope: string = 'service', ttl: number = 900): Promise<{ token: string; scope: string; expires_in: number }> => {

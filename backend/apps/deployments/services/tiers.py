@@ -35,6 +35,82 @@ def napd_available() -> bool:
     return bool(_napd_secret())
 
 
+def _napd_get(path: str, params: dict | None = None, timeout: int = 15):
+    """GET napd with auth. Returns parsed JSON, or None. Never raises."""
+    secret = _napd_secret()
+    if not secret:
+        return None
+    try:
+        import requests
+
+        resp = requests.get(
+            f"{NAPD_BASE_URL}{path}", params=params or {},
+            headers={"X-Napd-Secret": secret}, timeout=(5, timeout),
+        )
+        if resp.status_code == 200:
+            try:
+                return resp.json()
+            except Exception:
+                return None
+        logger.warning("napd GET %s returned %s", path, resp.status_code)
+        return None
+    except Exception as exc:
+        logger.warning("napd GET %s failed: %s", path, exc)
+        return None
+
+
+def napd_status() -> dict | None:
+    """Tier states from napd (/status). None when unavailable. Never raises."""
+    try:
+        data = _napd_get("/status")
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        logger.warning("napd status failed: %s", exc)
+        return None
+
+
+def sleep_tier(tier: str) -> bool:
+    """Ask napd to stop an infra tier. Never raises.
+
+    No ``force`` flag is ever sent: napd itself refuses non-autosleep
+    tiers (403) — the daemon stays the authoritative guard. Returns
+    True only on napd 200.
+    """
+    name = str(tier or "").strip().lower()
+    if not _TIER_RE.match(name):
+        logger.warning("Refusing to sleep invalid tier name: %r", tier)
+        return False
+    secret = _napd_secret()
+    if not secret:
+        logger.debug("NAPD_SHARED_SECRET unset — skipping sleep for tier %r", name)
+        return False
+    try:
+        import requests
+
+        resp = requests.post(
+            f"{NAPD_BASE_URL}/sleep",
+            params={"tier": name},
+            headers={"X-Napd-Secret": secret},
+            timeout=(5, 30),
+        )
+        if resp.status_code == 200:
+            return True
+        logger.warning(
+            "napd sleep for tier %r returned %s: %s",
+            name, resp.status_code, (resp.text or "")[:200],
+        )
+        return False
+    except Exception as exc:
+        try:
+            from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
+            if isinstance(exc, (SoftTimeLimitExceeded, TimeLimitExceeded)):
+                raise
+        except ImportError:
+            pass
+        logger.warning("napd sleep for tier %r failed: %s", name, exc)
+        return False
+
+
 def ensure_tier_awake(tier: str, timeout: int = 120) -> bool:
     """Wake an infra tier if it sleeps, waiting until ready. Never raises.
 

@@ -15,6 +15,7 @@ import {
 } from 'recharts';
 import { ChartContainer } from '@/components/ui/chart-container';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { SystemdTiers } from '@/components/settings/SystemdTiers';
 import { autoscalerApi, scalingApi, servicesApi, type Service, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService, type AutoscalerServiceReplica, type AutoscalerNode } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -910,6 +911,9 @@ export default function AutoscalerPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* ── Systemd tiers (napd) ───────────────────────────────────── */}
+        <SystemdTiers />
 
         {/* ── Service Cards Grid ───────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
