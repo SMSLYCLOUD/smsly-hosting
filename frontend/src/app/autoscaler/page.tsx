@@ -865,6 +865,7 @@ export default function AutoscalerPage() {
               <Server size={16} className="text-emerald-500" />
               Nodes
               <span className="text-xs font-normal text-muted-foreground">({nodes.length} remote node{nodes.length === 1 ? '' : 's'} — score, capacity, replicas, storage)</span>
+              <a href="/autoscaler/nodes" className="text-xs font-normal text-primary hover:underline ml-auto">Open Nodes page →</a>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
