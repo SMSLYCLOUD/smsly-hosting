@@ -447,6 +447,15 @@ def migrate_addon_mode_task(self, addon_id: str, target_mode: str) -> None:
     try:
         result = migrate_addon_mode(addon_id, target_mode)
         logger.info("migrate_addon_mode_task succeeded for addon %s: %s", addon_id, result.get('message'))
+        # A previous failure's text lingers on the row otherwise and
+        # the UI keeps showing it next to a healthy ACTIVE addon.
+        try:
+            addon = Addon.objects.get(id=addon_id)
+            if getattr(addon, 'deletion_error', ''):
+                addon.deletion_error = ''
+                addon.save(update_fields=['deletion_error'])
+        except Exception:
+            pass
     except Exception as exc:
         logger.error("migrate_addon_mode_task failed for addon %s: %s", addon_id, exc)
         try:

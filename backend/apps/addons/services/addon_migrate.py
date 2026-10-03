@@ -159,7 +159,16 @@ def sync_addon_env_vars(addon, old_url=""):
 
 
 def _service_container_names(service) -> list[str]:
-    """Running container names owned by the service (label, name, prefix)."""
+    """Running container names owned by the service (label, name, prefix).
+
+    Replicas carry ``smsly.replica=true`` + a canonical-name label
+    instead of ``smsly.service_id`` — without this second pass a
+    replica keeps serving (and writing) through migration quiesce
+    while the primary is stopped. Fail-open toward the old behavior:
+    any inspection failure just yields fewer extra names, never an
+    error (quiesce completeness is best-effort; verification still
+    guards the data).
+    """
     svc_name = str(getattr(service, 'name', '') or '').strip()
     names: list[str] = []
     res = _run(['docker', 'ps', '--format', '{{.Names}}',
@@ -167,6 +176,26 @@ def _service_container_names(service) -> list[str]:
                timeout=30)
     if not res.get('error'):
         names = [n for n in (res.get('output') or '').split() if n]
+    # Replicas of the same service (no smsly.service_id label).
+    try:
+        res = _run(['docker', 'ps', '--format', '{{.Names}}',
+                    '--filter', 'label=smsly.replica=true'], timeout=30)
+        candidates = [n for n in (res.get('output') or '').split() if n and n not in names]
+        for cand in candidates:
+            res = _run(['docker', 'inspect', '--format',
+                        '{{index .Config.Labels "smsly.blue_green.canonical_name"}}|'
+                        '{{index .Config.Labels "com.paas.service"}}',
+                        cand], timeout=15)
+            if res.get('error'):
+                continue
+            labels = (res.get('output') or '').strip()
+            if svc_name and svc_name in labels.split('|'):
+                names.append(cand)
+                logger.info(
+                    "Migration quiesce: including replica %s for service %r",
+                    cand, svc_name)
+    except Exception as exc:
+        logger.debug("Migration quiesce replica sweep skipped: %s", exc)
     if not names and svc_name:
         res = _run(['docker', 'ps', '--format', '{{.Names}}',
                     '--filter', f'name=^{svc_name}$'], timeout=30)
