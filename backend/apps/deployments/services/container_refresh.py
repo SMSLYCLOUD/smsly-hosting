@@ -62,6 +62,15 @@ def _recreate_remote_with_fresh_env(service, dry_run: bool = False) -> dict:
             if isinstance(value, str) and value.startswith("gAAAAA") and len(value) > 50:
                 continue
             overrides[key] = "" if value is None else str(value)
+        try:
+            # Same SOPS recipient the build pipeline injects (public).
+            from apps.deployments.services.secrets_sops import ensure_age_keypair
+            _pub, _ = ensure_age_keypair()
+            if _pub.startswith("age1"):
+                overrides.setdefault("SOPS_AGE_RECIPIENTS", _pub)
+                overrides.setdefault("SOPS_AGE_PUBLIC_KEY", _pub)
+        except Exception:
+            pass
         ref = (
             (getattr(service, "active_runtime_id", "") or "").strip()
             or (service.name or "").strip()
@@ -172,6 +181,16 @@ def _fresh_env(service, live_env=None) -> dict:
         env_vars.update(get_mtls_env_vars(service) or {})
     except Exception as exc:
         logger.debug("mTLS env injection skipped for %s: %s", service.name, exc)
+    try:
+        # Same SOPS recipient the build pipeline injects (public, safe).
+        # setdefault: an operator-pinned value always wins.
+        from apps.deployments.services.secrets_sops import ensure_age_keypair
+        _pub, _ = ensure_age_keypair()
+        if _pub.startswith("age1"):
+            env_vars.setdefault("SOPS_AGE_RECIPIENTS", _pub)
+            env_vars.setdefault("SOPS_AGE_PUBLIC_KEY", _pub)
+    except Exception as exc:
+        logger.debug("SOPS recipient injection skipped for %s: %s", service.name, exc)
     return env_vars
 
 

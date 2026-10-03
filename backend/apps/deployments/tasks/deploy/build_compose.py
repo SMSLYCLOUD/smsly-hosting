@@ -608,6 +608,19 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
     except Exception as exc:
         logger.debug("Infisical env injection skipped: %s", exc)
 
+    # SOPS-age public recipient on every build (default backend): apps
+    # and SDKs use it to encrypt toward the platform. Public — safe in
+    # env. Auto-created on first use; fail-open (skip) on any error so
+    # a secrets-side failure never blocks a deploy.
+    try:
+        from apps.deployments.services.secrets_sops import ensure_age_keypair
+        _pub, _ = ensure_age_keypair()
+        if _pub.startswith("age1"):
+            env_vars.setdefault("SOPS_AGE_RECIPIENTS", _pub)
+            env_vars.setdefault("SOPS_AGE_PUBLIC_KEY", _pub)
+    except Exception as exc:
+        logger.debug("SOPS recipient injection skipped: %s", exc)
+
     return env_vars
 
 def _smart_derive_database_vars(env_vars: dict):
