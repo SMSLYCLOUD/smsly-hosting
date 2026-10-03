@@ -490,6 +490,34 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
     for d in (service.custom_domains or []):
         if isinstance(d, str) and d.strip():
             all_hosts.append(d.strip())
+    # Node-hosted services are also reachable via their node hostnames
+    # (flat + deep + legacy). Without these the app 400s on direct
+    # node URLs even though routing + TLS are correct (flat 400s).
+    try:
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
+            node_service_domain,
+            node_service_domain_legacy_flat,
+            node_service_domain_legacy_nested,
+            node_service_domain_nested,
+        )
+        from apps.deployments.models.service import Service as _Svc
+        _svr = _resolve_effective_server(service)
+        if _svr is not None and not getattr(_svr, 'is_primary', True):
+            _nn = getattr(_svr, 'node_number', None) or 1
+            _base = _Svc.default_public_base_domain()
+            _slug = (getattr(service, 'slug', '') or service.name or '').strip().lower().replace(' ', '-')
+            if _slug and _base:
+                for _h in (
+                    node_service_domain(_slug, _nn, _base),
+                    node_service_domain_nested(_slug, _nn, _base),
+                    node_service_domain_legacy_flat(_slug, _nn, _base),
+                    node_service_domain_legacy_nested(_slug, _nn, _base),
+                ):
+                    if _h and _h not in all_hosts:
+                        all_hosts.append(_h)
+    except Exception:
+        pass
     hosts_csv = ','.join(all_hosts)
 
     env_vars['ALLOWED_HOSTS'] = hosts_csv
