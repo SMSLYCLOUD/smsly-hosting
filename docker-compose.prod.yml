@@ -885,6 +885,9 @@ services:
       registry:
         condition: service_started
     volumes:
+    # WAF converge task runs compose up/down for the appsec stack.
+    - /opt/smsly-hosting/docker-compose.prod.yml:/opt/smsly-hosting/docker-compose.prod.yml:ro,z
+    - /opt/smsly-hosting/.env:/opt/smsly-hosting/.env:ro,z
     - static_volume:/app/staticfiles
     - media_volume:/app/media
     - caddy_config:/caddy-config
@@ -1009,6 +1012,9 @@ services:
       registry:
         condition: service_started
     volumes:
+    # WAF converge task runs compose up/down for the appsec stack.
+    - /opt/smsly-hosting/docker-compose.prod.yml:/opt/smsly-hosting/docker-compose.prod.yml:ro,z
+    - /opt/smsly-hosting/.env:/opt/smsly-hosting/.env:ro,z
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - traefik_dynamic:/traefik-dynamic
@@ -1089,6 +1095,9 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
+    # WAF converge task runs compose up/down for the appsec stack.
+    - /opt/smsly-hosting/docker-compose.prod.yml:/opt/smsly-hosting/docker-compose.prod.yml:ro,z
+    - /opt/smsly-hosting/.env:/opt/smsly-hosting/.env:ro,z
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - traefik_dynamic:/traefik-dynamic
@@ -1204,6 +1213,9 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
+    # WAF converge task runs compose up/down for the appsec stack.
+    - /opt/smsly-hosting/docker-compose.prod.yml:/opt/smsly-hosting/docker-compose.prod.yml:ro,z
+    - /opt/smsly-hosting/.env:/opt/smsly-hosting/.env:ro,z
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - traefik_dynamic:/traefik-dynamic
@@ -1287,6 +1299,9 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
+    # WAF converge task runs compose up/down for the appsec stack.
+    - /opt/smsly-hosting/docker-compose.prod.yml:/opt/smsly-hosting/docker-compose.prod.yml:ro,z
+    - /opt/smsly-hosting/.env:/opt/smsly-hosting/.env:ro,z
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - coredns_config:/coredns-config

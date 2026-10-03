@@ -159,21 +159,26 @@ CONVERGE_LOCK_KEY = "waf-stack-converge-lock"
 
 
 def _compose_base() -> list[str] | None:
-    """docker compose base args for the host stack, or None if missing."""
+    """docker compose base args for the host stack, or None if missing.
+
+    Prefers the read-only single-file bind mount (present in backend
+    and celery services); falls back to legacy host paths.
+    """
     import os
-    import subprocess
 
     candidates = [
-        os.environ.get("INSTALL_DIR", "/opt/smsly-hosting"),
-        "/opt/smsly-hosting",
+        "/opt/smsly-hosting/docker-compose.prod.yml",
+        os.path.join(os.environ.get("INSTALL_DIR", "/opt/smsly-hosting"), "docker-compose.prod.yml"),
     ]
-    for base in dict.fromkeys(candidates):
-        compose = os.path.join(base, "docker-compose.prod.yml")
-        env_file = os.path.join(base, ".env")
+    for compose in dict.fromkeys(candidates):
         if os.path.exists(compose):
             cmd = ["docker", "compose"]
+            env_file = os.path.join(os.path.dirname(compose), ".env")
+            master_env = "/app/.env"
             if os.path.exists(env_file):
                 cmd += ["--env-file", env_file]
+            elif os.path.exists(master_env):
+                cmd += ["--env-file", master_env]
             return cmd + ["-f", compose]
     return None
 
