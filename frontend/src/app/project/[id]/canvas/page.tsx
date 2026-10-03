@@ -33,19 +33,107 @@ interface CanvasEdge {
 }
 
 /* ── Colors ─────────────────────────────────────────────── */
-const CARD_THEMES: Record<string, {
+type CardTheme = {
     bg: string; border: string; glow: string; icon: string; accent: string;
-}> = {
-    service:      { bg: '#18181b', border: '#3b82f6', glow: '#3b82f620', icon: '#3b82f6', accent: '#3b82f6' },
-    POSTGRES:     { bg: '#18181b', border: '#6366f1', glow: '#6366f120', icon: '#6366f1', accent: '#6366f1' },
-    REDIS:        { bg: '#18181b', border: '#22c55e', glow: '#22c55e20', icon: '#22c55e', accent: '#22c55e' },
-    MYSQL:        { bg: '#18181b', border: '#f59e0b', glow: '#f59e0b20', icon: '#f59e0b', accent: '#f59e0b' },
-    MONGODB:      { bg: '#18181b', border: '#a855f7', glow: '#a855f720', icon: '#a855f7', accent: '#a855f7' },
-    ELASTICSEARCH:{ bg: '#18181b', border: '#06b6d4', glow: '#06b6d420', icon: '#06b6d4', accent: '#06b6d4' },
-    RABBITMQ:     { bg: '#18181b', border: '#f97316', glow: '#f9731620', icon: '#f97316', accent: '#f97316' },
-    volume:       { bg: '#18181b', border: '#eab308', glow: '#eab30820', icon: '#eab308', accent: '#eab308' },
-    default:      { bg: '#18181b', border: '#3b82f6', glow: '#3b82f620', icon: '#3b82f6', accent: '#3b82f6' },
 };
+const _theme = (hex: string): CardTheme => ({
+    bg: '#18181b', border: hex, glow: hex + '20', icon: hex, accent: hex,
+});
+const CARD_THEMES: Record<string, CardTheme> = {
+    service:      _theme('#3b82f6'),
+    // Databases (brand hues — never service blue, never all-green)
+    POSTGRES:     _theme('#6366f1'),
+    TIMESCALEDB: _theme('#fde047'),
+    PGBOUNCER:    _theme('#a5b4fc'),
+    MYSQL:        _theme('#f59e0b'),
+    MARIADB:      _theme('#2dd4bf'),
+    COCKROACHDB: _theme('#818cf8'),
+    PERCONA:      _theme('#38bdf8'),
+    VITESS:       _theme('#a3e635'),
+    MONGODB:      _theme('#22c55e'),
+    COUCHDB:      _theme('#fca5a5'),
+    RETHINKDB:    _theme('#fb7185'),
+    ARANGODB:     _theme('#f472b6'),
+    FERRETDB:     _theme('#fdba74'),
+    SURREALDB:    _theme('#e879f9'),
+    CASSANDRA:    _theme('#7dd3fc'),
+    SCYLLADB:     _theme('#8b5cf6'),
+    CLICKHOUSE:   _theme('#fbbf24'),
+    NEO4J:        _theme('#60a5fa'),
+    DGRAPH:       _theme('#fb7185'),
+    // Cache (redis brand is red — the old all-green came from here)
+    REDIS:        _theme('#ef4444'),
+    MEMCACHED:    _theme('#c084fc'),
+    KEYDB:        _theme('#fde047'),
+    VALKEY:       _theme('#93c5fd'),
+    DRAGONFLYDB:  _theme('#f97316'),
+    ETCD:         _theme('#67e8f9'),
+    // Search
+    ELASTICSEARCH:_theme('#facc15'),
+    OPENSEARCH:   _theme('#38bdf8'),
+    MEILISEARCH:  _theme('#a855f7'),
+    TYPESENSE:    _theme('#22d3ee'),
+    SOLR:         _theme('#fb923c'),
+    // Queue
+    RABBITMQ:     _theme('#f97316'),
+    KAFKA:        _theme('#e2e8f0'),
+    NATS:         _theme('#4ade80'),
+    REDPANDA:     _theme('#f87171'),
+    PULSAR:       _theme('#818cf8'),
+    ACTIVEMQ:     _theme('#fda4af'),
+    // Storage
+    MINIO:        _theme('#f43f5e'),
+    GARAGE:       _theme('#f43f5e'),
+    SEAWEEDFS:    _theme('#5eead4'),
+    // Time-series / observability
+    INFLUXDB:     _theme('#c084fc'),
+    QUESTDB:      _theme('#fcd34d'),
+    VICTORIAMETRICS: _theme('#38bdf8'),
+    PROMETHEUS:   _theme('#f97316'),
+    GRAFANA:      _theme('#fdba74'),
+    JAEGER:       _theme('#22d3ee'),
+    // AI / infra / CLIs
+    QDRANT:       _theme('#a78bfa'),
+    WEAVIATE:     _theme('#34d399'),
+    MILVUS:       _theme('#60a5fa'),
+    CHROMADB:     _theme('#f472b6'),
+    N8N:          _theme('#fb7185'),
+    TEMPORAL:     _theme('#a5b6fc'),
+    VAULT:        _theme('#facc15'),
+    CONSUL:       _theme('#ec4899'),
+    KEYCLOAK:     _theme('#3b82f6'),
+    STEEL:        _theme('#cbd5e1'),
+    BROWSERLESS: _theme('#fbbf24'),
+    OPENCODE:     _theme('#34d399'),
+    COMMANDCODE:  _theme('#22d3ee'),
+    ANTIGRAVITYCLI: _theme('#60a5fa'),
+    KIMCHI:       _theme('#fb923c'),
+    FORGECODE:    _theme('#a78bfa'),
+    DEEPAGENTS:   _theme('#a3e635'),
+    QWENCODE:     _theme('#c084fc'),
+    FACTORYDROID: _theme('#fb7185'),
+    volume:       _theme('#eab308'),
+    default:      _theme('#64748b'),
+};
+
+/* Deterministic fallback hue for addon types with no explicit brand
+ * entry (future types): stable per name, vivid, and steered clear of
+ * the service-blue band so unknowns never masquerade as services. */
+function _hashHue(name: string): number {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    let hue = h % 360;
+    if (hue >= 205 && hue <= 235) hue = (hue + 60) % 360; // dodge service blue
+    return hue;
+}
+function _hsl(h: number, s: number, l: number): string {
+    s /= 100; l /= 100;
+    const k = (n: number) => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    const to = (x: number) => Math.round(255 * x).toString(16).padStart(2, '0');
+    return `#${to(f(0))}${to(f(8))}${to(f(4))}`;
+}
 
 const EDGE_COLORS: Record<string, string> = {
     API: '#60a5fa', DATABASE: '#818cf8', CACHE: '#34d399',
@@ -65,11 +153,12 @@ const DEPLOY_LABELS: Record<string, { color: string; label: string }> = {
     NONE:      { color: '#52525b', label: 'No Deploy' },
 };
 
-function getTheme(node: CanvasNode) {
+function getTheme(node: CanvasNode): CardTheme {
     if (node.type === 'service') return CARD_THEMES.service;
     if (node.type === 'addon') {
         const t = (node.data?.addon_type || '').toUpperCase();
-        return CARD_THEMES[t] || CARD_THEMES.default;
+        if (CARD_THEMES[t]) return CARD_THEMES[t];
+        return _theme(_hsl(_hashHue(t || node.name), 70, 55));
     }
     if (node.type === 'volume') return CARD_THEMES.volume;
     return CARD_THEMES.default;
