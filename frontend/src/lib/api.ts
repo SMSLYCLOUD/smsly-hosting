@@ -335,6 +335,7 @@ export interface Service {
   host_aliases?: { host: string; rewrite_root: string }[];
   node_url?: string | null;
   node_url_nested?: string | null;
+  sleep_state?: 'awake' | 'sleeping' | 'na' | 'unknown';
   node_domains?: {
     master?: string | null;
     flat?: string;

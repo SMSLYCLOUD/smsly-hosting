@@ -9,6 +9,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
 import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug, History } from 'lucide-react';
 import { InternalNetworkCard } from '@/components/settings/InternalNetworkCard';
+import { SleepingZzz } from '@/components/SleepingZzz';
 import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
 const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false, loading: () => <Skeleton className="h-[400px] w-full" /> });
@@ -489,6 +490,12 @@ export default function ServiceDetailPage() {
                         <p className={`text-3xl font-bold ${deployment?.status === 'ACTIVE' ? 'text-emerald-500' : deployment?.status === 'FAILED' ? 'text-red-500' : 'text-foreground'}`}>
                             {deployment?.status || 'No Deploy'}
                         </p>
+                        {(service as { sleep_state?: string }).sleep_state === 'sleeping' && (
+                            <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
+                                <SleepingZzz />
+                                <span className="text-xs font-medium">Sleeping — wakes on next request</span>
+                            </div>
+                        )}
                         <p className="text-xs text-muted-foreground mt-2 font-medium">
                             {deployment?.finished_at ? `Since ${new Date(deployment.finished_at).toLocaleDateString()}` : 'Awaiting deployment'}
                         </p>

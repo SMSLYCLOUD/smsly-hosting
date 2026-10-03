@@ -423,6 +423,33 @@
   @apply bg-accent text-accent-foreground;
 }
 
+/* ===== SLEEPING ZZZ: Spilling-out sleep animation for idle containers ===== */
+@keyframes smsly-zzz-float {
+  0% { opacity: 0; transform: translateY(6px) scale(0.7); }
+  25% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-14px) scale(1.15); }
+}
+.smsly-zzz {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1;
+  color: hsl(var(--status-offline));
+  user-select: none;
+}
+.smsly-zzz > span {
+  display: inline-block;
+  animation: smsly-zzz-float 2.4s ease-in-out infinite;
+}
+.smsly-zzz > span:nth-child(1) { font-size: 0.65em; animation-delay: 0s; }
+.smsly-zzz > span:nth-child(2) { font-size: 0.85em; animation-delay: 0.35s; }
+.smsly-zzz > span:nth-child(3) { font-size: 1.05em; animation-delay: 0.7s; }
+@media (prefers-reduced-motion: reduce) {
+  .smsly-zzz > span { animation: none; opacity: 0.8; }
+}
+
 /* ===== ICON GLOW: Subtle status indicator ===== */
 .icon-glow {
   @apply relative;
