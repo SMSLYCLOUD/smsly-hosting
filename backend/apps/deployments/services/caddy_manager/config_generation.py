@@ -1545,6 +1545,10 @@ def generate_node_caddyfile(node) -> str:
 
     sections: list[str] = []
 
+    # Snippet definitions must precede any `import secure_headers`
+    # (node reload fails with "File to import not found" otherwise).
+    sections.append(SECURE_HEADERS_SNIPPET)
+
     # Node management block
     mgmt_block = [
         f"{node_domain} {{",
