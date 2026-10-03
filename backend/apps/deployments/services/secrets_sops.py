@@ -94,6 +94,13 @@ def ensure_age_keypair() -> tuple[str, str]:
         line = line.strip()
         if line.startswith("Public key:"):
             new_public = line.split(":", 1)[1].strip().split()[0]
+        elif line.startswith("# public key:"):
+            # age-keygen stdout form (the bare "Public key:" line goes
+            # to stderr, which we do not capture by design).
+            for token in line.split():
+                if token.startswith("age1"):
+                    new_public = token
+                    break
         elif line.startswith("age1") and not new_public:
             new_public = line.split()[0]
         elif line.startswith("AGE-SECRET-KEY-") and not new_private:
