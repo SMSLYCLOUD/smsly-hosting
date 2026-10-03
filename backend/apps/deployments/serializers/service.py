@@ -817,6 +817,21 @@ class ServiceSerializer(serializers.ModelSerializer):
             obj._internal_addresses_cache = obj.generate_internal_addresses()
         return obj._internal_addresses_cache
 
+    def get_sleep_state(self, obj):
+        """Sablier sleep signal for the Zzz UI: 'sleeping' when the
+        service opted into scale-to-zero and no container is currently
+        attached (same cached inspect as internal_addresses — no extra
+        Docker calls). Anything else is 'awake'/'na'."""
+        try:
+            if not bool(getattr(obj, 'sablier_enabled', False)):
+                return 'na'
+            addrs = getattr(obj, '_internal_addresses_cache', None)
+            if not addrs:
+                addrs = obj.generate_internal_addresses()
+            return 'awake' if addrs else 'sleeping'
+        except Exception:
+            return 'unknown'
+
     def get_effective_registry(self, obj):
         """The registry host this service's images actually push/pull to.
 

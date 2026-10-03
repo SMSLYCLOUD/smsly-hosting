@@ -81,6 +81,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.cloud.views.code_analysis  # noqa: F401
     import apps.autoscaler.services.legacy_autoscaler  # noqa: F401
     import apps.autoscaler.services.tasks_autoscale  # noqa: F401
+    import apps.autoscaler.sleeper  # noqa: F401  # sleeper_agent_task
     import apps.deployments.tasks.deploy.promote  # noqa: F401  # auto_promote_staged_deployments
     import apps.deployments.services.redis_failover_recovery  # noqa: F401
     import apps.addons.tasks.ha_watchdog  # noqa: F401  # check_addon_ha_task
@@ -210,6 +211,7 @@ app.conf.task_routes = {
     # Stats collection does Docker/K8s I/O and mutates platform containers —
     # keep it off the default 'celery' queue with the other I/O-heavy tasks.
     'apps.autoscaler.tasks.autoscaler_collect_stats': {'queue': 'deploy'},
+    'apps.autoscaler.tasks.sleeper_agent_task': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh_dns.sync_mesh_dns_task': {'queue': 'deploy'},
@@ -593,6 +595,13 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.ensure_infisical_token_task',
         'schedule': crontab(minute=30, hour=3),
         'options': {'expires': 3600.0},
+    },
+    # Sleeper agent: stop idle sablier-enabled services + reap orphan
+    # buildkit builders. Wake stays automatic (Traefik sablier plugin).
+    'sleeper-agent-every-15m': {
+        'task': 'apps.autoscaler.tasks.sleeper_agent_task',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
     },
     # Intelligence runtime anomaly scan every 3 minutes
     'detect-runtime-anomalies-every-180s': {
