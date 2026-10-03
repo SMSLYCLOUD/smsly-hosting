@@ -90,7 +90,20 @@ class ComposeNetworkingMixin:
 
 
     def _resolve_service_network_name(self) -> str:
-        """Resolve the effective Docker network name for this service's scope."""
+        """Resolve the effective Docker network name for this service's scope.
+
+        An explicit master-shipped project bridge (deployment metadata)
+        wins — the local DB may carry no scope rows (nodes). Otherwise
+        project rows, otherwise DOCKER_NETWORK/smsly-net as before.
+        """
+        try:
+            from apps.deployments.services.network_scope import resolve_effective_network_name
+            explicit = resolve_effective_network_name(
+                getattr(self, "service", None), getattr(self, "deployment", None))
+            if explicit:
+                return explicit
+        except Exception:
+            pass
         from apps.deployments.models.network_scope import ScopedNetwork
         project = getattr(self.service, "project", None)
         if project:
@@ -175,8 +188,28 @@ class ComposeNetworkingMixin:
                 f"traefik.http.routers.{router}.entrypoints": "web",
             }
         )
+        chain = ["secure-headers-strict@file"]
         if enable_crowdsec_waf:
-            labels[f"traefik.http.routers.{router}.middlewares"] = "crowdsec-bouncer"
+            chain.insert(0, "crowdsec-bouncer")
+        try:
+            svc_flags = getattr(self, "service", None)
+            if svc_flags is not None:
+                if bool(getattr(svc_flags, "sablier_enabled", False)):
+                    session = str(getattr(svc_flags, "sablier_session", "") or "10m").strip() or "10m"
+                    group = str(getattr(svc_flags, "name", "") or router)
+                    labels[f"traefik.http.middlewares.{router}-sablier.plugin.sablier.group"] = group
+                    labels[f"traefik.http.middlewares.{router}-sablier.plugin.sablier.sablierUrl"] = "http://sablier:10000"
+                    labels[f"traefik.http.middlewares.{router}-sablier.plugin.sablier.sessionDuration"] = session
+                    labels[f"traefik.http.middlewares.{router}-sablier.plugin.sablier.dynamic.displayName"] = group
+                    labels["sablier.enable"] = "true"
+                    labels["sablier.group"] = group
+                    labels["traefik.docker.allownonrunning"] = "true"
+                    chain.append(f"{router}-sablier")
+                if bool(getattr(svc_flags, "edge_jwt_required", False)):
+                    chain.append("edge-forward-auth@file")
+        except Exception:
+            pass
+        labels[f"traefik.http.routers.{router}.middlewares"] = ",".join(chain)
 
         if use_ssl:
             middleware_name = f"{router}-forwarded-https"

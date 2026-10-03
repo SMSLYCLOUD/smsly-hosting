@@ -220,6 +220,50 @@ def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
         raise
 
 
+_SCOPED_NAME_RE = None
+
+
+def _scoped_name_re():
+    global _SCOPED_NAME_RE
+    if _SCOPED_NAME_RE is None:
+        import re as _re
+        _SCOPED_NAME_RE = _re.compile(r"^(smsly-net(-[0-9a-fA-F]{8})?|smsly-platform-net)$")
+    return _SCOPED_NAME_RE
+
+
+def is_valid_scoped_name(name: object) -> bool:
+    """Allowlist for network names accepted from remote masters.
+
+    Only the default bridge, project-scoped bridges and the platform
+    bridge — never arbitrary names (which could hijack host networks).
+    """
+    if not isinstance(name, str) or not name:
+        return False
+    return bool(_scoped_name_re().fullmatch(name.strip()))
+
+
+def resolve_effective_network_name(service=None, deployment=None) -> str | None:
+    """Project network honoring an explicit deployment target.
+
+    When a remote master triggers a deploy it resolves the project's
+    scoped bridge locally (its DB has the scope rows) and ships the
+    name in ``deployment.metadata['target_network']`` — the node has
+    no scope rows, so without this every node deploy falls back to
+    flat ``smsly-net`` and loses project isolation. Returns the
+    validated explicit name, else None (caller falls back to local
+    resolution as before).
+    """
+    try:
+        meta = getattr(deployment, "metadata", None) or {}
+        if isinstance(meta, dict):
+            name = str(meta.get("target_network") or "").strip()
+            if name and is_valid_scoped_name(name):
+                return name
+    except Exception:
+        pass
+    return None
+
+
 def ensure_scoped_network(network_config: dict[str, Any]) -> str:
     """
     Ensure a Docker network exists matching the scoped config.

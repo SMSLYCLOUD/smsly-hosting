@@ -129,6 +129,21 @@ class DeployActionsMixin:
             scan_depth=scan_depth if scan_depth in ('shallow', 'standard', 'deep') else '',
             is_fast_deploy=fast_deploy,
         )
+        # Remote masters ship their resolved project bridge (nodes carry
+        # no scope rows). Stash it validated on metadata so the pipeline
+        # attaches the container to the project bridge, not flat smsly-net.
+        if is_remote_sync:
+            try:
+                from apps.deployments.services.network_scope import is_valid_scoped_name
+                _net = request.data.get('network') or {}
+                _name = str(_net.get('name', '') or '').strip() if isinstance(_net, dict) else ''
+                if _name and is_valid_scoped_name(_name):
+                    _meta = dict(getattr(deployment, 'metadata', None) or {})
+                    _meta['target_network'] = _name
+                    deployment.metadata = _meta
+                    deployment.save(update_fields=['metadata'])
+            except Exception:
+                pass
 
         try:
             enqueue_smart_deploy_task(

@@ -290,6 +290,56 @@ class NodeExecViewSet(viewsets.ViewSet):
                 logger.debug("Node access log tail failed for %s: %s", candidate, exc)
         return Response({"entries": entries[-lines:]})
 
+    @action(detail=False, methods=["post"], url_path="network/attach")
+    def network_attach(self, request):
+        """Attach a running container to a scoped bridge (live, no recreate).
+
+        Body: {container, network, alias?}. Network allowlisted to
+        project bridges + platform bridge. Used to heal containers that
+        landed on flat smsly-net before their project bridge existed.
+        """
+        ok, err = _verify_node_caller(request, require_privileged=True)
+        if not ok:
+            return err
+        data = request.data if isinstance(request.data, dict) else {}
+        container_name = str(data.get("container", "") or "").strip()
+        network_name = str(data.get("network", "") or "").strip()
+        alias = str(data.get("alias", "") or "").strip()
+        if not container_name or not _CONTAINER_RE.match(container_name):
+            return Response({"error": "Valid container is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from apps.deployments.services.network_scope import (
+                ensure_scoped_network,
+                is_valid_scoped_name,
+            )
+        except Exception as exc:
+            return Response({"error": f"Network scope unavailable: {_scrub_error(exc, 120)}"},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        if not is_valid_scoped_name(network_name):
+            return Response({"error": "Network not allowed."}, status=status.HTTP_400_BAD_REQUEST)
+        if alias and not _CONTAINER_RE.match(alias):
+            return Response({"error": "Invalid alias."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = _resolve_container(client, container_name)
+            if container is None:
+                return Response({"error": f"Container {container_name} not found on this node."},
+                                status=status.HTTP_404_NOT_FOUND)
+            ensure_scoped_network({"name": network_name})
+            nets = ((container.attrs.get("NetworkSettings") or {}).get("Networks")) or {}
+            if network_name in nets:
+                return Response({"ok": True, "attached": False, "message": "Already attached."})
+            kwargs: dict = {}
+            if alias:
+                kwargs["aliases"] = [alias]
+            net = client.networks.get(network_name)
+            net.connect(container, **kwargs)
+            return Response({"ok": True, "attached": True, "network": network_name})
+        except Exception as exc:
+            logger.debug("Node network attach failed for %s: %s", container_name, exc)
+            return Response({"error": _scrub_error(exc, 200)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     @action(detail=False, methods=["post"], url_path="network/ensure")
     def network_ensure(self, request):
         ok, err = _verify_node_caller(request, require_privileged=True)

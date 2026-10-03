@@ -40,7 +40,28 @@ def _scoped_network_for(service) -> str:
     Checks if the service's project has a ScopedNetwork override configured.
     If so, uses that network and egress policy. Otherwise defaults to per-service
     bridge isolation.
+
+    Prefers an explicit master-shipped bridge from the latest deployment
+    metadata first (nodes carry no scope rows).
     """
+    try:
+        from apps.deployments.models import Deployment as _Dep
+        from apps.deployments.services.network_scope import resolve_effective_network_name
+        _dep = (
+            _Dep.objects.filter(service=service)
+            .order_by('-created_at')
+            .only('metadata')
+            .first()
+        )
+        _explicit = resolve_effective_network_name(service, _dep)
+        if _explicit:
+            try:
+                ensure_scoped_network({"name": _explicit})
+            except Exception:
+                pass
+            return _explicit
+    except Exception:
+        pass
     project = getattr(service, "project", None)
     if project:
         from apps.deployments.models.network_scope import ScopedNetwork

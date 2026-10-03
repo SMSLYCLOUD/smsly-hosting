@@ -226,6 +226,15 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
     update_stage(deployment, 'Remote Sync', 'success')
     update_stage(deployment, 'Remote Deploy', 'running')
 
+    # Ensure the scoped project bridge (and mTLS) on the node BEFORE
+    # triggering: the container attaches at create time, so a post-
+    # trigger ensure always misses it and the service lands on flat
+    # smsly-net without project isolation.
+    try:
+        _enforce_remote_runtime_policy(service, orchestrator)
+    except Exception as policy_exc:
+        append_log(deployment, f"[Remote] Runtime policy ensure skipped: {policy_exc}\n")
+
     remote_dep_id = orchestrator.trigger_deploy(
         deployment, remote_svc_id, skip_review=skip_review, image_name=image_name,
         fast_deploy=fast_deploy,
@@ -245,10 +254,6 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
     deployment.save(update_fields=['remote_deployment_id', 'status', 'started_at', 'updated_at'])
     append_log(deployment, f"Remote deployment triggered: {remote_dep_id}\n")
 
-    try:
-        _enforce_remote_runtime_policy(service, orchestrator)
-    except Exception as policy_exc:
-        append_log(deployment, f"[Remote] Runtime policy ensure skipped: {policy_exc}\n")
     _poll_remote_deployment(
         deployment,
         orchestrator,

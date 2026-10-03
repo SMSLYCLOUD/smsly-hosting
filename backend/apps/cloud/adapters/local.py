@@ -386,7 +386,12 @@ class LocalAdapter(BaseCloudAdapter):
             logger.warning(f"Kubernetes client not available: {e}")
 
     def _resolve_network_name(self) -> str:
-        """Resolve the scoped Docker network name for the current service."""
+        """Resolve the scoped Docker network name for the current service.
+
+        Prefers an explicit master-shipped bridge from the latest
+        deployment metadata (nodes carry no scope rows), then project
+        rows, then DOCKER_NETWORK/smsly-net as before.
+        """
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
         try:
             from apps.deployments.models import Service as _Svc
@@ -399,6 +404,23 @@ class LocalAdapter(BaseCloudAdapter):
                 .select_related('project__team__organization')
                 .first()
             )
+            if _svc:
+                try:
+                    from apps.deployments.models import Deployment as _Dep
+                    from apps.deployments.services.network_scope import (
+                        resolve_effective_network_name,
+                    )
+                    _dep = (
+                        _Dep.objects.filter(service=_svc)
+                        .order_by('-created_at')
+                        .only('metadata')
+                        .first()
+                    )
+                    _explicit = resolve_effective_network_name(_svc, _dep)
+                    if _explicit:
+                        return _explicit
+                except Exception:
+                    pass
             if _svc and getattr(_svc, 'project', None):
                 from apps.deployments.models.network_scope import ScopedNetwork
                 network_name = ScopedNetwork.resolve_network_name(_svc.project)
@@ -441,6 +463,7 @@ class LocalAdapter(BaseCloudAdapter):
 
         labels[f'traefik.http.routers.{router_name}.entrypoints'] = ','.join(entrypoints)
         self._apply_crowdsec_middleware(labels, name)
+        self._apply_edge_middlewares(labels, name)
         return labels
 
     def _apply_crowdsec_middleware(
@@ -463,6 +486,38 @@ class LocalAdapter(BaseCloudAdapter):
         existing = [m.strip() for m in str(labels.get(key, "") or "").split(",") if m.strip()]
         if "crowdsec-bouncer@docker" not in existing:
             existing.append("crowdsec-bouncer@docker")
+        labels[key] = ",".join(existing)
+
+    def _apply_edge_middlewares(
+        self, labels: dict[str, str], name: str,
+    ) -> None:
+        """Attach shared secure-headers + opt-in sablier/forward-auth."""
+        router_name = name.replace('.', '-').replace('_', '-')
+        key = f'traefik.http.routers.{router_name}.middlewares'
+        existing = [m.strip() for m in str(labels.get(key, "") or "").split(",") if m.strip()]
+        if "secure-headers-strict@file" not in existing:
+            existing.append("secure-headers-strict@file")
+        try:
+            from apps.deployments.models import Service
+            svc = Service.objects.filter(name=name).only(
+                "id", "sablier_enabled", "sablier_session", "edge_jwt_required").first()
+        except Exception:
+            svc = None
+        if svc is not None and getattr(svc, "sablier_enabled", False):
+            session = str(getattr(svc, "sablier_session", "") or "10m").strip() or "10m"
+            group = name
+            labels[f'traefik.http.middlewares.{router_name}-sablier.plugin.sablier.group'] = group
+            labels[f'traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sablierUrl'] = "http://sablier:10000"
+            labels[f'traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sessionDuration'] = session
+            labels[f'traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.displayName'] = name
+            labels["sablier.enable"] = "true"
+            labels["sablier.group"] = group
+            labels["traefik.docker.allownonrunning"] = "true"
+            if f"{router_name}-sablier" not in existing:
+                existing.append(f"{router_name}-sablier")
+        if svc is not None and getattr(svc, "edge_jwt_required", False):
+            if "edge-forward-auth@file" not in existing:
+                existing.append("edge-forward-auth@file")
         labels[key] = ",".join(existing)
     def _apply_router_special_labels(
         self,

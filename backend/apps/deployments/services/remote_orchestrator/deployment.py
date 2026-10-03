@@ -21,6 +21,23 @@ class DeploymentMixin:
             "skip_review": skip_review,
             "fast_deploy": fast_deploy,
         }
+        # Ship the master-resolved project bridge: the node has no scope
+        # rows, so without this every node deploy lands on flat smsly-net
+        # and loses project isolation (internal IP/DNS/egress scoping).
+        try:
+            from apps.deployments.models.network_scope import ScopedNetwork
+            _scope = getattr(deployment, "service", None) and getattr(deployment.service, "project", None)
+            if _scope is not None:
+                _cfg = ScopedNetwork.resolve_network_config(_scope)
+                _name = str(_cfg.get("name", "") or "").strip()
+                from apps.deployments.services.network_scope import is_valid_scoped_name
+                if _name and is_valid_scoped_name(_name):
+                    payload["network"] = {
+                        "name": _name,
+                        "egress": list(_cfg.get("allowed_egress_networks") or ["0.0.0.0/0"]),
+                    }
+        except Exception as exc:
+            logger.debug("Remote trigger network hint skipped: %s", exc)
         if image_name:
             # Rewrite master-INTERNAL registry refs (registry:5000 /
             # loopback) to the node-routable address. Centralised in
