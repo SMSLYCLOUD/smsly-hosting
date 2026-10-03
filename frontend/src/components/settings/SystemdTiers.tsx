@@ -21,7 +21,7 @@ export function SystemdTiers() {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const { toast } = useToast();
-  const { confirm } = useConfirm();
+  const confirm = useConfirm();
 
   const load = useCallback(async () => {
     try {
