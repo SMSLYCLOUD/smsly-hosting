@@ -3,7 +3,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ('deployments', '0241_addon_cli_config_alter_addon_addon_type'),
+        ('deployments', '0243_platformconfig_infisical_token'),
     ]
 
     operations = [

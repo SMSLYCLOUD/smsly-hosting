@@ -253,7 +253,48 @@ class TransferMixin:
 
                 self.transfer.service.save(update_fields=update_fields)
 
+                # Truthful routing (transfer path mirrors remote-promote
+                # semantics): the container runs on the node, so the
+                # ACTIVE deployment row must say so. Otherwise
+                # _resolve_effective_server returns primary, the master
+                # regen maps the service locally, and the wildcard keeps
+                # pointing at master (transfer-only redirect loop —
+                # fresh remote deploys set these at promote time).
+                try:
+                    from ....models import Deployment
+                    _dep = (
+                        Deployment.objects.filter(
+                            service=self.transfer.service,
+                            status=Deployment.Status.ACTIVE,
+                        )
+                        .order_by('-created_at')
+                        .first()
+                    )
+                    if _dep is not None and (
+                        _dep.target_is_local
+                        or getattr(_dep, 'target_server_id', None) != target_server.id
+                    ):
+                        _dep.target_server = target_server
+                        _dep.target_is_local = False
+                        _dep.save(update_fields=['target_server', 'target_is_local'])
+                        self._log(f"Deployment row pointed at {target_server.name} (was local).")
+                except Exception as dep_exc:
+                    logger.warning("Transfer deployment-row repair skipped: %s", dep_exc)
+
                 self._regenerate_master_caddyfile()
+
+                # Push the node Caddyfile too: its per-service TLS blocks
+                # (flat/deep/master-extra) are generated on master. Without
+                # this the node serves stale names while master already
+                # routes there. Best-effort — never revert a completed
+                # transfer over it, but log loudly.
+                try:
+                    from apps.deployments.tasks.deploy.caddy import push_caddy_to_node
+                    _push = push_caddy_to_node(str(target_server.id))
+                    self._log(f"Node Caddy push: {_push.get('message', _push)}")
+                except Exception as push_exc:
+                    logger.warning("Transfer node-Caddy push failed (manual push needed): %s", push_exc)
+                    self._log(f"WARNING: node Caddy push failed: {push_exc}. Push manually after transfer.")
 
         self.transfer.save()
         self._update(100, 'Transfer complete!')
