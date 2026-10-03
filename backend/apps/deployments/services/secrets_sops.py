@@ -86,11 +86,15 @@ def ensure_age_keypair() -> tuple[str, str]:
         return public, private
 
     age_keygen = _which_or_raise("age-keygen")
-    out = _run([age_keygen, "-o", "/dev/stdout"]).decode()
+    # NOTE: age-keygen rejects `-o /dev/stdout` ("file exists"); bare
+    # invocation prints the public line + secret line to stdout.
+    out = _run([age_keygen]).decode()
     new_private, new_public = "", ""
     for line in out.splitlines():
         line = line.strip()
-        if line.startswith("age1") and not new_public:
+        if line.startswith("Public key:"):
+            new_public = line.split(":", 1)[1].strip().split()[0]
+        elif line.startswith("age1") and not new_public:
             new_public = line.split()[0]
         elif line.startswith("AGE-SECRET-KEY-") and not new_private:
             new_private = line.split()[0]
