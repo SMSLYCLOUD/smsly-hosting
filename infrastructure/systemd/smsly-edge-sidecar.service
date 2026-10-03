@@ -48,8 +48,11 @@ ReadWritePaths=/run/smsly
 
 # Run unprivileged with an ephemeral UID: a high-port bind needs no
 # capabilities. DynamicUser alone (no explicit User=/Group= — systemd
-# rejects the combination).
+# rejects the combination). RuntimeDirectory creates /run/smsly BEFORE
+# mount namespacing (ReadWritePaths alone fails when the path is absent
+# on first boot or after /run is wiped — 226/NAMESPACE crash-loop).
 DynamicUser=yes
+RuntimeDirectory=smsly
 
 [Install]
 WantedBy=multi-user.target

@@ -447,6 +447,14 @@ func main() {
 	if len(cfg.secret) == 0 {
 		log.Printf("WARNING: NAPD_SHARED_SECRET unset — wake/sleep/status will 503 until configured")
 	}
+	// Unit RuntimeDirectory/StateDirectory cover /run/smsly and
+	// /var/lib/smsly; subdirs are created here (first boot after a
+	// /run wipe would otherwise fail writes, not the process).
+	for _, dir := range []string{cfg.stateDir, cfg.wakeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
 
 	d := &daemon{cfg: cfg}
 	d.loadState()

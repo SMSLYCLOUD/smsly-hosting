@@ -34,7 +34,11 @@ LogRateLimitBurst=100
 # smsly-tier@ units: compose files, docker socket, tier state).
 # ProtectHome is deliberately NOT set: docker compose reads
 # /root/.docker/config.json, and blanking HOME breaks the CLI.
+# RuntimeDirectory/StateDirectory are created BEFORE mount namespacing
+# (ReadWritePaths alone 226-crashes when absent after /run wipes).
 NoNewPrivileges=yes
+RuntimeDirectory=smsly
+StateDirectory=smsly
 ProtectSystem=strict
 ReadWritePaths=/opt/smsly-hosting /var/lib/docker /var/lib/smsly /run/smsly /root/.docker
 
