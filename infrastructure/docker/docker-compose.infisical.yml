@@ -21,6 +21,11 @@ services:
       # mandatory on purpose (loud failure beats silent misconfiguration).
       - ${INFISICAL_ENV_FILE:?INFISICAL_ENV_FILE must be set, e.g. /opt/smsly-hosting/.infisical.env}
     environment:
+      # JS heap cap: the image defaults to --max-old-space-size=2048 while
+      # the container idles at ~600MB RSS and is capped at 1G — heap
+      # growth toward 2G invites OOMKill churn. 512M keeps RSS ~400MB
+      # with headroom; raise via env for heavy vault workloads.
+      NODE_OPTIONS: ${INFISICAL_NODE_OPTIONS:---max-old-space-size=512}
       # Database. Host follows the platform DB mode via INFISICAL_DB_HOST
       # (exported by the installer: smsly-postgres-primary on local-ha,
       # haproxy on patroni). External mode has no local database —

@@ -13,7 +13,7 @@ scrape_configs:
   - job_name: docker
     docker_sd_configs:
       - host: unix:///var/run/docker.sock
-        refresh_interval: 5s
+        refresh_interval: 15s
     relabel_configs:
       # Keep SMSLY-managed containers (compose-deployed = has compose_project
       # OR deployed via platform = has managed_by label)
@@ -132,6 +132,7 @@ scrape_configs:
           expressions:
             client_host: ClientHost
             request_host: RequestHost
+            request_uri: RequestURI
             method: RequestMethod
             status: DownstreamStatus
             # Weighted canary attribution: which backend served the request
@@ -143,6 +144,19 @@ scrape_configs:
           status:
           service_addr:
           router_name:
+      # 2026-10-03: drop successful health probes (every service polls
+      # /health* ~30s; pure volume, zero signal). Field-level drop adds
+      # NO Loki label (a `path` label would explode stream cardinality).
+      # Scoped to status 200 — failing probes are kept, a failing health
+      # check is exactly what we page on. Engine liveness probes and
+      # metrics cover health independently of this log.
+      - match:
+          selector: '{status="200"}'
+          stages:
+            - drop:
+                source: request_uri
+                expression: '^/(health|health/live|ready|live|ping)(\?.*)?$'
+                drop_counter_reason: health_probe_spam
       - metrics:
           http_requests_total:
             type: Counter

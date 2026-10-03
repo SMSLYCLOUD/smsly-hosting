@@ -2115,7 +2115,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${CADVISOR_MEMORY_LIMIT:-256M}
+          # 2026-10-03: 256M OOM-killed cadvisor on hosts with 40+
+          # containers (each OOM tripped the swap adjuster). 384M fits
+          # the per-container stats buffers; override via env if needed.
+          memory: ${CADVISOR_MEMORY_LIMIT:-384M}
     labels:
       - managed_by=smsly-hosting
 

@@ -61,8 +61,17 @@ scrape_configs:
   # NOTE: 30s (not the 15s global) — cAdvisor/node are the highest-
   # cardinality jobs on the box; 15s doubled ingest CPU for no alerting
   # gain (staleness alerts trip past 60s). See 2026-09-23 burn-down.
+  # 2026-10-03: drop zero-consumer high-cardinality series at scrape
+  # (~44k of ~140k head series: per-task states, failure counters,
+  # mapped-file/failcnt). Dashboards + autoscaler only read cpu_usage
+  # and memory_usage_bytes — verified against platform-overview.json
+  # and backend PromQL before dropping.
   - job_name: 'cadvisor'
     scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'container_tasks_state|container_memory_failures_total|container_memory_mapped_file|container_memory_failcnt'
+        action: drop
     static_configs:
       - targets: ['cadvisor:8080']
         labels:
