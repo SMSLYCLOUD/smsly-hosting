@@ -468,6 +468,18 @@ class DomainConfigView(GenericAPIView):
 
             config.save()
 
+            # open-appsec toggle: converge running containers AFTER commit
+            # (enabled → start stack, disabled → stop + remove entirely).
+            if 'openappsec_enabled' in data:
+                try:
+                    from django.db import transaction as _tx
+                    from apps.deployments.tasks.infra.tasks_waf import (
+                        converge_openappsec_stack_task,
+                    )
+                    _tx.on_commit(lambda: converge_openappsec_stack_task.delay())
+                except Exception as exc:
+                    logger.debug("WAF converge queue skipped: %s", exc)
+
             updated_service_domains = 0
             new_domain = (config.domain or "").strip().lower().rstrip(".")
             if new_domain and new_domain != previous_base_domain:
@@ -540,6 +552,7 @@ class DomainConfigView(GenericAPIView):
                 'updated_service_domains': updated_service_domains,
                 'redeploy_required': bool(updated_service_domains),
                 'caddyfile_preview': _redact_caddyfile_preview(caddyfile_content),
+                'openappsec_converging': 'openappsec_enabled' in data,
             })
 
 

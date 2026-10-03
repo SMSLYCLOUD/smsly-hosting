@@ -267,7 +267,8 @@ export function SecurityScanningCard({ config, onChange }: SecurityCardProps) {
             </div>
           )}
           <p className="text-xs text-muted-foreground mt-2 ml-1">
-            Synced to the host .env for the installer reconcile; takes effect on the next update.
+            Applies immediately: enabling starts all six stack containers, disabling stops and removes
+            them entirely. Live container state shows under Insights → Security.
           </p>
         </div>
 

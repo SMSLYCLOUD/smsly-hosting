@@ -137,3 +137,120 @@ def sync_waf_policy_task():
         return {"ok": True, "changed": True, "previous": current, "mode": desired}
     finally:
         cache.delete(SYNC_LOCK_KEY)
+
+
+APPSEC_SERVICES = (
+    "appsec-agent",
+    "appsec-envoy",
+    "appsec-shared-storage",
+    "appsec-smartsync",
+    "appsec-tuning-svc",
+    "appsec-db",
+)
+APPSEC_CONTAINERS = (
+    "smsly-appsec-agent",
+    "smsly-appsec-envoy",
+    "smsly-appsec-shared-storage",
+    "smsly-appsec-smartsync",
+    "smsly-appsec-tuning-svc",
+    "smsly-appsec-db",
+)
+CONVERGE_LOCK_KEY = "waf-stack-converge-lock"
+
+
+def _compose_base() -> list[str] | None:
+    """docker compose base args for the host stack, or None if missing."""
+    import os
+    import subprocess
+
+    candidates = [
+        os.environ.get("INSTALL_DIR", "/opt/smsly-hosting"),
+        "/opt/smsly-hosting",
+    ]
+    for base in dict.fromkeys(candidates):
+        compose = os.path.join(base, "docker-compose.prod.yml")
+        env_file = os.path.join(base, ".env")
+        if os.path.exists(compose):
+            cmd = ["docker", "compose"]
+            if os.path.exists(env_file):
+                cmd += ["--env-file", env_file]
+            return cmd + ["-f", compose]
+    return None
+
+
+@shared_task(
+    name="apps.deployments.tasks.infra.tasks_waf.converge_openappsec_stack_task",
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
+)
+def converge_openappsec_stack_task():
+    """Converge running containers with PlatformConfig.openappsec_enabled.
+
+    Enabled → `up -d` the six stack services (images already present
+    from install; pull only if missing). Disabled → stop + rm every
+    `smsly-appsec-*` container so the stack disappears entirely — the
+    old behavior left them running with only the policy sync paused.
+    Explicit service lists only, never --remove-orphans. Fail-open:
+    returns a status dict, never raises.
+    """
+    import subprocess
+
+    if not cache.add(CONVERGE_LOCK_KEY, "1", timeout=600):
+        return {"ok": True, "skipped": True, "message": "converge already running"}
+    try:
+        from apps.deployments.models import PlatformConfig
+
+        try:
+            enabled = bool(getattr(PlatformConfig.load(), "openappsec_enabled", True))
+        except Exception as exc:
+            logger.debug("WAF converge: config load failed: %s", exc)
+            return {"ok": False, "message": "platform config unavailable"}
+
+        base = _compose_base()
+        if base is None:
+            return {"ok": False, "message": "compose file not found"}
+        try:
+            if enabled:
+                proc = subprocess.run(
+                    base + ["up", "-d", *APPSEC_SERVICES],
+                    capture_output=True, text=True, timeout=540,
+                )
+                action = "started"
+            else:
+                subprocess.run(
+                    base + ["stop", "--timeout", "15", *APPSEC_SERVICES],
+                    capture_output=True, text=True, timeout=300,
+                )
+                proc = subprocess.run(
+                    base + ["rm", "-f", *APPSEC_SERVICES],
+                    capture_output=True, text=True, timeout=300,
+                )
+                action = "stopped+removed"
+        except FileNotFoundError:
+            return {"ok": False, "message": "docker unavailable"}
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "message": f"compose {action} timed out"}
+
+        # Verify by container name (runtime truth, not compose exit code).
+        running: list[str] = []
+        try:
+            import docker
+
+            client = docker.from_env(timeout=10)
+            for name in APPSEC_CONTAINERS:
+                try:
+                    c = client.containers.get(name)
+                    if getattr(c, "status", "") == "running":
+                        running.append(name)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        if enabled:
+            ok = len(running) > 0
+        else:
+            ok = len(running) == 0
+        logger.info("WAF converge: enabled=%s action=%s running=%d", enabled, action, len(running))
+        return {"ok": ok, "enabled": enabled, "action": action, "running": running}
+    finally:
+        cache.delete(CONVERGE_LOCK_KEY)
