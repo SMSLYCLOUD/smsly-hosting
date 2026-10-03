@@ -67,18 +67,19 @@ export function InfisicalCard({ config, onChange }: { config?: any; onChange?: (
           </div>
         )}
         <div className="flex items-center justify-between">
-        <div className="space-y-0.5">
-          <Label className="text-base font-medium">Sync Platform Secrets</Label>
-          <p className="text-sm text-muted-foreground">Push active platform configuration values and encryption keys to Infisical.</p>
+          <div className="space-y-0.5">
+            <Label className="text-base font-medium">Sync Platform Secrets</Label>
+            <p className="text-sm text-muted-foreground">Push active platform configuration values and encryption keys to Infisical.</p>
+          </div>
+          <Button
+            onClick={handleSync}
+            disabled={syncing}
+            className="bg-purple-600 hover:bg-purple-700 text-white"
+          >
+            {syncing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Sync Secrets Now
+          </Button>
         </div>
-        <Button
-          onClick={handleSync}
-          disabled={syncing}
-          className="bg-purple-600 hover:bg-purple-700 text-white"
-        >
-          {syncing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Sync Secrets Now
-        </Button>
       </CardContent>
     </Card>
   );

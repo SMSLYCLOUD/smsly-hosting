@@ -395,20 +395,21 @@ def inject_infisical_env_for_service(
     service_id: str,
     client: InfisicalClient | None = None,
     workspace_id: str | None = None,
+    api_url: str | None = None,
 ) -> dict[str, str]:
     """
     Generate env vars for a deployed service that pulls from Infisical.
 
     Returns a dict of INFISICAL_* env vars to inject into the container.
     The container can then use the Infisical SDK or agent to pull secrets
-    at startup.
+    at startup. api_url overrides the default (nodes must use the
+    mesh-reachable URL, not master-local Docker DNS).
     """
     env: dict[str, str] = {}
     token = resolve_service_token()
     if token:
         env["INFISICAL_TOKEN"] = token
-    if INFISICAL_API_URL:
-        env["INFISICAL_API_URL"] = INFISICAL_API_URL
+    env["INFISICAL_API_URL"] = api_url or INFISICAL_API_URL
     if workspace_id:
         env["INFISICAL_WORKSPACE_ID"] = workspace_id
     env["INFISICAL_ENVIRONMENT"] = "prod"

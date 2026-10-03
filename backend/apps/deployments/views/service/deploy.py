@@ -132,6 +132,8 @@ class DeployActionsMixin:
         # Remote masters ship their resolved project bridge (nodes carry
         # no scope rows). Stash it validated on metadata so the pipeline
         # attaches the container to the project bridge, not flat smsly-net.
+        # They also ship the vault token (nodes have none of their own);
+        # store it only when non-blank, never wipe with blank, never log.
         if is_remote_sync:
             try:
                 from apps.deployments.services.network_scope import is_valid_scoped_name
@@ -142,6 +144,16 @@ class DeployActionsMixin:
                     _meta['target_network'] = _name
                     deployment.metadata = _meta
                     deployment.save(update_fields=['metadata'])
+            except Exception:
+                pass
+            try:
+                _vtok = str(request.data.get('vault_token') or '').strip()
+                if _vtok:
+                    from apps.deployments.models.core import PlatformConfig
+                    _cfg = PlatformConfig.load()
+                    if _cfg.infisical_service_token != _vtok:
+                        _cfg.infisical_service_token = _vtok
+                        _cfg.save(update_fields=['infisical_service_token'])
             except Exception:
                 pass
 

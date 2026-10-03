@@ -540,6 +540,23 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
         except Exception:
             pass
         _client = get_infisical_client()
+        _remote_base = ""
+        if _client is not None and not is_infisical_healthy(_client):
+            # Node hosts have no local vault: reach it over the WG mesh
+            # forwarder instead of giving up (plaintext fallback hid this).
+            try:
+                from apps.deployments.services.infisical import (
+                    ensure_infisical_mesh_forwarder,
+                    resolve_api_url,
+                )
+                _remote_base = ensure_infisical_mesh_forwarder() or resolve_api_url(for_remote=True)
+                if _remote_base:
+                    from apps.deployments.services.infisical import get_infisical_client as _gic
+                    _rc = _gic(for_remote=True)
+                    if _rc is not None and is_infisical_healthy(_rc):
+                        _client = _rc
+            except Exception:
+                pass
         if _client is not None and is_infisical_healthy(_client):
             _ws_id = get_or_create_workspace(_client)
             if _ws_id:
@@ -549,7 +566,10 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
                     push_service_secrets_to_infisical(str(service.id), _client, _ws_id)
                 except Exception as push_exc:
                     logger.warning("Infisical service push failed for %s: %s", service.name, push_exc)
-                infisical_vars = inject_infisical_env_for_service(str(service.id), _client, _ws_id)
+                infisical_vars = inject_infisical_env_for_service(
+                    str(service.id), _client, _ws_id,
+                    api_url=(f"{_remote_base}/api/v1" if _remote_base else None),
+                )
                 env_vars.update(infisical_vars)
         elif _client is not None:
             logger.warning("Infisical not healthy — falling back to plaintext env for %s", service.name)

@@ -38,6 +38,18 @@ class DeploymentMixin:
                     }
         except Exception as exc:
             logger.debug("Remote trigger network hint skipped: %s", exc)
+        # Ship the vault token: nodes carry no token of their own, so
+        # without this vault injection silently never runs on node
+        # deploys (the "Token: Missing" state). Same HMAC+TLS channel
+        # as env rows; node stores it only when non-blank (never wipes
+        # with blank); never logged anywhere on either side.
+        try:
+            from apps.deployments.services.infisical import resolve_service_token
+            _vtok = resolve_service_token()
+            if _vtok:
+                payload["vault_token"] = _vtok
+        except Exception as exc:
+            logger.debug("Remote trigger vault token skipped: %s", exc)
         if image_name:
             # Rewrite master-INTERNAL registry refs (registry:5000 /
             # loopback) to the node-routable address. Centralised in
