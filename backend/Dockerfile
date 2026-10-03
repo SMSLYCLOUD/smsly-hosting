@@ -47,6 +47,7 @@ RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true;
     apt-get install -y --no-install-recommends \
     gcc \
     git \
+    age \
     libpq-dev \
     postgresql-client \
     curl \
@@ -83,6 +84,13 @@ RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true;
     && NIXPACKS_ARCH=$(dpkg --print-architecture) \
     && curl -sSL -o /tmp/nixpacks.deb "https://github.com/railwayapp/nixpacks/releases/download/v1.40.0/nixpacks-v1.40.0-${NIXPACKS_ARCH}.deb" \
     && dpkg -i /tmp/nixpacks.deb && rm /tmp/nixpacks.deb \
+    # SOPS file-based secrets (default backend; Infisical is opt-in).
+    # Pinned version; asset pattern verified live (octet-stream 200).
+    # age comes from apt above (keygen + fallback decrypt).
+    && SOPS_ARCH=$(dpkg --print-architecture | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
+    && curl -sSL -o /usr/local/bin/sops "https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.${SOPS_ARCH}" \
+    && chmod +x /usr/local/bin/sops \
+    && sops --version 2>&1 | head -n 1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

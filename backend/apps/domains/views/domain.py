@@ -82,6 +82,9 @@ class DomainConfigView(GenericAPIView):
             'registry_user': config.registry_user,
             'registry_password_set': bool(config.registry_password),
             'infisical_service_token_set': bool(config.infisical_service_token),
+            'infisical_enabled': bool(config.infisical_enabled),
+            'secrets_backend': 'infisical' if config.infisical_enabled else 'sops',
+            'secrets_age_public_key': getattr(config, 'secrets_age_public_key', '') or '',
             # Observability
             'sentry_dsn_set': bool(config.sentry_dsn),
             'sentry_traces_sample_rate': config.sentry_traces_sample_rate,
@@ -364,6 +367,9 @@ class DomainConfigView(GenericAPIView):
             # PUT from silently wiping stored credentials on every save.
             if 'registry_password' in data and str(data.get('registry_password') or '').strip():
                 config.registry_password = str(data.get('registry_password') or '').strip()
+            # Vault opt-in toggle (SOPS-age bundles are the default backend).
+            if 'infisical_enabled' in data:
+                config.infisical_enabled = _parse_bool(data.get('infisical_enabled'))
             # Vault token: write-only, blank keeps existing (same round-trip
             # contract as registry_password above). Triggers a validation
             # pass after save so the UI reports bad tokens immediately.

@@ -145,6 +145,21 @@ def resolve_service_token() -> str:
     return os.environ.get("INFISICAL_SERVICE_TOKEN", "").strip()
 
 
+def vault_enabled() -> bool:
+    """True when the Infisical vault backend is opted in or usable.
+
+    Explicit PlatformConfig flag wins; a resolvable token also counts
+    (never strand a working vault behind a default-off flag).
+    """
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        if bool(getattr(PlatformConfig.load(), "infisical_enabled", False)):
+            return True
+    except Exception:
+        pass
+    return bool(resolve_service_token())
+
+
 def resolve_api_url(for_remote: bool = False) -> str:
     """Base API URL (no trailing /api/v1).
 

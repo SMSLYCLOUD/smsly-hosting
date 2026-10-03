@@ -813,6 +813,22 @@ class PlatformConfig(models.Model):
                   "buckets (404 probing, crawlers, bruteforce) always keep "
                   "their thresholds to avoid false positives.")
 
+
+    # Secrets backend: SOPS-age files by default (zero daemons);
+    # Infisical vault is opt-in for whoever needs the SaaS UI.
+    infisical_enabled = models.BooleanField(
+        default=False,
+        help_text="Run the Infisical vault (container + token ensure + "
+                  "env injection). Off by default; SOPS-age bundles "
+                  "cover secret sync with no always-on processes.")
+    secrets_age_private_key = EncryptedCharField(
+        max_length=2048, blank=True, default='',
+        help_text="Age private identity for SOPS bundles (auto-created "
+                  "on first export; Fernet-encrypted at rest).")
+    secrets_age_public_key = models.CharField(
+        max_length=256, blank=True, default="",
+        help_text="Age public recipient for SOPS bundles (safe to share; "
+                  "also written to secrets/.sops.yaml for operator CLIs).")
     # Infisical secret vault
     infisical_service_token = EncryptedCharField(
         max_length=512, blank=True, default='',

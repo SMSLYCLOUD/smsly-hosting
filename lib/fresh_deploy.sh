@@ -393,8 +393,10 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     fi
 
     # ─── Infisical auto-provision (master mode only) ─────────────────────
+    # Opt-in only: default secrets backend is SOPS (file-based, no
+    # daemon). Set SECRETS_BACKEND=infisical to provision the vault.
     _INFISICAL_COMPOSE="$INSTALL_DIR/infrastructure/docker/docker-compose.infisical.yml"
-    if [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$_INFISICAL_COMPOSE" ]; then
+    if [ "${SECRETS_BACKEND:-sops}" = "infisical" ] && [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$_INFISICAL_COMPOSE" ]; then
         _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}'  | head -1)
         if [ -n "$_infisical_running" ]; then
             echo -e "${GREEN}  ✓ Infisical already running (${_infisical_running})${NC}"

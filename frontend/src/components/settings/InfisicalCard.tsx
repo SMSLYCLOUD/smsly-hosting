@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Loader2, Shield, CheckCircle2, XCircle } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { infisicalApi } from "@/lib/api";
@@ -41,7 +42,23 @@ export function InfisicalCard({ config, onChange }: { config?: any; onChange?: (
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {onChange && (
+        <div className="flex items-center justify-between rounded-lg border p-3">
+          <div className="space-y-0.5">
+            <Label className="text-base font-medium">Secrets backend: {config?.secrets_backend === 'infisical' ? 'Infisical vault' : 'SOPS age files'}</Label>
+            <p className="text-xs text-muted-foreground">
+              SOPS is the default (zero daemons; encrypted bundles in backups/secrets).
+              Enable the vault only if you need its UI/API.
+              {config?.secrets_age_public_key ? ` Age recipient: ${(config.secrets_age_public_key as string).slice(0, 18)}…` : ''}
+            </p>
+          </div>
+          {onChange && (
+            <Switch
+              checked={config?.infisical_enabled === true}
+              onCheckedChange={(v) => onChange("infisical_enabled", v)}
+            />
+          )}
+        </div>
+        {config?.infisical_enabled === true && onChange && (
           <div className="space-y-2">
             <Label className="flex items-center gap-2">
               Service Token
@@ -66,20 +83,22 @@ export function InfisicalCard({ config, onChange }: { config?: any; onChange?: (
             </p>
           </div>
         )}
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <Label className="text-base font-medium">Sync Platform Secrets</Label>
-            <p className="text-sm text-muted-foreground">Push active platform configuration values and encryption keys to Infisical.</p>
+        {config?.infisical_enabled === true && (
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="text-base font-medium">Sync Platform Secrets</Label>
+              <p className="text-sm text-muted-foreground">Push active platform configuration values and encryption keys to Infisical.</p>
+            </div>
+            <Button
+              onClick={handleSync}
+              disabled={syncing}
+              className="bg-purple-600 hover:bg-purple-700 text-white"
+            >
+              {syncing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Sync Secrets Now
+            </Button>
           </div>
-          <Button
-            onClick={handleSync}
-            disabled={syncing}
-            className="bg-purple-600 hover:bg-purple-700 text-white"
-          >
-            {syncing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Sync Secrets Now
-          </Button>
-        </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -678,8 +678,10 @@
     esac
 
     # ─── Infisical auto-provision + secret sync ───────────────────────────
+    # Opt-in only (SECRETS_BACKEND=infisical). Default SOPS backend runs
+    # no vault container — and this must NOT resurrect a removed one.
     _INFISICAL_COMPOSE="$INSTALL_DIR/infrastructure/docker/docker-compose.infisical.yml"
-    if [ -f "$_INFISICAL_COMPOSE" ]; then
+    if [ "${SECRETS_BACKEND:-sops}" = "infisical" ] && [ -f "$_INFISICAL_COMPOSE" ]; then
         _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}'  | head -1)
         if [ -n "$_infisical_running" ]; then
             echo -e "${GREEN}  ✓ Infisical already running (${_infisical_running})${NC}"

@@ -241,21 +241,25 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
         logger.debug("Infisical container detection failed: %s", exc)
 
     try:
-        from apps.deployments.services.infisical import resolve_service_token
+        from apps.deployments.services.infisical import resolve_service_token, vault_enabled
         has_infisical_token = bool(
             resolve_service_token()
             or os.environ.get("INFISICAL_TOKEN")
             or os.environ.get("INFISICAL_PROJECT_ID")
         )
+        vault_on = vault_enabled()
     except Exception:
+        vault_on = False
         has_infisical_token = bool(
             os.environ.get("INFISICAL_SERVICE_TOKEN")
             or os.environ.get("INFISICAL_TOKEN")
             or os.environ.get("INFISICAL_PROJECT_ID")
         )
 
-    if infisical_running and has_infisical_token:
+    if infisical_running and has_infisical_token and vault_on:
         vault_provider = "Infisical Vault Active (Runtime secret sync & KMS encryption verified)"
+    elif not vault_on:
+        vault_provider = "SOPS age bundles (no vault daemon — encrypted copies in backups/secrets)"
     elif infisical_running:
         vault_provider = "Infisical Running (service token not configured)"
     elif has_infisical_token:

@@ -726,16 +726,57 @@ def ensure_infisical_token_task():
     Fail-open: returns a status dict, never raises. Without this, a
     rotated/revoked token silently disables vault injection on every
     deploy (the old "Token: Missing" state had no healer at all).
+    When the vault backend is disabled (SOPS default), converges the
+    vault containers away instead so the daemon stops eating RAM.
     Registered in celery.py beat_schedule daily.
     """
     try:
-        from apps.deployments.services.infisical import ensure_infisical_service_token
+        from apps.deployments.services.infisical import (
+            ensure_infisical_service_token,
+            vault_enabled,
+        )
+        if not vault_enabled():
+            return _converge_vault_away()
         result = ensure_infisical_service_token()
         logger.info("infisical ensure: %s", result)
         return {"status": "ok" if result.get("ok") else "degraded", **result}
     except Exception as exc:
         logger.error("infisical ensure crashed: %s", exc)
         return {"status": "error", "reason": str(exc)[:200]}
+
+
+def _converge_vault_away() -> dict:
+    """Stop + remove vault containers when the backend is SOPS.
+
+    Explicit name list only, never --remove-orphans. Best-effort per
+    container; reports what it did.
+    """
+    removed: list[str] = []
+    try:
+        import docker as _docker
+
+        client = _docker.from_env(timeout=10)
+    except Exception as exc:
+        return {"status": "degraded", "reason": f"docker unavailable: {exc}", "removed": removed}
+    for name in (
+        "smsly-infisical-infisical-1",
+        "smsly-infisical-1",
+        "smsly-mesh-fwd-infisical",
+    ):
+        try:
+            container = client.containers.get(name)
+        except Exception:
+            continue
+        try:
+            container.stop(timeout=15)
+        except Exception:
+            pass
+        try:
+            container.remove(force=True)
+            removed.append(name)
+        except Exception as exc:
+            logger.debug("Vault converge remove failed for %s: %s", name, exc)
+    return {"status": "ok", "reason": "vault backend disabled (SOPS mode)", "removed": removed}
 
 
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.ensure_service_network_attachments")
