@@ -176,6 +176,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.auto_promote_staged_deployments': {'queue': 'deploy'},
     'apps.deployments.tasks.ensure_service_network_attachments': {'queue': 'deploy'},
     'apps.deployments.tasks.auto_review_deployments': {'queue': 'deploy'},
+    'apps.deployments.tasks.prune_remote_docker_task': {'queue': 'deploy'},
     # -- Tasks re-exported from specialized modules (name= resolves to tasks.*) --
     'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
@@ -578,6 +579,13 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.auto_review_deployments',
         'schedule': 900.0,
         'options': {'expires': 600.0},
+    },
+    # Permanent disk hygiene: builder cache (>7d) + dangling images on
+    # master and all nodes. Never volumes/containers/tagged images.
+    'prune-remote-docker-daily': {
+        'task': 'apps.deployments.tasks.prune_remote_docker_task',
+        'schedule': crontab(minute=0, hour=3),
+        'options': {'expires': 3600.0},
     },
     # Intelligence runtime anomaly scan every 3 minutes
     'detect-runtime-anomalies-every-180s': {

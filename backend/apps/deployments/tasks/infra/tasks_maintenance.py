@@ -662,6 +662,63 @@ def reconcile_network_isolation_task():
         return {"status": "error", "reason": str(e)}
 
 
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], name="apps.deployments.tasks.prune_remote_docker_task")
+def prune_remote_docker_task():
+    """Permanent disk hygiene for nodes (and master builder cache).
+
+    Runs builder-cache prune (older than 7 days) plus dangling-image
+    prune on every non-primary node over SSH, and the same builder
+    prune locally. NEVER touches volumes, containers, or tagged images:
+    worst case a future build re-pulls. Fail-open per node; registered
+    in celery.py beat_schedule daily.
+    """
+    pruned: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    builder_cmd = "docker builder prune -af --filter until=168h 2>&1 | tail -n 2"
+    images_cmd = "docker image prune -f 2>&1 | tail -n 3"
+    try:
+        from apps.deployments.models.servers import ManagedServer
+        from apps.deployments.services.ssh_client import SSHClient
+        nodes = list(ManagedServer.objects.filter(is_primary=False)[:50])
+    except Exception as exc:
+        logger.error("docker prune: cannot list nodes: %s", exc)
+        return {"status": "error", "reason": "node listing failed"}
+    for node in nodes:
+        ssh = None
+        try:
+            ssh = SSHClient(
+                ip=node.host,
+                key_content=getattr(node, 'ssh_key', '') or '',
+                password=getattr(node, 'ssh_password', '') or '',
+                user=getattr(node, 'ssh_user', 'root') or 'root',
+                port=getattr(node, 'ssh_port', 22) or 22,
+                wg_address=getattr(node, 'wg_address', '') or '',
+            )
+            ssh.connect()
+            out1, _, _ = ssh.exec_command(builder_cmd, timeout=600, raise_on_error=False)
+            out2, _, _ = ssh.exec_command(images_cmd, timeout=600, raise_on_error=False)
+            pruned[node.name] = ((out1 or '') + ' / ' + (out2 or ''))[-300:]
+        except Exception as exc:
+            errors[node.name] = str(exc)[:200]
+        finally:
+            if ssh is not None:
+                try:
+                    ssh.close()
+                except Exception:
+                    pass
+    try:
+        import subprocess as _sp
+        local = _sp.run(
+            ['docker', 'builder', 'prune', '-af', '--filter', 'until=168h'],
+            capture_output=True, text=True, timeout=600,
+        )
+        pruned['master'] = ((local.stdout or '') + (local.stderr or ''))[-300:]
+    except Exception as exc:
+        errors['master'] = str(exc)[:200]
+    logger.info("docker prune: %d ok, %d failed", len(pruned), len(errors))
+    return {"status": "ok", "pruned": pruned, "errors": errors}
+
+
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.ensure_service_network_attachments")
 def ensure_service_network_attachments():
     """Attach live service containers missing their scoped project network.

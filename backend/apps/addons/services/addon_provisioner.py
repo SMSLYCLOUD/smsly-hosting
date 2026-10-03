@@ -1287,22 +1287,23 @@ class AddonProvisioner:
             connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
         elif addon_type == 'REDIS':
-            # Password via a mounted redis.conf (never on the command line).
-            # Persisted on the remote host (deleted in deprovision_remote)
-            # because Docker re-reads bind mounts on container restarts.
-            remote_conf_path = _write_remote_file(
-                f"requirepass {password}\n",
-                persist=True,
-                stable_name=f"{container_name}.conf",
-            )
+            # Password via container env (mirrors local _provision_redis:
+            # never on the command line, baked into container config so
+            # restarts keep working). The old mounted-conf approach needed
+            # a root-owned persist dir the ssh user cannot create
+            # ([Errno 2] on upload) — deleted, not fixed.
+            env_vars.update({'REDIS_PASSWORD': password})
+            _attach_env_file()
             cmd_parts.extend([
                 '-v', f'{container_name}-data:/data',
-                '-v', f'{remote_conf_path}:/usr/local/etc/redis/redis.conf:ro',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
             cmd_parts.append(image)
-            cmd_parts.extend(['redis-server', '/usr/local/etc/redis/redis.conf'])
+            cmd_parts.extend([
+                'sh', '-c',
+                'redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes',
+            ])
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             hostname = alias_name or container_name
             connection_url = f"redis://:{password}@{hostname}:{port}/0"
@@ -1369,16 +1370,15 @@ class AddonProvisioner:
             connection_url = f"amqp://{user}:{password}@{hostname}:{port}//"
 
         elif addon_type == 'MINIO':
-            # Garage-backed S3 (MinIO images are gone upstream) needs a
-            # config file + layout/key/bucket admin steps that the
-            # single-shot remote docker-run cannot express. Fail loudly
-            # instead of a cryptic registry pull 401.
-            raise RuntimeError(
-                "MINIO (Garage) addons are not yet supported on remote "
-                "nodes — provision this addon on the master/local "
-                "provider. Remote support requires the Garage admin "
-                "flow over SSH (config upload + layout + key steps)."
+            # Garage-backed S3 admin flow over SSH (mirrors local
+            # _provision_minio: create + config + start + layout + key +
+            # bucket). Same s3://user:pass@host:port/bucket contract.
+            container_id, connection_url = self._provision_remote_minio(
+                ssh, server, container_name, alias_name, port,
+                existing_url=existing_url,
             )
+            ssh.close()
+            return container_id, connection_url
 
         elif addon_type in ('QDRANT', 'ELASTICSEARCH'):
             if alias_name:
@@ -1441,6 +1441,18 @@ class AddonProvisioner:
 
         # SSH into remote node and provision
         net_setup = f"docker network inspect {shlex.quote(self.network_name)} >/dev/null 2>&1 || docker network create {shlex.quote(self.network_name)}"
+        # Explicit pull with one retry: implicit-pull extract failures
+        # (e.g. disk-full corruption) otherwise surface as cryptic
+        # overlayfs errors with no recovery attempt.
+        pull_cmd = f"docker pull {shlex.quote(image)}"
+        _, pull_err, pull_code = ssh.exec_command(pull_cmd, timeout=600, raise_on_error=False)
+        if pull_code != 0:
+            logger.warning("Remote pull failed on %s, retrying once: %s", server.host, (pull_err or '')[-200:])
+            _, pull_err, pull_code = ssh.exec_command(pull_cmd, timeout=600, raise_on_error=False)
+            if pull_code != 0:
+                raise RuntimeError(
+                    f"Remote image pull failed on {server.host}: {(pull_err or '').strip()[-300:]}"
+                )
         provision_cmd = f"{net_setup} && docker rm -f {shlex.quote(container_name)} 2>/dev/null; {cmd_str}"
 
         stdout, stderr, code = ssh.exec_command(provision_cmd, timeout=300, raise_on_error=False)
@@ -1466,6 +1478,155 @@ class AddonProvisioner:
 
         ssh.close()
         return container_id, connection_url
+
+    def _remote_garage_exec(self, ssh, container_name: str, *args: str, timeout: int = 90) -> str:
+        """Run a garage CLI command in the remote addon container; return stdout."""
+        cmd = "docker exec {} /garage {}".format(
+            shlex.quote(container_name),
+            " ".join(shlex.quote(str(a)) for a in args),
+        )
+        out, err, code = ssh.exec_command(cmd, timeout=timeout, raise_on_error=False)
+        if code != 0:
+            clean = self._strip_ansi((err or out or "").strip())
+            raise RuntimeError(f"garage {' '.join(args)} failed: {clean[-300:]}")
+        return self._strip_ansi(out or "")
+
+    def _wait_for_remote_tcp(self, ssh, port: int, timeout: int = 90) -> None:
+        """Wait until something accepts TCP on the remote loopback:port."""
+        probe = (
+            "python3 -c 'import socket,time\n"
+            "deadline=time.time()+%d\n"
+            "ok=False\n"
+            "while time.time()<deadline:\n"
+            "    try:\n"
+            "        s=socket.create_connection((\"127.0.0.1\",%d),timeout=2)\n"
+            "        s.close()\n"
+            "        ok=True\n"
+            "        break\n"
+            "    except Exception:\n"
+            "        time.sleep(2)\n"
+            "raise SystemExit(0 if ok else 1)'" % (timeout, port)
+        )
+        _, _, code = ssh.exec_command(probe, timeout=timeout + 30, raise_on_error=False)
+        if code != 0:
+            raise RuntimeError(f"Remote addon port {port} never opened (timeout {timeout}s)")
+
+    def _provision_remote_minio(self, ssh, server, container_name: str,
+                                alias_name: str, port: int,
+                                existing_url: str = "") -> tuple[str, str]:
+        """Garage-backed S3 on a full-stack node (mirrors _provision_minio)."""
+        import re as _re_mod
+
+        garage_image = "dxflrs/garage:v2.4.1"
+        bucket_name = "default-bucket"
+        key_name = "admin"
+        hostname = alias_name or container_name
+
+        rpc_secret = secrets.token_hex(32)
+        admin_token = secrets.token_urlsafe(32)
+        toml_text = self._garage_toml(rpc_secret, admin_token, port)
+
+        import tempfile as _tmp
+        fd, toml_local = _tmp.mkstemp(prefix="smsly-garage-", suffix=".toml", text=True)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(toml_text)
+            os.chmod(toml_local, 0o600)
+            remote_toml = f"/tmp/smsly-garage-{uuid.uuid4().hex}.toml"
+            ssh.upload_file(toml_local, remote_toml)
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(toml_local)
+
+        create_cmd = " ".join(shlex.quote(p) for p in [
+            "docker", "create",
+            "--name", container_name,
+            "--network", self.network_name,
+            "--restart", "unless-stopped",
+            *self.SECURITY_OPTS,
+            "-e", "MINIO_ROOT_USER=admin",
+            "-v", f"{container_name}-data:/var/lib/garage",
+        ] + ((["--network-alias", alias_name] if alias_name else [])) + [garage_image])
+        net_setup = f"docker network inspect {shlex.quote(self.network_name)} >/dev/null 2>&1 || docker network create {shlex.quote(self.network_name)}"
+        out, err, code = ssh.exec_command(
+            f"{net_setup} && docker rm -f {shlex.quote(container_name)} 2>/dev/null; {create_cmd}",
+            timeout=180, raise_on_error=False,
+        )
+        if code != 0:
+            raise RuntimeError(f"Remote garage create failed: {(err or out or '').strip()[-300:]}")
+        try:
+            _, _, cp_code = ssh.exec_command(
+                f"docker cp {shlex.quote(remote_toml)} {shlex.quote(container_name)}:/etc/garage.toml",
+                timeout=60, raise_on_error=False,
+            )
+            if cp_code != 0:
+                raise RuntimeError("docker cp garage.toml failed")
+            _, _, st_code = ssh.exec_command(
+                f"docker start {shlex.quote(container_name)}",
+                timeout=60, raise_on_error=False,
+            )
+            if st_code != 0:
+                raise RuntimeError("docker start failed")
+        except Exception:
+            with contextlib.suppress(Exception):
+                ssh.exec_command(f"docker rm -f {shlex.quote(container_name)}", timeout=60, raise_on_error=False)
+            raise
+        finally:
+            with contextlib.suppress(Exception):
+                ssh.exec_command(f"rm -f {shlex.quote(remote_toml)}", timeout=15, raise_on_error=False)
+
+        self._wait_for_remote_tcp(ssh, port)
+
+        node_out = self._remote_garage_exec(ssh, container_name, "node", "id")
+        node_match = _re_mod.search(r"\b([0-9a-f]{64})\b", node_out)
+        if not node_match:
+            raise RuntimeError(f"Could not parse garage node id: {node_out[-200:]}")
+        node_id = node_match.group(1)
+        try:
+            self._remote_garage_exec(ssh, container_name, "layout", "assign", "-z", "dc1", "-c", "10G", node_id)
+        except RuntimeError as exc:
+            logger.info("Remote garage layout assign skipped (may pre-exist): %s", exc)
+        try:
+            self._remote_garage_exec(ssh, container_name, "layout", "apply", "--version", "1")
+        except RuntimeError as exc:
+            logger.info("Remote garage layout apply skipped (may pre-exist): %s", exc)
+
+        try:
+            info_out = self._remote_garage_exec(ssh, container_name, "key", "info", key_name)
+        except RuntimeError as exc:
+            if "matching keys" in str(exc).lower():
+                raise
+            info_out = ""
+        if info_out:
+            id_match = _re_mod.search(r"Key ID:\s*(\S+)", info_out)
+            if not id_match:
+                raise RuntimeError("Could not parse remote garage key id")
+            key_id, key_secret = id_match.group(1), None
+        else:
+            key_out = self._remote_garage_exec(ssh, container_name, "key", "create", key_name)
+            id_match = _re_mod.search(r"Key ID:\s*(\S+)", key_out)
+            secret_match = _re_mod.search(r"Secret key:\s*(\S+)", key_out)
+            if not id_match or not secret_match:
+                raise RuntimeError(f"Could not parse garage key credentials: {key_out[-200:]}")
+            key_id, key_secret = id_match.group(1), secret_match.group(1)
+
+        try:
+            self._remote_garage_exec(ssh, container_name, "bucket", "create", bucket_name)
+        except RuntimeError as exc:
+            logger.info("Remote garage bucket create skipped (may pre-exist): %s", exc)
+        self._remote_garage_exec(
+            ssh, container_name, "bucket", "allow",
+            "--read", "--write", "--owner", bucket_name, "--key", key_id,
+        )
+
+        out, _, _ = ssh.exec_command(
+            f"docker inspect -f '{{{{.Id}}}}' {shlex.quote(container_name)}",
+            timeout=30, raise_on_error=False,
+        )
+        container_id = (out or "").strip()[:12] or container_name
+        if key_secret is None:
+            return container_id, ""
+        return container_id, f"s3://{key_id}:{key_secret}@{hostname}:{port}/{bucket_name}"
 
     def _provision_rabbitmq(self, container_name: str,
                             password: str, port: int,
