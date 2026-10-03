@@ -56,14 +56,18 @@ def _run(args: list[str], input_bytes: bytes | None = None, extra_env: dict | No
         env.update(extra_env)
     try:
         proc = subprocess.run(
-            args, input=input_bytes, capture_output=True, timeout=SOPS_TIMEOUT,
+            args, input=input_bytes, capture_output=True,
+            timeout=SOPS_TIMEOUT, env=env,
         )
     except FileNotFoundError as exc:
         raise SopsError(f"{args[0]} binary missing: {exc}")
     except subprocess.TimeoutExpired as exc:
         raise SopsError(f"{args[0]} timed out after {SOPS_TIMEOUT}s")
     if proc.returncode != 0:
-        raise SopsError(f"{args[0]} failed (exit {proc.returncode})")
+        detail = (proc.stderr or b"").decode(errors="replace").strip().splitlines()
+        # sops errors carry paths/key IDs, never secret values — safe tail.
+        tail = detail[-1][:200] if detail else ""
+        raise SopsError(f"{args[0]} failed (exit {proc.returncode}): {tail}")
     return proc.stdout or b""
 
 
