@@ -1,7 +1,7 @@
 # Stage 1: Build Caddy with xcaddy
 FROM caddy:2-builder AS builder
 
-RUN xcaddy build \
+RUN xcaddy build --output /usr/bin/caddy \
     --with github.com/caddy-dns/cloudflare@v0.2.4 \
     --with github.com/corazawaf/coraza-caddy/v2
 
