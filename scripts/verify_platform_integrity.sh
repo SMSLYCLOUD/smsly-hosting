@@ -261,10 +261,13 @@ ensure_edge_plugins() {
         fi
     fi
     if docker inspect smsly-sablier >/dev/null 2>&1; then
-        if timeout -k 5 10 docker exec smsly-sablier wget -q -O /dev/null http://127.0.0.1:10000/api/check 2>/dev/null; then
-            log "sablier reachable on :10000"
+        # Host-side probe via the loopback :10000 publish (the image
+        # ships no shell/wget, so docker-exec probing is not an option).
+        # /health is served by Sablier itself, independent of /api/... .
+        if curl -fsS -m 5 -o /dev/null http://127.0.0.1:10000/health 2>/dev/null; then
+            log "sablier reachable on :10000 (/health)"
         else
-            log "ALERT: sablier container exists but :10000 not reachable — sablier-gated services will 500"
+            log "ALERT: sablier container exists but :10000/health not reachable — sablier-gated services will 500"
         fi
     else
         log "sablier not running — sablier-gated services serve normally (no sleep)"
@@ -273,11 +276,11 @@ ensure_edge_plugins() {
     for caddy in smsly-hosting-caddy-1 caddy; do
         if docker inspect "$caddy" >/dev/null 2>&1; then
             local mods
-            mods=$(timeout -k 5 15 docker exec "$caddy" caddy list-modules 2>/dev/null | grep -E 'coraza|security' | head -n 5) || true
+            mods=$(timeout -k 5 15 docker exec "$caddy" caddy list-modules 2>/dev/null | grep -E 'coraza' | head -n 5) || true
             if [ -n "$mods" ]; then
                 log "caddy modules OK ($caddy): $(echo "$mods" | tr '\n' ' ')"
             else
-                log "ALERT: caddy ($caddy) missing coraza/security modules — rebuild Caddy image"
+                log "ALERT: caddy ($caddy) missing coraza module — rebuild Caddy image"
             fi
             break
         fi

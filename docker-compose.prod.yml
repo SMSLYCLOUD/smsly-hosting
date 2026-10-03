@@ -1581,6 +1581,11 @@ services:
     - --accesslog.fields.names.user-agent=drop
     - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
     - --experimental.plugins.crowdsec-bouncer.version=v1.7.1
+    # Sablier scale-to-zero (opt-in per service via sablier_enabled labels).
+    # Plugin loads at Traefik boot (needs pilot reachability, like
+    # crowdsec-bouncer); the sablier service below serves :10000.
+    - --experimental.plugins.sablier.modulename=github.com/sablierapp/sablier-traefik-plugin
+    - --experimental.plugins.sablier.version=v1.3.0
     ports:
     - "${TRAEFIK_HTTP_BIND:-127.0.0.1:8081}:80"
     - "${TRAEFIK_HTTPS_BIND:-127.0.0.1:8443}:443"
@@ -1630,6 +1635,76 @@ services:
         limits:
           cpus: '${TRAEFIK_CPU_LIMIT:-0.50}'
           memory: ${TRAEFIK_MEMORY_LIMIT:-512M}
+
+  # ── Sablier scale-to-zero server (tenant workloads, opt-in) ─────────
+  # Wakes `sablier_enabled` services on first request via the Traefik
+  # sablier plugin above. Docker access goes through a DEDICATED socket
+  # proxy exposing only what Sablier needs (CONTAINERS/EVENTS/VERSION/
+  # POST — start/stop/wait are all POST): the shared traefik-socket-proxy
+  # deliberately lacks POST, so reusing it would 403 every wake/sleep
+  # call. :10000 is loopback-published for host health checks only;
+  # Traefik reaches Sablier via docker DNS on smsly-net. Never
+  # profile-gate this: gated routers 500 while Sablier is down
+  # (failOpen defaults false — loud misconfig, not silent no-sleep).
+  sablier:
+    image: sablierapp/sablier:1.18.0
+    container_name: smsly-sablier
+    restart: unless-stopped
+    command:
+      - start
+      - --provider.name=docker
+    environment:
+      - DOCKER_HOST=tcp://sablier-socket-proxy:2375
+    networks:
+      - smsly-net
+      - sablier-proxy-net
+    ports:
+      - "127.0.0.1:10000:10000"
+    depends_on:
+      sablier-socket-proxy:
+        condition: service_healthy
+    # No docker healthcheck: the image ships no shell/wget to probe with,
+    # and a no-op `true` check would lie. Liveness is covered host-side by
+    # verify_platform_integrity.sh curling :10000/health (loopback
+    # publish above). Traefik plugin tolerates boot-order races — only
+    # sablier-gated routers are affected, and those are opt-in.
+    labels:
+    - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${SABLIER_MEMORY_LIMIT:-128M}
+
+  sablier-socket-proxy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    image: tecnativa/docker-socket-proxy:0.1.2
+    container_name: smsly-sablier-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      EVENTS: 1
+      VERSION: 1
+      POST: 1
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - sablier-proxy-net
+    deploy:
+      resources:
+        limits:
+          memory: ${SABLIER_SOCKET_PROXY_MEMORY_LIMIT:-64M}
   frps:
     security_opt:
       - no-new-privileges:true
@@ -2437,6 +2512,9 @@ networks:
     external: true
     name: smsly-net
   socket-proxy:
+    driver: bridge
+    internal: true
+  sablier-proxy-net:
     driver: bridge
     internal: true
   traefik-proxy-net:
