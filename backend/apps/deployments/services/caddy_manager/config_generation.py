@@ -505,7 +505,8 @@ def _alias_scoped_redirects(rules: list[tuple[str, str, str, str]],
 
 
 def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: str, host_header: str,
-                           path_redirect_rules: list[tuple[str, str, str, str]] | None = None) -> str:
+                           path_redirect_rules: list[tuple[str, str, str, str]] | None = None,
+                           edge_jwt_required: bool = False, waf_opt_out: bool = False) -> str:
     """Caddyfile site block for a host alias (accounts.google.com pattern).
 
     Semantics (from Service.host_aliases help_text):
@@ -529,7 +530,15 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         "        on_demand",
         "    }",
         "    import secure_headers",
-        "    import coraza_waf",
+    ])
+    if not waf_opt_out:
+        lines.append("    import coraza_waf")
+    # Aliases proxy DIRECTLY to the upstream (bypassing Traefik), so the
+    # edge gate must be emitted here too — otherwise a gated service's
+    # alias hosts serve the whole app unauthenticated.
+    if edge_jwt_required:
+        lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
+    lines.extend([
         "    log {",
         "        output file /var/log/caddy/access.log",
         "    }",
@@ -778,6 +787,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     upstream_url,
                     public_domain or alias_host,
                     path_redirect_rules=alias_redirects,
+                    edge_jwt_required=bool(getattr(service, "edge_jwt_required", False)),
+                    waf_opt_out=bool(getattr(service, "waf_opt_out", False)),
                 ))
 
             # Custom staging domain: only route if this service has an active

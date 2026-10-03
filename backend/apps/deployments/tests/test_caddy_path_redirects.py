@@ -81,6 +81,31 @@ class CaddyPathRedirectTests(SimpleTestCase):
         self.assertNotIn('redir ', block)
         self.assertIn('rewrite * /login', block)
 
+    def test_alias_block_gated_when_edge_jwt_required(self):
+        # Aliases proxy DIRECTLY to the upstream (bypassing Traefik), so a
+        # gated service's alias must carry the sidecar forward_auth gate —
+        # otherwise the alias serves the app unauthenticated.
+        block = _build_host_alias_block(
+            'accounts.example.com', '/login', 'http://127.0.0.1:8000',
+            'app.example.com', edge_jwt_required=True,
+        )
+        self.assertIn('forward_auth host.docker.internal:8971', block)
+        self.assertIn('uri /auth-verify', block)
+
+    def test_alias_block_ungated_by_default(self):
+        block = _build_host_alias_block(
+            'accounts.example.com', '/login', 'http://127.0.0.1:8000',
+            'app.example.com',
+        )
+        self.assertNotIn('forward_auth', block)
+
+    def test_alias_block_waf_opt_out(self):
+        block = _build_host_alias_block(
+            'accounts.example.com', '/login', 'http://127.0.0.1:8000',
+            'app.example.com', waf_opt_out=True,
+        )
+        self.assertNotIn('import coraza_waf', block)
+
     def test_root_source_redirects_only_exact_root(self):
         service = SimpleNamespace(
             path_redirects=[

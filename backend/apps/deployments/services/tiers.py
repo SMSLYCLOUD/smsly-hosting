@@ -66,5 +66,14 @@ def ensure_tier_awake(tier: str, timeout: int = 120) -> bool:
         )
         return False
     except Exception as exc:
+        # Never swallow Celery's time-limit signals: the hook is warn-only
+        # for ITS OWN failures, but a task that hit its time budget must
+        # abort, not continue into the tier consumer.
+        try:
+            from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
+            if isinstance(exc, (SoftTimeLimitExceeded, TimeLimitExceeded)):
+                raise
+        except ImportError:
+            pass
         logger.warning("napd wake for tier %r failed (proceeding anyway): %s", name, exc)
         return False
