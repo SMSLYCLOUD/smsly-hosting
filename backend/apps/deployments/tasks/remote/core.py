@@ -544,7 +544,7 @@ def _poll_remote_deployment(
                         # Require consecutive HTTP answers before traffic
                         # moves; any status below 500 counts (per-app health
                         # semantics differ: 200, 403-forbidden-but-alive…).
-                        if not _wait_for_remote_app_ready(service, deployment):
+                        if not _wait_for_remote_app_ready(deployment.service, deployment):
                             raise ValueError(
                                 "Remote app never answered HTTP within the readiness window."
                             )
@@ -561,7 +561,7 @@ def _poll_remote_deployment(
                         deployment.save(update_fields=['status', 'finished_at', 'updated_at', 'verified_target_type', 'verified_host_ip', 'verified_runtime_id', 'verified_at', 'target_server', 'target_is_local'])
 
                         try:
-                            node_logs = orchestrator.get_container_logs(remote_container_id or service.name, tail=200)
+                            node_logs = orchestrator.get_container_logs(remote_container_id or deployment.service.name, tail=200)
                             if node_logs and node_logs.get("logs"):
                                 deployment.runtime_logs = (deployment.runtime_logs or "") + (
                                     f"\n--- Remote Node Initial Logs ---\n{node_logs['logs'][-4000:]}\n--- End Remote Logs ---\n"
