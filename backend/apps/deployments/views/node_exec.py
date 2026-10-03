@@ -532,8 +532,8 @@ class NodeExecViewSet(viewsets.ViewSet):
         overrides = data.get("overrides") or {}
         if not isinstance(overrides, dict):
             return Response({"error": "overrides must be an object."}, status=status.HTTP_400_BAD_REQUEST)
-        if len(overrides) > 200:
-            return Response({"error": "Too many override keys (max 200)."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(overrides) > 2000:
+            return Response({"error": "Too many override keys (max 2000)."}, status=status.HTTP_400_BAD_REQUEST)
         for key, value in list(overrides.items()):
             if not isinstance(key, str) or not key or len(key) > 255:
                 return Response({"error": "Invalid override key."}, status=status.HTTP_400_BAD_REQUEST)
