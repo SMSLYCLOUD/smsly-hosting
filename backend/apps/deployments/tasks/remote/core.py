@@ -362,6 +362,68 @@ def _copy_remote_deployment_fields(deployment, remote_status: dict):
         update_fields.append("updated_at")
         deployment.save(update_fields=update_fields)
 
+def _wait_for_remote_app_ready(service, deployment, timeout_s: int = 300) -> bool:
+    """Wait until the remote app answers HTTP (consecutive successes).
+
+    Container-running is not app-ready (migrations, cold caches, fresh
+    datastores). Any status below 500 counts as answering — per-app
+    health semantics differ (200 healthy, 403 alive-but-guarded).
+    Returns False on timeout (caller fails the deploy visibly instead
+    of promoting into a blip). Never raises.
+    """
+    import requests as _requests
+
+    path = (getattr(service, "health_check_path", "") or "/health").strip() or "/health"
+    if not path.startswith("/"):
+        path = "/" + path
+    hosts: list[str] = []
+    for cand in (
+        (getattr(service, "public_domain", "") or "").strip(),
+    ):
+        if cand and cand not in hosts:
+            hosts.append(cand)
+    try:
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
+            node_service_domain,
+        )
+        from apps.deployments.models.service import Service as _Svc
+        svr = _resolve_effective_server(service)
+        if svr is not None and not getattr(svr, "is_primary", True):
+            flat = node_service_domain(
+                (getattr(service, "slug", "") or service.name),
+                getattr(svr, "node_number", None) or 1,
+                _Svc.default_public_base_domain(),
+            )
+            if flat and flat not in hosts:
+                hosts.append(flat)
+    except Exception:
+        pass
+    if not hosts:
+        return True
+    deadline = time.time() + timeout_s
+    consecutive = 0
+    while time.time() < deadline:
+        ok = False
+        for host in hosts:
+            try:
+                resp = _requests.get(f"https://{host}{path}", timeout=(5, 15))
+                if resp.status_code < 500:
+                    ok = True
+                    break
+            except Exception:
+                continue
+        consecutive = consecutive + 1 if ok else 0
+        if consecutive >= 2:
+            return True
+        time.sleep(10)
+    try:
+        append_log(deployment, f"[Remote] App readiness timeout on {hosts[0]}{path} — failing visibly instead of promoting into a blip.\n")
+    except Exception:
+        pass
+    return False
+
+
 def _poll_remote_deployment(
     deployment,
     orchestrator,
@@ -471,6 +533,16 @@ def _poll_remote_deployment(
                             or orchestrator.server.private_ip
                             or orchestrator.server.host
                         )
+                        # App-readiness gate: the container running does not
+                        # mean the app answers (fresh datastores, migrations,
+                        # cold caches — the classic first-seconds redis blip).
+                        # Require consecutive HTTP answers before traffic
+                        # moves; any status below 500 counts (per-app health
+                        # semantics differ: 200, 403-forbidden-but-alive…).
+                        if not _wait_for_remote_app_ready(service, deployment):
+                            raise ValueError(
+                                "Remote app never answered HTTP within the readiness window."
+                            )
                         deployment.verified_runtime_id = remote_container_id
                         deployment.verified_at = timezone.now()
 

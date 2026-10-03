@@ -1463,6 +1463,16 @@ class AddonProvisioner:
 
         container_id = stdout.strip()[:12] if stdout.strip() else container_name
 
+        # Ready-wait: the app container starts right after this and its
+        # first seconds fail if the datastore isn't accepting yet (the
+        # classic post-deploy redis blip). Probe the addon port on the
+        # node before returning; best-effort, never fails provisioning.
+        if port:
+            try:
+                self._wait_for_remote_tcp(ssh, int(port), timeout=90)
+            except Exception as exc:
+                logger.debug("Remote addon %s ready-wait skipped: %s", container_name, exc)
+
         # Remove remote secrets (env files / redis.conf) now that the
         # container is running.
         for remote_path in remote_temp_files:
