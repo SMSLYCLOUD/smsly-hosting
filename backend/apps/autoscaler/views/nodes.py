@@ -25,9 +25,19 @@ class AutoscalerNodesViewSet(viewsets.GenericViewSet):
         servers = list(ManagedServer.objects.filter(is_primary=False)[:50])
         scorer = NodeScorer()
         try:
+            from apps.deployments.services.node_scorer import _get_min_score
+            min_score = _get_min_score()
+        except Exception:
+            min_score = 0
+        try:
             scored = {s.id: (score, res) for s, score, res in scorer.score(servers)}
         except Exception:
             scored = {}
+        try:
+            from apps.deployments.models import Service as _Svc
+            svc_names = dict(_Svc.objects.values_list("id", "name"))
+        except Exception:
+            svc_names = {}
         rows = []
         for server in servers:
             score, resources = scored.get(server.id, (-1, {}))
@@ -46,10 +56,18 @@ class AutoscalerNodesViewSet(viewsets.GenericViewSet):
                 "node_type": getattr(server, "node_type", ""),
                 "is_lite_agent": bool(getattr(server, "is_lite_agent", False)),
                 "score": score,
+                "min_score": min_score,
+                "qualified": bool(score >= 0 and score >= min_score),
+                "allow_user_workloads": bool(getattr(server, "allow_user_workloads", True)),
                 "resources": resources or {},
                 "replica_count": replica_qs.count(),
                 "replicas": [
-                    {"id": str(r.id), "service": str(r.service_id), "status": r.status}
+                    {"id": str(r.id), "service": str(r.service_id),
+                     "service_name": svc_names.get(r.service_id, str(r.service_id)),
+                     "container_name": getattr(r, "container_name", ""),
+                     "status": r.status,
+                     "spawn_reason": getattr(r, "spawn_reason", "") or "",
+                     "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None}
                     for r in replica_qs[:50]
                 ],
                 "storage": (storage or {}).get("disk") if storage else None,

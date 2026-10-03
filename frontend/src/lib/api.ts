@@ -369,6 +369,10 @@ export interface Service {
   autoscale_cpu_target?: number;
   autoscale_enabled?: boolean;
   vpa_enabled?: boolean;
+  edge_jwt_required?: boolean;
+  sablier_enabled?: boolean;
+  sablier_session?: string;
+  waf_opt_out?: boolean;
   fast_deploy_enabled?: boolean | null; // null = inherit platform default
   buildpack?: 'NIXPACKS' | 'DOCKER' | 'STATIC';
   root_directory?: string;
@@ -2671,6 +2675,13 @@ export const autoscalerApi = {
   },
 };
 
+export const edgeApi = {
+  mintToken: async (scope: string = 'service', ttl: number = 900): Promise<{ token: string; scope: string; expires_in: number }> => {
+    const { data } = await api.post('/edge/token/', { scope, ttl });
+    return data;
+  },
+};
+
 export interface AutoscalerNode {
   id: string;
   name: string;
@@ -2679,9 +2690,12 @@ export interface AutoscalerNode {
   node_type: string;
   is_lite_agent: boolean;
   score: number;
+  min_score?: number;
+  qualified?: boolean;
+  allow_user_workloads?: boolean;
   resources: Record<string, unknown>;
   replica_count: number;
-  replicas: { id: string; service: string; status: string }[];
+  replicas: { id: string; service: string; service_name?: string; container_name?: string; status: string; spawn_reason?: string; created_at?: string | null }[];
   storage: { used_percent: number; free_gb: number; total_gb: number } | null;
   last_heartbeat: string | null;
 }

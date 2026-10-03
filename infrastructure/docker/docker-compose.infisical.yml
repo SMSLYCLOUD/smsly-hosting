@@ -22,10 +22,10 @@ services:
       - ${INFISICAL_ENV_FILE:?INFISICAL_ENV_FILE must be set, e.g. /opt/smsly-hosting/.infisical.env}
     environment:
       # JS heap cap: the image defaults to --max-old-space-size=2048 while
-      # the container idles at ~600MB RSS and is capped at 1G — heap
-      # growth toward 2G invites OOMKill churn. 512M keeps RSS ~400MB
-      # with headroom; raise via env for heavy vault workloads.
-      NODE_OPTIONS: ${INFISICAL_NODE_OPTIONS:---max-old-space-size=512}
+      # the container idles at ~600MB RSS. 512M proved too tight (boot
+      # migrations OOM), so 1024M with a 1.5G container cap: bounded but
+      # safe. Raise via env for heavy vault workloads.
+      NODE_OPTIONS: ${INFISICAL_NODE_OPTIONS:---max-old-space-size=1024}
       # Database. Host follows the platform DB mode via INFISICAL_DB_HOST
       # (exported by the installer: smsly-postgres-primary on local-ha,
       # haproxy on patroni). External mode has no local database —
@@ -67,9 +67,9 @@ services:
     deploy:
       resources:
         limits:
-          # Was 512M: the backend idles at ~500MB (Node heap) and sat at
-          # 98% of cap — one spike from OOMKill churn under load.
-          memory: ${INFISICAL_MEMORY_LIMIT:-1G}
+          # Backend idles ~600MB (Node heap); 512M OOMKill-churned.
+          # 1.5G bounds it with boot + spike headroom over the 1024M heap.
+          memory: ${INFISICAL_MEMORY_LIMIT:-1536M}
         reservations:
           memory: 256M
 
