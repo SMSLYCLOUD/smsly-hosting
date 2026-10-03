@@ -3490,21 +3490,42 @@ metrics = false
                     # Restore into the logical database on the shared server.
                     from urllib.parse import urlparse as _urlparse
                     from .shared_postgres import SHARED_CONTAINER
+                    import re as _re
                     parsed = _urlparse(addon.connection_url or '')
                     env_file = self._write_env_file(
                         {'PGPASSWORD': parsed.password or ''})
+                    # Shared restores run as the TENANT role (not
+                    # superuser): ownership-sensitive extension
+                    # statements from pg_dump die under ON_ERROR_STOP
+                    # ("must be owner of extension vector") even though
+                    # the extension itself is pre-created by
+                    # recreate_empty_database. COMMENT carries no data —
+                    # drop those lines from the stream (shared only;
+                    # container restores run as superuser and keep them).
+                    _ext_comment_re = _re.compile(
+                        rb'(?im)^\s*COMMENT\s+ON\s+EXTENSION\b[^\r\n]*\r?\n')
                     try:
                         with open(validated_backup_path, 'rb') as backup_file:
-                            subprocess.run(
-                                ['docker', 'exec', '-i', '--env-file', env_file,
-                                 SHARED_CONTAINER,
-                                 'psql', '-v', 'ON_ERROR_STOP=1', '-U', parsed.username or 'postgres',
-                                 '-h', '127.0.0.1',
-                                 (parsed.path or '/').lstrip('/') or 'postgres'],
-                                stdin=backup_file,
-                                check=True,
-                                timeout=300,
-                            )
+                            raw_dump = backup_file.read()
+                        filtered_dump, n_dropped = _ext_comment_re.subn(b'', raw_dump)
+                        if n_dropped:
+                            logger.info(
+                                "Restore for %s: dropped %d COMMENT ON "
+                                "EXTENSION line(s) (shared tenant restore)",
+                                addon.id, n_dropped)
+                    except Exception as exc:
+                        raise RuntimeError(f"Could not read backup file: {exc}")
+                    try:
+                        subprocess.run(
+                            ['docker', 'exec', '-i', '--env-file', env_file,
+                             SHARED_CONTAINER,
+                             'psql', '-v', 'ON_ERROR_STOP=1', '-U', parsed.username or 'postgres',
+                             '-h', '127.0.0.1',
+                             (parsed.path or '/').lstrip('/') or 'postgres'],
+                            input=filtered_dump,
+                            check=True,
+                            timeout=300,
+                        )
                     finally:
                         with contextlib.suppress(Exception):
                             os.remove(env_file)
