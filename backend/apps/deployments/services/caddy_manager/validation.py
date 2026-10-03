@@ -257,6 +257,12 @@ def validate_secure_headers_present(content: str) -> list[str]:
     for label, body in blocks.items():
         if label not in site_labels:
             continue
+        if label.startswith("("):
+            # Snippet DEFINITIONS (e.g. `(secure_headers) {`) start at
+            # column 0 like sites but are not sites — never demand they
+            # import themselves (2026-10-03: this false-positive refused
+            # every master regen).
+            continue
         if "import secure_headers" not in body:
             errors.append(f"Site {label} does not import secure_headers.")
     return errors
