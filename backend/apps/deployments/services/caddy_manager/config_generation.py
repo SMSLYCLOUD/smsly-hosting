@@ -1498,6 +1498,7 @@ def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> l
                 block.append("        on_demand")
             block.extend([
                 "    }",
+                "    import secure_headers",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
@@ -1555,6 +1556,7 @@ def generate_node_caddyfile(node) -> str:
         mgmt_block.append("        on_demand")
     mgmt_block.extend([
         "    }",
+        "    import secure_headers",
         "    log {",
         "        output file /var/log/caddy/access.log",
         "    }",
@@ -1655,6 +1657,7 @@ def generate_node_caddyfile(node) -> str:
                 f"{_nested} {{",
                 *tls_lines,
                 "    }",
+                "    import secure_headers",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
@@ -1674,6 +1677,7 @@ def generate_node_caddyfile(node) -> str:
             f"{flat_domain} {{",
             *tls_lines,
             "    }",
+            "    import secure_headers",
             "    log {",
             "        output file /var/log/caddy/access.log",
             "    }",
@@ -1695,6 +1699,7 @@ def generate_node_caddyfile(node) -> str:
                 f"{_extra} {{",
                 *tls_lines,
                 "    }",
+                "    import secure_headers",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
@@ -1818,6 +1823,7 @@ def generate_caddyfile(config) -> str:
         platform_block.extend(
             [
                 "    encode gzip",
+                "    import secure_headers",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
@@ -1944,6 +1950,7 @@ def generate_caddyfile(config) -> str:
             wildcard_lines.append("    log {")
             wildcard_lines.append("        output file /var/log/caddy/access.log")
             wildcard_lines.append("    }")
+            wildcard_lines.append("    import secure_headers")
 
             local_previews = []
             preview_auth_on = True
@@ -2185,6 +2192,7 @@ def generate_caddyfile(config) -> str:
         sections.append(
             f"""http://{domain} {{
     encode gzip
+    import secure_headers
     handle /api/* {{
         reverse_proxy backend:8000
     }}
