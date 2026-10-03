@@ -51,6 +51,7 @@ def generate_traefik_labels(
     rate_limit_burst: int = 200,
     health_check_path: str | None = None,
     host_aliases: list | None = None,
+    service=None,
 ) -> dict[str, str]:
     """
     Generate Traefik labels for a deployed service container.
@@ -114,8 +115,18 @@ def generate_traefik_labels(
     # NOTE: TLS labels removed — Caddy handles SSL termination in production.
     # Traefik only listens on the 'web' entrypoint (port 80) behind Caddy.
 
-    # Middlewares chain
-    middlewares = [f"{router_name}-ratelimit", f"{router_name}-headers"]
+    # Middlewares chain: crowdsec (platform default) + shared strict
+    # secure-headers bundle (file provider, always discovered) +
+    # per-router ratelimit. Opt-in sablier/forward-auth appended.
+    middlewares = ["secure-headers-strict@file"]
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        waf_on = bool(PlatformConfig.load().enable_crowdsec_waf)
+    except Exception:
+        waf_on = False
+    if waf_on:
+        middlewares.insert(0, "crowdsec-bouncer")
+    middlewares.append(f"{router_name}-ratelimit")
     labels[f"traefik.http.routers.{router_name}.middlewares"] = ",".join(
         middlewares)
 
@@ -126,13 +137,32 @@ def generate_traefik_labels(
         rate_limit_burst)
     labels[f"traefik.http.middlewares.{router_name}-ratelimit.ratelimit.period"] = "1s"
 
-    # Security headers middleware
-    labels[f"traefik.http.middlewares.{router_name}-headers.headers.stsSeconds"] = "31536000"
-    labels[f"traefik.http.middlewares.{router_name}-headers.headers.stsIncludeSubdomains"] = "true"
-    labels[f"traefik.http.middlewares.{router_name}-headers.headers.stsPreload"] = "true"
-    labels[f"traefik.http.middlewares.{router_name}-headers.headers.contentTypeNosniff"] = "true"
-    labels[f"traefik.http.middlewares.{router_name}-headers.headers.frameDeny"] = "true"
-    labels[f"traefik.http.middlewares.{router_name}-headers.headers.browserXssFilter"] = "true"
+    try:
+        sablier_on = bool(getattr(service, "sablier_enabled", False))
+        jwt_on = bool(getattr(service, "edge_jwt_required", False))
+        session = str(getattr(service, "sablier_session", "") or "10m").strip() or "10m"
+    except Exception:
+        sablier_on = False
+        jwt_on = False
+        session = "10m"
+
+    extra_chain = []
+    if sablier_on:
+        group = service_name
+        labels[f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.group"] = group
+        labels[f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sablierUrl"] = "http://sablier:10000"
+        labels[f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sessionDuration"] = session
+        labels[f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.displayName"] = service_name
+        labels["sablier.enable"] = "true"
+        labels["sablier.group"] = group
+        labels["traefik.docker.allownonrunning"] = "true"
+        extra_chain.append(f"{router_name}-sablier")
+    if jwt_on:
+        extra_chain.append("edge-forward-auth@file")
+    if extra_chain:
+        labels[f"traefik.http.routers.{router_name}.middlewares"] = (
+            labels[f"traefik.http.routers.{router_name}.middlewares"] + "," + ",".join(extra_chain)
+        )
 
     return labels
 

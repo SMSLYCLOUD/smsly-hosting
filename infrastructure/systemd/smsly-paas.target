@@ -1,0 +1,8 @@
+[Unit]
+Description=SMSLY PaaS managed infra (master/node)
+Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Install]
+WantedBy=multi-user.target

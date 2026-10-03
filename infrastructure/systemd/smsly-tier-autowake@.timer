@@ -1,0 +1,19 @@
+[Unit]
+Description=Scheduled auto-wake for SMSLY PaaS tier: %i
+Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
+
+[Timer]
+Unit=smsly-tier@%i.service
+# Rolling re-wake: fires once the tier has been inactive this long.
+# Use only for tiers that are cheap to lose and safe to interrupt
+# (build caches, dashboards). Never enable for anything on the request
+# path — see infrastructure/systemd/README.md.
+OnBootSec=20min
+OnUnitInactiveSec=20min
+AccuracySec=1min
+# Spread load so N tiers don't wake in lockstep after a host reboot.
+RandomizedDelaySec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

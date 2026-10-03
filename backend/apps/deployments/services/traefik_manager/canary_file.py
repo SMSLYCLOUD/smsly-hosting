@@ -216,7 +216,12 @@ def build_canary_config(
         "service": wrr_name,
     }
     if topology.get("middlewares"):
-        router["middlewares"] = list(topology["middlewares"])
+        chain = list(topology["middlewares"])
+        if "secure-headers-strict@file" not in chain:
+            chain.insert(0, "secure-headers-strict@file")
+        router["middlewares"] = chain
+    else:
+        router["middlewares"] = ["secure-headers-strict@file"]
     if topology.get("tls_resolver"):
         router["tls"] = {"certResolver": topology["tls_resolver"]}
     weighted: dict = {

@@ -14,8 +14,10 @@ See [architecture/taste.md](architecture/taste.md)
 - When manifest env resolver cannot resolve a var from any real source, fill it with a mock/placeholder value instead of leaving it empty or marking it unresolved. Confidence: 0.70
 
 # security
+- URLs embedded in customer-facing content (e.g., email verification stamps) are a phishing/attack surface — offer a link-free variant (plain hash id + customer-editable hint text with {host}/{hash} placeholders) alongside the link variant, and wire both options into the frontend so the customer chooses. Confidence: 0.80
 - Make security scan severity threshold configurable via settings with options to enable/disable and choose threshold level (low, medium, high, critical). Confidence: 0.70
 - Security tab in service Insights should show the service's own vulnerability scan data (Trivy results from the deployment model), not system-level hardening status. Confidence: 0.65
+- Edge security must be configured explicitly, never left at proxy defaults: strict secure-headers bundles with concrete values (HSTS `stsSeconds: 31536000` + includeSubDomains + preload, `browserXssFilter: true`, `contentTypeNosniff: true`, and rigid `customResponseHeaders` for `X-Frame-Options: DENY` / CSP `frame-ancestors 'none'` to kill clickjacking) applied on BOTH Traefik and Caddy, and a WAF (Coraza) enabled by default with only a per-service opt-out. Confidence: 0.70
 
 # content
 - Do not fabricate usage stats (deployment counts, user numbers, trust indicators) for new/early-stage products — the product is "new and fresh" and fake numbers undermine credibility. Confidence: 0.65

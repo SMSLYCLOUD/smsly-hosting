@@ -639,12 +639,21 @@ def _check_service_health(service: object, Deployment: object) -> None:
         return
 
     # Check Docker container state: if the container is dead, fast-fail.
+    # Sablier sleep is NOT a crash: a stopped container on a sablier
+    # service reads `standby` and skips fast-fail/restart-loop logic.
     container_id = (active.container_id or "").strip()
     runtime_ref = (getattr(active, "verified_runtime_id", "") or "").strip() or (getattr(service, "active_runtime_id", "") or "").strip()
     state_info = _probe_container_state(container_id, service=service, runtime_id=runtime_ref)
     state = state_info["status"]
     exit_code = state_info["exit_code"]
     restart_count = state_info["restart_count"]
+    sablier_sleeping = bool(getattr(service, "sablier_enabled", False)) and state in {"exited", "dead", "not-found", "stopped"}
+    if sablier_sleeping:
+        if service.health_status != "standby":
+            service.health_status = "standby"
+            service.save(update_fields=["health_status", "updated_at"])
+        _clear_state(service_key, clear_restart=True)
+        return
     is_crashed = state in {"exited", "dead", "not-found", "restarting"}
 
     # ── Restart-loop detection ──

@@ -196,6 +196,12 @@ def cleanup_dead_running(self) -> dict[str, int]:
         for replica in candidates:
             checked += 1
             try:
+                svc = getattr(replica, "service", None)
+                if svc is not None and bool(getattr(svc, "sablier_enabled", False)):
+                    continue
+            except Exception:
+                pass
+            try:
                 missing = spawner.replica_container_missing(replica)
             except SoftTimeLimitExceeded:
                 raise

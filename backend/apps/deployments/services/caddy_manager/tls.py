@@ -14,6 +14,41 @@ CADDY_TOKEN_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token")
 CADDY_TOKEN_CLEAR_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_clear")
 CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
 CADDY_TOKEN_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
+# Django-independent allow-list for the edge-sidecar `ask` endpoint.
+# Written atomically by the allow-list writer on every apply; the
+# sidecar hot-reloads it, so Caddy TLS issuance survives a Django
+# outage (AGENTS.md: no SPOF where Django down breaks all services).
+TLS_ALLOW_LIST_FILE = os.path.join(CADDY_CONFIG_DIR, ".tls-allow-list.json")
+
+
+def write_tls_allow_list(domains: list[str]) -> str | None:
+    """Atomically write the edge-sidecar TLS allow-list.
+
+    Returns the file path on success, None on failure (warn-only;
+    the sidecar keeps serving its last copy).
+    """
+    try:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in domains or []:
+            d = str(raw or "").strip().lower().rstrip(".")
+            if not d or d in seen:
+                continue
+            seen.add(d)
+            cleaned.append(d)
+        payload = json.dumps({"domains": sorted(cleaned), "updated_at": time.time()})
+        tmp = TLS_ALLOW_LIST_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        os.replace(tmp, TLS_ALLOW_LIST_FILE)
+        try:
+            os.chmod(TLS_ALLOW_LIST_FILE, 0o664)
+        except (OSError, PermissionError):
+            pass
+        return TLS_ALLOW_LIST_FILE
+    except Exception as exc:
+        logger.warning("Could not write TLS allow-list: %s", exc)
+        return None
 
 
 def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):

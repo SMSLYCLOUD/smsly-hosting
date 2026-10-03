@@ -99,10 +99,15 @@ class BuildConfigTests(SimpleTestCase):
         router = cfg["http"]["routers"]["myapp-canary"]
         self.assertEqual(router["priority"], 200)
         self.assertEqual(router["service"], "myapp-canary-wrr")
-        self.assertEqual(router["middlewares"], ["crowdsec-bouncer@docker"])
+        self.assertEqual(router["middlewares"], ["secure-headers-strict@file", "crowdsec-bouncer@docker"])
         children = cfg["http"]["services"]["myapp-canary-wrr"]["weighted"]["services"]
         self.assertEqual(children[0], {"name": "myapp@docker", "weight": 75})
         self.assertEqual(children[1], {"name": "myapp-staging@docker", "weight": 25})
+
+    def test_strict_headers_added_when_absent(self):
+        cfg = build_canary_config(self._topo(middlewares=[]), 75, 25)
+        router = cfg["http"]["routers"]["myapp-canary"]
+        self.assertEqual(router["middlewares"], ["secure-headers-strict@file"])
 
     def test_healthcheck_only_when_both_children_have_it(self):
         cfg = build_canary_config(self._topo(healthcheck_both=True), 75, 25)

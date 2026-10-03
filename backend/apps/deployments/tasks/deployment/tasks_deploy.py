@@ -436,6 +436,10 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     except Deployment.DoesNotExist:
         return
 
+    if bool(getattr(service, "sablier_enabled", False)):
+        append_log(deployment, "\n💤 Sablier scale-to-zero is on — skipping crash monitor (sleep is expected).\n")
+        return
+
     try:
         client = docker.from_env()
     except Exception:

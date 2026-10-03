@@ -439,6 +439,23 @@ SMSLY_WORKERS_EOF
     # Clean up marker
     rm -f "$INSTALL_DIR/.pre-update-head"  || true
 
+    # ─── Edge sidecar refresh (binary + unit + env, warn-only) ─────────
+    # Keeps the Django-independent ask/auth path current on every update.
+    if [ -f "$INSTALL_DIR/lib/edge_sidecar.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/edge_sidecar.sh" || true
+        if command -v smsly_edge_sidecar_install >/dev/null 2>&1; then
+            smsly_edge_sidecar_install || true
+        fi
+    fi
+
+    # ─── Tier sleep restore (update wakes everything — re-sleep) ───────
+    # Any `docker compose up -d` starts default-profile services again,
+    # including tiers deliberately stopped. Restore recorded sleep state.
+    if [ -x "$INSTALL_DIR/scripts/smsly-tier.sh" ]; then
+        "$INSTALL_DIR/scripts/smsly-tier.sh" resleep || true
+    fi
+
     # ─── Endpoint Verification (3 checks) ──────────────────────────────────
     echo -e "\n${BLUE}  → Running endpoint verification (3 checks)...${NC}"
     sleep 5

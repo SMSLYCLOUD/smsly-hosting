@@ -525,6 +525,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'autoscale_enabled', 'min_replicas', 'max_replicas',
             'autoscale_cpu_target', 'vpa_enabled', 'alert_config',
             'disable_crowdsec_waf',
+            'edge_jwt_required', 'sablier_enabled', 'sablier_session', 'waf_opt_out',
             'regions', 'primary_region',
             'safedeploy_enabled', 'preview_environments_enabled',
             'fast_deploy_enabled',

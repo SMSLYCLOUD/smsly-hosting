@@ -18,6 +18,30 @@ CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 _PATH_REDIRECT_SEGMENT_RE = re.compile(r"^/[a-z0-9_-]{1,63}$")
 _MAX_PATH_REDIRECTS_PER_SERVICE = 50
 
+SECURE_HEADERS_SNIPPET_NAME = "secure_headers"
+SECURE_HEADERS_SNIPPET = """(secure_headers) {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Content-Security-Policy "frame-ancestors 'none'"
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+}"""
+
+CORAZA_SNIPPET_NAME = "coraza_waf"
+CORAZA_SNIPPET = """(coraza_waf) {
+    coraza_waf {
+        load_owasp_crs
+        directives `
+            Include @coraza.conf-recommended
+            SecRuleEngine On
+        `
+    }
+}"""
+
 # Host aliases (accounts.google.com pattern): extra hostnames that serve the app
 _ALIAS_REWRITE_ROOT_RE = re.compile(r"^/[A-Za-z0-9/_.-]{0,100}$")
 _MAX_HOST_ALIASES_PER_SERVICE = 10
@@ -490,6 +514,8 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         "    tls {",
         "        on_demand",
         "    }",
+        "    import secure_headers",
+        "    import coraza_waf",
         "    log {",
         "        output file /var/log/caddy/access.log",
         "    }",
@@ -524,10 +550,17 @@ def _build_service_domain_block(
     upstream_host: str,
     upstream_url: str = "",
     path_redirect_rules: list[tuple[str, str, str, str]] | None = None,
+    edge_jwt_required: bool = False,
+    waf_opt_out: bool = False,
 ) -> str:
     lines = [f"{domain} {{"]
 
     lines.extend(_path_redirect_site_lines(path_redirect_rules or [], site_domain=domain))
+    lines.append("    import secure_headers")
+    if not waf_opt_out:
+        lines.append("    import coraza_waf")
+    if edge_jwt_required:
+        lines.append("    authorize with edge_jwt")
 
     if upstream_url:
         _append_reverse_proxy(lines, upstream_url, upstream_host or domain)
@@ -573,7 +606,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
 
         for service in Service.objects.only(
             "id", "public_domain", "custom_domains", "public_domain_hidden", "staging_domain",
-            "host_aliases", "path_redirects",
+            "host_aliases", "path_redirects", "edge_jwt_required", "waf_opt_out",
         ).order_by("id"):
             raw_public = (
                 str(service.public_domain or "").strip().lower()
@@ -611,6 +644,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                             public_domain,
                             upstream_url=_remote_upstream_url_for_service(service),
                             path_redirect_rules=_service_path_redirect_rules(service),
+                            edge_jwt_required=bool(getattr(service, "edge_jwt_required", False)),
+                            waf_opt_out=bool(getattr(service, "waf_opt_out", False)),
                         )
                     )
 
@@ -679,6 +714,11 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     lines.extend(_path_redirect_site_lines(
                         _service_path_redirect_rules(service), site_domain=value,
                     ))
+                    lines.append("    import secure_headers")
+                    if not bool(getattr(service, "waf_opt_out", False)):
+                        lines.append("    import coraza_waf")
+                    if bool(getattr(service, "edge_jwt_required", False)):
+                        lines.append("    authorize with edge_jwt")
                     lines.append("    tls {")
                     lines.append("        on_demand")
                     lines.append("    }")
@@ -751,6 +791,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                             lines.append("    tls {")
                             lines.append("        on_demand")
                             lines.append("    }")
+                            lines.append("    import secure_headers")
+                            lines.append("    import coraza_waf")
                             lines.append("    reverse_proxy traefik:80")
                             lines.append("    encode gzip")
                             lines.append("}")
@@ -774,6 +816,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 else:
                     blocks.append(
                         f"""{public_domain} {{
+    import secure_headers
+    import coraza_waf
     reverse_proxy {_service_proxy_upstream()}
 }}"""
                     )
@@ -1640,7 +1684,7 @@ def generate_caddyfile(config) -> str:
         logger.debug("Failed to load PlatformConfig for Caddy ask secret: %s", exc)
     if not _ask_secret:
         _ask_secret = str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
-    _ask_url = "http://backend:8000/api/v1/services/check-domain/"
+    _ask_url = "http://127.0.0.1:8971/ask"
     if _ask_secret:
         # Pass the secret via Caddy env var interpolation to avoid
         # embedding it in plaintext in the Caddyfile.
@@ -1685,6 +1729,20 @@ def generate_caddyfile(config) -> str:
 
     global_lines.append("}")
     sections.append("\n".join(global_lines))
+
+    sections.append(SECURE_HEADERS_SNIPPET)
+    sections.append(CORAZA_SNIPPET)
+    sections.append(
+        "security {\n"
+        "    edge_jwt {\n"
+        "        jwt {\n"
+        "            primary yes\n"
+        "            trusted_public_key {env.EDGE_JWT_SECRET}\n"
+        "            allow iss \"\"\n"
+        "        }\n"
+        "    }\n"
+        "}"
+    )
 
     _FAKE_TOKENS = {
         "fake", "changeme", "your_cloudflare_api_token", "test", "",

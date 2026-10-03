@@ -1,0 +1,13 @@
+[Unit]
+Description=SMSLY sleepable infra tiers
+Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
+# Stopping smsly-paas.target cascades here and sleeps every tier.
+PartOf=smsly-paas.target
+After=smsly-paas.target
+Requires=smsly-paas.target
+# No tier is enabled by default. Tiers are opt-in per host via
+#   systemctl enable smsly-tier@<tier>.service
+# so a fresh install behaves exactly as it did before this unit existed.
+
+[Install]
+WantedBy=smsly-paas.target

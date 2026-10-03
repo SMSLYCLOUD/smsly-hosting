@@ -1,0 +1,50 @@
+[Unit]
+Description=SMSLY edge sidecar (Caddy ask + edge JWT verify)
+Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/smsly-edge-sidecar
+Restart=always
+RestartSec=2
+StartLimitIntervalSec=120
+StartLimitBurst=10
+TimeoutStartSec=30
+TimeoutStopSec=10
+
+# The binary reads these; the installer writes them from .env.
+Environment=EDGE_SIDECAR_LISTEN=127.0.0.1:8971
+Environment=EDGE_SIDECAR_ALLOW_FILE=/opt/smsly-hosting/caddy-config/.tls-allow-list.json
+EnvironmentFile=-/etc/smsly/edge-sidecar.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=smsly-edge-sidecar
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+# Hardening. No Docker, no network beyond loopback listen, read-only
+# except the allow-list dir (read-only too — Django writes it).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ReadOnlyPaths=/opt/smsly-hosting/caddy-config
+ReadWritePaths=/run/smsly
+
+# Run unprivileged: loopback high-port bind needs no capabilities.
+DynamicUser=yes
+User=nobody
+Group=nogroup
+
+[Install]
+WantedBy=multi-user.target

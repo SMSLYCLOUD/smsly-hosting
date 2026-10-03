@@ -120,6 +120,17 @@ EOF
     rm -f /etc/systemd/system/caddy.service
     systemctl daemon-reload
 
+    # ─── Edge sidecar (Django-independent ask + edge-JWT verify) ──────
+    # Single static Go binary as a systemd unit — survives Django AND
+    # Docker outages. Warn-only, never aborts the install/update.
+    if [ -f "$INSTALL_DIR/lib/edge_sidecar.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/edge_sidecar.sh" || true
+        if command -v smsly_edge_sidecar_install >/dev/null 2>&1; then
+            smsly_edge_sidecar_install || true
+        fi
+    fi
+
     set_checkpoint "caddy_configured"
 fi
 fi # end Caddy skip for agent-lite/node modes

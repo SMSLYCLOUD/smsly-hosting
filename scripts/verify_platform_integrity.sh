@@ -248,6 +248,42 @@ ensure_traefik_service_conflicts() {
     fi
 }
 
+# ── 6d. Edge plugins must be loaded (sablier, sablier reachability, Caddy modules)
+ensure_edge_plugins() {
+    command -v docker >/dev/null 2>&1 || return 0
+    if docker inspect smsly-hosting-traefik-1 >/dev/null 2>&1; then
+        local plug
+        plug=$(docker logs smsly-hosting-traefik-1 --since 60m 2>&1 | grep -i 'plugin.*sablier' | head -n 3) || true
+        if [ -n "$plug" ]; then
+            log "traefik sablier plugin loaded"
+        else
+            log "traefik sablier plugin: no load line in 60m logs (verify flags after next Traefik recreate)"
+        fi
+    fi
+    if docker inspect smsly-sablier >/dev/null 2>&1; then
+        if timeout -k 5 10 docker exec smsly-sablier wget -q -O /dev/null http://127.0.0.1:10000/api/check 2>/dev/null; then
+            log "sablier reachable on :10000"
+        else
+            log "ALERT: sablier container exists but :10000 not reachable — sablier-gated services will 500"
+        fi
+    else
+        log "sablier not running — sablier-gated services serve normally (no sleep)"
+    fi
+    local caddy
+    for caddy in smsly-hosting-caddy-1 caddy; do
+        if docker inspect "$caddy" >/dev/null 2>&1; then
+            local mods
+            mods=$(timeout -k 5 15 docker exec "$caddy" caddy list-modules 2>/dev/null | grep -E 'coraza|security' | head -n 5) || true
+            if [ -n "$mods" ]; then
+                log "caddy modules OK ($caddy): $(echo "$mods" | tr '\n' ' ')"
+            else
+                log "ALERT: caddy ($caddy) missing coraza/security modules — rebuild Caddy image"
+            fi
+            break
+        fi
+    done
+}
+
 # ── 6c. Edge proxies must join service scoped bridges (2026-09-17 root cause)
 # Per-service isolation bridges (smsly-net-<hex>) island apps from the
 # edge: the container is healthy but every domain 503s with "no available
@@ -858,6 +894,7 @@ ensure_edge_lockdown
 ensure_migrations
 ensure_traefik_middlewares
 ensure_traefik_service_conflicts
+ensure_edge_plugins
 ensure_edge_on_scoped_networks
 ensure_caddy_logs_writable
 ensure_traefik_dynamic_dir

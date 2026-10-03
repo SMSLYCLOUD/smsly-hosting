@@ -1,0 +1,43 @@
+[Unit]
+Description=SMSLY PaaS infra tier: %i
+Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
+After=docker.service
+Requires=docker.service
+ConditionPathExists=/opt/smsly-hosting
+
+# Sleep every tier at once:  systemctl stop smsly-idle.target
+PartOf=smsly-idle.target
+# A tier may start before the idle group comes up, never after it goes down.
+Before=smsly-idle.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=SMSLY_INSTALL_DIR=/opt/smsly-hosting
+Environment=SMSLY_TIER_DIR=/etc/smsly/tiers.d
+Environment=SMSLY_TIER_STATE_DIR=/var/lib/smsly/tiers
+Environment=SMSLY_TIER_WAKE_DIR=/run/smsly/tier-wake
+EnvironmentFile=-/etc/smsly/tiers.d/%i.conf
+# Skips cleanly (rather than failing) when the tier is not defined here.
+ExecCondition=/opt/smsly-hosting/scripts/smsly-tier.sh check %i
+ExecStart=/opt/smsly-hosting/scripts/smsly-tier.sh up %i
+ExecStop=/opt/smsly-hosting/scripts/smsly-tier.sh down %i
+# Re-arm the .path trigger: PathExists only fires on an absent->present edge.
+ExecStartPost=/bin/rm -f /run/smsly/tier-wake/%i
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=smsly-tier@%i
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+# Hardening. ProtectHome is deliberately NOT set: docker compose reads
+# /root/.docker/config.json, and blanking HOME breaks the CLI.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/smsly-hosting /var/lib/docker /var/lib/smsly /run/smsly /root/.docker
+
+[Install]
+WantedBy=smsly-idle.target

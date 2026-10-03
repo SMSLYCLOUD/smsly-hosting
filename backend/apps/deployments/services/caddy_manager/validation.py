@@ -221,6 +221,69 @@ def extract_site_labels(content: str) -> set[str]:
     return labels
 
 
+def validate_edge_sidecar_endpoints(content: str) -> list[str]:
+    """Fail-closed: request-time edge deps must bypass Django.
+
+    Caddy `ask` and any forward-auth-shaped reference must point at
+    127.0.0.1:8971 (smsly-edge-sidecar), never backend:8000 — otherwise
+    a Django outage breaks TLS issuance and gated routing for all
+    services (SPOF). Returns error strings, empty when compliant.
+    """
+    text = str(content or "")
+    errors: list[str] = []
+    if "backend:8000/api/v1/services/check-domain" in text:
+        errors.append("Caddyfile ask still points at backend:8000 — must use 127.0.0.1:8971/ask.")
+    if "backend:8000/api/v1/edge/auth-verify" in text:
+        errors.append("forwardAuth still points at backend:8000 — must use 127.0.0.1:8971/auth-verify.")
+    if "ask " in text and "127.0.0.1:8971/ask" not in text:
+        errors.append("Caddyfile has an ask directive not pointing at the edge sidecar.")
+    return errors
+
+
+def validate_secure_headers_present(content: str) -> list[str]:
+    text = str(content or "")
+    errors: list[str] = []
+    if "(secure_headers)" not in text:
+        errors.append("Caddyfile is missing the (secure_headers) snippet definition.")
+        return errors
+    if "(coraza_waf)" not in text:
+        errors.append("Caddyfile is missing the (coraza_waf) snippet definition.")
+    site_labels = extract_site_labels(text)
+    blocks = _split_site_blocks(text)
+    for label, body in blocks.items():
+        if label not in site_labels:
+            continue
+        if "import secure_headers" not in body:
+            errors.append(f"Site {label} does not import secure_headers.")
+    return errors
+
+
+def _split_site_blocks(content: str) -> dict[str, str]:
+    blocks: dict[str, str] = {}
+    current: list[str] = []
+    label = ""
+    depth = 0
+    for line in str(content or "").splitlines():
+        if not line or line[0] in (" ", "\t"):
+            if label:
+                current.append(line)
+                depth += line.count("{") - line.count("}")
+            continue
+        stripped = line.strip()
+        if stripped.endswith("{"):
+            if label and current:
+                blocks[label] = "\n".join(current)
+            label = stripped[:-1].strip().split()[0] if stripped[:-1].strip() else ""
+            current = [line]
+            depth = 1
+            continue
+        if label:
+            current.append(line)
+    if label and current:
+        blocks[label] = "\n".join(current)
+    return blocks
+
+
 def validate_no_site_block_regression(
     new_content: str,
     live_content: str,

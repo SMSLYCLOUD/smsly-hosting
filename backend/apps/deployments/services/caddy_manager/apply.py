@@ -243,6 +243,54 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                 _shadow_exc,
             )
 
+        # SECURE-HEADERS GUARD: every tenant site must import the shared
+        # secure_headers snippet (HSTS/X-Frame/nosniff/CSP/Referrer/
+        # Permissions) and the (coraza_waf) definition must exist.
+        try:
+            from .validation import validate_secure_headers_present
+            hdr_errors = validate_secure_headers_present(content)
+            if hdr_errors:
+                result["message"] = hdr_errors[0]
+                logger.error("apply_caddyfile refused: %s", result["message"])
+                return result
+        except Exception as _hdr_exc:
+            logger.warning(
+                "secure-headers check errored (%s) — proceeding; "
+                "verify the Caddyfile after apply.",
+                _hdr_exc,
+            )
+
+        # EDGE-SIDECAR GUARD (SPOF): request-time edge deps must bypass
+        # Django — ask and forwardAuth point at 127.0.0.1:8971, never
+        # backend:8000. Refuse content that reintroduces the coupling.
+        try:
+            from .validation import validate_edge_sidecar_endpoints
+            edge_errors = validate_edge_sidecar_endpoints(content)
+            if edge_errors:
+                result["message"] = edge_errors[0]
+                logger.error("apply_caddyfile refused: %s", result["message"])
+                return result
+        except Exception as _edge_exc:
+            logger.warning(
+                "edge-sidecar check errored (%s) — proceeding; "
+                "verify the Caddyfile after apply.",
+                _edge_exc,
+            )
+
+        # TLS ALLOW-LIST: refresh the edge-sidecar's Django-independent
+        # allow-list from the same content being applied, so the `ask`
+        # endpoint keeps answering during a Django outage. Warn-only:
+        # a write failure must never block the Caddyfile apply.
+        try:
+            from .tls import write_tls_allow_list
+            from .validation import extract_site_labels
+            write_tls_allow_list(sorted(extract_site_labels(content)))
+        except Exception as _allow_exc:
+            logger.warning(
+                "TLS allow-list refresh failed (%s) — sidecar keeps last copy.",
+                _allow_exc,
+            )
+
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
         try:
             os.chmod(CADDY_CONFIG_DIR, 0o775)

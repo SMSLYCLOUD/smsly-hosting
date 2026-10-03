@@ -77,6 +77,7 @@ from ..views.integrations import (
 )
 from ..views.mesh import MeshNetworkViewSet
 from ..views.node_exec import NodeExecViewSet
+from ..views.edge_auth import EdgeAuthViewSet
 from ..views.metrics import MetricsViewSet
 from ..views.network_scope import ScopedNetworkViewSet
 from ..views.node_exchange import node_token_exchange, node_token_exchange_via_gateway
@@ -135,6 +136,7 @@ router.register(r'registry-scopes', ScopedRegistryViewSet, basename='registry-sc
 router.register(r'network-scopes', ScopedNetworkViewSet, basename='network-scope')
 router.register(r'platform-config', PlatformConfigViewSet, basename='platform-config')
 router.register(r'node', NodeExecViewSet, basename='node-exec')
+router.register(r'edge', EdgeAuthViewSet, basename='edge-auth')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/

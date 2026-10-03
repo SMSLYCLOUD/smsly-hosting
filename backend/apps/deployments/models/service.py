@@ -312,6 +312,15 @@ class Service(TimeStampedModel):
         default=80, help_text="Target CPU utilization percentage for the autoscaler")
     vpa_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=False, help_text="Enable Vertical Pod Autoscaling (VPA)")
+    edge_jwt_required = models.BooleanField(  # type: ignore[var-annotated]
+        default=False, help_text="Require edge JWT at Traefik/Caddy before routing to this service")
+    sablier_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=False, help_text="Scale this service to zero when idle; wake on first request via Sablier")
+    sablier_session = models.CharField(  # type: ignore[var-annotated]
+        max_length=16, default="10m",
+        help_text="Sablier session duration before idle shutdown (e.g. 10m, 1h)")
+    waf_opt_out = models.BooleanField(  # type: ignore[var-annotated]
+        default=False, help_text="Opt this service out of Coraza WAF protection")
     alert_config = models.JSONField(  # type: ignore[var-annotated]
         default=dict,
         blank=True,
