@@ -29591,93 +29591,114 @@ cat << 'EOF' > "$OOM_SCRIPT"
 #!/usr/bin/env bash
 # oom-swap-adjuster.sh
 #
-# Monitors the system for Out Of Memory (OOM) kills. If one is detected within the last
-# X minutes, it automatically increases the swap space by 200MB up to a maximum of 4x RAM.
-# This serves as an auto-maintenance feature to prevent recurring build crashes.
+# Monitors the system for HOST-LEVEL memory pressure. If genuine pressure
+# is detected, it grows a SINGLE swap file by 200MB per run.
+#
+# 2026-10-03 hardening: the old version fired on ANY cgroup OOM line
+# (e.g. a crash-looping 260MB cadvisor tripped it every 5 minutes) with
+# no sufficiency gate and a fresh timestamped file per run — 253 files
+# and a march toward the 4xRAM ceiling on a host that already had 16GB
+# swap for an 8GB box. Now: pressure gate + sufficiency cap + one file.
 
 set -euo pipefail
 
 LOG_FILE="/var/log/smsly-oom-adjuster.log"
 MINUTES_BACK=10
-SWAPFILE_PREFIX="/swapfile-smsly-auto"
+SWAPFILE="/swapfile-smsly-auto"
+# Only act when the host itself is actually pressured (MemAvailable —
+# swap-backed and reclaimable included — below this share of RAM).
+PRESSURE_PCT=15
+# Never grow total swap past 2x RAM; disk-backed swap is emergency
+# headroom, not a memory plan.
+MAX_SWAP_FACTOR=2
+# Grow in these steps per run.
+ADD_SWAP_MB=200
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
-# Check for OOM events in the last N minutes using journalctl
-OOM_COUNT=$(journalctl -k --since "${MINUTES_BACK} minutes ago" | grep -i "out of memory" | wc -l || true)
+# 1. Recent OOM kills? (Any scope — the pressure gate below decides.)
+OOM_COUNT=$(journalctl -k --since "${MINUTES_BACK} minutes ago" | grep -ci "out of memory" || true)
 
 if [ "$OOM_COUNT" -eq 0 ]; then
-    # No OOM detected recently, exit quietly.
     exit 0
-
 fi
 
-log "Detected $OOM_COUNT OOM events in the last $MINUTES_BACK minutes. Evaluating swap size."
-
-# Get RAM size in MB
+# 2. HOST pressure gate: skip cgroup-scoped kills on an otherwise
+# healthy host (e.g. one tiny container hitting its own limit).
 RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
-
-# Maximum allowed swap is 4x RAM
-MAX_SWAP_MB=$((RAM_MB * 4))
-
-if [ "$CURRENT_SWAP_MB" -ge "$MAX_SWAP_MB" ]; then
-    log "Swap is already at or above the maximum allowed limit (4x RAM = ${MAX_SWAP_MB}MB). No further auto-adjustment will be made."
+AVAIL_MB=$(free -m | awk '/^Mem:/{print $7}')
+if [ -z "$RAM_MB" ] || [ "$RAM_MB" -le 0 ]; then
+    exit 0
+fi
+AVAIL_PCT=$((AVAIL_MB * 100 / RAM_MB))
+if [ "$AVAIL_PCT" -ge "$PRESSURE_PCT" ]; then
+    log "OOM lines seen but host has ${AVAIL_MB}MB available (${AVAIL_PCT}% >= ${PRESSURE_PCT}% gate) — no swap change."
     exit 0
 fi
 
-# Calculate new swap chunk to add (200MB)
-ADD_SWAP_MB=200
-NEW_TOTAL_MB=$((CURRENT_SWAP_MB + ADD_SWAP_MB))
+# 3. Sufficiency cap.
+CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
+MAX_SWAP_MB=$((RAM_MB * MAX_SWAP_FACTOR))
+if [ "$CURRENT_SWAP_MB" -ge "$MAX_SWAP_MB" ]; then
+    log "Swap already ${CURRENT_SWAP_MB}MB (>= ${MAX_SWAP_FACTOR}x RAM = ${MAX_SWAP_MB}MB). No change."
+    exit 0
+fi
 
-# Cap at max if we would overshoot
+# Cap the step at the ceiling.
+NEW_TOTAL_MB=$((CURRENT_SWAP_MB + ADD_SWAP_MB))
 if [ "$NEW_TOTAL_MB" -gt "$MAX_SWAP_MB" ]; then
     ADD_SWAP_MB=$((MAX_SWAP_MB - CURRENT_SWAP_MB))
-    NEW_TOTAL_MB=$MAX_SWAP_MB
 fi
-
 if [ "$ADD_SWAP_MB" -le 0 ]; then
     exit 0
 fi
 
-NEW_SWAPFILE="${SWAPFILE_PREFIX}-$(date '+%s')"
-log "Increasing swap by ${ADD_SWAP_MB}MB. Creating ${NEW_SWAPFILE}..."
+log "Host pressure: ${AVAIL_MB}MB available (${AVAIL_PCT}%). Growing ${SWAPFILE} toward ${NEW_TOTAL_MB}MB total."
 
-# Create the new swap file
-if fallocate -l ${ADD_SWAP_MB}M "$NEW_SWAPFILE" ; then
-    chmod 600 "$NEW_SWAPFILE"
-    mkswap "$NEW_SWAPFILE" 
-    # Priority 10 like the installer swapfile: below zram (100), so
-    # compressed RAM stays the first overflow tier.
-    swapon -p 10 "$NEW_SWAPFILE"  || swapon "$NEW_SWAPFILE"  || true
-
-    # Make it permanent
-    if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
-        echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
+# 4. Single growing file. swapoff needs RAM room for what's currently
+# swapped; if it doesn't fit, leave everything untouched (fragmenting
+# further helps nothing).
+if [ -f "$SWAPFILE" ]; then
+    USED_SWAP_MB=$(free -m | awk '/^Swap:/{print $3}')
+    if [ "$AVAIL_MB" -gt "$((USED_SWAP_MB + 512))" ]; then
+        swapoff "$SWAPFILE" || true
+        rm -f "$SWAPFILE"
+    else
+        log "Not enough free RAM to regrow ${SWAPFILE} safely — leaving swap untouched."
+        exit 0
     fi
+fi
 
-    log "Successfully added ${ADD_SWAP_MB}MB of swap. Total swap is now approx ${NEW_TOTAL_MB}MB."
+GROW_OK=false
+if [ -f "$SWAPFILE" ]; then
+    CUR_MB=$(($(stat -c%s "$SWAPFILE" 2>/dev/null || echo 0) / 1024 / 1024))
+    if fallocate -l $((CUR_MB + ADD_SWAP_MB))M "$SWAPFILE" >/dev/null 2>&1; then
+        GROW_OK=true
+    fi
 else
-    # Fallback to dd if fallocate fails (e.g. some filesystems don't support it)
-    log "fallocate failed, trying dd..."
-    if dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count=$ADD_SWAP_MB status=none; then
-        chmod 600 "$NEW_SWAPFILE"
-        mkswap "$NEW_SWAPFILE" 
-        swapon -p 10 "$NEW_SWAPFILE"  || swapon "$NEW_SWAPFILE"  || true
-
-        if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
-            echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
-        fi
-
-        log "Successfully added ${ADD_SWAP_MB}MB of swap via dd. Total swap is now approx ${NEW_TOTAL_MB}MB."
+    if fallocate -l ${ADD_SWAP_MB}M "$SWAPFILE" >/dev/null 2>&1; then
+        GROW_OK=true
+    elif dd if=/dev/zero of="$SWAPFILE" bs=1M count=$ADD_SWAP_MB status=none; then
+        GROW_OK=true
     else
         log "Failed to create swap file."
-        rm -f "$NEW_SWAPFILE"
+        rm -f "$SWAPFILE"
         exit 1
     fi
 fi
+chmod 600 "$SWAPFILE"
+mkswap "$SWAPFILE"
+# Priority 10 like the installer swapfile: below zram (100), so
+# compressed RAM stays the first overflow tier.
+swapon -p 10 "$SWAPFILE" || swapon "$SWAPFILE" || true
+
+# Single permanent fstab entry.
+if ! grep -q "^${SWAPFILE} none swap" /etc/fstab ; then
+    echo "$SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
+fi
+log "Swap grown. Total swap is now approx ${NEW_TOTAL_MB}MB."
 EOF
 chmod +x "$OOM_SCRIPT"
 
