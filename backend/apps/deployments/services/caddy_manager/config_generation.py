@@ -718,6 +718,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         lines.append("    tls {")
                         lines.append("        on_demand")
                         lines.append("    }")
+                        lines.append("    import secure_headers")
                         # Challenge handle BEFORE the apex redirect: the
                         # verifier fetches over http (308 to https) and the
                         # www host must answer the token itself, not bounce
