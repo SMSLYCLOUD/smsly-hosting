@@ -461,6 +461,145 @@ class NodeExecViewSet(viewsets.ViewSet):
             logger.warning("Node service upsert failed for %s: %s", name, _scrub_error(exc, 120))
             return Response({"error": _scrub_error(exc, 200)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=False, methods=["post"], url_path="containers/recreate")
+    def container_recreate(self, request):
+        """Recreate one container from its SAME image with merged env.
+
+        Body: {name, overrides: {KEY: value}, dry_run?}. Live container
+        env is the base, overrides win (DB rows from master). Clones
+        image, labels, networks+aliases, volumes, restart policy and
+        runtime from live inspect; keeps a -prev backup until the
+        replacement runs, rolls back on failure. Secrets travel only
+        over the authenticated orchestrator channel and are never logged.
+        """
+        ok, err = _verify_node_caller(request, require_privileged=True)
+        if not ok:
+            return err
+        data = request.data if isinstance(request.data, dict) else {}
+        name = str(data.get("name", "") or "").strip()
+        if not name or not _CONTAINER_RE.match(name):
+            return Response({"error": "Valid container name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        overrides = data.get("overrides") or {}
+        if not isinstance(overrides, dict):
+            return Response({"error": "overrides must be an object."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(overrides) > 200:
+            return Response({"error": "Too many override keys (max 200)."}, status=status.HTTP_400_BAD_REQUEST)
+        for key, value in list(overrides.items()):
+            if not isinstance(key, str) or not key or len(key) > 255:
+                return Response({"error": "Invalid override key."}, status=status.HTTP_400_BAD_REQUEST)
+            text = "" if value is None else str(value)
+            if len(text) > 10000:
+                return Response({"error": f"Override value too long: {key}."}, status=status.HTTP_400_BAD_REQUEST)
+            overrides[key] = text
+        dry_run = bool(data.get("dry_run", False))
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = _resolve_container(client, name)
+            if container is None:
+                return Response({"error": f"Container {name} not found on this node."}, status=status.HTTP_404_NOT_FOUND)
+            try:
+                container.reload()
+            except Exception:
+                pass
+            attrs = container.attrs or {}
+            config = attrs.get("Config") or {}
+            host_config = attrs.get("HostConfig") or {}
+            image_tags = (getattr(container.image, "tags", None) or []) if getattr(container, "image", None) else []
+            image = image_tags[0] if image_tags else (config.get("Image") or "")
+            if not image:
+                return Response({"error": "Could not determine running image — refusing."}, status=status.HTTP_409_CONFLICT)
+            nets = ((attrs.get("NetworkSettings") or {}).get("Networks")) or {}
+            if not nets:
+                return Response({"error": "Container has no networks — refusing."}, status=status.HTTP_409_CONFLICT)
+            primary = next(iter(nets))
+            if dry_run:
+                return Response({"ok": True, "dry_run": True, "image": image,
+                                 "networks": sorted(nets), "override_keys": len(overrides)})
+            live_env: dict[str, str] = {}
+            for item in config.get("Env") or []:
+                if "=" in item:
+                    key, _, val = item.partition("=")
+                    live_env[key] = val
+            merged = dict(live_env)
+            merged.update(overrides)
+            labels = dict(config.get("Labels") or {})
+            restart_policy = host_config.get("RestartPolicy") or {"Name": "unless-stopped"}
+            runtime = host_config.get("Runtime") or None
+            volumes = []
+            for mount in attrs.get("Mounts") or []:
+                mtype = (mount.get("Type") or "").lower()
+                src = mount.get("Source") or mount.get("Name") or ""
+                dst = mount.get("Destination") or ""
+                if not src or not dst:
+                    continue
+                volumes.append(f"{src}:{dst}{':ro' if mount.get('Mode') == 'ro' or mount.get('RW') is False else ''}")
+            networking_config = {
+                net_name: client.api.create_endpoint_config(aliases=(cfg or {}).get("Aliases") or [])
+                for net_name, cfg in nets.items()
+            }
+            backup_name = f"{name}-prev"
+            try:
+                client.containers.get(backup_name).remove(force=True)
+            except Exception:
+                pass
+            create_kwargs: dict = {
+                "image": image, "name": name, "environment": merged,
+                "network": primary, "networking_config": networking_config,
+                "labels": labels, "volumes": volumes or None,
+                "restart_policy": restart_policy, "detach": True,
+            }
+            if runtime:
+                create_kwargs["runtime"] = runtime
+            container.stop(timeout=15)
+            container.rename(backup_name)
+            try:
+                new_container = client.containers.create(**create_kwargs)
+                new_container.start()
+            except Exception as exc:
+                self._rollback_recreate(client, name, backup_name)
+                return Response({"error": f"Replacement failed, rolled back: {_scrub_error(exc, 200)}"},
+                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            running = False
+            import time as _time
+            deadline = _time.time() + 90
+            while _time.time() < deadline:
+                try:
+                    new_container.reload()
+                    if new_container.status == "running":
+                        running = True
+                        break
+                except Exception:
+                    break
+                _time.sleep(3)
+            if not running:
+                self._rollback_recreate(client, name, backup_name)
+                return Response({"error": "Replacement did not run — rolled back."},
+                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            try:
+                client.containers.get(backup_name).remove(force=True)
+            except Exception:
+                pass
+            return Response({"ok": True, "container": name,
+                             "container_id": (new_container.id or "")[:12],
+                             "env_keys": len(merged)})
+        except Exception as exc:
+            logger.debug("Node container recreate failed for %s: %s", name, exc)
+            return Response({"error": _scrub_error(exc, 200)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _rollback_recreate(self, client, name: str, backup_name: str) -> None:
+        try:
+            try:
+                doomed = client.containers.get(name)
+                doomed.remove(force=True)
+            except Exception:
+                pass
+            prev = client.containers.get(backup_name)
+            prev.rename(name)
+            prev.start()
+        except Exception as exc:
+            logger.error("Node recreate rollback failed for %s: %s", name, exc)
+
     @action(detail=False, methods=["post"], url_path="storage/test")
     def storage_test(self, request):
         # Privileged-only: payload carries cloud credentials. Transport is the

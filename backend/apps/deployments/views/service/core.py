@@ -859,7 +859,7 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
         fresh env (seconds of downtime for a process boot, no build, no pull).
         The old container is kept as a backup until the replacement reports
         running; any failure rolls back automatically. Remote-node services
-        are refused (run where the code is current).
+        recreate on their home node through the node recreate API.
         """
         service = self.get_object()
         assert_can_write(self.request.user, service)

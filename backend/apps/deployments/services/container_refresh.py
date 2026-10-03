@@ -22,7 +22,8 @@ Safety:
     nsswitch consults files before dns.
   * resource limits come from the Service row (converging drift), env
     from EnvironmentVariable rows + mTLS injection (mirroring spawn).
-  * remote-node services are refused — run where the code is current.
+  * remote-node services recreate on their home node via the node
+    recreate API (same image, DB env merged over live env).
 """
 import logging
 import time
@@ -32,6 +33,48 @@ logger = logging.getLogger(__name__)
 
 class ContainerRefreshError(RuntimeError):
     """Fatal, user-facing recreation failure (rollback already attempted)."""
+
+
+def _recreate_remote_with_fresh_env(service, dry_run: bool = False) -> dict:
+    """Same-image recreate on the service's node (no rebuild).
+
+    Overrides are the decrypted DB rows (ciphertext-looking values
+    skipped, mirroring the deploy pipeline); the node merges them over
+    live container env, clones config, and rolls back on failure.
+    """
+    try:
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
+        )
+        server = _resolve_effective_server(service) or getattr(service, "server", None)
+        if server is None or getattr(server, "is_primary", True):
+            raise ContainerRefreshError("No remote home server for this service")
+        overrides: dict[str, str] = {}
+        for var in service.env_vars.all():
+            key = (getattr(var, "key", "") or "").strip()
+            if not key:
+                continue
+            try:
+                value = var.value or ""
+            except Exception:
+                continue
+            if isinstance(value, str) and value.startswith("gAAAAA") and len(value) > 50:
+                continue
+            overrides[key] = "" if value is None else str(value)
+        ref = (
+            (getattr(service, "active_runtime_id", "") or "").strip()
+            or (service.name or "").strip()
+        )
+        result = RemoteOrchestrator(server).recreate_remote_container(ref, overrides, dry_run=dry_run)
+        if not result or not result.get("ok"):
+            raise ContainerRefreshError("Node recreate refused or unreachable")
+        result["remote"] = getattr(server, "name", "")
+        return result
+    except ContainerRefreshError:
+        raise
+    except Exception as exc:
+        raise ContainerRefreshError(f"Remote apply-env failed: {exc}")
 
 
 def _is_remote_service(service) -> bool:
@@ -339,7 +382,7 @@ def recreate_with_fresh_env(service, container_id=None, dry_run=False,
         extra_hosts (stale overrides would shadow healthy DNS).
     """
     if _is_remote_service(service):
-        raise ContainerRefreshError("Remote services are not supported yet — redeploy from the dashboard")
+        return _recreate_remote_with_fresh_env(service, dry_run=dry_run)
     client = _docker_client()
     container = _resolve_target_container(service, client, container_id)
     if container is None:

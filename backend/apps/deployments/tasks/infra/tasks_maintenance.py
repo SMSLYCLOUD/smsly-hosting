@@ -719,6 +719,25 @@ def prune_remote_docker_task():
     return {"status": "ok", "pruned": pruned, "errors": errors}
 
 
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.ensure_infisical_token_task")
+def ensure_infisical_token_task():
+    """Daily vault-token ensure: validate, rotate on 401, mint if missing.
+
+    Fail-open: returns a status dict, never raises. Without this, a
+    rotated/revoked token silently disables vault injection on every
+    deploy (the old "Token: Missing" state had no healer at all).
+    Registered in celery.py beat_schedule daily.
+    """
+    try:
+        from apps.deployments.services.infisical import ensure_infisical_service_token
+        result = ensure_infisical_service_token()
+        logger.info("infisical ensure: %s", result)
+        return {"status": "ok" if result.get("ok") else "degraded", **result}
+    except Exception as exc:
+        logger.error("infisical ensure crashed: %s", exc)
+        return {"status": "error", "reason": str(exc)[:200]}
+
+
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.ensure_service_network_attachments")
 def ensure_service_network_attachments():
     """Attach live service containers missing their scoped project network.

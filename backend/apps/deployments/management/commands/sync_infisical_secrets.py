@@ -26,9 +26,14 @@ class Command(BaseCommand):
         parser.add_argument("--workspace", type=str, default="smsly-platform", help="Infisical workspace name")
 
     def handle(self, *args, **options):
+        from ...services.infisical import ensure_infisical_service_token
+        ensured = ensure_infisical_service_token()
+        if not ensured.get("ok"):
+            self.stderr.write(f"ERROR: Infisical token unusable ({ensured.get('reason')})")
+            return
         client = get_infisical_client()
         if client is None:
-            self.stderr.write("ERROR: Infisical not configured (INFISICAL_SERVICE_TOKEN missing)")
+            self.stderr.write("ERROR: Infisical not configured (no API URL)")
             return
 
         workspace_id = get_or_create_workspace(client, options["workspace"])

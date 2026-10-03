@@ -521,13 +521,24 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
         env_vars.pop('CUSTOM_DOMAINS', None)
 
     try:
-        from .services.infisical import (
+        # NOTE: absolute import — tasks.deploy has no `services`
+        # subpackage, so the old relative import silently skipped
+        # Infisical injection on EVERY deploy (ImportError swallowed
+        # below). Verified 2026-10-03: injection never ran.
+        from apps.deployments.services.infisical import (
+            ensure_cached,
             get_infisical_client,
             get_or_create_workspace,
             inject_infisical_env_for_service,
             is_infisical_healthy,
             push_service_secrets_to_infisical,
         )
+        try:
+            _ensure = ensure_cached()
+            if not _ensure.get("ok"):
+                logger.warning("Infisical ensure: %s", _ensure.get("reason"))
+        except Exception:
+            pass
         _client = get_infisical_client()
         if _client is not None and is_infisical_healthy(_client):
             _ws_id = get_or_create_workspace(_client)

@@ -813,6 +813,15 @@ class PlatformConfig(models.Model):
                   "buckets (404 probing, crawlers, bruteforce) always keep "
                   "their thresholds to avoid false positives.")
 
+    # Infisical secret vault
+    infisical_service_token = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="Service token for the Infisical API (auto-minted by the "
+                  "platform ensure job when admin bootstrap credentials "
+                  "exist, else paste from Organization Settings, Service "
+                  "Tokens). DB wins over INFISICAL_SERVICE_TOKEN env, so no "
+                  "backend restart is needed after rotation.")
+
     # ── SPIFFE mTLS ─────────────────────────────────────────────────────
     mtls_enabled = models.BooleanField(
         default=True,

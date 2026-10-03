@@ -35,7 +35,8 @@ class InfisicalClient:
 
     def __init__(self, base_url: str = INFISICAL_API_URL, token: str | None = None):
         self.base_url = base_url.rstrip("/")
-        self.token = token or os.environ.get("INFISICAL_SERVICE_TOKEN", "")
+        resolved = token if token else resolve_service_token()
+        self.token = resolved
         self.session = requests.Session()
         self.session.headers.update({
             "Content-Type": "application/json",
@@ -128,13 +129,96 @@ class InfisicalClient:
         return resp.status_code in (200, 204)
 
 
-def get_infisical_client() -> InfisicalClient | None:
-    """Return an Infisical client or None if not configured."""
-    token = os.environ.get("INFISICAL_SERVICE_TOKEN", "")
-    base_url = INFISICAL_API_URL
+INFISICAL_MESH_FORWARD_PORT = 25010
+INFISICAL_MESH_FORWARDER_NAME = "smsly-mesh-fwd-infisical"
+
+
+def resolve_service_token() -> str:
+    """DB first, env fallback. DB wins so rotation needs no restart."""
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        token = str(PlatformConfig.load().infisical_service_token or "").strip()
+        if token:
+            return token
+    except Exception:
+        pass
+    return os.environ.get("INFISICAL_SERVICE_TOKEN", "").strip()
+
+
+def resolve_api_url(for_remote: bool = False) -> str:
+    """Base API URL (no trailing /api/v1).
+
+    Local: Docker DNS as before. Remote (node) callers must use the
+    WireGuard-mesh forwarder (see ensure_infisical_mesh_forwarder):
+    nodes have no route to master's docker DNS and must not depend on
+    public DNS for vault traffic.
+    """
+    if for_remote:
+        try:
+            from apps.deployments.services.addon_mesh import _get_master_mesh_ip
+            mesh_ip = _get_master_mesh_ip()
+        except Exception:
+            mesh_ip = "10.100.0.1"
+        return f"http://{mesh_ip}:{INFISICAL_MESH_FORWARD_PORT}"
+    return INFISICAL_URL
+
+
+def ensure_infisical_mesh_forwarder() -> str:
+    """Expose Infisical on the master mesh IP via a socat forwarder.
+
+    Mirrors addon_mesh forwarders (bound strictly to the mesh IP, never
+    0.0.0.0). Returns the remote base URL, or '' when it cannot be built.
+    Fail-open: callers fall back to existing behavior.
+    """
+    import subprocess
+
+    try:
+        from apps.deployments.services.addon_mesh import _get_master_mesh_ip
+        mesh_ip = _get_master_mesh_ip()
+    except Exception:
+        mesh_ip = "10.100.0.1"
+    base_url = f"http://{mesh_ip}:{INFISICAL_MESH_FORWARD_PORT}"
+    chk = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", INFISICAL_MESH_FORWARDER_NAME],
+        capture_output=True, text=True, timeout=30,
+    )
+    if chk.returncode == 0 and chk.stdout.strip() == "true":
+        return base_url
+    subprocess.run(["docker", "rm", "-f", INFISICAL_MESH_FORWARDER_NAME],
+                   capture_output=True, timeout=60)
+    res = subprocess.run(
+        ["docker", "run", "-d",
+         "--name", INFISICAL_MESH_FORWARDER_NAME,
+         "--restart", "unless-stopped",
+         "--network", "smsly-net",
+         "-p", f"{mesh_ip}:{INFISICAL_MESH_FORWARD_PORT}:8080",
+         "alpine/socat:latest",
+         "tcp-listen:8080,fork,reuseaddr",
+         "tcp-connect:infisical:8080"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if res.returncode != 0:
+        logger.warning("Infisical mesh forwarder failed: %s", (res.stderr or "")[-200:])
+        return ""
+    return base_url
+
+
+def get_infisical_client(for_remote: bool = False) -> InfisicalClient | None:
+    """Return an Infisical client or None if not configured.
+
+    Token: PlatformConfig DB first, INFISICAL_SERVICE_TOKEN env fallback
+    (no backend restart needed after rotation). URL: remote callers use
+    the mesh forwarder, local callers keep Docker DNS behavior.
+    """
+    token = resolve_service_token()
+    if for_remote:
+        base_url = f"{resolve_api_url(for_remote=True)}/api/v1"
+    else:
+        base_url = INFISICAL_API_URL
     if not base_url:
         return None
     return InfisicalClient(base_url=base_url, token=token)
+    return base_url
 
 
 def get_or_create_workspace(client: InfisicalClient, workspace_name: str = "smsly-platform") -> str | None:
@@ -310,8 +394,9 @@ def inject_infisical_env_for_service(
     at startup.
     """
     env: dict[str, str] = {}
-    if os.environ.get("INFISICAL_SERVICE_TOKEN"):
-        env["INFISICAL_TOKEN"] = os.environ["INFISICAL_SERVICE_TOKEN"]
+    token = resolve_service_token()
+    if token:
+        env["INFISICAL_TOKEN"] = token
     if INFISICAL_API_URL:
         env["INFISICAL_API_URL"] = INFISICAL_API_URL
     if workspace_id:
@@ -363,14 +448,214 @@ def push_service_secrets_to_infisical(
     return results
 
 
+def ensure_cached(max_age_s: int = 3600) -> dict:
+    """Cached best-effort ensure for hot paths (deploy pipeline).
+
+    Validates at most once per hour; a broken token triggers the full
+    ensure (mint/rotate) immediately. Never raises.
+    """
+    from django.core.cache import cache as _cache
+
+    try:
+        stamp = _cache.get("smsly:infisical:ensure:v1")
+    except Exception:
+        stamp = None
+    import time as _time
+    now = _time.time()
+    if stamp:
+        try:
+            if now - float(stamp) < max_age_s:
+                return {"ok": True, "rotated": False, "reason": "recently verified"}
+        except Exception:
+            pass
+    try:
+        result = ensure_infisical_service_token()
+    except Exception as exc:
+        return {"ok": False, "rotated": False, "reason": f"ensure crashed: {exc}"}
+    if result.get("ok"):
+        try:
+            _cache.set("smsly:infisical:ensure:v1", now, max_age_s)
+        except Exception:
+            pass
+    return result
+
+
 def is_infisical_healthy(client: InfisicalClient | None = None) -> bool:
-    """Check if Infisical is reachable and authenticated."""
+    """Check if Infisical is reachable and authenticated.
+
+    A 401 used to count as healthy (get_workspaces returns [] on any
+    non-200) — wrong: callers then pushed per-secret into auth
+    failures. Only a real workspace list counts now.
+    """
+    return check_infisical_auth(client) is True
+
+
+def check_infisical_auth(client: InfisicalClient | None = None) -> bool | None:
+    """True = token works, False = rejected (401/403), None = transport/other error."""
     if client is None:
         client = get_infisical_client()
     if client is None:
+        return None
+    if not client.token:
         return False
     try:
-        workspaces = client.get_workspaces()
-        return isinstance(workspaces, list)
+        resp = client.session.request("GET", f"{client.base_url}/workspace", timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            return isinstance(data.get("workspaces"), list)
+        if resp.status_code in (401, 403):
+            return False
+        return None
     except Exception:
-        return False
+        return None
+
+
+def _read_admin_bootstrap() -> tuple[str, str]:
+    """Admin email/password from the provision-time bootstrap file."""
+    for candidate in (
+        "/opt/smsly-hosting/.infisical-admin",
+        os.path.join(os.environ.get("INSTALL_DIR", "/opt/smsly-hosting"), ".infisical-admin"),
+    ):
+        try:
+            with open(candidate) as fh:
+                vals = dict(
+                    line.strip().split("=", 1)
+                    for line in fh
+                    if "=" in line and not line.strip().startswith("#")
+                )
+            email = (vals.get("ADMIN_EMAIL") or "").strip()
+            password = (vals.get("ADMIN_PASSWORD") or "").strip()
+            if email and password:
+                return email, password
+        except Exception:
+            continue
+    return "", ""
+
+
+def _try_mint_service_token(base_url: str, email: str, password: str) -> str:
+    """Mint a service token via the admin account; return token or ''.
+
+    Tries known legacy API shapes and verifies each candidate by
+    listing workspaces with it. Loud redacted logs on every miss —
+    version drift must be visible, never silent.
+    """
+    import json as _json
+
+    def _login() -> str:
+        resp = requests.post(
+            f"{base_url}/api/v1/auth/login",
+            json={"email": email, "password": password},
+            timeout=20,
+        )
+        if resp.status_code not in (200, 201):
+            logger.warning("Infisical admin login → %s", resp.status_code)
+            return ""
+        try:
+            data = resp.json()
+        except Exception:
+            return ""
+        for key in ("token", "accessToken", "access_token"):
+            val = data.get(key)
+            if isinstance(val, str) and len(val) > 20:
+                return val
+        user = data.get("user") or {}
+        for key in ("token", "accessToken"):
+            val = user.get(key)
+            if isinstance(val, str) and len(val) > 20:
+                return val
+        return ""
+
+    def _verify(token: str) -> bool:
+        try:
+            resp = requests.get(
+                f"{base_url}/api/v1/workspace",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=15,
+            )
+            return resp.status_code == 200 and isinstance(resp.json().get("workspaces"), list)
+        except Exception:
+            return False
+
+    jwt = _login()
+    if not jwt:
+        return ""
+    headers = {"Authorization": f"Bearer {jwt}", "Content-Type": "application/json"}
+    workspaces: list[dict] = []
+    try:
+        resp = requests.get(f"{base_url}/api/v1/workspace", headers=headers, timeout=15)
+        if resp.status_code == 200:
+            workspaces = resp.json().get("workspaces", []) or []
+    except Exception as exc:
+        logger.debug("Infisical workspace list for mint failed: %s", exc)
+    ws_id = workspaces[0].get("id") if workspaces else ""
+    attempts = [
+        ("POST", "/api/v1/service-token",
+         {"name": "smsly-platform", "workspaceId": ws_id, "permissions": ["read", "write"]}),
+        ("POST", "/api/v2/service-token",
+         {"name": "smsly-platform", "workspaceId": ws_id}),
+        ("POST", f"/api/v1/workspace/{ws_id}/service-token" if ws_id else "/api/v1/service-token",
+         {"name": "smsly-platform"}),
+    ]
+    for method, path, payload in attempts:
+        try:
+            resp = requests.request(method, f"{base_url}{path}", headers=headers,
+                                    data=_json.dumps({k: v for k, v in payload.items() if v}),
+                                    timeout=20)
+            if resp.status_code not in (200, 201):
+                logger.warning("Infisical mint %s %s → %s", method, path, resp.status_code)
+                continue
+            try:
+                data = resp.json()
+            except Exception:
+                continue
+            for key in ("token", "serviceToken", "service_token"):
+                cand = data.get(key)
+                if isinstance(cand, str) and len(cand) > 20 and _verify(cand):
+                    return cand
+                nested = data.get("serviceToken") or {}
+                if isinstance(nested, dict):
+                    cand = nested.get("token", "")
+                    if isinstance(cand, str) and len(cand) > 20 and _verify(cand):
+                        return cand
+            logger.warning("Infisical mint %s %s: no verifiable token in response", method, path)
+        except Exception as exc:
+            logger.debug("Infisical mint attempt failed: %s", exc)
+    return ""
+
+
+def ensure_infisical_service_token() -> dict:
+    """Validate the vault token; mint + store when broken and possible.
+
+    Never raises. Returns {ok, rotated, reason}. Rotation writes the
+    DB field (live immediately, no restart) and never touches .env.
+    Auto-mint needs the provision-time admin bootstrap file; without it
+    the result explains the exact manual step instead of failing silently.
+    """
+    client = get_infisical_client()
+    if client is None:
+        return {"ok": False, "rotated": False, "reason": "no API URL configured"}
+    if check_infisical_auth(client) is True:
+        return {"ok": True, "rotated": False, "reason": "token valid"}
+    if client.token:
+        logger.warning("Infisical token rejected (401/403) — attempting rotation")
+    else:
+        logger.warning("Infisical service token missing — attempting auto-mint")
+    email, password = _read_admin_bootstrap()
+    if not email or not password:
+        return {
+            "ok": False, "rotated": False,
+            "reason": "no working token and admin bootstrap file unreadable — mint at secrets UI (Organization Settings → Service Tokens) and save to PlatformConfig infisical_service_token",
+        }
+    base_url = INFISICAL_API_URL or "http://infisical:8080/api/v1"
+    minted = _try_mint_service_token(base_url, email, password)
+    if not minted:
+        return {"ok": False, "rotated": False, "reason": "auto-mint failed — see warnings above; mint manually"}
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        cfg = PlatformConfig.load()
+        cfg.infisical_service_token = minted
+        cfg.save(update_fields=["infisical_service_token"])
+    except Exception as exc:
+        return {"ok": False, "rotated": False, "reason": f"minted but DB store failed: {exc}"}
+    logger.info("Infisical service token rotated and stored (DB, live immediately)")
+    return {"ok": True, "rotated": True, "reason": "minted via admin bootstrap"}

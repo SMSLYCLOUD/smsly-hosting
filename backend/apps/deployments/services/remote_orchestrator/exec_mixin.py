@@ -96,6 +96,21 @@ class ExecMixin:
             return self._parse_json_response(resp, "upserting remote service")
         return None
 
+    def recreate_remote_container(self, container_name: str, overrides: dict, dry_run: bool = False) -> dict | None:
+        """Same-image recreate on the node with merged env (no rebuild).
+
+        Secrets travel only over the authenticated channel; never logged.
+        Returns the parsed body on success, None otherwise.
+        """
+        resp = self._request(
+            "POST", "/api/v1/node/containers/recreate/",
+            payload={"name": container_name, "overrides": overrides, "dry_run": dry_run},
+            timeout=300,
+        )
+        if resp is not None and resp.status_code < 400:
+            return self._parse_json_response(resp, "recreating remote container")
+        return None
+
     # -- Public terminal-relay helpers (stable API for consumers) --
     def find_remote_service_id(self, service, path: str = "/api/v1/services/") -> str:
         try:
