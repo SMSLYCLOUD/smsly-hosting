@@ -210,13 +210,13 @@ class LogsActionsMixin:
                     from apps.deployments.services.remote_orchestrator import (
                         RemoteOrchestrator,
                     )
-                    ref = (
-                        (getattr(deployment, 'verified_runtime_id', '') or '').strip()
-                        or (getattr(service, 'active_runtime_id', '') or '').strip()
-                        or (deployment.container_id or '').strip()
-                        or service.name
-                    )
-                    node_data = RemoteOrchestrator(active_server).get_container_logs(ref, tail=tail)
+                    refs = [
+                        (getattr(service, 'name', '') or '').strip(),
+                        (getattr(deployment, 'verified_runtime_id', '') or '').strip(),
+                        (getattr(service, 'active_runtime_id', '') or '').strip(),
+                        (deployment.container_id or '').strip(),
+                    ]
+                    node_data = RemoteOrchestrator(active_server).get_container_logs_multi(refs, tail=tail)
                     node_logs = (node_data or {}).get('logs', '') if node_data else ''
                     if node_logs.strip():
                         return Response({

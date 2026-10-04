@@ -157,16 +157,16 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
             dep = Deployment.objects.select_related('service').get(id=self.deployment_id)
             remote = self._resolve_remote_target(dep)
             if remote is not None:
-                server, ref = remote
+                server, refs = remote
                 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-                data = RemoteOrchestrator(server).get_container_logs(ref, tail=tail)
+                data = RemoteOrchestrator(server).get_container_logs_multi(refs, tail=tail)
                 logs = (data or {}).get("logs", "") if data else ""
                 if not logs.strip():
                     logs = getattr(dep, 'runtime_logs', '') or ''
                 return {
                     'logs': logs,
                     'status': dep.status,
-                    'container_id': ref,
+                    'container_id': (data or {}).get("_ref", "") if data else '',
                     'container_status': (data or {}).get("status", "running") if data else "unknown",
                     'source': 'remote_node',
                 }
@@ -318,13 +318,16 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
             from apps.deployments.utils.target import resolve_active_execution_target
             target = resolve_active_execution_target(dep.service)
             if target.get("target_type") in ("remote", "lite_agent") and target.get("server_obj") is not None:
-                ref = (
-                    (getattr(dep, "verified_runtime_id", "") or "").strip()
-                    or (getattr(dep.service, "active_runtime_id", "") or "").strip()
-                    or (dep.container_id or "").strip()
-                    or dep.service.name
-                )
-                return target["server_obj"], ref
+                # Ref LIST (not a single ref): container IDs go stale on
+                # every recreate; the stable service name anchors the end.
+                # Callers cascade through get_container_logs_multi.
+                refs = [
+                    (getattr(dep.service, 'name', '') or '').strip(),
+                    (getattr(dep, "verified_runtime_id", "") or "").strip(),
+                    (getattr(dep.service, "active_runtime_id", "") or "").strip(),
+                    (dep.container_id or "").strip(),
+                ]
+                return target["server_obj"], [r for r in refs if r]
         except ValueError:
             pass
         except Exception as exc:
@@ -334,12 +337,12 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
     async def _stream_remote_logs(self, remote):
         from asgiref.sync import sync_to_async
 
-        server, ref = remote
+        server, refs = remote
         seen = set()
         failures = 0
         while not self._disconnected:
             try:
-                data = await sync_to_async(self._fetch_remote_logs)(server, ref)
+                data = await sync_to_async(self._fetch_remote_logs)(server, refs)
                 failures = 0
             except Exception:
                 failures += 1
@@ -356,7 +359,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 await self.send(text_data=json.dumps({'type': 'log', 'log': line, 'timestamp': ''}))
             await asyncio.sleep(2)
 
-    def _fetch_remote_logs(self, server, ref):
+    def _fetch_remote_logs(self, server, refs):
         from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-        data = RemoteOrchestrator(server).get_container_logs(ref, tail=100)
+        data = RemoteOrchestrator(server).get_container_logs_multi(refs, tail=100)
         return (data or {}).get("logs", "") if data else ""
