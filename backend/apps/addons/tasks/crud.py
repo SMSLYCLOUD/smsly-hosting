@@ -212,6 +212,11 @@ def deprovision_addon_task(self, addon_id: str) -> None:
         addon.deleted_at = timezone.now()
         addon.save(update_fields=['status', 'deleted_at', 'retired_volume', 'updated_at'])
     except Exception as e: # pylint: disable=broad-exception-caught
+        if isinstance(e, Addon.DoesNotExist):
+            # Row already gone (deleted elsewhere) — retrying every 30s
+            # forever just burns workers and log volume. Fail permanently.
+            logger.warning("Deprovision skipped for missing addon row (no retry)")
+            return
         logger.error("Deprovision failed: %s", e)
         raise self.retry(exc=e, countdown=30)
 

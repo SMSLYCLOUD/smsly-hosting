@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { domainsApi, servicesApi, type Domain, type Service } from '@/lib/api';
+import { FailoverNotice } from '@/components/domains/FailoverNotice';
 import Link from 'next/link';
 
 const STATUSES = ['active', 'pending', 'error'];
@@ -227,6 +228,8 @@ export default function DomainsPage() {
               </Button>
             </div>
           </div>
+
+          <FailoverNotice />
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {[

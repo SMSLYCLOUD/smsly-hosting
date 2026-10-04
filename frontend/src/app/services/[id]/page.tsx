@@ -718,6 +718,7 @@ export default function ServiceDetailPage() {
                             <div className="border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Custom Domain Setup</span>
                                 <p className="text-[10px] text-muted-foreground mt-1">Point your domain at any of the three platform hostnames above: CNAME subdomains to the master or flat node domain, or A-record apexes to the server IP. Deep node domains accept CNAME but stay DNS-only unless paid certificates are enabled. Verification passes via public DNS quorum, HTTP proof, or Cloudflare DNS record — a Cloudflare miss alone never fails the check.</p>
+                                <p className="text-[10px] text-amber-500/90 mt-1 font-medium">Master-down failover: this same domain keeps serving from the node's emergency Caddy if you point its DNS at the node IP in Cloudflare (grey cloud issues a cert automatically) — no dashboard needed. See Domains for details.</p>
                             </div>
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Domain Verification</span>

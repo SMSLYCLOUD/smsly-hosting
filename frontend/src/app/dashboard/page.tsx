@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X, DollarSign, Bell, ShieldCheck, BookTemplate, Cloud, List, BarChart3 } from "lucide-react";
 import { coreApi, DashboardOverview, systemApi } from "@/lib/api";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
+import { FailoverNotice } from "@/components/domains/FailoverNotice";
 import Link from "next/link";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -211,6 +212,8 @@ export default function DashboardPage() {
               </button>
             </div>
           )}
+
+          <FailoverNotice compact />
 
           {/* Stat Panels */}
           <div className="grid gap-px bg-border/50 rounded overflow-hidden">

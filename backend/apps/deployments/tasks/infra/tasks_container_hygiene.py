@@ -84,6 +84,13 @@ def container_restart_loop_watchdog_task():
 def orphan_addon_gc_task(dry_run: bool = False):
     """Remove addon containers that no DB record backs.
 
+    MASTER ONLY — returns immediately on nodes/lite-agents. Addon rows
+    live in the master database; a node worker sees an empty table, so
+    without this guard the hourly beat deletes every node addon
+    container within an hour of provisioning (2026-10-04: marketer's
+    node postgres/redis/rabbitmq vanished hourly while volumes and
+    rows stayed intact).
+
     Safety rules (mirror of the manual incident sweep):
       * Only touches names starting with 'smsly-addon-'
       * A container is kept iff its name matches an ACTIVE addon record
@@ -91,6 +98,10 @@ def orphan_addon_gc_task(dry_run: bool = False):
         removed — duplicates shadowing a healthy alias included, since DNS
         round-robins between live and dead instances.
     """
+    import os as _os
+    if (_os.environ.get('SMSLY_NODE_ID', '') or '').strip():
+        logger.debug("orphan_addon_gc: skipping on node worker (no addon rows here)")
+        return {"status": "skipped", "reason": "node-worker"}
     from urllib.parse import urlparse
     from apps.deployments.models.addons import Addon
 
