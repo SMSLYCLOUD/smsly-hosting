@@ -147,17 +147,68 @@ class LogsActionsMixin:
     """LogsActions actions for the viewset."""
 
 
+    def _remote_build_logs(self, deployment, server, keep: int):
+        """Proxy node build logs for remote services. Returns a Response
+        on success, None to fall back to the local row. Never raises."""
+        try:
+            from apps.deployments.services.remote_orchestrator import (
+                RemoteOrchestrator,
+            )
+            orchestrator = RemoteOrchestrator(server)
+            service = deployment.service
+            rid = (getattr(deployment, 'remote_deployment_id', '') or '').strip()
+            if not rid:
+                node_id = orchestrator.find_remote_service_id(service) or ''
+                if not node_id:
+                    return None
+                latest = orchestrator.list_remote_deployments(node_id, limit=1)
+                if not latest:
+                    return None
+                first = latest[0] if isinstance(latest, list) else {}
+                rid = str(first.get('id', '') or '').strip()
+                if not rid:
+                    return None
+            resp = orchestrator._request(
+                method='GET',
+                path=f"/api/v1/deployments/{rid}/build-logs/",
+                params={'tail': keep or 20000},
+                timeout=20,
+            )
+            if resp and resp.status_code == 200:
+                data = resp.json()
+                data['id'] = str(deployment.id)
+                data['source'] = 'remote_node_build'
+                return Response(data)
+        except Exception as exc:
+            logger.debug("Remote build-log proxy failed: %s", exc)
+        return None
+
     @action(detail=True, methods=['get'], url_path='build-logs')
     def build_logs(self, request: object, pk: str | None = None) -> Response:
         """
         Get build logs for a deployment (REST fallback for non-WebSocket).
         GET /api/v1/deployments/{id}/build-logs/?tail=20000 (chars, cap 200k)
+
+        Remote services proxy the node's own build logs first (the build
+        ran there); the local row is only a fallback. Without this, node
+        services show a stale local copy from before the transfer.
         """
         deployment = self.get_object()
         try:
             keep = max(0, min(int(request.query_params.get('tail', 0) or 0), 200000))
         except (TypeError, ValueError):
             keep = 0
+        try:
+            from apps.deployments.utils.target import resolve_active_execution_target
+            _target = resolve_active_execution_target(deployment.service)
+            _srv = _target.get("server_obj")
+            _ttype = _target.get("target_type")
+        except Exception:
+            _srv, _ttype = None, "local"
+        if _ttype in ("remote", "lite_agent") and _srv is not None:
+            _proxied = self._remote_build_logs(deployment, _srv, keep)
+            if _proxied is not None:
+                return _proxied
         build = deployment.build_logs or ""
         runtime = getattr(deployment, 'runtime_logs', '') or ''
         truncated = False
