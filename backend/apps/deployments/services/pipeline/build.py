@@ -179,11 +179,45 @@ def _local_registry_host() -> str:
     return ""
 
 
-def _with_local_registry(bare_name: str, deployment=None) -> str:
-    """Prefix `ns/name:tag` with the local registry host when safe.
+def _project_registry_host(project) -> str:
+    """Scoped registry host for *project*, or "" when none is configured.
 
-    Pure function except the deployment-locality check. Never
-    double-prefixes; never touches already-qualified (external) names.
+    Fail-closed: returns "" on any error or when the project has no
+    explicit ScopedRegistry.registry_url, so callers fall back to the
+    platform-global _local_registry_host(). Never raises. Only the
+    project's own chain (Project -> Team -> Org via get_for_object) is
+    consulted — never another project's row.
+    """
+    try:
+        if project is None:
+            return ""
+        from apps.deployments.models.registry_scope import ScopedRegistry
+        scoped = ScopedRegistry.get_for_object(project)
+        raw = (getattr(scoped, "registry_url", "") or "").strip() if scoped else ""
+        if not raw:
+            return ""
+        host = raw.split("://")[-1].rstrip("/").split("/")[0].strip()
+        return host
+    except Exception:
+        return ""
+
+
+def _deployment_project(deployment) -> object | None:
+    """Best-effort project for a deployment (never raises)."""
+    try:
+        svc = getattr(deployment, "service", None)
+        return getattr(svc, "project", None)
+    except Exception:
+        return None
+
+
+def _with_local_registry(bare_name: str, deployment=None) -> str:
+    """Prefix `ns/name:tag` with the registry host when safe.
+
+    Resolution order (fail-closed): project-scoped registry host first
+    (Project -> Team -> Org via ScopedRegistry), then the platform-global
+    daemon-local host. Never double-prefixes; never touches
+    already-qualified (external) names.
     """
     name = (bare_name or "").strip()
     if not name:
@@ -195,13 +229,21 @@ def _with_local_registry(bare_name: str, deployment=None) -> str:
     first = name.split("/")[0] if "/" in name else ""
     if "." in first or ":" in first:
         return name  # already registry-qualified (or external) — keep
-    host = _local_registry_host()
+    project = _deployment_project(deployment) if deployment is not None else None
+    scoped_host = _project_registry_host(project) if project is not None else ""
+    host = scoped_host or _local_registry_host()
     if not host:
         return name
+    # A scoped EXTERNAL host (e.g. ghcr.io) is directly reachable from
+    # any daemon — no mesh rewrite. Only daemon-local hosts need the
+    # remote/mesh translation below.
+    is_local_host = host.startswith(("registry:", "127.0.0.1:", "localhost:"))
     if deployment is not None:
         try:
             from apps.deployments.utils import is_deployment_local
             if not is_deployment_local(deployment):
+                if not is_local_host:
+                    return f"{host}/{name}"
                 # Agent/remote daemons can't resolve the local name — try
                 # the mesh address (probe-gated, "" when unreachable).
                 mesh = _mesh_registry_host()
@@ -732,19 +774,30 @@ class BuildMixin:
 
 
     def _pull_cached_image(self) -> bool:
-        """Pull a previously built tag from the local registry on cache miss.
+        """Pull a previously built tag from the scoped registry on cache miss.
 
         Retention prunes old tags from the daemon but keeps the rollback
         window in the registry; a pull restores the exact image in seconds
-        instead of rebuilding for minutes. The daemon may lack registry
-        creds at this point (login happens later in the build flow), so any
-        auth/network failure simply returns False and the normal build
-        proceeds. Never raises.
+        instead of rebuilding for minutes. The registry host is resolved
+        from the deployment's project scope first (Project -> Team -> Org),
+        falling back to the platform-global CONTAINER_REGISTRY_URL.
+        The daemon may lack registry creds at this point (login happens
+        later in the build flow), so any auth/network failure simply
+        returns False and the normal build proceeds. Never raises.
         """
         try:
-            from django.conf import settings as _settings
-            registry = (getattr(_settings, "CONTAINER_REGISTRY_URL", "") or "").strip()
-            registry = registry.split("://")[-1].rstrip("/")
+            registry = ""
+            try:
+                from apps.deployments.models.registry_scope import ScopedRegistry
+                _scope = getattr(getattr(self, "service", None), "project", None)
+                _info = ScopedRegistry.resolve_registry_credentials(_scope)
+                registry = ((_info.get("url") or "").split("://")[-1].rstrip("/"))
+            except Exception:
+                registry = ""
+            if not registry:
+                from django.conf import settings as _settings
+                registry = (getattr(_settings, "CONTAINER_REGISTRY_URL", "") or "").strip()
+                registry = registry.split("://")[-1].rstrip("/")
             if not registry or not self.image_name:
                 return False
             # Already qualified (registry-prefixed at construction) — pull
@@ -891,10 +944,13 @@ class BuildMixin:
             if self.service.registry_credential.registry_url:
                 registry_url = self.service.registry_credential.registry_url.replace("https://", "").replace("http://", "").split("/")[0]
 
-        # Fall back to scoped registry chain
+        # Fall back to scoped registry chain (project-only).
+        # Only scope objects (Project/Team/Org) are walked — a User owner
+        # is NOT a scope entity, so passing it would silently skip to the
+        # platform fallback and hide a missing project link.
         if not registry_url:
             from apps.deployments.models.registry_scope import ScopedRegistry
-            scope_obj = self.service.project or self.service.owner
+            scope_obj = getattr(self.service, "project", None)
             registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
             registry_url = (registry_info.get("url") or "").split("://")[-1]
             _reg_user = _reg_user or registry_info.get("username", "")

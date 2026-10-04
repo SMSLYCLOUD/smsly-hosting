@@ -174,7 +174,19 @@ class ProjectViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        project = serializer.save(owner=self.request.user)
+        # Every project needs its own ScopedRegistry row so manual
+        # (non-ecosystem) deploys inherit project-scoped credentials
+        # at push/pull/login instead of sharing the platform pair.
+        # Best-effort: a credential failure must never block creation.
+        try:
+            from apps.deployments.services.registry_credentials import (
+                ensure_project_registry_credentials,
+            )
+            ensure_project_registry_credentials(project)
+        except Exception as exc:
+            logger.debug("Project registry ensure skipped for %s: %s",
+                         getattr(project, "id", "?"), exc)
 
     # ── Nested: services in project ──────────────────────────────
 

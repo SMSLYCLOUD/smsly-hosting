@@ -113,12 +113,17 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
 
         # Seamless: If no server is assigned, default to the primary (local)
         # controller so user workloads land on the local server by default.
+        # Fail-closed: an omitted server must never land on a random remote
+        # node. Prefer the primary, then any ONLINE primary record, then
+        # auto-register the local controller. If all of that fails, leave
+        # the service unassigned (local controller) instead of picking a
+        # random ONLINE server that may be remote.
         if not server:
             server = ManagedServer.get_primary()
             if not server:
                 server = ManagedServer.objects.filter(
-                    status='ONLINE'
-                ).order_by('?').first()
+                    status='ONLINE', is_primary=True
+                ).first()
             if not server:
                 # No ManagedServer exists at all — auto-register the local
                 # controller so future service creations find it.
@@ -148,6 +153,23 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
                 apply_project_membership(service)
             except Exception as exc:
                 logger.debug("Project inheritance skipped for %s: %s",
+                             service.name, exc)
+            # Manual (/new) services previously bypassed per-project
+            # registry provisioning (only ecosystem tasks called it),
+            # so pushes fell back to the shared platform credential.
+            # Best-effort and scoped to this service's own project only.
+            try:
+                from ...services.registry_credentials import (
+                    ensure_project_registry_credentials,
+                )
+                if service.project is not None:
+                    ensure_project_registry_credentials(service.project)
+                else:
+                    service.refresh_from_db(fields=["project"])
+                    if service.project is not None:
+                        ensure_project_registry_credentials(service.project)
+            except Exception as exc:
+                logger.debug("Project registry ensure skipped for %s: %s",
                              service.name, exc)
 
         # Setup provider webhook only for direct user actions.
@@ -180,11 +202,14 @@ class ServiceViewSet(DeployActionsMixin, TrafficSplitMixin, DomainActionsMixin, 
         if 'server' in serializer.validated_data:
             server = serializer.validated_data.get('server')
             if not server:
+                # Fail-closed (same as perform_create): clearing the server
+                # re-homes to local. Never fall back to a random ONLINE
+                # server that may be remote.
                 server = ManagedServer.get_primary()
                 if not server:
                     server = ManagedServer.objects.filter(
-                        status='ONLINE'
-                    ).order_by('?').first()
+                        status='ONLINE', is_primary=True
+                    ).first()
                 if server:
                     logger.info("Auto-assigning server %s to service %s during update", server.name, serializer.instance.name)
             ServerGuard.assert_user_workload_allowed(server)

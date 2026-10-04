@@ -54,10 +54,17 @@ def _get_node_metadata(obj) -> dict:
 
     active_target_type = obj.active_target_type
     active_host = obj.active_host_ip
+    # Display-only fail-closed: a single remote-targeted deployment row
+    # must not move the displayed home node on its own. Only a completed
+    # (ACTIVE) remote deploy may be adopted here — a merely QUEUED remote
+    # run (e.g. one leg of a multi-deploy) leaves the display on the
+    # service's assigned home. Persisted remote active state is rendered
+    # by the active_target_type branch below regardless.
     if (
         latest_deploy
         and latest_deploy.target_server
         and not getattr(latest_deploy, 'target_is_local', False)
+        and latest_deploy.status == Deployment.Status.ACTIVE
         and (
             not server
             or server.is_primary

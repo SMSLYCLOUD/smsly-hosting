@@ -64,6 +64,10 @@ class ResolveRequestedDeployTargetTests(TestCase):
         self.assertIsNone(result["target_server"])
 
     def test_omitted_target_with_remote_assignment_stays_remote(self):
+        # Fail-closed for NEW services: an omitted target on a remote-
+        # assigned service with NO deployment history resolves local
+        # (the assignment may be poisoned by the old random-ONLINE
+        # fallback). Explicit remote stays available via target_server_id.
         remote = ManagedServer.objects.create(
             owner=self.user,
             name="Worker EU",
@@ -72,6 +76,33 @@ class ResolveRequestedDeployTargetTests(TestCase):
         )
         self.service.server = remote
         self.service.save(update_fields=["server"])
+
+        result = _resolve_requested_deploy_target(_request(), self.service)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["target_is_local"])
+        self.assertIsNone(result["target_server"])
+        self.assertIsNone(result["effective_server"])
+
+    def test_omitted_target_with_remote_history_stays_remote(self):
+        # Legacy inherit preserved: a service that already deployed
+        # remotely keeps resolving remote on omitted targets.
+        from apps.deployments.models import Deployment
+        remote = ManagedServer.objects.create(
+            owner=self.user,
+            name="Worker EU",
+            host="198.51.100.7",
+            is_primary=False,
+        )
+        self.service.server = remote
+        self.service.save(update_fields=["server"])
+        Deployment.objects.create(
+            service=self.service,
+            target_server=remote,
+            target_is_local=False,
+            status=Deployment.Status.ACTIVE,
+            commit_hash="abc1234",
+        )
 
         result = _resolve_requested_deploy_target(_request(), self.service)
 

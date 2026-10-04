@@ -19,7 +19,9 @@ class RegistryMixin:
     def _ensure_registry_running(self):
         """Ensure the internal registry container is running (if using internal registry).
 
-        Only applies when CONTAINER_REGISTRY_URL points to the platform's
+        The registry host is resolved from the deployment's project scope
+        (Project -> Team -> Organization -> PlatformConfig fallback).
+        Only applies when the effective URL points to the platform's
         own registry (registry:5000, 127.0.0.1:5000, localhost:5000).
         For external registries this is a no-op.
         """
@@ -27,7 +29,8 @@ class RegistryMixin:
 
         registry_url = None
         try:
-            scope_obj = self.service.project or self.service.owner
+            # Project-only: owner is a User, not a scope entity.
+            scope_obj = getattr(self.service, "project", None)
             registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
             registry_url = (registry_info.get("url") or "").split("://")[-1]
         except Exception as exc:

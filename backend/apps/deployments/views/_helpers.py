@@ -767,11 +767,39 @@ def _resolve_requested_deploy_target(request, service: Service):
         # When no server is assigned to the service, fall back to local
         # deployment so the provider resolution picks LOCAL and Caddy
         # routing is set up correctly.
+        if effective_server is None:
+            return {
+                "ok": True,
+                "specified": False,
+                "target_server": None,
+                "target_is_local": True,
+                "effective_server": None,
+            }
+        # Fail-closed for NEW services: an omitted target on a service
+        # with no deployment history must resolve local, even when
+        # service.server points at a remote node (e.g. poisoned by the old
+        # random-ONLINE create fallback). Remote execution stays fully
+        # available via an explicit target_server_id (single deploy) or
+        # server_ids (multi-deploy).
+        try:
+            has_deployments = service.deployments.exists()
+        except Exception:
+            # History undeterminable (stub/mock caller) — preserve legacy
+            # inherit behavior rather than guessing.
+            has_deployments = True
+        if not has_deployments:
+            return {
+                "ok": True,
+                "specified": False,
+                "target_server": None,
+                "target_is_local": True,
+                "effective_server": None,
+            }
         return {
             "ok": True,
             "specified": False,
             "target_server": None,
-            "target_is_local": effective_server is None,
+            "target_is_local": False,
             "effective_server": effective_server,
         }
 

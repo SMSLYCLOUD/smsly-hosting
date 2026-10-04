@@ -125,6 +125,18 @@ def move_service_to_project(service, target, actor_username="system") -> dict:
     except Exception as exc:
         logger.debug("Addon project relink skipped for %s: %s",
                      getattr(service, "name", "?"), exc)
+    # Adoption/move previously carried the Service FK but left the
+    # ScopedRegistry/htpasswd namespace behind, so the moved service
+    # kept pushing with the source project's (or platform) credential.
+    # Ensure the TARGET project has its own row (best-effort).
+    try:
+        from apps.deployments.services.registry_credentials import (
+            ensure_project_registry_credentials,
+        )
+        ensure_project_registry_credentials(target)
+    except Exception as exc:
+        logger.debug("Target project registry ensure skipped for %s: %s",
+                     getattr(target, "id", "?"), exc)
     membership = apply_project_membership(service, target)
     try:
         AuditLog(

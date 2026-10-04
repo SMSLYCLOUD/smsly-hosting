@@ -18,6 +18,33 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
 # ---------------------------------------------------------------------------
+# Token scopes
+# ---------------------------------------------------------------------------
+# Permission scopes for MCP/CLI API tokens. ``read`` covers all read-only
+# tools (list/search/get/logs); ``write`` covers mutating tools (env var
+# changes, rebuilds, provisioning, deletes). An empty scope list means
+# legacy full access (tokens created before scopes existed).
+VALID_SCOPES = frozenset({"read", "write"})
+
+
+def validate_scopes(scopes) -> list:
+    """Normalize an optional scopes value to a list of valid scope strings."""
+    if scopes is None:
+        return []
+    if isinstance(scopes, str) or not isinstance(scopes, (list, tuple)):
+        raise ValueError("scopes must be a list of scope strings, e.g. ['read'].")
+    cleaned = []
+    for scope in scopes:
+        if not isinstance(scope, str) or scope not in VALID_SCOPES:
+            raise ValueError(
+                f"Invalid scope {scope!r}. Valid scopes: {sorted(VALID_SCOPES)}."
+            )
+        if scope not in cleaned:
+            cleaned.append(scope)
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
 # Model
 # ---------------------------------------------------------------------------
 
@@ -52,6 +79,11 @@ class APIToken(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    scopes = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Permission scopes, e.g. ['read'] or ['read', 'write']. Empty = full access (legacy).",
+    )
 
     class Meta:
         db_table = 'deployments_apitoken'
@@ -64,12 +96,15 @@ class APIToken(models.Model):
     # ---- Factory ----
 
     @classmethod
-    def create_token(cls, user, name: str = "CLI Token"):
+    def create_token(cls, user, name: str = "CLI Token", scopes=None):
         """
         Generate a new token. Returns (APIToken instance, raw_token).
 
         The raw token is prefixed with "smsly_" for easy identification.
+        ``scopes`` is an optional list like ["read"] or ["read", "write"];
+        None/empty means legacy full access.
         """
+        validated_scopes = validate_scopes(scopes)
         raw = f"smsly_{secrets.token_hex(24)}"  # 48 hex chars + prefix = 54 chars
         token_hash = hashlib.sha256(raw.encode()).hexdigest()
         prefix = raw[:12]
@@ -79,8 +114,16 @@ class APIToken(models.Model):
             name=name,
             prefix=prefix,
             token_hash=token_hash,
+            scopes=validated_scopes,
         )
         return instance, raw
+
+    def has_scope(self, scope: str) -> bool:
+        """True if this token may perform an action requiring ``scope``."""
+        current = getattr(self, "scopes", None) or []
+        if not current:
+            return True  # legacy full access
+        return scope in current
 
     @classmethod
     def verify(cls, raw_token: str):

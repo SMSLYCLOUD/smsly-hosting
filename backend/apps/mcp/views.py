@@ -22,6 +22,56 @@ _TYPE_MAP = {
 # Internal plumbing params every tool accepts — never exposed to callers.
 _HIDDEN_PARAMS = {"user_id", "user_email"}
 
+# Tools that mutate state: env var changes, rebuilds, provisioning, deletes.
+# Everything else known is read-only (list/search/get/logs). Unknown tool
+# names default to "write" (fail closed for read-only tokens).
+_WRITE_TOOLS = frozenset({
+    "set_service_env_var",
+    "delete_service_env_var",
+    "trigger_service_rebuild",
+    "bulk_import_env_vars",
+    "provision_service_addon",
+    "deploy_from_local_archive",
+    "cancel_deployment",
+    "retry_deployment",
+})
+
+_READ_TOOLS = frozenset({
+    "list_services",
+    "get_deployment_status",
+    "get_service_logs",
+    "get_service_env_vars",
+    "get_error_diagnostics",
+    "list_projects",
+    "get_project_services",
+    "list_service_addons",
+    "get_exhaustive_deployment_diagnostics",
+    "list_managed_servers",
+    "get_server_health",
+    "search_services",
+    "get_service_details",
+    "list_service_deployments",
+    "get_failed_deployments",
+    "list_all_addons",
+    "get_addon_details",
+    "get_service_domains",
+})
+
+
+def _required_scope(tool_name: str) -> str:
+    """Scope a token needs to call ``tool_name``: "read" or "write"."""
+    if tool_name in _WRITE_TOOLS:
+        return "write"
+    if tool_name in _READ_TOOLS:
+        return "read"
+    return "write"
+
+
+def _token_scopes(token) -> list:
+    """Scope list for an auth token; empty/missing means legacy full access."""
+    scopes = getattr(token, "scopes", None) or []
+    return [s for s in scopes if isinstance(s, str)]
+
 
 def _discover_tools() -> dict:
     """Public tool functions in apps.mcp.tools, keyed by name.
@@ -158,6 +208,7 @@ class McpTokenListView(APIView):
                 "id": str(t.id),
                 "name": t.name,
                 "prefix": t.prefix,
+                "scopes": list(getattr(t, "scopes", None) or []),
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
             }
@@ -172,12 +223,20 @@ class McpTokenListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         name = str(request.data.get("name") or "").strip()[:100] or "MCP Token"
-        instance, raw = APIToken.create_token(request.user, name)
+        raw_scopes = request.data.get("scopes", None)
+        try:
+            instance, raw = APIToken.create_token(request.user, name, scopes=raw_scopes)
+        except ValueError as exc:
+            return Response(
+                {"error": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response(
             {
                 "id": str(instance.id),
                 "name": instance.name,
                 "prefix": instance.prefix,
+                "scopes": list(getattr(instance, "scopes", None) or []),
                 "token": raw,
                 "warning": "Copy now — the raw token is never shown again.",
             },
@@ -221,6 +280,23 @@ class McpToolCallView(APIView):
                 {"ok": False, "error": f"Unknown tool: {name}."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        from apps.core.models.api_token import APIToken
+        auth = getattr(request, "auth", None)
+        if isinstance(auth, APIToken):
+            token_scopes = _token_scopes(auth)
+            if token_scopes:
+                required = _required_scope(name)
+                if required not in token_scopes:
+                    return Response(
+                        {
+                            "ok": False,
+                            "error": (
+                                f"Token lacks required scope '{required}' for tool '{name}'. "
+                                f"Token scopes: {token_scopes}."
+                            ),
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
         args = request.data.get("args") or {}
         if not isinstance(args, dict):
             return Response(

@@ -12,7 +12,7 @@ import {
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { mcpApi, McpStatus, McpTool, McpToken } from '@/lib/api';
+import { mcpApi, api, McpStatus, McpTool, McpToken } from '@/lib/api';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -101,6 +101,14 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   );
 }
 
+type McpTokenWithScopes = McpToken & { scopes?: string[] | null };
+
+function scopeLabel(scopes?: string[] | null): string {
+  if (!scopes || scopes.length === 0) return 'full access (legacy)';
+  if (scopes.includes('write')) return 'read + write';
+  return 'read-only';
+}
+
 export default function MCPPage() {
   const { toast } = useToast();
   const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
@@ -110,9 +118,10 @@ export default function MCPPage() {
   const [runningTool, setRunningTool] = useState<string | null>(null);
   const [toolArgs, setToolArgs] = useState<Record<string, string>>({});
   const [toolResult, setToolResult] = useState<Record<string, { ok: boolean; text: string }>>({});
-  const [tokens, setTokens] = useState<McpToken[] | null>(null);
+  const [tokens, setTokens] = useState<McpTokenWithScopes[] | null>(null);
   const [newToken, setNewToken] = useState<{ name: string; token: string } | null>(null);
   const [tokenBusy, setTokenBusy] = useState<string | null>(null);
+  const [tokenScope, setTokenScope] = useState<'read' | 'full'>('full');
 
   const refreshStatus = useCallback(async (silent = false) => {
     if (!silent) setStatusLoading(true);
@@ -147,8 +156,12 @@ export default function MCPPage() {
     setTokenBusy('create');
     setNewToken(null);
     try {
-      const res = await mcpApi.createToken(`MCP ${new Date().toISOString().slice(0, 10)}`);
-      setNewToken({ name: res.name, token: res.token });
+      const scopes = tokenScope === 'read' ? ['read'] : ['read', 'write'];
+      const res = await api.post('/mcp/tokens/', {
+        name: `MCP ${new Date().toISOString().slice(0, 10)}`,
+        scopes,
+      });
+      setNewToken({ name: res.data.name, token: res.data.token });
       await refreshTokens();
       toast({ title: 'Token created — copy it now, it is never shown again' });
     } catch (err: any) {
@@ -413,11 +426,20 @@ export default function MCPPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" onClick={generateToken} disabled={tokenBusy === 'create'}>
                       {tokenBusy === 'create' ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <KeyRound className="w-3.5 h-3.5 mr-1" />}
                       Generate token
                     </Button>
+                    <select
+                      value={tokenScope}
+                      onChange={(e) => setTokenScope(e.target.value as 'read' | 'full')}
+                      className="text-xs bg-background border border-border rounded px-2 py-1.5"
+                      title="Permission scope for the new token"
+                    >
+                      <option value="full">Read + write</option>
+                      <option value="read">Read-only</option>
+                    </select>
                     <span className="text-xs text-muted-foreground">Use as <code className="bg-muted px-1 rounded">Authorization: Bearer smsly_…</code></span>
                   </div>
                   {newToken && (
@@ -439,6 +461,7 @@ export default function MCPPage() {
                             <p className="text-[11px] text-muted-foreground">
                               created {t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'}
                               {t.last_used_at ? ` · used ${new Date(t.last_used_at).toLocaleDateString()}` : ' · never used'}
+                              {` · ${scopeLabel(t.scopes)}`}
                             </p>
                           </div>
                           <Button variant="ghost" size="sm" onClick={() => revokeToken(t.id)} disabled={tokenBusy === t.id}>

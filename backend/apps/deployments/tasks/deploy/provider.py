@@ -9,22 +9,34 @@ from apps.deployments.models import Deployment, Service
 def _resolve_provider_for_service(service: Service, prefer_local: bool = False) -> CloudProvider | None:
     """
     Strict one-to-one provider resolution. No silent fallbacks.
-    - If service has a provider, it MUST be active and we return it.
-    - If no provider but prefer_local, return LOCAL if active.
+    - If prefer_local, the deployment must run on the local controller:
+      return the attached provider only when it is itself an active LOCAL
+      provider, else the active LOCAL provider, else fail explicitly.
+      A stored REMOTE provider must never silently serve a local deploy.
+    - If service has a provider (and local was not requested), it MUST be
+      active and we return it.
+    - If no provider and local was not requested, prefer REMOTE, then LOCAL.
     - Fail explicitly if intended target unavailable.
     """
-    if service.provider:
-        if service.provider.is_active:
-            return service.provider
-        return None
-
     if prefer_local:
+        attached = getattr(service, 'provider', None)
+        if (
+            attached is not None
+            and getattr(attached, 'is_active', False)
+            and getattr(attached, 'provider_type', None) == CloudProvider.ProviderType.LOCAL
+        ):
+            return attached
         local = CloudProvider.objects.filter(
             provider_type=CloudProvider.ProviderType.LOCAL,
             is_active=True
         ).first()
         if local:
             return local
+        return None
+
+    if service.provider:
+        if service.provider.is_active:
+            return service.provider
         return None
 
     remote = CloudProvider.objects.filter(

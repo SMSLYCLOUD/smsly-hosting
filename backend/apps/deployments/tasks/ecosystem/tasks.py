@@ -1411,6 +1411,16 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                         )
                         _adopt_svc.project = project
                         _adopt_svc.save(update_fields=["project", "updated_at"])
+                        # Adoption moved the Service FK but left the
+                        # ScopedRegistry/htpasswd namespace behind.
+                        # Ensure the target project owns a credential row.
+                        try:
+                            from apps.deployments.services.registry_credentials import (
+                                ensure_project_registry_credentials,
+                            )
+                            ensure_project_registry_credentials(project)
+                        except Exception:
+                            pass
                 except Exception as exc:
                     logger.debug(
                         "Cross-project ecosystem service adoption failed: %s", exc,

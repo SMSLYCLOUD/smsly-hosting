@@ -43,17 +43,64 @@ def _master_registry_setup_commands() -> list[str]:
     return commands
 
 
-def _registry_credential_list(server: ManagedServer) -> list:
+def _scoped_project_tuples(project, node_url: str = "") -> list[tuple]:
+    """(url, username, password) tuples for ONE project's effective scope.
+
+    Fail-closed: returns [] when the project has no usable credential.
+    Only the given project's own chain is consulted — never another
+    project's row. Internal-scoped credentials are mapped to the
+    node-routable URL when one is known so a remote daemon can reach
+    the same registry it was pushed to.
+    """
+    try:
+        from apps.deployments.models.registry_scope import ScopedRegistry
+        info = ScopedRegistry.resolve_registry_credentials(project)
+        url = (info.get("url") or "").strip().split("://")[-1].rstrip("/")
+        user = (info.get("username") or "").strip()
+        pwd = (info.get("password") or "").strip()
+        if not url or not user or not pwd:
+            return []
+        from apps.deployments.services.registry_routing import (
+            internal_registry_hosts,
+            master_registry_node_url,
+        )
+        try:
+            internal_hosts = set(internal_registry_hosts())
+        except Exception:
+            internal_hosts = set()
+        resolved_node = (node_url or "").strip()
+        if not resolved_node:
+            try:
+                resolved_node = (master_registry_node_url() or "").strip()
+            except Exception:
+                resolved_node = ""
+        tuples = [(url, user, pwd)]
+        if url in internal_hosts and resolved_node and resolved_node != url:
+            tuples.append((resolved_node, user, pwd))
+        return tuples
+    except Exception:
+        return []
+
+
+def _registry_credential_list(server: ManagedServer, project=None) -> list:
     """All (url, username, password) tuples the node must log into.
 
-    Master's registry first, then active scoped registries. Single source
+    Master's registry first, then active scoped registries, then — when
+    resolvable — the given deployment project's own scoped credential
+    (plus every project currently assigned to this server, so a node
+    that hosts project-scoped images can pull them). Single source
     for both the legacy command-string builder below and the stdin-based
     login used by provisioning (which keeps secrets out of argv/ps).
+
+    Fail-closed: any lookup failure degrades to the master entry only.
+    Project credentials are always per-project (never enumerated
+    platform-wide except for projects assigned to THIS server).
     """
     creds = []
+    node_url = ""
     try:
         from apps.deployments.services.registry_routing import master_registry_node_url
-        node_url = master_registry_node_url()
+        node_url = master_registry_node_url() or ""
         if node_url:
             from apps.deployments.models.core import PlatformConfig
             user = (PlatformConfig.get_config_value("registry_user") or "smsly-registry").strip()
@@ -64,11 +111,50 @@ def _registry_credential_list(server: ManagedServer) -> list:
         pass
     try:
         for reg in server.registry_access.filter(is_active=True).select_related("content_type"):
-            url = (reg.registry_url or "").strip()
+            reg_url = (getattr(reg, "registry_url", "") or "").strip()
             user = (reg.username or "").strip()
             pwd = (reg.password or "").strip()
-            if url and user and pwd:
-                creds.append((url, user, pwd))
+            if user and pwd:
+                if reg_url:
+                    creds.append((reg_url, user, pwd))
+                elif getattr(reg, "is_internal", False) and node_url:
+                    # Per-project internal row (registry_url=""): same
+                    # registry as master, project-scoped htpasswd user.
+                    # The node reaches it via the node-routable address.
+                    creds.append((node_url, user, pwd))
+    except Exception:
+        pass
+    # Per-project credentials for pulls of project-scoped images.
+    # Explicit deployment project first (exact need-to-know), then every
+    # project with services pinned to this server (so heals without a
+    # deployment context still cover hosted projects).
+    try:
+        _projects = []
+        if project is not None:
+            _projects.append(project)
+        try:
+            from apps.deployments.models import Service as _Svc
+            _sids = (
+                _Svc.objects.filter(server=server)
+                .exclude(project__isnull=True)
+                .values_list("project_id", flat=True)
+                .distinct()
+            )
+            _pids = [p for p in _sids if p is not None]
+            if _pids:
+                from apps.deployments.models.core import Project as _Project
+                for _p in _Project.objects.filter(id__in=_pids):
+                    if project is not None and str(_p.id) == str(
+                        getattr(project, "id", project)
+                    ):
+                        continue
+                    _projects.append(_p)
+        except Exception:
+            pass
+        for _proj in _projects:
+            for tup in _scoped_project_tuples(_proj, node_url=node_url):
+                if tup not in creds:
+                    creds.append(tup)
     except Exception:
         pass
     return creds
@@ -106,13 +192,18 @@ def _master_registry_ca_pem() -> str:
         return ""
 
 
-def ensure_node_registry(server: ManagedServer) -> dict:
+def ensure_node_registry(server: ManagedServer, project=None) -> dict:
     """Self-heal a node's trust + login for the master registry.
 
     Repairs the two failure modes seen on self-bootstrapped nodes
     (2026-10-02: empty ``certs.d`` dir, never logged in) and on
     password rotations (stale login). Safe to run often: when the CA
     is present the only remote work is an idempotent ``docker login``.
+
+    *project* (optional) adds that deployment project's own scoped
+    credential to the login set so a remote node can pull
+    project-scoped images. When omitted, projects assigned to this
+    server are still covered via _registry_credential_list.
 
     Returns {'ok': bool, 'repaired': [steps], 'error': str}.
     """
@@ -155,7 +246,7 @@ def ensure_node_registry(server: ManagedServer) -> dict:
                     result["error"] = "CA reinstall failed"
                     return result
                 result["repaired"].append("registry-ca")
-            if _docker_login_all(ssh, server):
+            if _docker_login_all(ssh, server, project=project):
                 result["ok"] = True
                 if "registry-ca" in result["repaired"]:
                     result["repaired"].append("registry-login")
@@ -170,19 +261,21 @@ def ensure_node_registry(server: ManagedServer) -> dict:
         _logger.debug("ensure_node_registry failed for %s: %s",
                       getattr(server, "name", "?"), exc)
     return result
-def _docker_login_all(ssh, server: ManagedServer) -> bool:
+def _docker_login_all(ssh, server: ManagedServer, project=None) -> bool:
     """docker login on the node without leaking passwords.
 
     The SSH wrapper returns ``(out, err, code)`` tuples (no stdin
     channel), so the password travels inside a base64 pipe evaluated
     on the NODE. Logs only outcomes, never secrets.
-    Returns True when every registry login succeeded, False otherwise.
+    *project* scopes an additional per-project login for pulls of
+    project-scoped images. Returns True when every registry login
+    succeeded, False otherwise.
     """
     import base64 as _b64
     import logging as _logging
     _logger = _logging.getLogger(__name__)
     all_ok = True
-    for url, user, pwd in _registry_credential_list(server):
+    for url, user, pwd in _registry_credential_list(server, project=project):
         try:
             import shlex as _shlex
             blob = _b64.b64encode(pwd.encode("utf-8")).decode("ascii")
@@ -205,7 +298,7 @@ def _docker_login_all(ssh, server: ManagedServer) -> bool:
     return all_ok
 
 
-def _registry_login_commands(server: ManagedServer) -> str:
+def _registry_login_commands(server: ManagedServer, project=None) -> str:
     """Legacy command-string builder (kept for compatibility).
 
     Prefer _docker_login_all for provisioning: this variant embeds
@@ -215,7 +308,7 @@ def _registry_login_commands(server: ManagedServer) -> str:
     commands = []
     commands.extend(_master_registry_setup_commands())
 
-    for url, user, pwd in _registry_credential_list(server):
+    for url, user, pwd in _registry_credential_list(server, project=project):
         # Skip the master entry already covered above (same URL).
         safe_user = shlex.quote(user)
         safe_pwd = shlex.quote(pwd)
