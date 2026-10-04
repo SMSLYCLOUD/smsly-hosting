@@ -34,6 +34,12 @@ RULE_TAG_PREFIX = "smsly-egress-"
 # tag already exists without an ESTABLISHED rule — still converge.
 MESH_REPLY_TAG = "smsly-mesh-reply"
 
+# WireGuard mesh CIDR (container-initiated addon/DB traffic).
+MESH_CIDR = "10.100.0.0/24"
+
+# Tag for tenant→mesh egress (see ensure_tenant_mesh_egress).
+MESH_TENANT_EGRESS_TAG = "smsly-mesh-tenant-egress"
+
 # Tag for backend→mesh egress (see ensure_backend_mesh_egress).
 MESH_EGRESS_TAG = "smsly-mesh-egress"
 
@@ -660,6 +666,18 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
         "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
         "-p", "udp", "--dport", "53", "-j", "RETURN",
     ])
+
+    # 5. Tenant mesh egress (unrestricted bridges only). Addon/DB traffic
+    # forwarded through the WireGuard mesh originates from tenant
+    # bridges; without this the terminal DROP eats container-initiated
+    # mesh connections while host probes succeed ("works from shell,
+    # timeouts from app", 2026-10-04 marketer DB). Narrowly scoped to
+    # the mesh CIDR; restricted bridges keep exact operator semantics.
+    if is_unrestricted:
+        _run([
+            "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+            "-d", MESH_CIDR, "-j", "RETURN",
+        ])
 
 
 def ensure_mesh_reply_rule(bridge_iface: str) -> bool:
