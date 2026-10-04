@@ -303,16 +303,37 @@ def _registry_cache_settings(image_name, build_args):
     Returns ``(cache_from, build_args)``. ``cache_from`` points at the
     previous image only when the name is registry-qualified (bare
     names make BuildKit resolve docker.io and fail with
-    insufficient_scope). In that case ``BUILDKIT_INLINE_CACHE=1`` is
-    also defaulted in so the pushed image carries layer metadata to
-    rebuild from — without it ``cache_from`` is dead weight and every
-    redeploy recompiles all layers once the local BuildKit cache is
-    pruned. An explicit caller value always wins (setdefault).
+    insufficient_scope) AND the ref actually exists — a dangling
+    ``--cache-from`` for a never-pushed tag kills the Solve on the
+    first cache op (instant ~7s failure, same fileOp hash across
+    repos). Existence is probed via ``docker manifest inspect``
+    (login already happened upstream); any probe failure drops the
+    cache ref and the build proceeds uncached (slower, never fatal).
+    In that case ``BUILDKIT_INLINE_CACHE=1`` is also defaulted in so
+    the pushed image carries layer metadata to rebuild from — without
+    it ``cache_from`` is dead weight and every redeploy recompiles
+    all layers once the local BuildKit cache is pruned. An explicit
+    caller value always wins (setdefault).
     """
     name = image_name or ""
     registry_host = name.split("/")[0] if "/" in name else ""
     use_cache = bool(registry_host) and ("." in registry_host or ":" in registry_host)
     if not use_cache:
+        return [], build_args
+    try:
+        import subprocess as _sp
+        probe = _sp.run(
+            ["docker", "manifest", "inspect", name],
+            capture_output=True, text=True, timeout=30,
+        )
+        if probe.returncode != 0:
+            logger.debug(
+                "cache_from skipped: registry ref %s not present (%s)",
+                name, (probe.stderr or "").strip()[:120],
+            )
+            return [], build_args
+    except Exception as exc:
+        logger.debug("cache_from probe failed for %s: %s", name, exc)
         return [], build_args
     merged = dict(build_args or {})
     merged.setdefault("BUILDKIT_INLINE_CACHE", "1")
