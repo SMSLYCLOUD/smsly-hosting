@@ -379,7 +379,7 @@ function ProjectDetailContent() {
             )}
             <Button
               size="sm"
-              onClick={() => router.push('/new')}
+              onClick={() => router.push(`/new?project=${projectId}`)}
               className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-lg shadow-emerald-500/20"
             >
               <Plus className="w-4 h-4 mr-1" /> New Service
@@ -438,7 +438,7 @@ function ProjectDetailContent() {
                     <Plus className="w-4 h-4 mr-1" /> Add Existing
                   </Button>
                   <Button
-                    onClick={() => router.push('/new')}
+                    onClick={() => router.push(`/new?project=${projectId}`)}
                     className="bg-emerald-600 hover:bg-emerald-700 text-white"
                   >
                     <Plus className="w-4 h-4 mr-1" /> New Service

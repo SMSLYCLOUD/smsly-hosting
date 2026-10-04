@@ -2954,6 +2954,17 @@ export const ecosystemApi = {
 
   restorePlanSnapshots: (planId: string, data: { confirm: true; service_ids?: string[]; redeploy?: boolean }) =>
     api.post(`/cloud/ecosystem/plans/${planId}/restore-snapshots/`, data).then(r => r.data),
+
+  // ── Post-deploy Add-Service (rules-aware shared vs dedicated) ──
+  getPlanAddons: (planId: string) =>
+    api.get(`/cloud/ecosystem/plans/${planId}/addons/`).then(r => r.data),
+
+  addServiceToPlan: (data: {
+    plan_id: string; name: string; repo_url: string; branch?: string;
+    port: number; stack?: string; directory?: string;
+    trust_domain?: string; trigger_deploy?: boolean;
+    addons?: { type: string; mode?: 'shared' | 'dedicated' }[];
+  }) => api.post('/cloud/ecosystem/add-service/', data).then(r => r.data),
 };
 
 // ─── Database Replicas API ───────────────────────────────────────────────────

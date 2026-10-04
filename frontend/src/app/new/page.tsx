@@ -151,6 +151,24 @@ export default function NewServicePage() {
     registryCredentialsApi.list().then(setRegistryCredentials).catch(() => {})
   }, [])
 
+  // Scoped entry: /new?project=<id> from a project page pre-selects the
+  // project so the deploy inherits its scoped network, scoped registry
+  // and project *-shared addon fallbacks. Client-only read (no Suspense
+  // boundary needed). Unknown ids are ignored (manual dropdown wins).
+  const [scopedProject, setScopedProject] = React.useState(false)
+  React.useEffect(() => {
+    try {
+      const pid = new URLSearchParams(window.location.search).get('project')
+      if (pid) {
+        setSelectedProject((cur) => {
+          if (cur && cur !== '' && cur !== 'none') return cur
+          return pid
+        })
+        setScopedProject(true)
+      }
+    } catch { /* non-browser or malformed URL: manual selection */ }
+  }, [])
+
   // Fetch branches from Git provider when a repo URL is entered
   React.useEffect(() => {
     if (!repoUrl || sourceType !== "git") {
@@ -947,7 +965,7 @@ export default function NewServicePage() {
                   {/* Project assignment */}
                   <div className="grid gap-2">
                     <Label className="flex items-center gap-1.5">Project <span className="text-xs text-muted-foreground">(optional)</span></Label>
-                    <Select value={selectedProject} onValueChange={setSelectedProject}>
+                    <Select value={selectedProject} onValueChange={(v) => { setSelectedProject(v); setScopedProject(false) }}>
                       <SelectTrigger>
                         <SelectValue placeholder="No project (ungrouped)" />
                       </SelectTrigger>
@@ -960,6 +978,17 @@ export default function NewServicePage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {selectedProject && selectedProject !== 'none' && (() => {
+                      const sp = projectsList.find(p => p.id === selectedProject)
+                      return (
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                          {scopedProject ? 'Scoped from project page — ' : ''}Deploys into
+                          <span className="font-semibold text-foreground"> {sp ? sp.name : 'project'}</span>:
+                          isolated network, project scoped registry, and
+                          <span className="font-mono"> *-shared</span> addon fallbacks apply.
+                        </p>
+                      )
+                    })()}
                   </div>
 
                   {/* Custom registry (push to) */}

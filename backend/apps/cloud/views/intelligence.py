@@ -1056,6 +1056,73 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             plan_record.plan = _plan_json
             plan_record.save(update_fields=['services_created', 'plan', 'updated_at'])
 
+        # ── Addon handling: shared-vs-dedicated per plan rules ──
+        # Honors use_shared_addons + shared_addon_config unless the caller
+        # overrides per type. Shared reuses the project's `{type}-shared`
+        # ACTIVE addon (provisioning one on the new service when none
+        # exists); dedicated provisions a personal addon. Deploy-time env
+        # fallback injects the URLs, so attach here is row + provision
+        # queue only. Outside the transaction like the deploy trigger.
+        addons_effective: list = []
+        addon_warnings: list = []
+        requested_addons = request.data.get('addons') or []
+        if isinstance(requested_addons, list) and requested_addons:
+            from apps.addons.tasks.crud import provision_addon_task
+            from apps.deployments.models.addons import Addon as _AddonModel
+            _rule_cfg = plan_record.shared_addon_config or {}
+            _rule_default = bool(plan_record.use_shared_addons)
+            _seen_types: set = set()
+            _valid_types = set(_AddonModel.Type.values)
+            for entry in requested_addons:
+                t = str((entry or {}).get('type', '') or '').strip().upper()
+                if not t or t in _seen_types:
+                    continue
+                if t not in _valid_types:
+                    addon_warnings.append(f"Ignoring unsupported addon type {t!r}.")
+                    continue
+                _seen_types.add(t)
+                req_mode = str((entry or {}).get('mode', '') or '').strip().lower()
+                _cfg = _rule_cfg.get(t)
+                rule_shared = bool(_cfg.get('shared', _rule_default)) if isinstance(_cfg, dict) else _rule_default
+                if req_mode in ('shared', 'dedicated'):
+                    use_shared = req_mode == 'shared'
+                else:
+                    use_shared = rule_shared
+                try:
+                    if use_shared:
+                        existing = _AddonModel.objects.filter(
+                            service__owner=request.user,
+                            service__project=project,
+                            addon_type=t,
+                            status=_AddonModel.Status.ACTIVE,
+                            name=f"{t.lower()}-shared",
+                        ).first()
+                        if existing:
+                            addons_effective.append({
+                                'type': t, 'mode': 'shared',
+                                'addon_id': str(existing.id),
+                                'reused': True,
+                                'rule_shared': rule_shared,
+                            })
+                            continue
+                        row = _AddonModel.objects.create(
+                            service=svc, name=f"{t.lower()}-shared",
+                            addon_type=t, status=_AddonModel.Status.PROVISIONING,
+                        )
+                    else:
+                        row = _AddonModel.objects.create(
+                            service=svc, name=f"{service_name}-{t.lower()}",
+                            addon_type=t, status=_AddonModel.Status.PROVISIONING,
+                        )
+                    provision_addon_task.delay(addon_id=str(row.id))
+                    addons_effective.append({
+                        'type': t, 'mode': 'shared' if use_shared else 'dedicated',
+                        'addon_id': str(row.id), 'reused': False,
+                        'rule_shared': rule_shared,
+                    })
+                except Exception as exc:
+                    addon_warnings.append(f"Could not provision {t}: {exc}"[:200])
+
         # Optionally trigger deployment (outside the transaction so a broker
         # outage doesn't roll back the created rows).
         _deploy_warning = None
@@ -1216,7 +1283,60 @@ MIGRATION_PHASE=phase4
         }
         if _deploy_warning:
             _resp['warning'] = _deploy_warning
+        if addons_effective:
+            _resp['addons_effective'] = addons_effective
+        if addon_warnings:
+            _resp['addon_warnings'] = addon_warnings
         return Response(_resp)
+
+    @action(detail=False, methods=['get'])
+    def plan_addons(self, request, plan_id=None):
+        """Addon rules + existing shared addons for the Add-Service form.
+
+        Returns the plan's sharing rules (use_shared_addons,
+        shared_addon_config with per-type effective defaults) and the
+        project's current `{type}-shared` ACTIVE addons, so the UI can
+        ask shared-vs-new per type with the rule preselected.
+        """
+        from apps.deployments.models.addons import Addon as _AddonModel
+        from apps.deployments.models.ecosystem import EcosystemPlan
+
+        try:
+            plan_record = EcosystemPlan.objects.get(id=plan_id, user=request.user)
+        except EcosystemPlan.DoesNotExist:
+            return Response({'error': 'Ecosystem plan not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not plan_record.project:
+            return Response({'error': 'Plan has no associated project.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        cfg = plan_record.shared_addon_config or {}
+        default = bool(plan_record.use_shared_addons)
+        project = plan_record.project
+        existing = _AddonModel.objects.filter(
+            service__owner=request.user,
+            service__project=project,
+            status=_AddonModel.Status.ACTIVE,
+            name__endswith='-shared',
+        ).only('id', 'name', 'addon_type', 'service_id')
+        shared_rows = []
+        for addon in existing:
+            t = str(addon.addon_type or '').upper()
+            rule = cfg.get(t)
+            rule_shared = bool(rule.get('shared', default)) if isinstance(rule, dict) else default
+            shared_rows.append({
+                'type': t,
+                'name': addon.name,
+                'addon_id': str(addon.id),
+                'service_id': str(addon.service_id),
+                'rule_shared': rule_shared,
+            })
+        return Response({
+            'plan_id': str(plan_record.id),
+            'project_id': str(project.id),
+            'project_name': project.name,
+            'use_shared_addons': default,
+            'shared_addon_config': cfg,
+            'shared_addons': shared_rows,
+        })
 
     @action(detail=False, methods=['get'])
     def task_status(self, request):

@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ecosystemApi } from '@/lib/api';
 import Link from 'next/link';
 import { TopologyCanvas } from './components/TopologyCanvas';
+import { AddServiceForm } from '@/components/ecosystem/AddServiceForm';
 import { BulkEnvDialog } from './components/BulkEnvDialog';
 import { CachedScanCard } from './components/CachedScanCard';
 import { PlanHistorySection } from './components/PlanHistorySection';
@@ -917,6 +918,11 @@ export default function EcosystemPage() {
                     {/* Plan History */}
                     {step === 'idle' && (
                         <PlanHistorySection />
+                    )}
+
+                    {/* Post-deploy: add a service to an ecosystem project */}
+                    {step === 'idle' && (
+                        <AddServiceForm />
                     )}
 
                     {/* Step: Selection */}

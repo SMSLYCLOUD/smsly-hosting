@@ -28,6 +28,62 @@ def _edge_id():
     return f"e-{uuid.uuid4().hex[:8]}"
 
 
+def _addon_kind(addon_type: str) -> str:
+    t = (addon_type or '').upper()
+    if t in ('POSTGRES', 'MYSQL', 'MONGODB', 'MARIADB', 'CLICKHOUSE',
+             'TIMESCALEDB', 'PGBOUNCER', 'COCKROACHDB', 'PERCONA', 'VITESS',
+             'CASSANDRA', 'SCYLLADB', 'NEO4J', 'DGRAPH', 'INFLUXDB',
+             'QUESTDB', 'SURREALDB', 'ARANGODB', 'COUCHDB', 'RETHINKDB',
+             'FERRETDB'):
+        return 'DATABASE'
+    if t in ('REDIS', 'MEMCACHED', 'KEYDB', 'VALKEY', 'DRAGONFLYDB', 'ETCD'):
+        return 'CACHE'
+    if t in ('RABBITMQ', 'KAFKA', 'NATS', 'REDPANDA', 'PULSAR', 'ACTIVEMQ'):
+        return 'QUEUE'
+    if t in ('ELASTICSEARCH', 'OPENSEARCH', 'MEILISEARCH', 'TYPESENSE',
+             'SOLR', 'QDRANT', 'WEAVIATE', 'MILVUS', 'CHROMADB'):
+        return 'SEARCH'
+    return 'STORAGE'
+
+
+def _addon_node(addon, shared: bool = False) -> dict:
+    addon_id = f"addon-{addon.id}"
+    kind = _addon_kind(getattr(addon, 'addon_type', ''))
+    label = f"{addon.name} ({addon.addon_type})"
+    if shared:
+        label = f"shared · {label}"
+    return {
+        'id': addon_id,
+        'type': 'addon',
+        'data': {
+            'name': addon.name,
+            'label': label,
+            'status': addon.status,
+            'kind': kind,
+            'subtype': addon.addon_type,
+            'region': '',
+            'addon_type': addon.addon_type,
+            'shared': bool(shared),
+            'provision_mode': str(getattr(addon, 'provision_mode', '') or ''),
+        }
+    }
+
+
+def _addon_edge(svc_id: str, addon, shared: bool = False) -> dict:
+    kind = _addon_kind(getattr(addon, 'addon_type', ''))
+    link_type = kind if kind != 'STORAGE' else 'ADDON'
+    label = str(getattr(addon, 'addon_type', '') or '')
+    if shared:
+        label = f"{label} · shared"
+    return {
+        'id': _edge_id(),
+        'source': svc_id,
+        'target': f"addon-{addon.id}",
+        'type': link_type,
+        'label': label,
+    }
+
+
 class TopologyViewSet(viewsets.GenericViewSet):
     serializer_class = TopologySerializer
     permission_classes = [IsAuthenticated]
@@ -209,45 +265,35 @@ class TopologyViewSet(viewsets.GenericViewSet):
                 })
 
             # ── Addon nodes + edges ──────────────────────────────────
+            # Own addons first; project `*-shared` fallbacks fill types
+            # the service lacks (same rule the deploy env uses:
+            # service's own addons win, `{type}-shared` in the same
+            # project backs DATABASE_URL/REDIS_URL). Without this, a
+            # service on a shared addon shows no database at all.
+            covered_types: set[str] = set()
             for addon in service.addons.all():
-                addon_id = f"addon-{addon.id}"
-                addon_upper = (addon.addon_type or '').upper()
-                if addon_upper in ('POSTGRES', 'MYSQL', 'MONGODB',
-                                   'MARIADB', 'CLICKHOUSE'):
-                    addon_kind = 'DATABASE'
-                elif addon_upper in ('REDIS', 'MEMCACHED'):
-                    addon_kind = 'CACHE'
-                elif addon_upper in ('RABBITMQ', 'KAFKA'):
-                    addon_kind = 'QUEUE'
-                elif addon_upper in {'ELASTICSEARCH', 'QDRANT'}:
-                    addon_kind = 'SEARCH'
-                elif addon_upper == 'MINIO':
-                    addon_kind = 'STORAGE'
-                else:
-                    addon_kind = 'STORAGE'
+                covered_types.add(str(addon.addon_type or '').upper())
+                nodes.append(_addon_node(addon, shared=False))
+                edges.append(_addon_edge(svc_id, addon, shared=False))
 
-                nodes.append({
-                    'id': addon_id,
-                    'type': 'addon',
-                    'data': {
-                        'name': addon.name,
-                        'label': f"{addon.name} ({addon.addon_type})",
-                        'status': addon.status,
-                        'kind': addon_kind,
-                        'subtype': addon.addon_type,
-                        'region': '',
-                        'addon_type': addon.addon_type,
-                    }
-                })
-
-                link_type = addon_kind if addon_kind != 'STORAGE' else 'ADDON'
-                edges.append({
-                    'id': _edge_id(),
-                    'source': svc_id,
-                    'target': addon_id,
-                    'type': link_type,
-                    'label': addon.addon_type,
-                })
+            shared_owner_ids = {str(s.id) for s in user_services}
+            if project_id:
+                from apps.deployments.models.addons import Addon as _Addon
+                for addon in _Addon.objects.filter(
+                    service__project_id=service.project_id,
+                    status='ACTIVE',
+                    name__endswith='-shared',
+                ).exclude(service=service).only(
+                    'id', 'name', 'addon_type', 'status', 'service_id',
+                    'provision_mode',
+                ):
+                    if str(addon.addon_type or '').upper() in covered_types:
+                        continue
+                    if str(addon.service_id) not in shared_owner_ids:
+                        continue  # fail-closed: only render visible services' addons
+                    covered_types.add(str(addon.addon_type or '').upper())
+                    nodes.append(_addon_node(addon, shared=True))
+                    edges.append(_addon_edge(svc_id, addon, shared=True))
 
             # ── Volume nodes + edges ─────────────────────────────────
             for volume in service.volumes.all():

@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { TopologyNode, TopologyNodeData } from '@/types/topology';
 import { Loader2 } from 'lucide-react';
 import { getAddonMetadata } from '@/lib/addonRegistry';
+import { addonHex, SERVICE_HEX, SHARED_HEX } from '@/lib/addonColors';
 import { ServiceSidePanel } from '../src/components/topology/ServiceSidePanel';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 
@@ -68,7 +69,9 @@ const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), {
 
 const NODE_REL_SIZE = 6;
 
-// Status colors
+// Status colors — state accents only. Node bodies are colored by TYPE
+// (service blue / addon brand / shared pink) so a healthy graph is
+// colorful, not an emerald blob. FAILED still overrides the body.
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: '#10b981', // Emerald
   RUNNING: '#10b981',
@@ -79,6 +82,14 @@ const STATUS_COLORS: Record<string, string> = {
   FAILED: '#ef4444', // Red
   STOPPED: '#71717a', // Zinc
   UNKNOWN: '#71717a',
+};
+
+// Edge colors by dependency kind.
+const LINK_COLORS: Record<string, string> = {
+  DATABASE: '#818cf8', CACHE: '#f87171', QUEUE: '#fb923c',
+  SEARCH: '#22d3ee', STORAGE: '#fbbf24', ADDON: '#94a3b8',
+  API: '#60a5fa', DOMAIN: '#34d399', REPLICA: '#34d399',
+  INTERNAL: '#475569',
 };
 
 // Geometries
@@ -115,11 +126,32 @@ export function Topology3D({ data, loading, error, refresh }: { data: any, loadi
 
   const nodeThreeObject = useCallback((node: any) => {
     const data = node.data as TopologyNodeData;
-    const color = getNodeColor(data.status);
+    const nodeType = (node.type || '').toLowerCase();
+    const status = (data.status || '').toUpperCase();
+    const isFailed = status === 'FAILED' || status === 'ERROR';
+    const isShared = !!(data as any).shared;
+    // Body color: type brand (lively by design). Shared addons glow
+    // pink regardless of type so shared-vs-owned is obvious at a
+    // glance. FAILED overrides everything; other states show through
+    // opacity while the brand stays recognizable.
+    let color: string;
+    if (isFailed) {
+      color = STATUS_COLORS.FAILED;
+    } else if (isShared) {
+      color = SHARED_HEX;
+    } else if (nodeType === 'addon') {
+      color = addonHex(data.addon_type, data.name);
+    } else if (nodeType === 'service') {
+      color = SERVICE_HEX;
+    } else {
+      color = getNodeColor(data.status);
+    }
+    const dimmed = !isFailed && status !== 'ACTIVE' && status !== 'RUNNING' && status !== '';
     const material = new THREE.MeshLambertMaterial({
       color,
       transparent: true,
-      opacity: 0.9,
+      opacity: dimmed ? 0.45 : 0.9,
+      emissive: new THREE.Color(color).multiplyScalar(isShared ? 0.35 : 0.12),
     });
 
     // Addon nodes wear their registry brand mark (fully-rasterized
@@ -132,11 +164,11 @@ export function Topology3D({ data, loading, error, refresh }: { data: any, loadi
       if (tex) material.map = tex;
     }
 
-    const nodeType = (node.type || '').toLowerCase();
+    const nodeTypeLower = nodeType;
     let mesh;
 
     // Replica nodes: smaller, rounded cube
-    if (nodeType === 'replica') {
+    if (nodeTypeLower === 'replica') {
       const replicaMaterial = new THREE.MeshLambertMaterial({
         color,
         transparent: true,
@@ -202,7 +234,12 @@ export function Topology3D({ data, loading, error, refresh }: { data: any, loadi
           nodeLabel={(node: any) => `${node.data?.name || node.id} (${node.data?.kind || 'UNKNOWN'})`}
           nodeThreeObject={nodeThreeObject}
           nodeRelSize={NODE_REL_SIZE}
-          linkColor={() => '#ffffff30'}
+          linkColor={(link: any) => {
+            const t = String(link?.type || '').toUpperCase();
+            const shared = /shared/i.test(String(link?.label || ''));
+            const base = LINK_COLORS[t] || '#ffffff30';
+            return shared ? '#f472b6' : base;
+          }}
           linkDirectionalArrowLength={3.5}
           linkDirectionalArrowRelPos={1}
           onNodeClick={handleNodeClick}
@@ -216,10 +253,11 @@ export function Topology3D({ data, loading, error, refresh }: { data: any, loadi
       <div className="absolute top-4 left-4 p-4 bg-black/60 backdrop-blur-md rounded-lg border border-zinc-800 pointer-events-none">
         <h3 className="text-sm font-semibold text-zinc-300 mb-2">3D Topology</h3>
         <div className="space-y-1 text-xs text-zinc-500">
-          <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 rounded-sm"></div> Active</div>
-          <div className="flex items-center gap-2"><div className="w-3 h-3 bg-blue-500 rounded-sm"></div> Building</div>
+          <div className="flex items-center gap-2"><div className="w-3 h-3 bg-blue-500 rounded-sm"></div> Service</div>
+          <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-sm" style={{backgroundColor: SHARED_HEX}}></div> Shared addon</div>
           <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-500 rounded-sm"></div> Failed</div>
           <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 rounded-sm opacity-60" style={{width: 8, height: 8}}></div> Replica</div>
+          <div className="text-[10px] text-zinc-600 pt-1">Addons wear type colors + brand logos.<br />Dimmed = non-running state.</div>
           <div className="mt-2 pt-2 border-t border-zinc-800">
             <p>Left-click: Rotate</p>
             <p>Right-click: Pan</p>
