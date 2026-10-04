@@ -1748,11 +1748,12 @@ def generate_node_caddyfile(node) -> str:
         # the Cloudflare token only covers our own zones, so DNS-01 dies
         # with "expected 1 zone, got 0" for foreign zones — HTTP-01 /
         # TLS-ALPN (automatic, no dns line) is the only issuance path
-        # that works when DNS points straight at the node.
+        # that works when DNS points straight at the node. Shape matches
+        # tls_lines exactly (open block, NO closing brace — the shared
+        # literal below closes it).
         _bare_tls_lines = [
             "    tls {",
             "        on_demand",
-            "    }",
         ]
         for _extra in dict.fromkeys(extra_hosts):
             _is_external = not _extra.endswith(suffix)
