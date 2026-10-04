@@ -1622,6 +1622,29 @@ def generate_node_caddyfile(node) -> str:
                     continue
                 if value and value.endswith(suffix) and value not in (flat_domain, nested_domain, legacy_flat, legacy_nested):
                     extra_hosts.append(value)
+            # Verified EXTERNAL customs (e.g. ignite.trulay.co on a
+            # trulay.site platform): DNS may point them straight at the
+            # node IP for emergency/direct serving. Without a site block
+            # the handshake has no SNI match and dies (fail-closed TLS).
+            # Only verified names — never raw user input.
+            try:
+                from apps.domains.models import DomainStatus as _DS
+                _verified: list[str] = []
+                for d in service.domain_instances.filter(
+                    status__in=[_DS.ACTIVE, _DS.DNS_VERIFIED, _DS.SSL_PROVISIONING],
+                    verified=True,
+                ):
+                    try:
+                        _verified.append(normalize_domain(str(d.domain_name or "").strip()))
+                    except ValueError:
+                        continue
+                for value in dict.fromkeys(_verified):
+                    if value and not value.endswith(suffix) and value not in (
+                        flat_domain, nested_domain, legacy_flat, legacy_nested,
+                    ):
+                        extra_hosts.append(value)
+            except Exception as exc:
+                logger.debug("Node extra customs skipped for %s: %s", service.id, exc)
         http_hosts = [flat_domain, legacy_flat, *extra_hosts]
 
         tls_lines = [
