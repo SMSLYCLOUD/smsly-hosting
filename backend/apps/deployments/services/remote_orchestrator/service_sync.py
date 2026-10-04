@@ -228,6 +228,22 @@ class ServiceSyncMixin:
 
         env_vars = EnvironmentVariable.objects.filter(service=service)
 
+        # Pre-resolve {{shortcodes}} master-side: node Addon rows are never
+        # synced (by design — _ensure_addons_ready requires local addon
+        # containers), so node-side resolution would skip every placeholder
+        # and the deploy would start without its DB URLs. Master owns the
+        # addon rows; resolved literals ship instead, and the mesh_env
+        # trigger overrides rewrite addon hostnames to mesh endpoints.
+        # Fail-open per var: unresolvable values ship verbatim (node
+        # behavior unchanged for those).
+        try:
+            from apps.deployments.services.env_resolver import (
+                resolve_shortcodes,
+            )
+            _sid = str(getattr(service, "id", "") or "")
+        except Exception:
+            resolve_shortcodes = None
+            _sid = ""
         safe_vars = []
         skipped_count = 0
         for var in env_vars:
@@ -240,6 +256,11 @@ class ServiceSyncMixin:
                 )
                 skipped_count += 1
                 continue
+            if resolve_shortcodes is not None and isinstance(raw_value, str) and "{{" in raw_value:
+                try:
+                    raw_value = resolve_shortcodes(_sid, raw_value)
+                except Exception as exc:
+                    logger.debug("Master shortcode pre-resolve skipped for %s: %s", var.key, exc)
             safe_vars.append({
                 "key": var.key,
                 "value": raw_value,

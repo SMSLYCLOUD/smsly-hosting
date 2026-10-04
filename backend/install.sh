@@ -25589,10 +25589,15 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 # blackholes its :80 (nothing listens on its gateway; 2026-09-29: node
 # smsly-net containers could not reach mesh :80). App builds run on
 # docker0, so nothing is lost; every other bridge now routes directly.
-# Host-local OUTPUT still takes the local hop (transparent default
-# server passes it through byte-identical); HTTPS is untouched, and
-# nginx is monitored like any platform service. This is the standard
-# transparent-proxy pattern, not a hack.
+# Host-local OUTPUT still takes the local hop, EXCEPT destinations on
+# local/docker/mesh ranges (see the RETURN converge below): the
+# transparent proxy resolves the Host header, so traffic aimed at a
+# container IP with an unresolvable Host (published :80 ports via
+# docker-proxy, host diagnostics, Caddy -> traefik:80 wake probes from
+# the host) 502s instead of passing through. Those destinations bypass
+# the shim (direct); real internet egress still steers. HTTPS is
+# untouched, and nginx is monitored like any platform service. This is
+# the standard transparent-proxy pattern, not a hack.
 #
 # Idempotent: safe to run on every install/update/resume and at boot.
 # Best-effort: never aborts the caller (returns 0); build failures still
@@ -25731,6 +25736,21 @@ ensure_egress_mirror() {
         iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
             _egress_warn "OUTPUT rule install failed"
     fi
+    # Converge: local/docker/mesh destinations must bypass the shim.
+    # The transparent default server proxies by Host header, so any
+    # :80 connection aimed at a container/bridge/mesh IP whose Host
+    # does not publicly resolve there (every docker-proxy upstream for
+    # published :80 ports, host-to-container diagnostics, Caddy ->
+    # traefik:80 wake path probes from the host) 502s instead of
+    # passing through (2026-10-05: node :8081 always nginx-502 while
+    # container-path traffic was fine). RETURNs are inserted ahead of
+    # the REDIRECT above; internet egress still steers.
+    for _cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+        if ! iptables -t nat -C OUTPUT -d "$_cidr" -p tcp --dport 80 -j RETURN >/dev/null 2>&1; then
+            iptables -t nat -I OUTPUT 2 -d "$_cidr" -p tcp --dport 80 -j RETURN 2>/dev/null || \
+                _egress_warn "OUTPUT local bypass failed for $_cidr"
+        fi
+    done
 
     # 4. End-to-end proof through the shim (host path). A container-path
     # proof runs separately before unblocking app builds.

@@ -1,7 +1,8 @@
 """Tests for per-node Caddyfile generation (node-hosted services).
 
-Covers the flat second-level scheme ({slug}-grid{N}.{zone}, CF-safe)
+Covers the flat second-level scheme ({slug}-node{N}.{zone}, CF-safe)
 plus the nested direct-access form, and container-name upstreams.
+Legacy gridN names remain served alongside.
 """
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -20,19 +21,19 @@ class NodeServiceDomainTests(TestCase):
     def test_flat_scheme_second_level(self):
         self.assertEqual(
             node_service_domain("my-app", 1, "trulay.site"),
-            "my-app-grid1.trulay.site",
+            "my-app-node1.trulay.site",
         )
 
     def test_flat_scheme_strips_first_label(self):
         self.assertEqual(
             node_service_domain("my-app", 2, "grid.smsly.cloud"),
-            "my-app-grid2.smsly.cloud",
+            "my-app-node2.smsly.cloud",
         )
 
     def test_nested_scheme_unchanged(self):
         self.assertEqual(
             node_service_domain_nested("my-app", 1, "trulay.site"),
-            "my-app.grid1.trulay.site",
+            "my-app.node1.trulay.site",
         )
 
 
@@ -87,7 +88,9 @@ class GenerateNodeCaddyfileTests(TestCase):
     def test_flat_https_block_for_cf_direct(self):
         self._svc()
         content = generate_node_caddyfile(self.node)
-        self.assertIn("my-app-grid1.trulay.site {", content)
+        self.assertIn("my-app-node1.trulay.site {", content)
+        # Legacy grid flat name stays served (plain-HTTP proxy path).
+        self.assertIn("my-app-grid1.trulay.site:80 {", content)
 
     def test_preview_host_joins_plain_http_block(self):
         self._svc()
@@ -103,6 +106,16 @@ class GenerateNodeCaddyfileTests(TestCase):
             "my-app-grid1.trulay.site:80 {",
             content,
         )
+
+    def test_sablier_enabled_https_goes_via_traefik_plain_stays_direct(self):
+        svc = self._svc()
+        svc.sablier_enabled = True
+        svc.save(update_fields=["sablier_enabled"])
+        content = generate_node_caddyfile(self.node)
+        # HTTPS blocks wake through node Traefik (sablier plugin).
+        self.assertIn("reverse_proxy traefik:80 {", content)
+        # Plain-:80 master->node proxy path never sleeps: stays direct.
+        self.assertIn("reverse_proxy my-app:8000 {", content)
 
     def test_other_node_services_excluded(self):
         other = ManagedServer.objects.create(

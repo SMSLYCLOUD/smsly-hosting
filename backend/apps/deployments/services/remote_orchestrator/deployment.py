@@ -50,6 +50,21 @@ class DeploymentMixin:
                 payload["vault_token"] = _vtok
         except Exception as exc:
             logger.debug("Remote trigger vault token skipped: %s", exc)
+        # Ship mesh-rewritten addon URLs: node pipeline reads node-local
+        # Addon rows (always empty after sync) so plain env sync leaves
+        # addon DNS names dead on the node. Compute overrides on master
+        # (which owns addon rows + creates socat forwarders) and let the
+        # node apply them to its env rows before enqueue. Fail-open:
+        # never blocks deploy on mesh errors.
+        try:
+            from apps.deployments.services.addon_mesh import rewrite_env_for_mesh
+            _svc = getattr(deployment, "service", None)
+            if _svc is not None:
+                _mesh = rewrite_env_for_mesh(_svc)
+                if _mesh:
+                    payload["mesh_env"] = dict(list(_mesh.items())[:200])
+        except Exception as exc:
+            logger.debug("Remote trigger mesh env skipped: %s", exc)
         if image_name:
             # Rewrite master-INTERNAL registry refs (registry:5000 /
             # loopback) to the node-routable address. Centralised in

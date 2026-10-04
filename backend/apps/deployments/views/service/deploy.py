@@ -156,6 +156,28 @@ class DeployActionsMixin:
                         _cfg.save(update_fields=['infisical_service_token'])
             except Exception:
                 pass
+            # Apply master-computed mesh env overrides (task 9): the node
+            # has no addon rows, so addon DNS names in synced env vars
+            # would otherwise stay dead. Only touches keys the master
+            # explicitly rewrote; never deletes; caps size fail-closed.
+            try:
+                _mesh = request.data.get('mesh_env') or {}
+                if isinstance(_mesh, dict) and _mesh:
+                    from apps.deployments.models import EnvironmentVariable
+                    for _k, _v in list(_mesh.items())[:200]:
+                        _key = str(_k or '').strip()[:255]
+                        if not _key or not isinstance(_v, str):
+                            continue
+                        _val = _v[:10000]
+                        _ev, _created = EnvironmentVariable.objects.get_or_create(
+                            service=service, key=_key,
+                            defaults={'value': _val},
+                        )
+                        if not _created and _ev.value != _val:
+                            _ev.value = _val
+                            _ev.save(update_fields=['value', 'updated_at'])
+            except Exception:
+                pass
 
         try:
             enqueue_smart_deploy_task(
