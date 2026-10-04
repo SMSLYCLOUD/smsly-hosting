@@ -61,16 +61,12 @@ def project_registry_username(project_id) -> str:
 def project_image_namespace(service) -> str:
     """Return the registry repository namespace for a service's images.
 
-    Ecosystem services (``managed_by="ECOSYSTEM"``, always project-scoped)
-    build into ``proj-<first 8 of project uuid>`` — the same stable
-    identity as their per-project registry credential — so every
-    ecosystem project gets its own storage namespace instead of sharing
-    the global ``smsly/`` one. Same-plan retries reuse the same project
-    and therefore the same namespace; a brand-new plan (new ephemeral
-    project) starts clean, which is what makes ecosystems independent.
-
-    Everything else keeps the legacy ``smsly/`` namespace (no behavior
-    change for manual/platform flows). Pure function: reads
+    Any service in a project builds into ``proj-<first 8 of project
+    uuid>`` — the same stable identity as its per-project registry
+    credential — so every project gets its own storage namespace
+    instead of sharing the global ``smsly/`` one. Same-project
+    redeploys reuse the namespace; only ungrouped services keep the
+    legacy ``smsly/`` namespace. Pure function: reads
     ``managed_by``/``project_id`` only, no DB access.
 
     Caveat: the live registry enforces htpasswd auth, which cannot scope
@@ -81,9 +77,8 @@ def project_image_namespace(service) -> str:
     (``apps/deployments/views/registry_auth.py``).
     """
     try:
-        managed = str(getattr(service, "managed_by", "") or "").upper()
         project_id = getattr(service, "project_id", None)
-        if managed == "ECOSYSTEM" and project_id:
+        if project_id:
             return f"proj-{str(project_id).replace('-', '')[:8]}"
     except Exception:
         pass
