@@ -233,7 +233,13 @@ def render_tenants_config(pools):
         'server_idle_timeout = 600',
         'server_connect_timeout = 15',
         'query_timeout = 0',
-        'ignore_startup_parameters = extra',
+        # Transaction mode rejects unknown startup options (Django /
+        # psycopg send statement_timeout) with FATAL "unsupported
+        # startup parameter" — every pooled app boot-loops. Ignore it
+        # pooler-side (standard practice; per-transaction SET still
+        # works). Without this, any framework default kills the app
+        # on first connect after a shared migration (2026-10-04).
+        'ignore_startup_parameters = extra,statement_timeout',
         # Protocol-level prepared statements in transaction mode
         # (PgBouncer >= 1.21). Django/psycopg3 binds server-side by
         # default — without this, pooled tenants hit "prepared statement

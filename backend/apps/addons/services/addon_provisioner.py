@@ -2607,7 +2607,7 @@ metrics = false
             "server_reset_query = DISCARD ALL\n"
             "server_check_query = select 1\n"
             "server_check_delay = 30\n"
-            "ignore_startup_parameters = extra\n"
+            "ignore_startup_parameters = extra,statement_timeout\n"
         )
         userlist = f'"{db_user}" "{verifier}"\n'
         return ini, userlist
