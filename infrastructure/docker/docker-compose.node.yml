@@ -29,6 +29,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - socket-proxy
+      # Traefik (docker provider) lives on traefik-proxy-net — without
+      # this attachment its tcp://socket-proxy:2375 endpoint never
+      # resolves and ZERO routers are discovered (2026-10-04: node
+      # canary 502 with no plugin errors at all).
+      - traefik-proxy-net
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
       interval: 5s
