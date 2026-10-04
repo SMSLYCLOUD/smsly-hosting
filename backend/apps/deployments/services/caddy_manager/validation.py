@@ -249,7 +249,28 @@ def validate_edge_sidecar_endpoints(content: str) -> list[str]:
 def validate_secure_headers_present(content: str) -> list[str]:
     text = str(content or "")
     errors: list[str] = []
+    # Node Caddyfiles carry the same headers INLINE (no snippet/import
+    # — older node binaries reject the file at the snippet's `header`
+    # line). Inline HSTS in every site satisfies the guard; only flag
+    # sites with neither form.
+    blocks = _split_site_blocks(text)
     if "(secure_headers)" not in text:
+        if not blocks:
+            errors.append("Caddyfile is missing the (secure_headers) snippet definition.")
+            return errors
+        # Plain-:80 blocks carry no TLS/HSTS by design — only TLS sites
+        # must carry the headers (inline or via import).
+        tls_blocks = [
+            body for label, body in blocks.items()
+            if label in extract_site_labels(text)
+            and not label.startswith("(")
+            and not label.rstrip().endswith(":80")
+        ]
+        inline_ok = bool(tls_blocks) and all(
+            "Strict-Transport-Security" in (body or "") for body in tls_blocks
+        )
+        if inline_ok:
+            return errors
         errors.append("Caddyfile is missing the (secure_headers) snippet definition.")
         return errors
     if "(coraza_waf)" not in text:

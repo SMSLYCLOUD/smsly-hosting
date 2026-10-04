@@ -1516,6 +1516,28 @@ def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> l
         return []
 
 
+def _node_secure_header_lines() -> list[str]:
+    """Inline security headers for node site blocks (no snippet/import).
+
+    The node Caddyfile ships without snippet definitions: older node
+    binaries rejected the file at the snippet's `header` line while the
+    identical construct adapts on newer builds, and the emergency path
+    must parse on whatever binary the node runs. Same headers as
+    SECURE_HEADERS_SNIPPET, written inline.
+    """
+    return [
+        "    header {",
+        '        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "        X-Content-Type-Options nosniff",
+        "        X-Frame-Options DENY",
+        '        Content-Security-Policy "frame-ancestors \'none\'"',
+        "        Referrer-Policy strict-origin-when-cross-origin",
+        '        Permissions-Policy "camera=(), microphone=(), geolocation()"',
+        "        -Server",
+        "    }",
+    ]
+
+
 def generate_node_caddyfile(node) -> str:
     """Generate a Caddyfile for a specific node.
 
@@ -1546,9 +1568,9 @@ def generate_node_caddyfile(node) -> str:
 
     sections: list[str] = []
 
-    # Snippet definitions must precede any `import secure_headers`
-    # (node reload fails with "File to import not found" otherwise).
-    sections.append(SECURE_HEADERS_SNIPPET)
+    # NOTE: no SECURE_HEADERS_SNIPPET here on purpose — node binaries
+    # must parse this file cold (see _node_secure_header_lines); every
+    # site block below carries the headers inline instead.
 
     # Node management block
     mgmt_block = [
@@ -1561,7 +1583,7 @@ def generate_node_caddyfile(node) -> str:
         mgmt_block.append("        on_demand")
     mgmt_block.extend([
         "    }",
-        "    import secure_headers",
+        *_node_secure_header_lines(),
         "    log {",
         "        output file /var/log/caddy/access.log",
         "    }",
@@ -1685,7 +1707,7 @@ def generate_node_caddyfile(node) -> str:
                 f"{_nested} {{",
                 *tls_lines,
                 "    }",
-                "    import secure_headers",
+                *_node_secure_header_lines(),
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
@@ -1705,7 +1727,7 @@ def generate_node_caddyfile(node) -> str:
             f"{flat_domain} {{",
             *tls_lines,
             "    }",
-            "    import secure_headers",
+            *_node_secure_header_lines(),
             "    log {",
             "        output file /var/log/caddy/access.log",
             "    }",
@@ -1739,7 +1761,7 @@ def generate_node_caddyfile(node) -> str:
                 f"{_extra} {{",
                 *_block_tls,
                 "    }",
-                "    import secure_headers",
+                *_node_secure_header_lines(),
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
