@@ -603,6 +603,14 @@ app.conf.beat_schedule = {
         'schedule': 900.0,
         'options': {'expires': 900.0},
     },
+    # Addon backend reconcile (daily): flag ACTIVE rows whose backend
+    # (container/node/shared DB) is gone. Detection only — recovery is
+    # an explicit operator reprovision, never automatic.
+    'reconcile-addon-backends-daily': {
+        'task': 'apps.deployments.tasks.reconcile_addon_backends_task',
+        'schedule': crontab(minute=0, hour=4),
+        'options': {'expires': 3600.0},
+    },
     # Intelligence runtime anomaly scan every 3 minutes
     'detect-runtime-anomalies-every-180s': {
         'task': 'apps.intelligence.tasks.detect_anomalies_task',

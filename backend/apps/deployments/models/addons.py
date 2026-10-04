@@ -96,6 +96,7 @@ class Addon(TimeStampedModel):
         PROVISIONING = 'PROVISIONING', 'Provisioning'
         ACTIVE = 'ACTIVE', 'Active'
         FAILED = 'FAILED', 'Failed'
+        BACKEND_MISSING = 'BACKEND_MISSING', 'Backend missing (row kept, needs reprovision)'
         DELETED = 'DELETED', 'Deleted'
         DELETION_PENDING = 'DELETION_PENDING', 'Deletion Pending'
         DELETION_FAILED = 'DELETION_FAILED', 'Deletion Failed'

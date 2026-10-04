@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 from celery import shared_task
 from apps.addons.services.addon_provisioner import addon_provisioner
 
-from apps.deployments.constants import RETRY_DELAY_STANDARD, TASK_TIME_LIMIT_DATA_SYNC, TASK_TIME_LIMIT_MEDIUM
+from apps.deployments.constants import RETRY_DELAY_STANDARD, TASK_TIME_LIMIT_DATA_SYNC, TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_STANDARD
 from apps.deployments.models import (
     EnvironmentVariable,
 )
@@ -427,6 +427,22 @@ def delete_addon_task(self, addon_id: str) -> None:
         addon.status = Addon.Status.DELETION_FAILED
         addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."
         addon.save(update_fields=['status', 'deletion_error'])
+
+
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], name="apps.deployments.tasks.reconcile_addon_backends_task")
+def reconcile_addon_backends_task(self) -> dict:
+    """Daily: flag ACTIVE addons whose backend is gone (BACKEND_MISSING).
+
+    Detection only — never deletes or reprovisions (an empty fresh
+    backend would mask data loss). Recovery stays an explicit operator
+    reprovision; a reappeared backend clears the flag automatically.
+    """
+    from apps.addons.services.addon_reconcile import reconcile_addon_backends
+    try:
+        return reconcile_addon_backends()
+    except Exception as exc:
+        logger.error("reconcile_addon_backends_task crashed: %s", exc)
+        return {"status": "error", "error": str(exc)[:200]}
 
 
 @shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1], name="apps.deployments.tasks.migrate_addon_mode_task")
