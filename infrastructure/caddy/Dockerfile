@@ -1,12 +1,16 @@
 # Stage 1: Build Caddy with xcaddy
-FROM caddy:2-builder AS builder
+# CADDY_VERSION pins the base (default 2 = latest). Pin explicitly when
+# building for nodes: a newer binary once refused the node Caddyfile
+# while the older one served it (2026-10-04). Master tracks latest.
+ARG CADDY_VERSION=2
+FROM caddy:${CADDY_VERSION}-builder AS builder
 
 RUN xcaddy build --output /usr/bin/caddy \
     --with github.com/caddy-dns/cloudflare@v0.2.4 \
     --with github.com/corazawaf/coraza-caddy/v2
 
 # Stage 2: Final Image
-FROM caddy:2-alpine
+FROM caddy:${CADDY_VERSION}-alpine
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 
