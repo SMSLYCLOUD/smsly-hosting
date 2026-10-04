@@ -655,6 +655,23 @@ export default function ServiceDetailPage() {
                                     {service.public_domain || `${service.name}.cloud.trulay.co`}
                                 </a>
                             </div>
+                            {(service.node_url && (service.node_domains?.master || service.public_domain)) && (
+                                <div className="border-b border-border pb-3">
+                                    <div className="flex justify-between gap-4">
+                                        <span className="text-muted-foreground font-medium">Node Entry (master)</span>
+                                        <a
+                                            href={`https://${service.node_domains?.master || service.public_domain}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="font-mono text-primary hover:underline flex items-center gap-1"
+                                        >
+                                            <Globe className="w-3 h-3" />
+                                            {service.node_domains?.master || service.public_domain}
+                                        </a>
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground mt-1">Via the master proxy (advised path) — terminates at master, forwards to the node over the mesh.</p>
+                                </div>
+                            )}
                             {service.node_url && (
                                 <div className="border-b border-border pb-3">
                                     <div className="flex justify-between gap-4">
@@ -795,6 +812,41 @@ export default function ServiceDetailPage() {
                                         <><Globe className="w-3.5 h-3.5" /> Active</>
                                     ) : (
                                         <><Shield className="w-3.5 h-3.5" /> Hidden</>
+                                    )}
+                                </button>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-border pb-3">
+                                <div>
+                                    <span className="text-muted-foreground font-medium">Wildcard Domain</span>
+                                    <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">When destroyed, the auto-generated platform domain is removed from routing entirely (no proxy, no redirect). Custom domains and private/internal access are unaffected — for fully internal services.</p>
+                                </div>
+                                <button
+                                    onClick={async () => {
+                                        const newVal = !(service.wildcard_url_enabled !== false);
+                                        try {
+                                            const updated = await servicesApi.toggleWildcardUrl(service.id, newVal);
+                                            setService(prev => ({ ...prev, wildcard_url_enabled: updated.wildcard_url_enabled }));
+                                            toast({
+                                                title: newVal ? 'Wildcard domain restored' : 'Wildcard domain destroyed',
+                                                description: newVal
+                                                    ? 'The auto-generated domain routes to the service again.'
+                                                    : 'Auto-generated domain removed from all routing. Custom domains keep working.',
+                                            });
+                                        } catch (err) {
+                                            console.error(err);
+                                            toast({ title: 'Failed to update wildcard domain', variant: 'destructive' });
+                                        }
+                                    }}
+                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+                                        service.wildcard_url_enabled !== false
+                                            ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                                            : 'bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20'
+                                    }`}
+                                >
+                                    {service.wildcard_url_enabled !== false ? (
+                                        <><Globe className="w-3.5 h-3.5" /> Active</>
+                                    ) : (
+                                        <><Shield className="w-3.5 h-3.5" /> Destroyed</>
                                     )}
                                 </button>
                             </div>
