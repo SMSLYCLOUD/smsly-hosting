@@ -1722,10 +1722,22 @@ def generate_node_caddyfile(node) -> str:
         # terminate these names itself. DNS-01 works regardless of where
         # the A records point. Without these blocks an https-forcing app
         # behind an http upstream 301-loops forever (marketer 2026-10-03).
+        # EXTERNAL customs (verified, non-base-domain) get BARE on_demand:
+        # the Cloudflare token only covers our own zones, so DNS-01 dies
+        # with "expected 1 zone, got 0" for foreign zones — HTTP-01 /
+        # TLS-ALPN (automatic, no dns line) is the only issuance path
+        # that works when DNS points straight at the node.
+        _bare_tls_lines = [
+            "    tls {",
+            "        on_demand",
+            "    }",
+        ]
         for _extra in dict.fromkeys(extra_hosts):
+            _is_external = not _extra.endswith(suffix)
+            _block_tls = _bare_tls_lines if _is_external else tls_lines
             extra_tls_block = [
                 f"{_extra} {{",
-                *tls_lines,
+                *_block_tls,
                 "    }",
                 "    import secure_headers",
                 "    log {",
