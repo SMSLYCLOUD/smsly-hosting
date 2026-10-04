@@ -17,6 +17,35 @@ class ExecMixin:
             return self._parse_json_response(resp, "fetching remote container logs")
         return None
 
+    def get_container_logs_multi(self, refs, tail: int = 200) -> dict | None:
+        """Fetch node container logs trying each ref in order.
+
+        Container IDs go stale on every recreate (refresh, redeploy);
+        the stable service name is usually last in the list. Returns
+        the first response carrying log lines; failing that, the first
+        response reporting a running container (so streams attach even
+        when the tail is momentarily empty); else None. Never raises.
+        """
+        fallback = None
+        try:
+            candidates = [str(r or "").strip() for r in (refs or [])]
+        except Exception:
+            candidates = []
+        for ref in dict.fromkeys(c for c in candidates if c):
+            try:
+                data = self.get_container_logs(ref, tail=tail)
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if str(data.get("logs", "") or "").strip():
+                data["_ref"] = ref
+                return data
+            if fallback is None and str(data.get("status", "") or "") == "running":
+                data["_ref"] = ref
+                fallback = data
+        return fallback
+
     def get_container_stats(self, container_name: str) -> dict | None:
         resp = self._request(
             "GET",

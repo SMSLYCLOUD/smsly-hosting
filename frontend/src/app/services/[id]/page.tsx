@@ -7,7 +7,7 @@ import { getWsUrl } from '@/lib/websocket';
 import ScalingTab from '@/components/settings/ScalingTab';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
-import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug, History } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug, History, Plus } from 'lucide-react';
 import { InternalNetworkCard } from '@/components/settings/InternalNetworkCard';
 import { SleepingZzz } from '@/components/SleepingZzz';
 import dynamic from 'next/dynamic';
@@ -735,7 +735,7 @@ export default function ServiceDetailPage() {
                             <div className="border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Custom Domain Setup</span>
                                 <p className="text-[10px] text-muted-foreground mt-1">Point your domain at any of the three platform hostnames above: CNAME subdomains to the master or flat node domain, or A-record apexes to the server IP. Deep node domains accept CNAME but stay DNS-only unless paid certificates are enabled. Verification passes via public DNS quorum, HTTP proof, or Cloudflare DNS record — a Cloudflare miss alone never fails the check.</p>
-                                <p className="text-[10px] text-amber-500/90 mt-1 font-medium">Master-down failover: this same domain keeps serving from the node's emergency Caddy if you point its DNS at the node IP in Cloudflare (grey cloud issues a cert automatically) — no dashboard needed. See Domains for details.</p>
+                                <p className="text-[10px] text-amber-500/90 mt-1 font-medium">Master-down failover: this same domain keeps serving from the node&apos;s emergency Caddy if you point its DNS at the node IP in Cloudflare (grey cloud issues a cert automatically) — no dashboard needed. See Domains for details.</p>
                             </div>
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Domain Verification</span>
@@ -848,6 +848,30 @@ export default function ServiceDetailPage() {
                                     ) : (
                                         <><Shield className="w-3.5 h-3.5" /> Destroyed</>
                                     )}
+                                </button>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-border pb-3">
+                                <div>
+                                    <span className="text-muted-foreground font-medium">Generate Wildcard</span>
+                                    <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">Mint a fresh auto-generated domain name (old name stops routing immediately). Custom domains unaffected.</p>
+                                </div>
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const updated = await servicesApi.regenerateWildcard(service.id);
+                                            setService(prev => ({ ...prev, public_domain: updated.public_domain, wildcard_url_enabled: true }));
+                                            toast({
+                                                title: 'New wildcard domain generated',
+                                                description: updated.public_domain,
+                                            });
+                                        } catch (err) {
+                                            console.error(err);
+                                            toast({ title: 'Failed to generate wildcard domain', variant: 'destructive' });
+                                        }
+                                    }}
+                                    className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
+                                >
+                                    <><Plus className="w-3.5 h-3.5" /> Generate</>
                                 </button>
                             </div>
                             {(service.custom_domains?.length ?? 0) > 0 && (

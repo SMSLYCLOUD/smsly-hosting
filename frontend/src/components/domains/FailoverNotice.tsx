@@ -22,14 +22,14 @@ export function FailoverNotice({ compact = false }: { compact?: boolean }) {
       </div>
       <div className={`text-xs text-muted-foreground leading-relaxed space-y-1.5 ${compact ? "line-clamp-4" : ""}`}>
         <p>
-          Each server runs its own emergency Caddy serving that server's services — including your
+          Each server runs its own emergency Caddy serving that server&apos;s services — including your
           verified custom domains — even if the master control plane is unreachable. Failover needs
           no UI and no input here: it is a DNS change only.
         </p>
         <p>
-          <span className="font-semibold text-foreground">In Cloudflare:</span> change the domain's
+          <span className="font-semibold text-foreground">In Cloudflare:</span> change the domain&apos;s
           A record (apex) or CNAME (subdomain) to the <span className="font-mono">node IP</span> shown
-          on the service's Network tab — grey cloud (DNS-only) issues a certificate automatically on
+          on the service&apos;s Network tab — grey cloud (DNS-only) issues a certificate automatically on
           first request; orange cloud works once the node holds a certificate for the name.
         </p>
         <p>

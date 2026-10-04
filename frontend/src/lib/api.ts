@@ -928,6 +928,11 @@ export const servicesApi = {
       return response.data;
   },
 
+  regenerateWildcard: async (serviceId: string): Promise<{ public_domain: string; old_domain: string; wildcard_url_enabled: boolean }> => {
+      const response = await api.post(`/services/${serviceId}/regenerate-wildcard/`, {});
+      return response.data;
+  },
+
   toggleNodeUrl: async (serviceId: string, enabled: boolean): Promise<{ node_url_enabled: boolean }> => {
       const response = await api.post(`/services/${serviceId}/toggle-node-url/`, { enabled });
       return response.data;

@@ -60,6 +60,36 @@ class DomainActionsMixin:
         _ = self._sync_caddy()
         return Response({"wildcard_url_enabled": service.wildcard_url_enabled})
 
+    @action(detail=True, methods=["post"], url_path="regenerate-wildcard")
+    def regenerate_wildcard(self, request, pk=None):
+        """Mint a fresh auto-generated wildcard domain for this service.
+
+        Replaces public_domain with a new `{slug}-{rand6}.{base}` name
+        and re-enables wildcard routing (old name stops routing
+        immediately after the Caddy sync). Custom domains, visibility
+        and hidden flags are untouched. Use after destroying a leaked
+        or unwanted auto-generated name.
+        """
+        import hashlib
+        import uuid as _uuid
+        service = self.get_object()
+        assert_can_write(self.request.user, service)
+        slug = (service.slug or service.name.lower().replace(" ", "-")).strip() or "svc"
+        short_id = hashlib.sha256(f"{service.owner_id}:{slug}:{_uuid.uuid4().hex}".encode()).hexdigest()[:6]
+        base_domain = Service.default_public_base_domain()
+        old_domain = (service.public_domain or "").strip()
+        service.public_domain = f"{slug}-{short_id}.{base_domain}"
+        service.wildcard_url_enabled = True
+        service.save(update_fields=["public_domain", "wildcard_url_enabled", "updated_at"])
+        _ = self._sync_caddy()
+        logger.info("Regenerated wildcard domain for %s: %r -> %r",
+                    service.name, old_domain, service.public_domain)
+        return Response({
+            "public_domain": service.public_domain,
+            "old_domain": old_domain,
+            "wildcard_url_enabled": True,
+        })
+
     @action(detail=True, methods=["post"], url_path="toggle-node-url")
     def toggle_node_url(self, request, pk=None):
         """Toggle the direct node URL for this service."""
