@@ -825,7 +825,7 @@ export default function ServiceDetailPage() {
                                         const newVal = !(service.wildcard_url_enabled !== false);
                                         try {
                                             const updated = await servicesApi.toggleWildcardUrl(service.id, newVal);
-                                            setService(prev => ({ ...prev, wildcard_url_enabled: updated.wildcard_url_enabled }));
+                                            setService(prev => (prev ? { ...prev, wildcard_url_enabled: updated.wildcard_url_enabled } : prev));
                                             toast({
                                                 title: newVal ? 'Wildcard domain restored' : 'Wildcard domain destroyed',
                                                 description: newVal
@@ -859,7 +859,7 @@ export default function ServiceDetailPage() {
                                     onClick={async () => {
                                         try {
                                             const updated = await servicesApi.regenerateWildcard(service.id);
-                                            setService(prev => ({ ...prev, public_domain: updated.public_domain, wildcard_url_enabled: true }));
+                                            setService(prev => (prev ? { ...prev, public_domain: updated.public_domain, wildcard_url_enabled: true } : prev));
                                             toast({
                                                 title: 'New wildcard domain generated',
                                                 description: updated.public_domain,
