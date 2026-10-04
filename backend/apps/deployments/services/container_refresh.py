@@ -76,6 +76,16 @@ def _recreate_remote_with_fresh_env(service, dry_run: bool = False) -> dict:
             or (service.name or "").strip()
         )
         result = RemoteOrchestrator(server).recreate_remote_container(ref, overrides, dry_run=dry_run)
+        if (not result or not result.get("ok")) and ref != (service.name or "").strip():
+            # Stale runtime IDs (old container long replaced) make the
+            # node answer not-found — retry once by stable service name
+            # before giving up. Never raises here; the caller decides.
+            logger.warning(
+                "Remote recreate by runtime id failed for %s; retrying by service name",
+                service.name,
+            )
+            result = RemoteOrchestrator(server).recreate_remote_container(
+                (service.name or "").strip(), overrides, dry_run=dry_run)
         if not result or not result.get("ok"):
             raise ContainerRefreshError("Node recreate refused or unreachable")
         result["remote"] = getattr(server, "name", "")
