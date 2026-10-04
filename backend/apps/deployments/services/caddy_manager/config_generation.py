@@ -1622,6 +1622,16 @@ def generate_node_caddyfile(node) -> str:
         # DNS resolves — never localhost (that's Caddy itself).
         container = (service.name or "").strip() or slug
         port = getattr(service, "internal_port", 8000) or 8000
+        # Sablier wake path (opt-in): HTTPS blocks proxy through node
+        # Traefik so stopped containers wake on request (same pattern
+        # as master: Caddy -> traefik:80 -> sablier plugin). Plain-:80
+        # blocks stay direct (master->node proxy path never sleeps).
+        sab = bool(getattr(service, "sablier_enabled", False))
+        proxy_target = "traefik:80" if sab else f"{container}:{port}"
+        proxy_retry_lines = (
+            ["        lb_try_duration 30s", "        lb_try_interval 1s"]
+            if sab else []
+        )
 
         # Every public hostname that can arrive here: the flat node
         # name (+ legacy grid alias), the service's public/custom wildcard
@@ -1711,7 +1721,8 @@ def generate_node_caddyfile(node) -> str:
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
-                f"    reverse_proxy {container}:{port} {{",
+                f"    reverse_proxy {proxy_target} {{",
+                *proxy_retry_lines,
                 "        header_up Host {host}",
                 "    }",
                 "    encode gzip",
@@ -1731,7 +1742,8 @@ def generate_node_caddyfile(node) -> str:
             "    log {",
             "        output file /var/log/caddy/access.log",
             "    }",
-            f"    reverse_proxy {container}:{port} {{",
+            f"    reverse_proxy {proxy_target} {{",
+            *proxy_retry_lines,
             "        header_up Host {host}",
             "    }",
             "    encode gzip",
@@ -1766,7 +1778,8 @@ def generate_node_caddyfile(node) -> str:
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
-                f"    reverse_proxy {container}:{port} {{",
+                f"    reverse_proxy {proxy_target} {{",
+                *proxy_retry_lines,
                 "        header_up Host {host}",
                 "    }",
                 "    encode gzip",

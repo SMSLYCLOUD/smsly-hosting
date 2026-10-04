@@ -152,6 +152,10 @@ class ServiceSyncMixin:
             "min_replicas": service.min_replicas,
             "max_replicas": service.max_replicas,
             "vpa_enabled": service.vpa_enabled,
+            # On-demand sleep flags: node Traefik needs these to attach
+            # the sablier wake middleware to node-side routers.
+            "sablier_enabled": bool(getattr(service, "sablier_enabled", False)),
+            "sablier_session": str(getattr(service, "sablier_session", "") or ""),
         }
         try:
             from apps.deployments.models.network_scope import ScopedNetwork

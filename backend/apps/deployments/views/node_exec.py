@@ -484,6 +484,16 @@ class NodeExecViewSet(viewsets.ViewSet):
             ):
                 if key in data:
                     fields[key] = data[key]
+            # On-demand sleep flags (node Traefik sablier middleware).
+            # Coerced defensively: garbage never flips routing behavior.
+            if "sablier_enabled" in data:
+                raw_sab = data.get("sablier_enabled")
+                fields["sablier_enabled"] = (
+                    raw_sab if isinstance(raw_sab, bool)
+                    else str(raw_sab or "").strip().lower() in {"1", "true", "yes", "on"}
+                )
+            if "sablier_session" in data:
+                fields["sablier_session"] = str(data.get("sablier_session") or "").strip()[:16] or "10m"
             customs = data.get("custom_domains")
             if isinstance(customs, list):
                 fields["custom_domains"] = [str(d) for d in customs[:20]]

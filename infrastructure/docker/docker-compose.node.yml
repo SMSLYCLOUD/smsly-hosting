@@ -206,6 +206,7 @@ services:
       - backups_data:/app/backups
       - ../../auth:/auth:rw,z
       - ../../.env:/app/.env:ro,z
+      - traefik_dynamic:/traefik-dynamic
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/health/live || exit 1"]
       interval: 30s
@@ -624,6 +625,141 @@ services:
           memory: ${NODE_EXPORTER_MEMORY_LIMIT:-128M}
 
   # ============================================================
+  # Sablier scale-to-zero (tenant workloads, opt-in) + minimal Traefik
+  # Emergency path parity with master: node Caddy fronts sablier-enabled
+  # services through Traefik so stopped containers wake on request even
+  # when the master is down. Sablier talks to node Docker through a
+  # DEDICATED socket proxy (POST for start/stop); the shared
+  # socket-proxy deliberately lacks POST. Traefik carries the sablier +
+  # crowdsec plugins and the file-provider shared middlewares written
+  # by the node backend to traefik_dynamic. Sleep on node is NOT
+  # implemented (sleeper skips remote) — this is wake-only.
+  # ============================================================
+  sablier:
+    image: sablierapp/sablier:1.18.0
+    container_name: smsly-sablier
+    restart: unless-stopped
+    command:
+      - start
+      - --provider.name=docker
+    environment:
+      - DOCKER_HOST=tcp://sablier-socket-proxy:2375
+    networks:
+      - smsly-net
+      - sablier-proxy-net
+    ports:
+      - "127.0.0.1:10000:10000"
+    depends_on:
+      sablier-socket-proxy:
+        condition: service_healthy
+    labels:
+    - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${SABLIER_MEMORY_LIMIT:-128M}
+
+  sablier-socket-proxy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    image: tecnativa/docker-socket-proxy:0.1.2
+    container_name: smsly-sablier-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      EVENTS: 1
+      VERSION: 1
+      POST: 1
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - sablier-proxy-net
+    deploy:
+      resources:
+        limits:
+          memory: ${SABLIER_SOCKET_PROXY_MEMORY_LIMIT:-64M}
+
+  traefik:
+    image: traefik:v3.6
+    container_name: smsly-hosting-traefik-1
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+    - no-new-privileges:true
+    - apparmor:docker-default
+    cap_drop:
+    - ALL
+    cap_add:
+    - NET_BIND_SERVICE
+    command:
+    - --providers.docker=true
+    - --providers.docker.exposedbydefault=false
+    - --providers.docker.endpoint=tcp://socket-proxy:2375
+    - --providers.file.directory=/etc/traefik/dynamic
+    - --providers.file.watch=true
+    - --entrypoints.web.address=:80
+    - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,100.64.0.0/10
+    - --entrypoints.metrics.address=:8082
+    - --metrics.prometheus=true
+    - --metrics.prometheus.entrypoint=metrics
+    - --metrics.prometheus.addEntryPointsLabels=true
+    - --metrics.prometheus.addRoutersLabels=false
+    - --metrics.prometheus.addServicesLabels=false
+    - --log.level=WARN
+    - --ping=true
+    - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+    - --experimental.plugins.crowdsec-bouncer.version=v1.7.1
+    - --experimental.plugins.sablier.modulename=github.com/sablierapp/sablier-traefik-plugin
+    - --experimental.plugins.sablier.version=v1.3.0
+    ports:
+    - "127.0.0.1:8081:80"
+    - 127.0.0.1:8082:8082
+    volumes:
+    - traefik_dynamic:/etc/traefik/dynamic:ro
+    depends_on:
+      socket-proxy:
+        condition: service_healthy
+      crowdsec:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+    - managed_by=smsly-hosting
+    - traefik.enable=true
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.enabled=true"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecMode=stream"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiScheme=http"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiHost=crowdsec:8080"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=${CROWDSEC_BOUNCER_KEY:-}"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.updateMaxFailure=-1"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.streamStartupBlock=false"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.forwardedHeadersTrustedIPs=127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,100.64.0.0/10"
+    networks:
+    - smsly-net
+    - traefik-proxy-net
+    deploy:
+      resources:
+        limits:
+          cpus: '${TRAEFIK_CPU_LIMIT:-0.50}'
+          memory: ${TRAEFIK_MEMORY_LIMIT:-512M}
+
+  # ============================================================
   # OPTIONAL: Promtail (Log Shipping to Master — NODE_OBSERVABILITY=1)
   # Ships Caddy access logs to master's Loki for CrowdSec analysis
   # ============================================================
@@ -698,11 +834,18 @@ volumes:
   caddy_data:
   caddy_config:
   caddy_logs:
+  traefik_dynamic:
 
 networks:
   smsly-net:
     external: true
     name: smsly-net
   socket-proxy:
+    driver: bridge
+    internal: true
+  traefik-proxy-net:
+    driver: bridge
+    internal: true
+  sablier-proxy-net:
     driver: bridge
     internal: true
