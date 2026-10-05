@@ -266,9 +266,12 @@ def run_restore():
             print(f"Found matching owner on target: {{owner_email}}")
 
     if not target_user:
-        target_user = User.objects.filter(is_superuser=True).first() or User.objects.first()
+        # Fail closed: never assign a service to an arbitrary first user.
+        # Superuser fallback preserves restores onto fresh targets; with
+        # no superuser either, the operator must create the owner first.
+        target_user = User.objects.filter(is_superuser=True).first()
         if target_user:
-            print(f"No matching owner found. Assigning to fallback user: {{target_user.email}}")
+            print(f"No matching owner found. Assigning to fallback superuser: {{target_user.email}}")
 
     if not target_user:
         print("ERROR: No suitable user found on target server to own the restored service.", file=sys.stderr)

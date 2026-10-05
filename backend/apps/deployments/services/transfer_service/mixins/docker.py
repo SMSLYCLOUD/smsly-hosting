@@ -97,31 +97,39 @@ class DockerMixin:
         #      (project + platform bridge) on the master; without a RETURN
         #      to smsly-platform-net, cross-project traffic is DROPped.
         #   3. Same-bridge RETURN for addon reachability.
+        #   4. Mesh RETURN (10.100.0.0/24): node-hosted services reach
+        #      master-side addons over the WireGuard mesh — without this,
+        #      every mesh DB dial DROPs (marketer 2026-10-04).
+        # RULE ORDER IS LOAD-BEARING: `iptables -I` prepends, so rules
+        # must be listed BOTTOM-UP (catch-all DROP first, DNS/accepts
+        # last) or the DROP lands on top and blocks everything.
         net_cmd = (
             f"docker network inspect {safe_net} >/dev/null 2>&1 "
             f"|| docker network create {safe_net} >/dev/null; "
             f"BR=$(docker network inspect {safe_net} --format '{{{{.Id}}}}' 2>/dev/null | tr -d '-' | head -c 12); "
             f"if [ -n \"$BR\" ] && ! iptables -C DOCKER-USER -i br-$BR -j DROP 2>/dev/null; then "
-            # DNS first (never shadowed)
-            f"iptables -I DOCKER-USER -i br-$BR -p udp --dport 53 -j RETURN; "
-            # Metadata IP guard
-            f"iptables -I DOCKER-USER -i br-$BR -d 169.254.169.254/32 -j DROP; "
-            # Established connections
-            f"iptables -I DOCKER-USER -i br-$BR -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN; "
-            # Internet via physical NICs — ALL naming schemes
+            # Catch-all DROP first (ends up at the bottom of the chain).
+            f"iptables -I DOCKER-USER -i br-$BR -j DROP; "
+            # Cross-bridge DROP (project isolation).
+            f"iptables -I DOCKER-USER -i br-$BR -o br-+ -j DROP; "
+            # Same bridge (addon reachability).
+            f"iptables -I DOCKER-USER -i br-$BR -o br-$BR -j RETURN; "
+            # Platform bridge (cross-project communication).
+            f"iptables -I DOCKER-USER -i br-$BR -o docker0 -j RETURN 2>/dev/null || true; "
+            # WireGuard mesh (master-side addons + registry).
+            f"iptables -I DOCKER-USER -i br-$BR -d 10.100.0.0/24 -j RETURN; "
+            # Internet via physical NICs — ALL naming schemes.
             f"iptables -I DOCKER-USER -i br-$BR -o wl+ -j RETURN; "
             f"iptables -I DOCKER-USER -i br-$BR -o enp+ -j RETURN; "
             f"iptables -I DOCKER-USER -i br-$BR -o ens+ -j RETURN; "
             f"iptables -I DOCKER-USER -i br-$BR -o eno+ -j RETURN; "
             f"iptables -I DOCKER-USER -i br-$BR -o eth+ -j RETURN; "
-            # Platform bridge (cross-project communication)
-            f"iptables -I DOCKER-USER -i br-$BR -o docker0 -j RETURN 2>/dev/null || true; "
-            # Same bridge (addon reachability)
-            f"iptables -I DOCKER-USER -i br-$BR -o br-$BR -j RETURN; "
-            # Cross-bridge DROP (project isolation)
-            f"iptables -I DOCKER-USER -i br-$BR -o br-+ -j DROP; "
-            # Catch-all DROP
-            f"iptables -I DOCKER-USER -i br-$BR -j DROP; "
+            # Established connections.
+            f"iptables -I DOCKER-USER -i br-$BR -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN; "
+            # Metadata IP guard.
+            f"iptables -I DOCKER-USER -i br-$BR -d 169.254.169.254/32 -j DROP; "
+            # DNS last (ends up at the top — never shadowed).
+            f"iptables -I DOCKER-USER -i br-$BR -p udp --dport 53 -j RETURN; "
             f"fi"
         )
         rm_cmd = f"docker rm -f {shlex.quote(name)} || true"

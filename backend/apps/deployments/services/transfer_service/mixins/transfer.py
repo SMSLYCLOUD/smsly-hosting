@@ -26,6 +26,54 @@ logger = logging.getLogger(__name__)
 class TransferMixin:
     """Mixin providing the transfer lifecycle methods (_stop_source_service → rollback)."""
 
+    def _source_is_local(self):
+        """True when the source container runs on this host."""
+        ip = (self.transfer.source_server_ip or '').strip()
+        if not ip:
+            return True
+        local_ips = {'127.0.0.1', 'localhost', ''}
+        try:
+            cfg = PlatformConfig.load()
+            if cfg and cfg.server_ip:
+                local_ips.add(cfg.server_ip.strip())
+        except Exception as exc:
+            logger.debug("Failed to load PlatformConfig for source IP check: %s", exc)
+        return ip in local_ips or ip.startswith('10.100.0.')
+
+    def _init_source_ssh(self):
+        """Connect to the SOURCE host for pre-cutover container stop.
+
+        Returns a connected SSHClient, or None when the source is local
+        (stop via the local daemon instead) or unreachable (caller logs
+        and skips — never fail a transfer on the stop step alone).
+        A pre-attached client (tests, ops) is reused as-is.
+        """
+        existing = getattr(self, 'source_ssh', None)
+        if existing is not None:
+            return existing
+        if self._source_is_local():
+            return None
+        ip = (self.transfer.source_server_ip or '').strip()
+        if not ip:
+            return None
+        try:
+            from ....models.core import ManagedServer
+            from ...ssh_client import SSHClient
+            row = ManagedServer.objects.filter(host=ip).first()
+            client = SSHClient(
+                ip=ip,
+                key_content=(getattr(row, 'ssh_key', '') if row else '') or self.transfer.source_ssh_key,
+                password=(getattr(row, 'ssh_password', '') if row else '') or self.transfer.source_ssh_password,
+                user=(getattr(row, 'ssh_user', '') if row else '') or 'root',
+                port=int(getattr(row, 'ssh_port', 0) if row else 0) or 22,
+            )
+            client.connect()
+        except Exception as exc:
+            logger.warning("Transfer %s: source SSH to %s failed: %s", self.transfer.id, ip, exc)
+            return None
+        self.source_ssh = client
+        return client
+
     def _stop_source_service(self):
         if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
             return
@@ -35,6 +83,24 @@ class TransferMixin:
         # that doesn't actually move anything.
         if self._target_is_local():
             self._log("Target is local — skipping source container stop (no-op transfer).")
+            return
+        import shlex as _shlex
+        name = self.transfer.service.name
+        safe = _shlex.quote(name)
+        if not self._source_is_local():
+            ssh = self._init_source_ssh()
+            if ssh is not None:
+                try:
+                    ssh.exec_command(f"docker stop {safe}", timeout=60, raise_on_error=False)
+                    ssh.exec_command(f"docker rm -f {safe}", timeout=60, raise_on_error=False)
+                    self._log(f"Source container {name} stopped on {self.transfer.source_server_ip}.")
+                except Exception as exc:
+                    logger.debug("Failed to stop source container over SSH: %s", exc)
+                return
+            self._log(
+                "Source host unreachable over SSH — skipping source container "
+                "stop (verify no split-brain before DNS cutover)."
+            )
             return
         try:
             from apps.cloud.docker_client import get_docker_client

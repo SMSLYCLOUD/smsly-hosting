@@ -35,6 +35,7 @@ class CoreMixin:
     def __init__(self, transfer):
         self.transfer = transfer
         self.ssh = None
+        self.source_ssh = None
         self._uploaded_remote_backup_path = None
         self._target_transfer_id = None
 
@@ -77,7 +78,6 @@ class CoreMixin:
 
         server = self._target_server_record()
         wg_ip = str(getattr(server, 'wg_address', '') or '').strip() if server else ''
-        getattr(server, 'is_lite_agent', False) if server else False
         host = str(getattr(server, 'host', '') or '').strip() if server else ''
 
         def add(url: str):
@@ -123,6 +123,16 @@ class CoreMixin:
         server = self._target_server_record()
         secret = str(getattr(server, 'gateway_secret', '') or '').strip() if server else ''
         if not secret:
+            # No per-server secret: fall back to the platform SECRET_KEY.
+            # This only authenticates when both ends share it (copied .env
+            # installs) — otherwise the node 401s (fail-closed). Never
+            # rely on this: provision the node so it stores a gateway
+            # secret instead.
+            logger.warning(
+                "Transfer %s: no gateway_secret for target %s — falling back "
+                "to SECRET_KEY for HMAC (fails closed unless shared).",
+                getattr(self.transfer, 'id', '?'), target_ip,
+            )
             secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')).strip()
 
         timestamp = str(int(time.time()))
@@ -238,6 +248,10 @@ class CoreMixin:
 
         secret = str(getattr(server, 'gateway_secret', '') or '').strip() if server else ''
         if not secret:
+            logger.warning(
+                "Transfer sync headers: no gateway_secret for target — "
+                "falling back to SECRET_KEY (fails closed unless shared)."
+            )
             secret = str(
                 getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')
             ).strip()
