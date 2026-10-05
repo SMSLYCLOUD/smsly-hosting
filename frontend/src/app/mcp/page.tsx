@@ -13,6 +13,7 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { mcpApi, api, McpStatus, McpTool, McpToken, projectsApi, Project } from '@/lib/api';
+import { usePermissions } from '@/hooks/usePermissions';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -117,6 +118,7 @@ function projectLabel(projects: string[] | null | undefined, all: Project[]): st
 
 export default function MCPPage() {
   const { toast } = useToast();
+  const { isStaff } = usePermissions();
   const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [controlBusy, setControlBusy] = useState<string | null>(null);
@@ -316,12 +318,12 @@ export default function MCPPage() {
                   <Button variant="outline" size="sm" onClick={() => refreshStatus()} disabled={statusLoading}>
                     <RefreshCw className={`w-3.5 h-3.5 mr-1 ${statusLoading ? "animate-spin" : ""}`} /> Refresh
                   </Button>
-                  {!running ? (
+                  {isStaff && !running ? (
                     <Button size="sm" onClick={() => controlServer('start')} disabled={!!controlBusy}>
                       {controlBusy === 'start' ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Power className="w-3.5 h-3.5 mr-1" />}
                       Start
                     </Button>
-                  ) : (
+                  ) : isStaff && running ? (
                     <>
                       <Button variant="outline" size="sm" onClick={() => controlServer('restart')} disabled={!!controlBusy}>
                         {controlBusy === 'restart' ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
@@ -332,6 +334,8 @@ export default function MCPPage() {
                         Stop
                       </Button>
                     </>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Server control requires staff access.</span>
                   )}
                 </div>
               </div>

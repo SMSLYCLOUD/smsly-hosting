@@ -14,7 +14,7 @@ class Team(models.Model):
     )
     owner = models.ForeignKey(  # type: ignore[var-annotated]
         'auth.User',
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name='owned_teams',
         null=True)
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
