@@ -50,12 +50,79 @@ class DeploymentMixin:
                 payload["vault_token"] = _vtok
         except Exception as exc:
             logger.debug("Remote trigger vault token skipped: %s", exc)
-        # Ship mesh-rewritten addon URLs: node pipeline reads node-local
-        # Addon rows (always empty after sync) so plain env sync leaves
-        # addon DNS names dead on the node. Compute overrides on master
-        # (which owns addon rows + creates socat forwarders) and let the
-        # node apply them to its env rows before enqueue. Fail-open:
-        # never blocks deploy on mesh errors.
+        # Ship the SOPS platform keypair: nodes auto-create their own age
+        # keypair on first use, which can never decrypt master-exported
+        # bundles (verify/decrypt unprovisioned on nodes). Same HMAC+TLS
+        # channel and never-log handling as the vault token. Fail-open.
+        try:
+            from apps.deployments.services.secrets_sops import ensure_age_keypair
+            _pub, _priv = ensure_age_keypair()
+            if _pub.startswith("age1") and _priv.startswith("AGE-SECRET-KEY-"):
+                payload["sops_age_public"] = _pub
+                payload["sops_age_private"] = _priv
+        except Exception as exc:
+            logger.debug("Remote trigger SOPS key skipped: %s", exc)
+        # Ship addon rows for node consumption (mesh-backed): the node
+        # pipeline, readiness gates, and shortcode resolution all read
+        # node-local Addon rows, which are otherwise always empty after
+        # sync. Only ACTIVE addons with mesh-routable URLs; the node
+        # applies them as mesh-backed rows (never provisioned locally).
+        # Fail-open: never blocks deploy on addon/mesh errors.
+        try:
+            from apps.deployments.services.addon_mesh import mesh_url_for_addon
+            _svc2 = getattr(deployment, "service", None)
+            _addon_rows = []
+            if _svc2 is not None:
+                for _addon in _svc2.addons.exclude(status="DELETED"):
+                    if getattr(_addon, "status", "") != "ACTIVE":
+                        continue
+                    _mesh_url = mesh_url_for_addon(_addon)
+                    if not _mesh_url:
+                        continue
+                    _meta = dict(getattr(_addon, "provider_metadata", None) or {})
+                    _addon_rows.append({
+                        "name": str(getattr(_addon, "name", "") or "")[:255],
+                        "addon_type": str(getattr(_addon, "addon_type", "") or "")[:20],
+                        "connection_url": _mesh_url[:512],
+                        "mesh_forward_port": _meta.get("mesh_forward_port"),
+                    })
+                    if len(_addon_rows) >= 50:
+                        break
+            if _addon_rows:
+                payload["addons"] = _addon_rows
+        except Exception as exc:
+            logger.debug("Remote trigger addon sync skipped: %s", exc)
+        # Ship volume definitions: node deploys read node-local Volume
+        # rows for mounts, which are otherwise always empty after sync
+        # (apps write to container FS instead of their volume). Data does
+        # NOT transfer — fresh empty docker volumes are created on the
+        # node; use transfer/backup for data seeding. Validated names,
+        # mount paths, and size bounds; fail-open.
+        try:
+            _svc3 = getattr(deployment, "service", None)
+            _vol_rows = []
+            if _svc3 is not None:
+                for _vol in _svc3.volumes.all()[:20]:
+                    _vname = str(getattr(_vol, "name", "") or "").strip()[:255]
+                    _vpath = str(getattr(_vol, "mount_path", "") or "").strip()[:255]
+                    try:
+                        _vsize = int(getattr(_vol, "size_gb", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if not _vname or not _vpath:
+                        continue
+                    if not 1 <= _vsize <= 1000:
+                        continue
+                    _vol_rows.append({
+                        "name": _vname, "mount_path": _vpath, "size_gb": _vsize,
+                    })
+            if _vol_rows:
+                payload["volumes"] = _vol_rows
+        except Exception as exc:
+            logger.debug("Remote trigger volume sync skipped: %s", exc)
+        # Ship mesh-rewritten addon env overrides as well (belt over the
+        # row sync above): env rows apply even if addon-row sync is ever
+        # skipped. Fail-open.
         try:
             from apps.deployments.services.addon_mesh import rewrite_env_for_mesh
             _svc = getattr(deployment, "service", None)

@@ -39,6 +39,23 @@ def check_addon_backend(addon) -> str | None:
     flips the row).
     """
     try:
+        try:
+            _rmeta = dict(getattr(addon, 'provider_metadata', None) or {})
+        except Exception:
+            _rmeta = {}
+        if _rmeta.get('mesh_backed'):
+            # Mesh-backed row (node copy of a master addon): no local
+            # container exists by design — probe the mesh endpoint.
+            # Refusal flags BACKEND_MISSING (recovery = reprovision on
+            # master + redeploy, never local provisioning).
+            try:
+                from apps.deployments.tasks.deploy.addons import _probe_mesh_addon
+                _probe_mesh_addon(addon)
+                return None
+            except RuntimeError as exc:
+                return f'gone: {exc}'[:160]
+            except Exception as exc:
+                return f'check-failed: mesh probe: {exc}'[:160]
         mode = str(getattr(addon, 'provision_mode', '') or '').strip() or 'container'
         if mode == 'shared':
             try:

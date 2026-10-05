@@ -36,8 +36,11 @@ class Volume(models.Model):
         docker.sock or other host directories into their container.
         """
         super().clean()
-        # Avoid circular import
-        from .views.storage import _validate_volume_mount_path, _validate_volume_name
+        # Validators live in the storage VIEW module (the model has no
+        # views subpackage — a relative import here always ImportError'd,
+        # silently disabling model-level validation). Lazy import: the
+        # view module imports this model at its top level.
+        from apps.deployments.views.storage import _validate_volume_mount_path, _validate_volume_name
         try:
             _validate_volume_name(self.name)
         except Exception as exc:

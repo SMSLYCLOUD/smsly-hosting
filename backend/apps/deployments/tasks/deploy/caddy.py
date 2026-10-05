@@ -193,9 +193,77 @@ def push_caddy_to_node(server_id: str) -> dict:
             return {"ok": False, "message": f"Caddy reload failed (exit {reload_code})"}
 
         logger.info("Caddyfile pushed to node %s and Caddy reloaded", server.name)
+        # Convergence bookkeeping: stamp the pushed content hash so the
+        # reconcile beat can detect drift (e.g. pushes lost to an SSH
+        # outage) without re-pushing identical configs. Best-effort —
+        # never fails the push itself.
+        try:
+            import hashlib as _hashlib
+            _meta = dict(getattr(server, "provider_metadata", None) or {})
+            _meta["caddy_config_sha256"] = _hashlib.sha256(content.encode()).hexdigest()
+            server.provider_metadata = _meta
+            server.save(update_fields=["provider_metadata"])
+        except Exception:
+            pass
         return {"ok": True, "message": "Caddyfile pushed, written, and Caddy reloaded"}
     except Exception as exc:
         logger.warning("push_caddy_to_node: failed to push to node: %s", exc)
         return {"ok": False, "message": f"Push failed: {exc}"}
     finally:
         ssh.close()
+
+
+@shared_task(
+    soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
+    time_limit=TASK_TIME_LIMIT_MEDIUM[1],
+    name="apps.deployments.tasks.deploy.caddy.reconcile_node_caddyfiles_task",
+)
+def reconcile_node_caddyfiles_task() -> dict:
+    """Converge full-node Caddyfiles by content hash (every 15m).
+
+    The SSH fanout in push_caddy_to_node is fire-and-forget: an SSH
+    outage leaves node edges serving stale configs with only a warning
+    in the logs. This beat regenerates each node's content, compares
+    against the last-pushed hash stamped on the server row, and pushes
+    on drift (or when never stamped). OFFLINE nodes are skipped (a push
+    cannot succeed); empty content is never pushed. Never raises —
+    per-node failures are reported, not fatal.
+    """
+    from apps.deployments.models.core import ManagedServer
+    report: dict = {"pushed": [], "converged": [], "skipped": [], "failed": []}
+    try:
+        nodes = ManagedServer.objects.filter(is_primary=False, is_lite_agent=False)
+    except Exception as exc:
+        logger.warning("reconcile_node_caddyfiles: node query failed: %s", exc)
+        return {"status": "error", "error": str(exc)[:200], **report}
+    for node in nodes:
+        name = getattr(node, "name", str(getattr(node, "id", "?")))
+        try:
+            if str(getattr(node, "status", "") or "").upper() == "OFFLINE":
+                report["skipped"].append(f"{name} (offline)")
+                continue
+            from apps.deployments.services.caddy_manager.config_generation import (
+                generate_node_caddyfile,
+            )
+            content = generate_node_caddyfile(node)
+            if not content:
+                report["skipped"].append(f"{name} (empty)")
+                continue
+            import hashlib as _hashlib
+            want = _hashlib.sha256(content.encode()).hexdigest()
+            try:
+                have = dict(getattr(node, "provider_metadata", None) or {}).get(
+                    "caddy_config_sha256", "")
+            except Exception:
+                have = ""
+            if have and have == want:
+                report["converged"].append(name)
+                continue
+            result = push_caddy_to_node(str(node.id))
+            if result.get("ok"):
+                report["pushed"].append(name)
+            else:
+                report["failed"].append(f"{name} ({result.get('message', '')[:120]})")
+        except Exception as exc:
+            report["failed"].append(f"{name} ({exc.__class__.__name__})")
+    return {"status": "ok", **report}

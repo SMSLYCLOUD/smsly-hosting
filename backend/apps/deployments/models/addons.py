@@ -144,6 +144,12 @@ class Addon(TimeStampedModel):
     deletion_error = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     connection_url = EncryptedCharField(
         max_length=512, blank=True)  # H-1 fix: encrypted at rest
+    provider_metadata = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text="Provider bookkeeping: mesh forward ports "
+                  "('mesh_forward_port'), remote mesh-backing marker "
+                  "('mesh_backed'), never credentials.")
     # CLI addon configuration (API key + model selection), managed via
     # the addon cli-config API. Encrypted at rest — never log or return
     # the raw value; use cli_addons.public_view for reads.

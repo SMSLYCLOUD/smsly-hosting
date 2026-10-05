@@ -608,6 +608,16 @@ class AddonProvisioner:
         Returns:
             Tuple of (container_id, connection_url)
         """
+        try:
+            _pmeta = dict(getattr(addon, 'provider_metadata', None) or {})
+        except Exception:
+            _pmeta = {}
+        if _pmeta.get('mesh_backed'):
+            raise RuntimeError(
+                f"Addon {getattr(addon, 'name', '?')} is a mesh-backed node copy "
+                "of a master addon — it must never be provisioned locally. "
+                "Reprovision on the master, then redeploy the service."
+            )
         addon_type = addon.addon_type
         service_name = addon.service.name
         self._ensure_network()

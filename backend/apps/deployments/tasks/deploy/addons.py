@@ -53,6 +53,16 @@ def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
                 f"Addon {addon.addon_type} ({addon.name}) is ACTIVE but has no "
                 f"connection URL. Provisioning may have failed silently."
             )
+        try:
+            _mesh_meta = dict(getattr(addon, 'provider_metadata', None) or {})
+        except Exception:
+            _mesh_meta = {}
+        if _mesh_meta.get('mesh_backed'):
+            # Remote mesh-backed addon (synced from master): no local
+            # container exists by design — TCP-probe the mesh endpoint
+            # instead. Fail-closed like the local path on refusal.
+            _probe_mesh_addon(addon)
+            continue
         container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
         backend_kind = "addon container"
         if _is_shared_postgres(addon):
@@ -139,6 +149,35 @@ def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
                 "[probe:%s] Addon network alias check failed for %s: %s",
                 probe_id, container_name, exc,
             )
+
+
+def _probe_mesh_addon(addon) -> None:
+    """TCP-probe a mesh-backed addon's endpoint (remote backend on master).
+
+    Raises RuntimeError on refusal/timeout — same fail-closed contract
+    as the local container checks. Never logs credentials (host:port
+    only).
+    """
+    from urllib.parse import urlparse as _urlparse
+    try:
+        parsed = _urlparse(str(addon.connection_url or ''))
+        host, port = parsed.hostname, parsed.port
+    except Exception:
+        host, port = None, None
+    if not host or not port:
+        raise RuntimeError(
+            f"Addon {addon.addon_type} ({addon.name}) is mesh-backed but "
+            f"its connection URL has no usable host:port."
+        )
+    import socket as _sock_module
+    try:
+        with _sock_module.create_connection((host, port), timeout=8):
+            return
+    except Exception as exc:
+        raise RuntimeError(
+            f"Addon {addon.addon_type} ({addon.name}) mesh endpoint "
+            f"{host}:{port} unreachable: {exc.__class__.__name__}."
+        )
 
 
 def _resolve_addon_ip(addon, client) -> str:
@@ -240,6 +279,19 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
 
     for addon in addons:
         if not addon.connection_url:
+            continue
+        try:
+            _pmeta = dict(getattr(addon, 'provider_metadata', None) or {})
+        except Exception:
+            _pmeta = {}
+        if _pmeta.get('mesh_backed'):
+            # Remote mesh-backed addon: same TCP probe as readiness.
+            # Probe errors join the error list (fail-closed, no raise:
+            # this function reports, the caller decides).
+            try:
+                _probe_mesh_addon(addon)
+            except RuntimeError as exc:
+                errors.append(str(exc))
             continue
         parsed = _urlparse(addon.connection_url)
         hostname = unquote(parsed.hostname or '').strip().lower()

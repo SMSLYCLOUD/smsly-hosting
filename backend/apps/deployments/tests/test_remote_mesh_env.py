@@ -37,6 +37,12 @@ class TriggerMeshEnvTests(TestCase):
                 if isinstance(mesh_value, Exception)
                 else {"return_value": mesh_value}
             ),
+        ), patch(
+            "apps.deployments.services.secrets_sops.ensure_age_keypair",
+            return_value=(
+                "age1testpublic0000000000000000000000000000000000",
+                "AGE-SECRET-KEY-1testprivate000000000000000000000000000000",
+            ),
         ):
             rid = orch.trigger_deploy(deployment, "svc-remote-id")
         self.assertEqual(rid, "remote-1")
@@ -62,3 +68,13 @@ class TriggerMeshEnvTests(TestCase):
         _args, kwargs = call
         payload = kwargs.get("payload") or call[0][2]
         self.assertNotIn("mesh_env", payload)
+
+    def test_sops_pair_shipped_fail_open(self):
+        call = self._trigger({})
+        _args, kwargs = call
+        payload = kwargs.get("payload") or call[0][2]
+        self.assertEqual(
+            payload["sops_age_public"],
+            "age1testpublic0000000000000000000000000000000000",
+        )
+        self.assertTrue(payload["sops_age_private"].startswith("AGE-SECRET-KEY-"))

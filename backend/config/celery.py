@@ -603,6 +603,15 @@ app.conf.beat_schedule = {
         'schedule': 900.0,
         'options': {'expires': 900.0},
     },
+    # Node Caddy converge every 15m: hash-compare each full node's
+    # generated Caddyfile against the last-pushed stamp and re-push on
+    # drift (recovers SSH-outage staleness the fire-and-forget fanout
+    # would otherwise leave behind silently).
+    'reconcile-node-caddy-every-15m': {
+        'task': 'apps.deployments.tasks.deploy.caddy.reconcile_node_caddyfiles_task',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
     # Addon backend reconcile (daily): flag ACTIVE rows whose backend
     # (container/node/shared DB) is gone. Detection only — recovery is
     # an explicit operator reprovision, never automatic.

@@ -40,6 +40,38 @@ class SopsError(RuntimeError):
     """User-facing SOPS failure (message contains no secret material)."""
 
 
+def store_platform_keypair(public_recipient: str, private_key: str) -> bool:
+    """Converge this host onto the platform age keypair (node use).
+
+    Remote nodes auto-create their OWN keypair on first use, which can
+    never decrypt master-exported bundles. The master ships its pair
+    inside the (HMAC+TLS) deploy trigger; the node stores it here so
+    verify/decrypt and recipient injection all use the single platform
+    identity. Values are validated by shape, stored Fernet-encrypted
+    (model field), never logged. Returns True when stored/changed.
+    """
+    public = str(public_recipient or "").strip()
+    private = str(private_key or "").strip()
+    if not public.startswith("age1") or len(public) > 128:
+        return False
+    if not private.startswith("AGE-SECRET-KEY-") or len(private) > 256:
+        return False
+    from apps.deployments.models.core import PlatformConfig
+    cfg = PlatformConfig.load()
+    cur_pub = str(getattr(cfg, "secrets_age_public_key", "") or "").strip()
+    try:
+        cur_priv = str(cfg.secrets_age_private_key or "").strip()
+    except Exception:
+        cur_priv = ""
+    if cur_pub == public and cur_priv and cur_priv == private:
+        return False
+    cfg.secrets_age_public_key = public
+    cfg.secrets_age_private_key = private
+    cfg.save(update_fields=["secrets_age_public_key", "secrets_age_private_key"])
+    logger.info("SOPS platform keypair converged (public %s...)", public[:12])
+    return True
+
+
 def _which_or_raise(binary: str) -> str:
     path = shutil.which(binary)
     if not path:

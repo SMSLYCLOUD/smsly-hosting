@@ -130,6 +130,37 @@ def ensure_addon_mesh_forward(addon) -> tuple[str, int] | None:
     return _get_master_mesh_ip(), int(fwd_port)
 
 
+def mesh_url_for_addon(addon) -> str | None:
+    """Mesh-rewritten connection URL for one addon (node consumption).
+
+    Ensures the socat forwarder exists, then rewrites the URL's host to
+    the master mesh endpoint (credentials preserved). Returns None when
+    the addon has no usable connection_url or the forwarder failed.
+    """
+    from urllib.parse import urlparse, urlunparse
+    url = str(getattr(addon, "connection_url", "") or "")
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    if not parsed.hostname or not parsed.port:
+        return None
+    fwd = ensure_addon_mesh_forward(addon)
+    if not fwd:
+        return None
+    mip, port = fwd
+    netloc = f"{mip}:{port}"
+    if parsed.username:
+        cred = parsed.username
+        if parsed.password:
+            cred += f":{parsed.password}"
+        netloc = f"{cred}@{netloc}"
+    try:
+        return urlunparse(parsed._replace(netloc=netloc))
+    except Exception:
+        return None
+
+
 def rewrite_env_for_mesh(service, master_ip: str | None = None) -> dict[str, str]:
     """Return env overrides mapping addon-hosted URL vars to mesh endpoints.
 

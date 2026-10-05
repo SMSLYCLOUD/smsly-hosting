@@ -156,29 +156,29 @@ class DeployActionsMixin:
                         _cfg.save(update_fields=['infisical_service_token'])
             except Exception:
                 pass
-            # Apply master-computed mesh env overrides (task 9): the node
-            # has no addon rows, so addon DNS names in synced env vars
-            # would otherwise stay dead. Only touches keys the master
-            # explicitly rewrote; never deletes; caps size fail-closed.
+            # Master-shipped deploy state (mesh_env / SOPS key / volumes /
+            # addon rows): applied via testable helpers in
+            # remote_orchestrator.node_apply. Update-only, capped,
+            # validated, fail-open individually — a bad entry never blocks
+            # the deploy. See node_apply docstrings for the contract.
             try:
-                _mesh = request.data.get('mesh_env') or {}
-                if isinstance(_mesh, dict) and _mesh:
-                    from apps.deployments.models import EnvironmentVariable
-                    for _k, _v in list(_mesh.items())[:200]:
-                        _key = str(_k or '').strip()[:255]
-                        if not _key or not isinstance(_v, str):
-                            continue
-                        _val = _v[:10000]
-                        _ev, _created = EnvironmentVariable.objects.get_or_create(
-                            service=service, key=_key,
-                            defaults={'value': _val},
-                        )
-                        if not _created and _ev.value != _val:
-                            _ev.value = _val
-                            _ev.save(update_fields=['value', 'updated_at'])
+                from apps.deployments.services.remote_orchestrator import node_apply
+                from apps.deployments.services.secrets_sops import store_platform_keypair
+                for _apply in (
+                    lambda: node_apply.apply_mesh_env(service, request.data.get('mesh_env')),
+                    lambda: store_platform_keypair(
+                        request.data.get('sops_age_public'),
+                        request.data.get('sops_age_private'),
+                    ),
+                    lambda: node_apply.apply_volumes(service, request.data.get('volumes')),
+                    lambda: node_apply.apply_mesh_addons(service, request.data.get('addons')),
+                ):
+                    try:
+                        _apply()
+                    except Exception:
+                        pass
             except Exception:
                 pass
-
         try:
             enqueue_smart_deploy_task(
                 deployment_id=str(deployment.id),
