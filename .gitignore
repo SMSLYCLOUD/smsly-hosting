@@ -214,3 +214,6 @@ infrastructure/pxe-server/
 /wait_falco.sh
 /strip_livekit.py
 crowdsec/cloudflare-bouncer.yaml
+
+# Local operator scratch (never commit)
+.scratch/
