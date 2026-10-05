@@ -33,6 +33,29 @@ CHANNEL_LAYERS_TEST = {
 }
 
 
+
+def _test_channel_layer():
+    """Default channel layer (mirrors CHANNEL_LAYERS_TEST override)."""
+    from channels.layers import get_channel_layer
+    return get_channel_layer()
+
+
+
+async def _assert_rejected_with_error(comm, expected=4001):
+    """New-channels rejection contract: the consumer SENDs an error payload
+    then closes WITHOUT accept, so communicator.connect() raises
+    AssertionError. Drive the handshake manually and verify both frames.
+    """
+    import json as _json
+    await comm.send_input({"type": "websocket.connect"})
+    msg = await comm.receive_output(timeout=2)
+    assert msg["type"] == "websocket.send", msg
+    assert "error" in _json.loads(msg.get("text") or "{}"), msg
+    closed = await comm.receive_output(timeout=2)
+    assert closed["type"] == "websocket.close", closed
+    assert closed.get("code", expected) == expected, closed
+
+
 def _make_communicator(consumer_cls, path, *, user=None, query_string='',
                         subprotocols=None):
     """Build a WebsocketCommunicator with auth injected into scope."""
@@ -64,7 +87,7 @@ class BuildLogConsumerTests(TestCase):
         self.deployment_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 
     async def test_connect_rejects_no_user(self):
-        """Anonymous scope (no user) is rejected with close(4001)."""
+        """Anonymous scope (no user) gets error + close, no accept."""
         comm = WebsocketCommunicator(
             BuildLogConsumer.as_asgi(),
             f'/ws/build-logs/{self.deployment_id}/',
@@ -73,11 +96,11 @@ class BuildLogConsumerTests(TestCase):
             'args': (),
             'kwargs': {'deployment_id': self.deployment_id},
         }
-        connected, _ = await comm.connect()
-        self.assertFalse(connected)
+        await _assert_rejected_with_error(comm, expected=4001)
+        await comm.disconnect()
 
     async def test_connect_rejects_invalid_token(self):
-        """Unauthenticated user is rejected with close(4001)."""
+        """Unauthenticated user gets error + close, no accept."""
         comm = WebsocketCommunicator(
             BuildLogConsumer.as_asgi(),
             f'/ws/build-logs/{self.deployment_id}/',
@@ -87,8 +110,8 @@ class BuildLogConsumerTests(TestCase):
             'kwargs': {'deployment_id': self.deployment_id},
         }
         comm.scope['user'] = MagicMock(is_authenticated=False)
-        connected, _ = await comm.connect()
-        self.assertFalse(connected)
+        await _assert_rejected_with_error(comm, expected=4001)
+        await comm.disconnect()
 
     async def test_connect_accepts_valid_owner(self):
         """Authenticated owner gets accepted and receives initial_state."""
@@ -154,7 +177,7 @@ class BuildLogConsumerTests(TestCase):
 
             # Simulate Celery pushing a log via channel layer
             group_name = f"build_logs_{self.deployment_id}"
-            await comm.instance.channel_layer.group_send(
+            await _test_channel_layer().group_send(
                 group_name, {
                     'type': 'build_log',
                     'log': 'Compiling assets...\n',
@@ -198,17 +221,12 @@ class BuildLogConsumerTests(TestCase):
             await comm.receive_json_from(timeout=2)
 
             group_name = f"build_logs_{self.deployment_id}"
-            channel_name = comm.instance.channel_name
-            channel_layer = comm.instance.channel_layer
-            self.assertIn(channel_name,
-                          channel_layer.groups.get(group_name, set()))
+            layer = _test_channel_layer()
+            self.assertTrue(layer.groups.get(group_name))
 
             await comm.disconnect()
             # After disconnect the channel should be gone from the group
-            self.assertNotIn(
-                channel_name,
-                channel_layer.groups.get(group_name, set()),
-            )
+            self.assertFalse(layer.groups.get(group_name))
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +242,7 @@ class RuntimeLogConsumerTests(TestCase):
         self.deployment_id = 'aaaaaaaa-bbbb-cccc-dddd-ffffffffffff'
 
     async def test_connect_rejects_anonymous(self):
-        """Anonymous scope is rejected with close(4002)."""
+        """Anonymous scope gets error + close(4002), no accept."""
         comm = WebsocketCommunicator(
             RuntimeLogConsumer.as_asgi(),
             f'/ws/runtime-logs/{self.deployment_id}/',
@@ -233,8 +251,8 @@ class RuntimeLogConsumerTests(TestCase):
             'args': (),
             'kwargs': {'deployment_id': self.deployment_id},
         }
-        connected, _ = await comm.connect()
-        self.assertFalse(connected)
+        await _assert_rejected_with_error(comm, expected=4002)
+        await comm.disconnect()
 
     async def test_connect_accepts_valid_owner(self):
         """Authenticated owner gets accepted and receives initial_state."""
@@ -296,7 +314,7 @@ class RuntimeLogConsumerTests(TestCase):
             await comm.receive_json_from(timeout=2)  # initial_state
 
             group_name = f"runtime_logs_{self.deployment_id}"
-            await comm.instance.channel_layer.group_send(
+            await _test_channel_layer().group_send(
                 group_name, {
                     'type': 'log_event',
                     'log': 'Listening on port 3000\n',
@@ -337,16 +355,11 @@ class RuntimeLogConsumerTests(TestCase):
             await comm.receive_json_from(timeout=2)
 
             group_name = f"runtime_logs_{self.deployment_id}"
-            channel_name = comm.instance.channel_name
-            self.assertIn(channel_name,
-                          comm.instance.channel_layer.groups.get(
-                              group_name, set()))
+            layer = _test_channel_layer()
+            self.assertTrue(layer.groups.get(group_name))
 
             await comm.disconnect()
-            self.assertNotIn(
-                channel_name,
-                comm.instance.channel_layer.groups.get(group_name, set()),
-            )
+            self.assertFalse(layer.groups.get(group_name))
 
 
 # ---------------------------------------------------------------------------
@@ -361,14 +374,17 @@ class ServiceStatusConsumerTests(TestCase):
         self.token = Token.objects.create(user=self.user)
 
     async def test_connect_rejects_unauthenticated(self):
-        """Anonymous scope is rejected with close(4001)."""
+        """Anonymous scope is accepted, told, then closed (accept+error+close)."""
         comm = WebsocketCommunicator(
             ServiceStatusConsumer.as_asgi(),
             '/ws/service-status/',
         )
         comm.scope['url_route'] = {'args': (), 'kwargs': {}}
         connected, _ = await comm.connect()
-        self.assertFalse(connected)
+        self.assertTrue(connected)
+        msg = await comm.receive_json_from(timeout=2)
+        self.assertEqual(msg.get('error'), 'Authentication required')
+        await comm.disconnect()
 
     async def test_connect_accepts_and_sends_initial_services(self):
         """Authenticated user gets accepted and receives initial service list."""
@@ -420,7 +436,7 @@ class ServiceStatusConsumerTests(TestCase):
             # but the group is joined)
 
             group_name = f"user_services_{self.user.id}"
-            await comm.instance.channel_layer.group_send(
+            await _test_channel_layer().group_send(
                 group_name, {
                     'type': 'service_status_update',
                     'service_id': 'svc-uuid-2',
@@ -455,16 +471,11 @@ class ServiceStatusConsumerTests(TestCase):
             self.assertTrue(connected)
 
             group_name = f"user_services_{self.user.id}"
-            channel_name = comm.instance.channel_name
-            self.assertIn(channel_name,
-                          comm.instance.channel_layer.groups.get(
-                              group_name, set()))
+            layer = _test_channel_layer()
+            self.assertTrue(layer.groups.get(group_name))
 
             await comm.disconnect()
-            self.assertNotIn(
-                channel_name,
-                comm.instance.channel_layer.groups.get(group_name, set()),
-            )
+            self.assertFalse(layer.groups.get(group_name))
 
 
 # ---------------------------------------------------------------------------

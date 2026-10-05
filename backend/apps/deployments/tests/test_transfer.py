@@ -270,7 +270,8 @@ class PreTransferEnvSnapshotTests(TestCase):
     def test_revert_target_platform_env_reads_metadata_snapshot(self):
         """The revert method must read from
         ``transfer.metadata['pre_transfer_env_vars']`` and write each
-        key back to the target's EnvironmentVariable table.
+        key back to the target's EnvironmentVariable table via the
+        node API (incoming/exec). No SSH upload path exists anymore.
         """
         from django.contrib.auth import get_user_model
         user_model = get_user_model()
@@ -292,37 +293,27 @@ class PreTransferEnvSnapshotTests(TestCase):
             },
         )
         svc = ServerTransferService(transfer)
-        svc.ssh = MagicMock()
         svc._log = MagicMock()
         svc._find_remote_backend_container = MagicMock(
             return_value='smsly-hosting-backend-1',
         )
+        calls = []
 
-        uploaded = []
+        def fake_exec(script, container='backend', timeout=120):
+            calls.append(script)
+            return {'stdout': 'REVERTED 2 env vars for revert-svc\n', 'exit_code': 0}
 
-        def fake_upload(local_path, remote_path):
-            with open(local_path) as f:
-                uploaded.append(f.read())
-
-        svc.ssh.upload_file.side_effect = fake_upload
-        exec_results = ['REVERTED 2 env vars for revert-svc\n']
-
-        def fake_exec(command, *args, **kwargs):
-            joined = command if isinstance(command, str) else ' '.join(command)
-            if 'python3 /tmp/' in joined:
-                return exec_results.pop(0)
-            return ''
-
-        svc.ssh.exec_command.side_effect = fake_exec
+        svc._exec_on_target = fake_exec
 
         svc._revert_target_platform_env()
 
-        self.assertEqual(len(uploaded), 1)
-        self.assertIn('revert-svc', uploaded[0])
-        self.assertIn('postgresql://source', uploaded[0])
-        self.assertIn('redis://source', uploaded[0])
-        self.assertIn('DATABASE_URL', uploaded[0])
-        self.assertIn('REDIS_URL', uploaded[0])
+        self.assertEqual(len(calls), 1)
+        script = calls[0]
+        self.assertIn('revert-svc', script)
+        self.assertIn('postgresql://source', script)
+        self.assertIn('redis://source', script)
+        self.assertIn('DATABASE_URL', script)
+        self.assertIn('REDIS_URL', script)
 
     def test_revert_target_platform_env_noop_without_snapshot(self):
         from django.contrib.auth import get_user_model
@@ -340,13 +331,12 @@ class PreTransferEnvSnapshotTests(TestCase):
             metadata={},
         )
         svc = ServerTransferService(transfer)
-        svc.ssh = MagicMock()
         svc._log = MagicMock()
+        svc._node_api_request = MagicMock()
 
         svc._revert_target_platform_env()
 
-        svc.ssh.upload_file.assert_not_called()
-        svc.ssh.exec_command.assert_not_called()
+        svc._node_api_request.assert_not_called()
 
     def test_revert_target_platform_env_noop_for_full_transfer(self):
         from django.contrib.auth import get_user_model
@@ -364,10 +354,42 @@ class PreTransferEnvSnapshotTests(TestCase):
             },
         )
         svc = ServerTransferService(transfer)
-        svc.ssh = MagicMock()
         svc._log = MagicMock()
+        svc._node_api_request = MagicMock()
 
         svc._revert_target_platform_env()
 
-        svc.ssh.upload_file.assert_not_called()
-        svc.ssh.exec_command.assert_not_called()
+        svc._node_api_request.assert_not_called()
+
+
+class TransferRemapWiringTests(TestCase):
+    def test_remap_executes_and_stores_snapshot(self):
+        """The remap must actually run (no NameError on os/urlparse) and
+        persist the target's pre-transfer snapshot for rollback."""
+        from django.contrib.auth import get_user_model
+        user_model = get_user_model()
+        user = user_model.objects.create_superuser(
+            username='remap-wiring', email='rw@example.com', password='x',
+        )
+        from apps.deployments.models import Service
+        from apps.deployments.models.transfer import ServerTransfer
+        from apps.deployments.services.transfer_service import ServerTransferService
+        service = Service.objects.create(owner=user, name='remap-wiring-svc')
+        transfer = ServerTransfer.objects.create(
+            owner=user, transfer_type='SERVICE', service=service,
+            source_server_ip='10.0.0.1', target_server_ip='10.0.0.2',
+        )
+        svc = ServerTransferService(transfer)
+        svc._log = MagicMock()
+        sent = {}
+
+        def fake_exec(script, container='backend', timeout=120):
+            sent['script'] = script
+            return {'stdout': 'PRE_TRANSFER_ENV_JSON_BEGIN {"DATABASE_URL": "postgresql://old"}\nPRE_TRANSFER_ENV_JSON_END\n'}
+
+        svc._exec_on_target = fake_exec
+        svc._remap_target_platform_env()
+        transfer.refresh_from_db()
+        snapshot = (transfer.metadata or {}).get('pre_transfer_env_vars') or {}
+        self.assertEqual(snapshot.get('DATABASE_URL'), 'postgresql://old')
+        self.assertIn('urlparse', sent['script'])

@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 BUNDLE_DIR = "/app/backups/secrets"
 SOPS_RULE_FILE = os.path.join(BUNDLE_DIR, ".sops.yaml")
 SOPS_TIMEOUT = 120
+# Largest bundle file accepted for node distribution (bundles hold
+# secret key/values only — KBs in practice; anything bigger is refused
+# rather than shipped).
+BUNDLE_DISTRIBUTION_LIMIT = 256 * 1024
 
 
 class SopsError(RuntimeError):
@@ -69,6 +73,66 @@ def store_platform_keypair(public_recipient: str, private_key: str) -> bool:
     cfg.secrets_age_private_key = private
     cfg.save(update_fields=["secrets_age_public_key", "secrets_age_private_key"])
     logger.info("SOPS platform keypair converged (public %s...)", public[:12])
+    return True
+
+
+def read_service_bundle(service) -> dict | None:
+    """Read this service's exported bundle for node distribution.
+
+    Returns {fingerprint, content} or None when no bundle exists (or
+    it exceeds the distribution cap). Content is SOPS-encrypted —
+    safe to ship over the HMAC+TLS trigger channel; callers must
+    still never log it.
+    """
+    import hashlib as _hashlib
+    path = _bundle_path(getattr(service, "id", ""))
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    if size <= 0 or size > BUNDLE_DISTRIBUTION_LIMIT:
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="strict") as fh:
+            content = fh.read()
+    except (OSError, UnicodeError):
+        return None
+    if "sops:" not in content or "ENC[" not in content:
+        return None
+    fingerprint = _hashlib.sha256(content.encode()).hexdigest()[:16]
+    return {"fingerprint": fingerprint, "content": content}
+
+
+def store_service_bundle(service, bundle) -> bool:
+    """Store a master-shipped bundle for local verify/decrypt use.
+
+    Shape-validated (SOPS envelope markers + size cap), written 0600
+    to this host's bundle path for the LOCAL service row. Never logs
+    content. Returns True when stored.
+    """
+    if not isinstance(bundle, dict):
+        return False
+    content = bundle.get("content")
+    if not isinstance(content, str) or not content:
+        return False
+    if len(content.encode()) > BUNDLE_DISTRIBUTION_LIMIT:
+        return False
+    if "sops:" not in content or "ENC[" not in content:
+        return False
+    path = _bundle_path(getattr(service, "id", ""))
+    try:
+        os.makedirs(BUNDLE_DIR, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    logger.info(
+        "SOPS bundle stored for %s (%d bytes)",
+        getattr(service, "name", "?"), len(content.encode()),
+    )
     return True
 
 

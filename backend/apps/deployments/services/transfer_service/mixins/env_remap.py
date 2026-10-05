@@ -1,7 +1,9 @@
 import json
 import logging
+import os
 import re
 import shlex
+from urllib.parse import urlparse
 
 from ..helpers import _safe_service_name
 
@@ -57,7 +59,20 @@ if svc:
         if env and env.value and str(env.value).strip():
             old_val = str(env.value).strip()
             old_base = os.environ.get("DOMAIN_OLD", "").strip() or "localhost"
-            if old_base in old_val or old_val == "********":
+            # Hostname-aware stale check: a bare substring match would
+            # remap unrelated values merely containing the old base
+            # (e.g. old "a.com" inside "https://xa.com/"). Compare
+            # hostnames for URL-like values, exact otherwise.
+            try:
+                old_host = (urlparse(old_val).hostname or "").strip().lower()
+            except Exception:
+                old_host = ""
+            is_stale = (
+                old_val == "********"
+                or old_base in (old_val, old_host)
+                or (not old_host and old_base in old_val)
+            )
+            if is_stale:
                 EnvironmentVariable.objects.update_or_create(
                     service=svc, key=dk,
                     defaults={"value": dv, "source": "SYSTEM"},

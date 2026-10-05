@@ -62,6 +62,19 @@ class DeploymentMixin:
                 payload["sops_age_private"] = _priv
         except Exception as exc:
             logger.debug("Remote trigger SOPS key skipped: %s", exc)
+        # Ship this service's SOPS bundle file (if exported): nodes
+        # verify/decrypt against local rows + the converged keypair.
+        # Encrypted at rest in transit terms (SOPS envelope); still
+        # never logged. Fail-open.
+        try:
+            from apps.deployments.services.secrets_sops import read_service_bundle
+            _svc_b = getattr(deployment, "service", None)
+            if _svc_b is not None:
+                _bundle = read_service_bundle(_svc_b)
+                if _bundle:
+                    payload["sops_bundle"] = _bundle
+        except Exception as exc:
+            logger.debug("Remote trigger SOPS bundle skipped: %s", exc)
         # Ship addon rows for node consumption (mesh-backed): the node
         # pipeline, readiness gates, and shortcode resolution all read
         # node-local Addon rows, which are otherwise always empty after

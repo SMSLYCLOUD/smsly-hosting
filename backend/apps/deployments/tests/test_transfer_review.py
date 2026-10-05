@@ -73,8 +73,7 @@ class TransferFirewallOrderTests(TestCase):
             self.assertNotIn("RETURN", rule)
 
 
-class TransferOwnerFallbackTests(TestCase):
-    def test_no_arbitrary_first_user(self):
+class TransferOwnerFallbackTests(TestCase):    def test_no_arbitrary_first_user(self):
         from apps.deployments.services.transfer_service.mixins.service_restore import (
             SingleServiceRestoreMixin,
         )

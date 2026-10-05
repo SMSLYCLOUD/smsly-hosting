@@ -137,3 +137,17 @@ def apply_volumes(service, items) -> int:
     except Exception as exc:
         logger.debug("volume apply skipped: %s", exc)
     return created
+
+
+def apply_sops_bundle(service, bundle) -> bool:
+    """Store the master-shipped SOPS bundle for local verify/decrypt.
+
+    Thin wrapper over secrets_sops.store_service_bundle with the
+    node_apply fail-open contract (never raises).
+    """
+    try:
+        from apps.deployments.services.secrets_sops import store_service_bundle
+        return bool(store_service_bundle(service, bundle))
+    except Exception as exc:
+        logger.debug("sops bundle apply skipped: %s", exc)
+        return False

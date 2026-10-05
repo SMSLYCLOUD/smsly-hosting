@@ -17,6 +17,9 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3100:3100"
+      # WireGuard mesh ingest for node promtails (kept identical to
+      # docker-compose.prod.yml — both files manage smsly-loki).
+      - "${LOKI_MESH_BIND_IP:-10.100.0.1}:3100:3100"
     volumes:
       - loki-data:/loki
       - ../monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro

@@ -170,6 +170,7 @@ class DeployActionsMixin:
                         request.data.get('sops_age_public'),
                         request.data.get('sops_age_private'),
                     ),
+                    lambda: node_apply.apply_sops_bundle(service, request.data.get('sops_bundle')),
                     lambda: node_apply.apply_volumes(service, request.data.get('volumes')),
                     lambda: node_apply.apply_mesh_addons(service, request.data.get('addons')),
                 ):

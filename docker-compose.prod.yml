@@ -2023,6 +2023,10 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3100:3100"
+      # WireGuard mesh ingest for node promtails (same pattern as the
+      # registry/coredns mesh binds — loopback alone leaves node
+      # pushes dying with i/o timeouts). Mesh peers are trusted nodes.
+      - "${LOKI_MESH_BIND_IP:-10.100.0.1}:3100:3100"
     volumes:
       - loki-data:/loki
       - ./infrastructure/monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro

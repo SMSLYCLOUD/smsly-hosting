@@ -24,6 +24,11 @@ _VOLUME_MOUNT_PATH_ALLOWED_PREFIXES = (
     "/home/smsly/",
     "/mnt/",
     "/opt/app/",
+    # Tenant serializer roots (views/storage.py _VOLUME_ALLOWED_ROOTS):
+    # bare roots must also pass here, otherwise a path the serializer
+    # and model clean() accept dies at pre_save. Children are covered
+    # by prefix match; bare roots by the ==rstrip check.
+    "/var/lib/smsly/",
     # Platform template fixtures (apps/deployments/fixtures/templates.json):
     # vetted app-data roots the one-click deployer auto-mounts as Docker
     # NAMED volumes (isolated daemon storage — never host directories,
@@ -67,21 +72,20 @@ def validate_volume_name_pre_save(sender, instance, **kwargs):
     """SECURITY (Issue 140): defence-in-depth for Volume.name.
 
     The serializer runs ``_validate_volume_name`` first, but admin
-    scripts or direct ORM writes can bypass it.  The model-level
+    scripts or direct ORM writes can bypass it. The model-level
     ``clean()`` is not invoked automatically by ``save()``, so we
-    attach a ``pre_save`` signal that enforces the same
-    ``^[a-zA-Z0-9_-]{1,64}$`` regex.
+    attach a ``pre_save`` signal enforcing the SAME validator
+    (single source of truth in views/storage.py — regex plus the
+    platform prefix blocklist). Lazy import: views.storage imports
+    models at its top level.
     """
     if instance.name is None:
         return
-    name = str(instance.name)
-    if not Volume._VOLUME_NAME_RE.match(name):
-        raise ValidationError({
-            "name": (
-                "name must match ^[a-zA-Z0-9_-]{1,64}$ "
-                "(letters, digits, underscore or hyphen; max 64 chars)."
-            )
-        })
+    from apps.deployments.views.storage import _validate_volume_name
+    try:
+        _validate_volume_name(str(instance.name))
+    except Exception as exc:
+        raise ValidationError({"name": str(exc)})
 
 
 @receiver(pre_save, sender=Volume)

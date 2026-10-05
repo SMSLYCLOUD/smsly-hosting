@@ -34,6 +34,13 @@ class ExecMixin:
                 if name and name not in candidates:
                     candidates.append(name)
 
+        # Exact configured/backend names first: on hosts running
+        # several backend-ish containers (workers, sidecars) a substring
+        # hit may be the wrong daemon.
+        exact = {configured, 'smsly-hosting-backend-1'}
+        for name in candidates:
+            if name in exact:
+                return name
         for name in candidates:
             if 'hosting' in name and 'backend' in name:
                 return name
