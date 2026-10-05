@@ -12,7 +12,7 @@ import {
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { mcpApi, api, McpStatus, McpTool, McpToken } from '@/lib/api';
+import { mcpApi, api, McpStatus, McpTool, McpToken, projectsApi, Project } from '@/lib/api';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -101,12 +101,18 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   );
 }
 
-type McpTokenWithScopes = McpToken & { scopes?: string[] | null };
+type McpTokenWithScopes = McpToken & { scopes?: string[] | null; projects?: string[] | null };
 
 function scopeLabel(scopes?: string[] | null): string {
   if (!scopes || scopes.length === 0) return 'full access (legacy)';
   if (scopes.includes('write')) return 'read + write';
   return 'read-only';
+}
+
+function projectLabel(projects: string[] | null | undefined, all: Project[]): string {
+  if (!projects || projects.length === 0) return 'all projects';
+  const names = projects.map((id) => all.find((p) => p.id === id)?.name || id.slice(0, 8));
+  return names.join(', ');
 }
 
 export default function MCPPage() {
@@ -122,6 +128,8 @@ export default function MCPPage() {
   const [newToken, setNewToken] = useState<{ name: string; token: string } | null>(null);
   const [tokenBusy, setTokenBusy] = useState<string | null>(null);
   const [tokenScope, setTokenScope] = useState<'read' | 'full'>('full');
+  const [projectList, setProjectList] = useState<Project[]>([]);
+  const [tokenProjects, setTokenProjects] = useState<string[]>([]);
 
   const refreshStatus = useCallback(async (silent = false) => {
     if (!silent) setStatusLoading(true);
@@ -160,8 +168,10 @@ export default function MCPPage() {
       const res = await api.post('/mcp/tokens/', {
         name: `MCP ${new Date().toISOString().slice(0, 10)}`,
         scopes,
+        projects: tokenProjects,
       });
       setNewToken({ name: res.data.name, token: res.data.token });
+      setTokenProjects([]);
       await refreshTokens();
       toast({ title: 'Token created — copy it now, it is never shown again' });
     } catch (err: any) {
@@ -196,6 +206,7 @@ export default function MCPPage() {
     refreshStatus();
     refreshTools();
     refreshTokens();
+    projectsApi.list().then(setProjectList).catch(() => setProjectList([]));
   }, [refreshStatus, refreshTools, refreshTokens]);
 
   const controlServer = async (action: 'start' | 'stop' | 'restart') => {
@@ -440,6 +451,17 @@ export default function MCPPage() {
                       <option value="full">Read + write</option>
                       <option value="read">Read-only</option>
                     </select>
+                    <select
+                      multiple
+                      value={tokenProjects}
+                      onChange={(e) => setTokenProjects(Array.from(e.target.selectedOptions, (o) => o.value))}
+                      className="text-xs bg-background border border-border rounded px-2 py-1.5 max-w-[220px]"
+                      title="Restrict the new token to these projects (empty = all projects)"
+                    >
+                      {projectList.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
                     <span className="text-xs text-muted-foreground">Use as <code className="bg-muted px-1 rounded">Authorization: Bearer smsly_…</code></span>
                   </div>
                   {newToken && (
@@ -461,7 +483,7 @@ export default function MCPPage() {
                             <p className="text-[11px] text-muted-foreground">
                               created {t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'}
                               {t.last_used_at ? ` · used ${new Date(t.last_used_at).toLocaleDateString()}` : ' · never used'}
-                              {` · ${scopeLabel(t.scopes)}`}
+                              {` · ${scopeLabel(t.scopes)} · ${projectLabel(t.projects, projectList)}`}
                             </p>
                           </div>
                           <Button variant="ghost" size="sm" onClick={() => revokeToken(t.id)} disabled={tokenBusy === t.id}>

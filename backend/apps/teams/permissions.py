@@ -70,14 +70,33 @@ def user_is_team_admin(user, service_or_project) -> bool:
     return _team_role(user, service_or_project) == 'ADMIN'
 
 
+def _is_owner_or_superuser(user, service_or_project) -> bool:
+    """Platform ownership rule: superusers and the resource owner always
+    have access (mirrors assert_can_write/assert_can_delete and the
+    owner arm of get_team_q_filter). Without this, teamless owners see
+    their objects in listings but get "Permission denied" on read."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    try:
+        return getattr(service_or_project, "owner", None) == user
+    except Exception:
+        return False
+
+
 def user_can_write(user, service_or_project) -> bool:
     """Can the user create/update resources (but not delete)?"""
+    if _is_owner_or_superuser(user, service_or_project):
+        return True
     role = _team_role(user, service_or_project)
     return role in ('ADMIN', 'MEMBER')
 
 
 def user_can_read(user, service_or_project) -> bool:
     """Can the user view resources?"""
+    if _is_owner_or_superuser(user, service_or_project):
+        return True
     role = _team_role(user, service_or_project)
     return role in ('ADMIN', 'MEMBER', 'VIEWER')
 

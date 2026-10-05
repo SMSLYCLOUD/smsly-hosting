@@ -249,10 +249,23 @@ def get_error_diagnostics(deployment_id: str, user_id: str | None = None, user_e
 def list_projects(user_id: str | None = None, user_email: str | None = None) -> list[dict[str, Any]]:
     """List all projects/workspaces in the ecosystem."""
     try:
+        from django.db.models import Q
         user = _resolve_user(user_id, user_email)
         projects = Project.objects.all()
         if user:
-            projects = projects.filter(get_team_q_filter(user))
+            if not user.is_superuser:
+                # Project-correct scoping: owned OR team-member. NOTE:
+                # get_team_q_filter() builds service-shaped lookups
+                # (project__team_id) which raise FieldError on Project
+                # querysets — do not use it here.
+                from apps.teams.models import TeamMember
+                from django.utils import timezone
+                team_ids = list(TeamMember.objects.filter(
+                    user=user, is_active=True,
+                ).exclude(
+                    expires_at__isnull=False, expires_at__lt=timezone.now(),
+                ).values_list('team_id', flat=True))
+                projects = projects.filter(Q(owner=user) | Q(team_id__in=team_ids))
 
         results = []
         for proj in projects:

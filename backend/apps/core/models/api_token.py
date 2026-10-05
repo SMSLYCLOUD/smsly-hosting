@@ -27,6 +27,31 @@ from rest_framework.exceptions import AuthenticationFailed
 VALID_SCOPES = frozenset({"read", "write"})
 
 
+def validate_projects(projects) -> list:
+    """Normalize an optional project-scope value to a list of UUID strings.
+
+    Each entry must be a valid UUID string (Project PKs). Existence and
+    readability are checked at mint time by the caller (it knows the
+    user); use ``has_project``/``project_scope`` at call time.
+    """
+    import uuid as _uuid
+    if projects is None:
+        return []
+    if isinstance(projects, str) or not isinstance(projects, (list, tuple)):
+        raise ValueError("projects must be a list of project ID strings.")
+    cleaned = []
+    for project_id in projects:
+        if not isinstance(project_id, str):
+            raise ValueError(f"Invalid project ID {project_id!r}: must be a UUID string.")
+        try:
+            normalized = str(_uuid.UUID(str(project_id).strip()))
+        except (ValueError, AttributeError):
+            raise ValueError(f"Invalid project ID {project_id!r}: must be a UUID string.")
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+    return cleaned
+
+
 def validate_scopes(scopes) -> list:
     """Normalize an optional scopes value to a list of valid scope strings."""
     if scopes is None:
@@ -84,6 +109,11 @@ class APIToken(models.Model):
         blank=True,
         help_text="Permission scopes, e.g. ['read'] or ['read', 'write']. Empty = full access (legacy).",
     )
+    projects = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Project IDs this token may access. Empty = all owner's projects (legacy).",
+    )
 
     class Meta:
         db_table = 'deployments_apitoken'
@@ -96,15 +126,17 @@ class APIToken(models.Model):
     # ---- Factory ----
 
     @classmethod
-    def create_token(cls, user, name: str = "CLI Token", scopes=None):
+    def create_token(cls, user, name: str = "CLI Token", scopes=None, projects=None):
         """
         Generate a new token. Returns (APIToken instance, raw_token).
 
         The raw token is prefixed with "smsly_" for easy identification.
         ``scopes`` is an optional list like ["read"] or ["read", "write"];
-        None/empty means legacy full access.
+        None/empty means legacy full access. ``projects`` is an optional
+        list of project ID strings; None/empty means all owner's projects.
         """
         validated_scopes = validate_scopes(scopes)
+        validated_projects = validate_projects(projects)
         raw = f"smsly_{secrets.token_hex(24)}"  # 48 hex chars + prefix = 54 chars
         token_hash = hashlib.sha256(raw.encode()).hexdigest()
         prefix = raw[:12]
@@ -115,6 +147,7 @@ class APIToken(models.Model):
             prefix=prefix,
             token_hash=token_hash,
             scopes=validated_scopes,
+            projects=validated_projects,
         )
         return instance, raw
 
@@ -124,6 +157,23 @@ class APIToken(models.Model):
         if not current:
             return True  # legacy full access
         return scope in current
+
+    def project_scope(self) -> list | None:
+        """Project IDs this token may access, or None for full access.
+
+        Empty/missing means legacy full access (all owner's projects).
+        """
+        current = getattr(self, "projects", None) or []
+        if not current:
+            return None
+        return [str(p) for p in current if isinstance(p, str)]
+
+    def has_project(self, project_id) -> bool:
+        """True if this token may access ``project_id``."""
+        scope = self.project_scope()
+        if scope is None:
+            return True  # legacy full access
+        return str(project_id) in scope
 
     @classmethod
     def verify(cls, raw_token: str):

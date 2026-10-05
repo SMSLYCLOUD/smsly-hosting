@@ -268,11 +268,11 @@ class McpTransportAuthTests(TestCase):
 
     def test_stdio_passthrough(self):
         self.assertEqual(
-            self.auth("list_services", None, "u1", "a@b.c"), ("u1", "a@b.c")
+            self.auth("list_services", None, "u1", "a@b.c"), ("u1", "a@b.c", None)
         )
         self.assertEqual(
             self.auth("set_service_env_var", self._ctx(request=False), "u1", None),
-            ("u1", None),
+            ("u1", None, None),
         )
 
     def test_http_without_token_denied(self):
@@ -296,25 +296,28 @@ class McpTransportAuthTests(TestCase):
     def test_http_binds_identity_and_enforces_scopes(self):
         read_inst, read_raw = self._token(["read"])
         ctx = self._ctx({"authorization": f"Bearer {read_raw}"})
-        uid, email = self.auth("list_services", ctx, "spoofed", "spoof@x.y")
+        uid, email, scope = self.auth("list_services", ctx, "spoofed", "spoof@x.y")
         self.assertEqual(uid, str(self.user.id))
         self.assertEqual(email, "auth@example.com")
+        self.assertIsNone(scope)
         with self.assertRaises(self.ToolError):
             self.auth("set_service_env_var", ctx)
         write_inst, write_raw = self._token(["read", "write"])
-        uid2, _ = self.auth(
+        uid2, _, scope2 = self.auth(
             "set_service_env_var",
             self._ctx({"authorization": f"Bearer {write_raw}"}),
         )
         self.assertEqual(uid2, str(self.user.id))
+        self.assertIsNone(scope2)
 
     def test_http_legacy_token_full_access(self):
         inst, raw = self._token(None)
-        uid, _ = self.auth(
+        uid, _, scope = self.auth(
             "trigger_service_rebuild",
             self._ctx({"authorization": f"Bearer {raw}"}),
         )
         self.assertEqual(uid, str(self.user.id))
+        self.assertIsNone(scope)
 
 
 class McpControlPermissionTests(TestCase):
@@ -350,3 +353,129 @@ class McpOwnNetworksTests(TestCase):
         client.containers.get.return_value = me
         with patch("socket.gethostname", return_value="backend"):
             self.assertEqual(svc._own_networks(client), ["smsly-net"])
+
+
+class McpProjectScopeTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        self.user = User.objects.create_user(username="mcp-proj-user", password="pass")
+        from apps.deployments.models import Project, Service
+        self.proj_a = Project.objects.create(owner=self.user, name="Proj A")
+        self.proj_b = Project.objects.create(owner=self.user, name="Proj B")
+        self.svc_a = Service.objects.create(name="mcp-proj-svc-a", owner=self.user, project=self.proj_a)
+        self.svc_b = Service.objects.create(name="mcp-proj-svc-b", owner=self.user, project=self.proj_b)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def _token(self, scopes=None, projects=None):
+        from apps.core.models.api_token import APIToken
+        return APIToken.create_token(self.user, "t", scopes=scopes, projects=projects)
+
+    def test_validate_projects(self):
+        from apps.core.models.api_token import validate_projects
+        self.assertEqual(validate_projects(None), [])
+        self.assertEqual(validate_projects([str(self.proj_a.id)]), [str(self.proj_a.id)])
+        with self.assertRaises(ValueError):
+            validate_projects(["not-a-uuid"])
+        with self.assertRaises(ValueError):
+            validate_projects("oops")
+
+    def test_create_token_with_projects(self):
+        created = self.client.post(
+            "/api/v1/mcp/tokens/",
+            {"name": "scoped", "projects": [str(self.proj_a.id)]},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.data["projects"], [str(self.proj_a.id)])
+
+    def test_create_token_rejects_foreign_project(self):
+        other = User.objects.create_user(username="mcp-proj-other", password="pass")
+        from apps.deployments.models import Project
+        foreign = Project.objects.create(owner=other, name="Foreign")
+        created = self.client.post(
+            "/api/v1/mcp/tokens/",
+            {"name": "scoped", "projects": [str(foreign.id)]},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 400)
+
+    def test_bound_token_service_isolation_http(self):
+        _, raw = self._token(["read", "write"], [str(self.proj_a.id)])
+        from rest_framework.test import APIClient as RawClient
+        anon = RawClient()
+        ok = anon.post(
+            "/api/v1/mcp/tools/get_service_details/call/",
+            {"args": {"service_id": str(self.svc_a.id)}},
+            format="json", HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        self.assertEqual(ok.status_code, 200)
+        self.assertTrue(ok.data["ok"])
+        denied = anon.post(
+            "/api/v1/mcp/tools/get_service_details/call/",
+            {"args": {"service_id": str(self.svc_b.id)}},
+            format="json", HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        self.assertEqual(denied.status_code, 403)
+        self.assertFalse(denied.data["ok"])
+
+    def test_bound_token_global_lists_denied_projects_filtered_http(self):
+        _, raw = self._token(["read"], [str(self.proj_a.id)])
+        from rest_framework.test import APIClient as RawClient
+        anon = RawClient()
+        denied = anon.post(
+            "/api/v1/mcp/tools/list_services/call/",
+            {"args": {}},
+            format="json", HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        self.assertEqual(denied.status_code, 403)
+        # list_projects is filtered, not denied
+        listed = anon.post(
+            "/api/v1/mcp/tools/list_projects/call/",
+            {"args": {}},
+            format="json", HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        self.assertEqual(listed.status_code, 200)
+        ids = [p.get("id") for p in listed.data["result"] if isinstance(p, dict)]
+        self.assertIn(str(self.proj_a.id), ids)
+        self.assertNotIn(str(self.proj_b.id), ids)
+
+    def test_bound_token_project_services_scoped_http(self):
+        _, raw = self._token(["read"], [str(self.proj_a.id)])
+        from rest_framework.test import APIClient as RawClient
+        anon = RawClient()
+        ok = anon.post(
+            "/api/v1/mcp/tools/get_project_services/call/",
+            {"args": {"project_id": str(self.proj_a.id)}},
+            format="json", HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        self.assertEqual(ok.status_code, 200)
+        denied = anon.post(
+            "/api/v1/mcp/tools/get_project_services/call/",
+            {"args": {"project_id": str(self.proj_b.id)}},
+            format="json", HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        self.assertEqual(denied.status_code, 403)
+
+    def test_bound_token_transport_scoped_sse(self):
+        from types import SimpleNamespace
+        from apps.mcp import server as server_module
+        _, raw = self._token(["read", "write"], [str(self.proj_a.id)])
+
+        def ctx():
+            return SimpleNamespace(request_context=SimpleNamespace(
+                request=SimpleNamespace(headers={"authorization": f"Bearer {raw}"})))
+
+        uid, _, scope = server_module._mcp_auth(
+            "get_service_details", ctx(), None, None,
+            tool_args={"service_id": str(self.svc_a.id)},
+        )
+        self.assertEqual(uid, str(self.user.id))
+        self.assertEqual(scope, [str(self.proj_a.id)])
+        with self.assertRaises(server_module.ToolError):
+            server_module._mcp_auth(
+                "get_service_details", ctx(), None, None,
+                tool_args={"service_id": str(self.svc_b.id)},
+            )
+        with self.assertRaises(server_module.ToolError):
+            server_module._mcp_auth("list_services", ctx(), None, None)

@@ -213,6 +213,7 @@ class McpTokenListView(APIView):
                 "name": t.name,
                 "prefix": t.prefix,
                 "scopes": list(getattr(t, "scopes", None) or []),
+                "projects": list(getattr(t, "projects", None) or []),
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
             }
@@ -228,8 +229,28 @@ class McpTokenListView(APIView):
             )
         name = str(request.data.get("name") or "").strip()[:100] or "MCP Token"
         raw_scopes = request.data.get("scopes", None)
+        raw_projects = request.data.get("projects", None)
         try:
-            instance, raw = APIToken.create_token(request.user, name, scopes=raw_scopes)
+            from apps.core.models.api_token import validate_projects
+            from apps.teams.permissions import user_can_read
+            project_ids = validate_projects(raw_projects)
+            for pid in project_ids:
+                try:
+                    from apps.deployments.models import Project
+                    proj = Project.objects.get(id=pid)
+                except Exception:
+                    return Response(
+                        {"error": f"Project {pid} not found."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not user_can_read(request.user, proj):
+                    return Response(
+                        {"error": f"No read access to project {proj.name}."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            instance, raw = APIToken.create_token(
+                request.user, name, scopes=raw_scopes, projects=project_ids,
+            )
         except ValueError as exc:
             return Response(
                 {"error": str(exc)},
@@ -241,6 +262,7 @@ class McpTokenListView(APIView):
                 "name": instance.name,
                 "prefix": instance.prefix,
                 "scopes": list(getattr(instance, "scopes", None) or []),
+                "projects": list(getattr(instance, "projects", None) or []),
                 "token": raw,
                 "warning": "Copy now — the raw token is never shown again.",
             },
@@ -307,6 +329,19 @@ class McpToolCallView(APIView):
                 {"ok": False, "error": "args must be a JSON object."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Project scope (bound tokens): WHAT is gated by scopes above;
+        # WHERE is gated here. Fail closed on unresolvable targets.
+        if isinstance(auth, APIToken):
+            from apps.mcp.policy import check_project_scope, filter_projects_result
+            scope_error = check_project_scope(auth, name, args)
+            if scope_error:
+                return Response(
+                    {"ok": False, "error": scope_error},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            _project_filter = lambda result: filter_projects_result(auth, result)
+        else:
+            _project_filter = lambda result: result
         # Coerce declared scalar params; inject the caller's identity for
         # the tools' built-in per-object permission checks.
         try:
@@ -337,4 +372,4 @@ class McpToolCallView(APIView):
         except Exception as exc:
             logger.exception("MCP tool %s failed", name)
             return Response({"ok": False, "error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        return Response({"ok": True, "result": result})
+        return Response({"ok": True, "result": _project_filter(result)})
