@@ -245,3 +245,108 @@ class SseReachableTests(TestCase):
 
     def test_unreachable_on_error(self):
         self.assertFalse(self._status(urlopen_error=Exception("down")).data["sse_reachable"])
+
+
+class McpTransportAuthTests(TestCase):
+    def setUp(self):
+        mcp_fastmcp = __import__("mcp.server.fastmcp", fromlist=["Context"])
+        self.assertTrue(hasattr(mcp_fastmcp, "Context"))
+        from apps.mcp import server as server_module
+        self.auth = server_module._mcp_auth
+        self.ToolError = server_module.ToolError
+        self.user = User.objects.create_user(
+            username="mcp-auth-user", email="auth@example.com", password="pass",
+        )
+
+    def _ctx(self, headers=None, request=True):
+        from types import SimpleNamespace
+        if not request:
+            return SimpleNamespace(request_context=SimpleNamespace(request=None))
+        return SimpleNamespace(
+            request_context=SimpleNamespace(request=SimpleNamespace(headers=headers or {}))
+        )
+
+    def test_stdio_passthrough(self):
+        self.assertEqual(
+            self.auth("list_services", None, "u1", "a@b.c"), ("u1", "a@b.c")
+        )
+        self.assertEqual(
+            self.auth("set_service_env_var", self._ctx(request=False), "u1", None),
+            ("u1", None),
+        )
+
+    def test_http_without_token_denied(self):
+        with self.assertRaises(self.ToolError):
+            self.auth("list_services", self._ctx({}))
+        with self.assertRaises(self.ToolError):
+            self.auth("list_services", self._ctx({"authorization": "Basic abc"}))
+
+    def test_http_invalid_token_denied(self):
+        from rest_framework.exceptions import AuthenticationFailed
+        with patch("apps.core.models.api_token.APIToken.verify",
+                   side_effect=AuthenticationFailed("nope")):
+            with self.assertRaises(self.ToolError):
+                self.auth("list_services",
+                          self._ctx({"authorization": "Bearer smsly_deadbeef"}))
+
+    def _token(self, scopes):
+        from apps.core.models.api_token import APIToken
+        return APIToken.create_token(self.user, "t", scopes=scopes)
+
+    def test_http_binds_identity_and_enforces_scopes(self):
+        read_inst, read_raw = self._token(["read"])
+        ctx = self._ctx({"authorization": f"Bearer {read_raw}"})
+        uid, email = self.auth("list_services", ctx, "spoofed", "spoof@x.y")
+        self.assertEqual(uid, str(self.user.id))
+        self.assertEqual(email, "auth@example.com")
+        with self.assertRaises(self.ToolError):
+            self.auth("set_service_env_var", ctx)
+        write_inst, write_raw = self._token(["read", "write"])
+        uid2, _ = self.auth(
+            "set_service_env_var",
+            self._ctx({"authorization": f"Bearer {write_raw}"}),
+        )
+        self.assertEqual(uid2, str(self.user.id))
+
+    def test_http_legacy_token_full_access(self):
+        inst, raw = self._token(None)
+        uid, _ = self.auth(
+            "trigger_service_rebuild",
+            self._ctx({"authorization": f"Bearer {raw}"}),
+        )
+        self.assertEqual(uid, str(self.user.id))
+
+
+class McpControlPermissionTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        self.user = User.objects.create_user(username="mcp-ctl-user", password="pass")
+        self.staff = User.objects.create_user(
+            username="mcp-ctl-staff", password="pass", is_staff=True,
+        )
+        self.client = APIClient()
+
+    def test_non_staff_cannot_control(self):
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.post("/api/v1/mcp/control/", {"action": "stop"}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_staff_can_control(self):
+        self.client.force_authenticate(user=self.staff)
+        with patch("apps.mcp.services.stop",
+                   return_value={"exists": True, "running": False}):
+            resp = self.client.post("/api/v1/mcp/control/", {"action": "stop"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+
+
+class McpOwnNetworksTests(TestCase):
+    def test_tenant_bridges_excluded(self):
+        from apps.mcp import services as svc
+        client = MagicMock()
+        me = MagicMock()
+        me.attrs = {"NetworkSettings": {"Networks": {
+            "smsly-net": {}, "smsly-net-9da4e64b": {}, "paas-svc-x": {},
+        }}}
+        client.containers.get.return_value = me
+        with patch("socket.gethostname", return_value="backend"):
+            self.assertEqual(svc._own_networks(client), ["smsly-net"])

@@ -59,12 +59,19 @@ class TestIsInternalTarget(unittest.TestCase):
         self.assertTrue(_is_internal_target("https://192.168.100.50:8080"))
 
     def test_mesh_vpn_ranges(self):
-        """Test detection of Tailscale/FRP mesh VPN ranges."""
-        # Tailscale CGNAT range (100.64.0.0/10)
-        self.assertTrue(_is_internal_target("http://100.64.0.1"))
-        self.assertTrue(_is_internal_target("https://100.127.255.255"))
-        # FRP internal ranges
-        self.assertTrue(_is_internal_target("http://100.64.1.10:8000"))
+        """Mesh addressing is the 10.100.0.0/24 WireGuard range (RFC1918).
+
+        Fail-closed: CGNAT (100.64.0.0/10) and other non-RFC1918 space are
+        NOT treated as internal — only loopback/link-local/RFC1918/
+        localhost skip the internal fast path, so TLS verification is
+        never skipped for them. The old Tailscale-era expectation dated
+        from before the WireGuard mesh cutover.
+        """
+        self.assertTrue(_is_internal_target("http://10.100.0.1"))
+        self.assertTrue(_is_internal_target("https://10.100.0.2:8000"))
+        self.assertFalse(_is_internal_target("http://100.64.0.1"))
+        self.assertFalse(_is_internal_target("https://100.127.255.255"))
+        self.assertFalse(_is_internal_target("http://100.64.1.10:8000"))
 
     def test_localhost(self):
         """Test localhost detection."""
@@ -79,11 +86,13 @@ class TestIsInternalTarget(unittest.TestCase):
         self.assertFalse(_is_internal_target("http://public-server.com:8080"))
 
     def test_public_ips(self):
-        """Test that public IPs return False (but note: in mesh, all IPs might be internal)."""
-        # These are public IPs, so _is_internal_target should return False
-        # based on prefix matching, but _host_is_ip returns True
-        # The function combines both checks
-        self.assertTrue(_is_internal_target("http://209.159.152.123"))  # IP = internal for mesh
+        """Public IPs are NOT internal (fail-closed: TLS is verified).
+
+        A public IP must never skip verification, even if it currently
+        routes to a mesh worker — verification is what stops a
+        network-adjacent MITM from harvesting the gateway secret.
+        """
+        self.assertFalse(_is_internal_target("http://209.159.152.123"))
         self.assertFalse(_is_internal_target("https://api.smsly.cloud"))  # Domain = not internal
 
 
@@ -97,11 +106,12 @@ class TestCandidateBaseURLs(unittest.TestCase):
         self.mock_server.host = "192.168.1.100"
         self.mock_server.api_url = None
         self.mock_server.is_lite_agent = False
+        self.mock_server.is_primary = False
+        self.mock_server.node_domain = ""
         self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
-    @patch("apps.deployments.services.remote_orchestrator._ENFORCE_TLS", False)
     def test_ip_host_generates_http_first(self):
         """Test that IP-based hosts prioritize HTTP for mesh VPN."""
         orchestrator = RemoteOrchestrator(self.mock_server)
@@ -116,9 +126,12 @@ class TestCandidateBaseURLs(unittest.TestCase):
         if urls:
             self.assertTrue(urls[0].startswith("http://"), "First URL should be HTTP for IP host")
 
-    @patch("apps.deployments.services.remote_orchestrator._ENFORCE_TLS", True)
+    @patch.dict(os.environ, {"SMSLY_ENFORCE_INTERSERVER_TLS": "true"})
     def test_tls_enforcement_skips_http(self):
         """Test that TLS enforcement returns only HTTPS URLs."""
+        # Enforcement applies to non-node servers (node servers are
+        # exempt: mesh TLS is negotiated at another layer).
+        self.mock_server.is_primary = True
         orchestrator = RemoteOrchestrator(self.mock_server)
         urls = orchestrator._candidate_base_urls()
 
@@ -152,10 +165,9 @@ class TestRemoteRequestSSLVerification(unittest.TestCase):
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
-    @patch("apps.deployments.services.remote_orchestrator.requests.request")
-    @patch("apps.deployments.services.remote_orchestrator._REMOTE_VERIFY", True)
+    @patch("apps.deployments.services.remote_orchestrator.client.requests.request")
     def test_internal_ip_skips_ssl_verification(self, mock_request):
-        """Test that internal IPs skip SSL verification even when _REMOTE_VERIFY is True."""
+        """Internal HTTP targets carry verify=False (no certificate exists)."""
         mock_request.return_value = Mock(status_code=200, json=lambda: {"id": "test"})
 
         orchestrator = RemoteOrchestrator(self.mock_server)
@@ -170,10 +182,9 @@ class TestRemoteRequestSSLVerification(unittest.TestCase):
         call_kwargs = mock_request.call_args[1]
         self.assertFalse(call_kwargs.get('verify', True), "Should skip SSL verification for internal IP")
 
-    @patch("apps.deployments.services.remote_orchestrator.requests.request")
-    @patch("apps.deployments.services.remote_orchestrator._REMOTE_VERIFY", True)
+    @patch("apps.deployments.services.remote_orchestrator.client.requests.request")
     def test_public_domain_uses_ssl_verification(self, mock_request):
-        """Test that public domains respect _REMOTE_VERIFY setting."""
+        """Public HTTPS targets verify (should_verify policy)."""
         mock_request.return_value = Mock(status_code=200, json=lambda: {"id": "test"})
 
         self.mock_server.host = "api.smsly.cloud"
@@ -203,7 +214,7 @@ class TestRemoteOrchestratorLogging(unittest.TestCase):
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
-    @patch("apps.deployments.services.remote_orchestrator.logger")
+    @patch("apps.deployments.services.remote_orchestrator.manager.logger")
     def test_init_logs_server_info(self, mock_logger):
         """Test that __init__ logs server initialization."""
         RemoteOrchestrator(self.mock_server)
@@ -214,11 +225,11 @@ class TestRemoteOrchestratorLogging(unittest.TestCase):
             self.mock_server.name, self.mock_server.host
         )
 
-    @patch("apps.deployments.services.remote_orchestrator.logger")
+    @patch("apps.deployments.services.remote_orchestrator.client.logger")
     def test_is_internal_target_logs_decision(self, mock_logger):
         """Test that _is_internal_target logs its decision."""
         # This is a static method, so we test it directly
-        from apps.deployments.services.remote_orchestrator import _is_internal_target
+        from apps.deployments.services.remote_orchestrator.client import _is_internal_target
 
         _is_internal_target("http://192.168.1.1")
 
@@ -357,17 +368,18 @@ class TestMeshOptimizationIntegration(unittest.TestCase):
     """Integration tests for mesh VPN optimization features."""
 
     def test_worker_ip_from_error_log(self):
-        """Test the specific worker IP from the deployment error."""
+        """A public worker IP verifies TLS; only mesh-range IPs skip it."""
         worker_ip = "69.164.244.51"
 
-        # This IP should be detected as internal for mesh purposes
-        # (even though it's a public IP, in the mesh context it's treated as internal)
         self.assertTrue(_host_is_ip(worker_ip), "Worker IP should be recognized as IP address")
 
-        # The _is_internal_target function should return True for any IP
-        # because mesh VPN handles encryption
-        self.assertTrue(_is_internal_target(f"https://{worker_ip}"),
-                       "Mesh worker IP should skip SSL verification")
+        # Public IPs are never internal (fail-closed) — the mesh latency
+        # optimization must not disable verification for them.
+        self.assertFalse(_is_internal_target(f"https://{worker_ip}"),
+                       "Public worker IP must verify SSL")
+        # The actual WireGuard mesh range stays on the fast path.
+        self.assertTrue(_is_internal_target("https://10.100.0.2"),
+                       "Mesh IP should skip SSL verification")
 
     def test_env_var_controls(self):
         """Test that environment variables control behavior."""
@@ -510,7 +522,7 @@ class TestPreflightCheckOrHeal(unittest.TestCase):
             return_value=['http://10.100.0.2', 'http://69.164.244.51'],
         ):
             with patch(
-                'apps.deployments.services.remote_orchestrator.requests.get',
+                'apps.deployments.services.remote_orchestrator.health.requests.get',
                 side_effect=[ConnectTimeout('mesh timed out'), ConnectTimeout('mesh timed out live'), ok_health],
             ):
                 with patch.object(orchestrator, '_request', return_value=ok_api):
@@ -546,11 +558,13 @@ class TestLiteAgentCandidateURLs(unittest.TestCase):
         self.mock_server.name = "lite-node"
         self.mock_server.host = "69.164.244.51"
         self.mock_server.api_url = None
+        self.mock_server.is_primary = False
+        self.mock_server.node_domain = ""
         self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
-    @patch("apps.deployments.services.remote_orchestrator._ENFORCE_TLS", False)
+    @patch.dict(os.environ, {"SMSLY_ENFORCE_INTERSERVER_TLS": "false"})
     def test_lite_agent_only_port_80(self):
         """Lite agents should generate http, http:8090, and https candidate URLs when TLS is not enforced."""
         self.mock_server.is_lite_agent = True
@@ -562,7 +576,7 @@ class TestLiteAgentCandidateURLs(unittest.TestCase):
         self.assertEqual(urls[1], "http://69.164.244.51:8090")
         self.assertEqual(urls[2], "https://69.164.244.51")
 
-    @patch("apps.deployments.services.remote_orchestrator._ENFORCE_TLS", False)
+    @patch.dict(os.environ, {"SMSLY_ENFORCE_INTERSERVER_TLS": "false"})
     def test_full_install_has_multiple_ports(self):
         """Full install nodes should try multiple ports (80, 8090, 443)."""
         self.mock_server.is_lite_agent = False

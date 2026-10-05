@@ -4,7 +4,7 @@ import inspect
 import logging
 
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -170,7 +170,11 @@ def _sse_reachable(timeout_seconds: int = 5) -> bool:
 
 
 class McpControlView(APIView):
-    permission_classes = [IsAuthenticated]
+    # Container lifecycle (start/stop/restart via the Docker SDK) is a
+    # privileged control-plane action — staff only. Status stays readable
+    # by any authenticated user; tokens and tool calls keep their own
+    # per-user/per-scope enforcement.
+    permission_classes = [IsAdminUser]
 
     def post(self, request):
         from apps.mcp import services as mcp_services

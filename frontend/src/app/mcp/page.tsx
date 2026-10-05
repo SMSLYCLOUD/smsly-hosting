@@ -646,6 +646,12 @@ export default function MCPPage() {
                       <pre className="bg-[#0d1117] text-[13px] p-3 rounded-lg font-mono border border-white/5">
                         <code>python manage.py runmcpserver --sse --host 0.0.0.0 --port 8001</code>
                       </pre>
+                      <p className="text-sm text-muted-foreground mt-2">
+                        SSE requires an API token: send <code className="text-xs bg-muted px-1.5 py-0.5 rounded">Authorization: Bearer smsly_...</code> with
+                        every request. Calls without a valid token are rejected, and write tools need a token
+                        with the write scope. Create one in the Tokens tab. STDIO (local process) keeps
+                        local trust and needs no token.
+                      </p>
                     </div>
                   </div>
 

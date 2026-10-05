@@ -14,6 +14,7 @@ removed — set MCP_AUTOSTART=false for fully manual control.
 
 import logging
 import os
+import re
 import socket
 
 logger = logging.getLogger(__name__)
@@ -76,14 +77,30 @@ def _get_client():
 
 
 def _own_networks(client) -> list:
-    """Networks of this backend container (best guess for MCP attachment)."""
+    """Networks of this backend container (best guess for MCP attachment).
+
+    Tenant scoped bridges (``smsly-net-<8hex>``, ``paas-svc-*``) are
+    excluded fail-closed: the unauthenticated-then-token MCP transport
+    must never follow the backend onto a tenant network where app
+    containers could reach it. Infra bridges only.
+    """
     try:
         hostname = socket.gethostname()
         me = client.containers.get(hostname)
         me.reload()
         nets = list((me.attrs.get("NetworkSettings") or {}).get("Networks", {}).keys())
+        infra = [
+            n for n in nets
+            if not re.match(r"^(smsly-net-[0-9a-fA-F]{8}|paas-svc-)", str(n))
+        ]
+        if infra:
+            return infra
         if nets:
-            return nets
+            logger.warning(
+                "MCP network fallback: backend only on tenant bridges %s; "
+                "attaching to %s anyway (reachability over isolation).",
+                nets, MCP_NETWORK,
+            )
     except Exception as exc:
         logger.debug("Could not detect own container networks: %s", exc)
     return [MCP_NETWORK]
