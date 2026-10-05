@@ -807,6 +807,66 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=True, methods=['post'], url_path='mtls-reload')
+    def mtls_reload(self, request, pk=None):
+        """
+        POST /api/v1/projects/{id}/mtls-reload/
+
+        Manual mTLS reload for every mTLS-enabled service in the
+        project: redeploy from HEAD + Envoy sidecar refresh + SPIRE
+        entries sync, per service. Services without an enabled
+        MtlsConfig are reported as skipped, never touched.
+        """
+        from apps.mtls.services.reload import _mtls_config_for, reload_service_mtls
+        from apps.teams.permissions import assert_can_write
+
+        project = self.get_object()
+        assert_can_write(request.user, project, action='reload mTLS for project')
+        services = list(
+            Service.objects.filter(project=project).order_by('name')[:50]
+        )
+        reloaded, skipped, errors = [], [], []
+        for service in services:
+            if _mtls_config_for(service) is None:
+                skipped.append(service.name)
+                continue
+            try:
+                assert_can_write(request.user, service, action='reload mTLS')
+            except Exception:
+                skipped.append(f"{service.name} (access denied)")
+                continue
+            try:
+                from apps.deployments.views.service.core import ServiceViewSet
+                from apps.deployments.views.service.deploy import DeployActionsMixin
+                from rest_framework.test import APIRequestFactory, force_authenticate
+                factory = APIRequestFactory()
+                sub = factory.post(
+                    f"/api/v1/services/{service.id}/deploy/", {'ref': 'HEAD'},
+                    format='json',
+                )
+                force_authenticate(sub, user=request.user)
+                sub_view = ServiceViewSet()
+                sub_view.request = sub
+                sub_view.kwargs = {'pk': str(service.id)}
+                sub_view.format_kwarg = None
+                resp = DeployActionsMixin.deploy(sub_view, sub, pk=str(service.id))
+                reloaded.append(reload_service_mtls(service, resp))
+            except Exception as exc:
+                errors.append(f"{service.name}: {exc.__class__.__name__}")
+        try:
+            from apps.deployments.tasks_spiffe import sync_spiffe_entries_task
+            sync_spiffe_entries_task.delay()
+            spiffe = "sync-queued"
+        except Exception:
+            spiffe = "sync-failed"
+        return Response({
+            'project': project.name,
+            'reloaded': reloaded,
+            'skipped': skipped,
+            'errors': errors,
+            'spiffe': spiffe,
+        })
+
     @action(detail=True, methods=['post'], url_path='sync-envs')
     def sync_envs(self, request, pk=None):
         """
