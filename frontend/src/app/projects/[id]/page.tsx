@@ -70,6 +70,7 @@ function ProjectDetailContent() {
   const [dualPlatform, setDualPlatform] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [mtlsReloading, setMtlsReloading] = useState(false);
 
   // Team & Members
   const [teams, setTeams] = useState<Team[]>([]);
@@ -268,8 +269,7 @@ function ProjectDetailContent() {
     }
   };
 
-  const handleSyncEnvs = async () => {
-    setSyncing(true);
+  const handleSyncEnvs = async () => {    setSyncing(true);
     try {
       await projectsApi.syncEnvs(projectId);
       toast({ 
@@ -284,6 +284,29 @@ function ProjectDetailContent() {
       });
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleMtlsReload = async () => {
+    setMtlsReloading(true);
+    try {
+      const res = await projectsApi.mtlsReload(projectId);
+      const n = (res.reloaded || []).length;
+      const errs = (res.errors || []).length;
+      toast({
+        title: errs > 0 ? `mTLS reload partial — ${n} ok, ${errs} failed` : `mTLS reload triggered — ${n} service(s)`,
+        description: `Skipped ${(res.skipped || []).length} non-mTLS. SPIRE sync: ${res.spiffe}.` +
+          (errs > 0 ? ` Errors: ${(res.errors || []).join('; ')}` : ''),
+        variant: errs > 0 ? 'destructive' : undefined,
+      });
+    } catch (err: any) {
+      toast({
+        title: 'mTLS reload failed',
+        description: err?.response?.data?.error || 'Could not reload mTLS for this project.',
+        variant: 'destructive'
+      });
+    } finally {
+      setMtlsReloading(false);
     }
   };
 
@@ -377,6 +400,17 @@ function ProjectDetailContent() {
                 {syncing ? 'Syncing...' : 'Sync Ecosystem'}
               </Button>
             )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleMtlsReload}
+              disabled={mtlsReloading}
+              title="Redeploy mTLS-enabled services from HEAD and refresh sidecars plus SPIRE entries"
+              className="text-zinc-500 hover:text-cyan-400 hover:bg-cyan-500/10 transition-all border border-transparent hover:border-cyan-500/20"
+            >
+              <RefreshCcw className={cn("w-3.5 h-3.5 mr-1.5", mtlsReloading && "animate-spin")} />
+              {mtlsReloading ? 'Reloading...' : 'Reload mTLS'}
+            </Button>
             <Button
               size="sm"
               onClick={() => router.push(`/new?project=${projectId}`)}

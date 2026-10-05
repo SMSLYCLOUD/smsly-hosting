@@ -19,6 +19,8 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
     const [loading, setLoading] = useState(true);
     const [repairing, setRepairing] = useState(false);
     const [repairReport, setRepairReport] = useState<any>(null);
+    const [reloading, setReloading] = useState(false);
+    const [reloadReport, setReloadReport] = useState<any>(null);
 
     const load = async () => {
         setLoading(true);
@@ -38,8 +40,7 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
 
     useEffect(() => { void load(); }, [serviceId]);
 
-    const handleRepair = async () => {
-        setRepairing(true);
+    const handleRepair = async () => {        setRepairing(true);
         setRepairReport(null);
         try {
             const response = await api.post(`/services/${serviceId}/mtls/repair/`);
@@ -64,6 +65,31 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
             });
         } finally {
             setRepairing(false);
+        }
+    };
+
+    const handleReload = async () => {
+        setReloading(true);
+        setReloadReport(null);
+        try {
+            const response = await api.post(`/services/${serviceId}/mtls-reload/`, {});
+            const report = response.data;
+            setReloadReport(report);
+            toast({
+                title: report.deploy_triggered ? 'mTLS reload triggered' : 'mTLS components refreshed',
+                description: report.deploy_triggered
+                    ? 'Redeploy from HEAD started; sidecar and SPIRE entries refreshing.'
+                    : 'No new deploy (one already queued); sidecar and SPIRE entries refreshing.',
+            });
+            void load();
+        } catch (error: any) {
+            toast({
+                title: 'mTLS reload failed',
+                description: error?.response?.data?.error || 'Could not reload mTLS.',
+                variant: 'destructive',
+            });
+        } finally {
+            setReloading(false);
         }
     };
 
@@ -104,6 +130,20 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
+                        {status?.mtls_enabled ? (
+                            <Button
+                                variant="default"
+                                size="sm"
+                                onClick={() => void handleReload()}
+                                disabled={reloading || loading}
+                                title="Redeploy from HEAD and refresh the Envoy sidecar plus SPIRE entries"
+                            >
+                                {reloading
+                                    ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    : <RefreshCw className="mr-2 h-4 w-4" />}
+                                Reload mTLS
+                            </Button>
+                        ) : null}
                         <Button
                             variant="secondary"
                             size="sm"
@@ -122,6 +162,31 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
                         </Button>
                     </div>
                 </div>
+
+                {reloadReport && (
+                    <div className="mt-5 rounded-lg border bg-muted/30 p-4">
+                        <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                            Reload report
+                        </h4>
+                        <ul className="mt-2 space-y-1 text-xs">
+                            <li>
+                                <span className="font-semibold">Deploy:</span>{' '}
+                                {reloadReport.deploy_triggered
+                                    ? `triggered (${reloadReport.deployment_id || 'queued'})`
+                                    : `not triggered (status ${reloadReport.deploy_status})`}
+                            </li>
+                            <li>
+                                <span className="font-semibold">Sidecar:</span>{' '}
+                                {reloadReport.components?.sidecar?.status || 'unknown'}
+                                {reloadReport.components?.sidecar?.detail ? ` — ${reloadReport.components.sidecar.detail}` : ''}
+                            </li>
+                            <li>
+                                <span className="font-semibold">SPIRE sync:</span>{' '}
+                                {reloadReport.components?.spiffe?.status || 'unknown'}
+                            </li>
+                        </ul>
+                    </div>
+                )}
 
                 {repairReport && (
                     <div className="mt-5 rounded-lg border bg-muted/30 p-4">

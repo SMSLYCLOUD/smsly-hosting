@@ -2450,6 +2450,12 @@ export const projectsApi = {
     const response = await api.post(`/projects/${id}/sync-envs/`);
     return response.data;
   },
+  mtlsReload: async (id: string): Promise<{
+    project: string; reloaded: unknown[]; skipped: string[]; errors: string[]; spiffe: string;
+  }> => {
+    const response = await api.post(`/projects/${id}/mtls-reload/`);
+    return response.data;
+  },
   getInternalNetwork: async (id: string): Promise<{
     status: string;
     exists: boolean;
