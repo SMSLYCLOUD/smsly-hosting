@@ -111,3 +111,58 @@ class RegistryRoutingTests(TestCase):
             self.assertTrue(
                 is_master_registry_ref('10.100.0.1:5000/smsly/app:abc')
             )
+
+
+class PreferredPullRefTests(TestCase):
+    """First-pull reference depends on the executing host (2026-10-05)."""
+
+    def _ref(self, image, resolves=None):
+        from apps.deployments.tasks.deploy.deploy_container import (
+            _preferred_pull_ref,
+        )
+        with mock.patch.dict(
+            "os.environ",
+            {"WIREGUARD_MASTER_MESH_IP": "10.100.0.1", "MASTER_PUBLIC_IP": ""},
+            clear=False,
+        ):
+            if resolves is None:
+                with mock.patch("socket.gethostbyname",
+                                side_effect=OSError("no dns")):
+                    return _preferred_pull_ref(image)
+            import socket as _sockmod
+            if resolves:
+                with mock.patch("socket.gethostbyname",
+                                return_value="10.0.0.5"):
+                    return _preferred_pull_ref(image)
+            with mock.patch("socket.gethostbyname",
+                            side_effect=_sockmod.gaierror(8, "nxdomain")):
+                return _preferred_pull_ref(image)
+
+    def test_mesh_image_node_prefers_mesh(self):
+        self.assertEqual(
+            self._ref("10.100.0.1:5000/proj-9da4e64b/app:6114911", resolves=False),
+            "10.100.0.1:5000/proj-9da4e64b/app:6114911",
+        )
+
+    def test_mesh_image_master_prefers_internal(self):
+        self.assertEqual(
+            self._ref("10.100.0.1:5000/proj-9da4e64b/app:6114911", resolves=True),
+            "registry:5000/proj-9da4e64b/app:6114911",
+        )
+
+    def test_internal_image_unchanged(self):
+        self.assertEqual(
+            self._ref("registry:5000/proj-9da4e64b/app:6114911", resolves=True),
+            "registry:5000/proj-9da4e64b/app:6114911",
+        )
+
+    def test_external_image_untouched(self):
+        self.assertEqual(
+            self._ref("nginx:alpine", resolves=False), "nginx:alpine",
+        )
+
+    def test_dns_error_keeps_old_order(self):
+        self.assertEqual(
+            self._ref("10.100.0.1:5000/proj-9da4e64b/app:6114911"),
+            "registry:5000/proj-9da4e64b/app:6114911",
+        )

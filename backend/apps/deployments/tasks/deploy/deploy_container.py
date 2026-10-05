@@ -33,6 +33,36 @@ from .state import _mark_deployment_active, _post_deploy_success
 logger = logging.getLogger(__name__)
 
 
+def _preferred_pull_ref(image_name: str) -> str:
+    """First image reference to pull for ``image_name`` on THIS host.
+
+    Master-side callers need the INTERNAL registry ref, but a delegated
+    deploy executes this pipeline on the node, where only the
+    node-routable (mesh/public) form pulls. Prefer the form this host
+    can reach, probed via local DNS for the internal ``registry`` name;
+    any probe error keeps the historical internal-first order
+    (fail-safe toward status quo).
+    """
+    from apps.deployments.services.registry_routing import image_ref_for_internal
+    internal_ref = image_ref_for_internal(image_name or "")
+    if not internal_ref or internal_ref == image_name:
+        return image_name
+    import socket
+    try:
+        internal_resolves = bool(socket.gethostbyname("registry"))
+    except socket.gaierror:
+        # Name genuinely does not resolve here (e.g. a worker node with
+        # no local registry): the internal form cannot pull.
+        internal_resolves = False
+    except Exception:
+        # Unexpected probe failure (no DNS at all, odd platform): keep
+        # the historical internal-first order rather than guessing.
+        internal_resolves = True
+    if internal_resolves:
+        return internal_ref
+    return image_name
+
+
 def _resolve_live_container(resource_id: str, service_name: str) -> tuple[str, bool]:
     """Return ``(container_id, promoted)`` for the container that is live.
 
@@ -225,15 +255,37 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             deployment.save(update_fields=['staging_url'])
 
         # Explicitly pull image before deployment to avoid 404/Not Found.
-        # Master-side operations always use the INTERNAL registry ref:
-        # the image_name may already be rewritten to the node-routable
-        # mesh address for remote delegation, which the master's docker
-        # cannot verify (no mesh cert dir) — pulling that form here fails
-        # even though the image exists (2026-10-02: braid fe18dae).
+        # The correct reference form depends on WHICH HOST executes this
+        # pipeline: master-side operations use the INTERNAL registry ref,
+        # but a delegated deploy runs this same code ON THE NODE, where
+        # only the node-routable (mesh/public) form pulls — the internal
+        # registry:5000 name neither resolves nor verifies there. Always
+        # converting to internal made every node pull fail even with the
+        # image cached, and the cache fallback never probed the mesh ref
+        # actually in cache (2026-10-05: marketer node deploys failed
+        # with 6114911 already pulled).
+        # Fail-safe ordering: prefer the form this host can reach
+        # (probed via local DNS; any probe error keeps the old order),
+        # then fall back to the other form, then local cache.
         from apps.deployments.services.registry_routing import image_ref_for_internal
-        pull_ref = image_ref_for_internal(image_name)
+        pull_ref = _preferred_pull_ref(image_name)
+        _internal_ref = image_ref_for_internal(image_name)
+        if _internal_ref and _internal_ref != image_name and _internal_ref != pull_ref:
+            _pull_candidates = [pull_ref, _internal_ref]
+        else:
+            _pull_candidates = [pull_ref] if pull_ref else [image_name]
         append_log(deployment, f"Pulling image {pull_ref}...\n")
-        if not compute.pull_image(pull_ref):
+        _pulled_ref = None
+        if pull_ref and compute.pull_image(pull_ref):
+            _pulled_ref = pull_ref
+        else:
+            for _alt in _pull_candidates[1:]:
+                append_log(deployment, f"Pulling image {_alt}...\n")
+                if compute.pull_image(_alt):
+                    _pulled_ref = _alt
+                    pull_ref = _alt
+                    break
+        if not _pulled_ref:
             append_log(deployment, f"Warning: Registry pull failed for {pull_ref}. "
                                    "Attempting deployment using local cache...\n")
             image_available_after_pull_failure = False
