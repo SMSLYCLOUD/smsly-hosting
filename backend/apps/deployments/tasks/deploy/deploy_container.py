@@ -34,32 +34,18 @@ logger = logging.getLogger(__name__)
 
 
 def _preferred_pull_ref(image_name: str) -> str:
-    """First image reference to pull for ``image_name`` on THIS host.
+    """First image reference to pull for ``image_name``.
 
-    Master-side callers need the INTERNAL registry ref, but a delegated
-    deploy executes this pipeline on the node, where only the
-    node-routable (mesh/public) form pulls. Prefer the form this host
-    can reach, probed via local DNS for the internal ``registry`` name;
-    any probe error keeps the historical internal-first order
-    (fail-safe toward status quo).
+    Trust the caller: ``image_name`` already arrives in the form
+    appropriate for the TARGET host (master rewrites registry refs to
+    the node-routable mesh address when delegating to a node, and
+    keeps the internal form for local deploys). The internal
+    ``registry:5000`` name must NOT be preferred blindly: full worker
+    nodes run their own local registry container holding that DNS
+    name, so converting first pulls from the WRONG registry and then
+    the cache fallback never probes the mesh ref actually in cache
+    (2026-10-05: marketer node deploys failed with 6114911 cached).
     """
-    from apps.deployments.services.registry_routing import image_ref_for_internal
-    internal_ref = image_ref_for_internal(image_name or "")
-    if not internal_ref or internal_ref == image_name:
-        return image_name
-    import socket
-    try:
-        internal_resolves = bool(socket.gethostbyname("registry"))
-    except socket.gaierror:
-        # Name genuinely does not resolve here (e.g. a worker node with
-        # no local registry): the internal form cannot pull.
-        internal_resolves = False
-    except Exception:
-        # Unexpected probe failure (no DNS at all, odd platform): keep
-        # the historical internal-first order rather than guessing.
-        internal_resolves = True
-    if internal_resolves:
-        return internal_ref
     return image_name
 
 
@@ -255,18 +241,11 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             deployment.save(update_fields=['staging_url'])
 
         # Explicitly pull image before deployment to avoid 404/Not Found.
-        # The correct reference form depends on WHICH HOST executes this
-        # pipeline: master-side operations use the INTERNAL registry ref,
-        # but a delegated deploy runs this same code ON THE NODE, where
-        # only the node-routable (mesh/public) form pulls — the internal
-        # registry:5000 name neither resolves nor verifies there. Always
-        # converting to internal made every node pull fail even with the
-        # image cached, and the cache fallback never probed the mesh ref
-        # actually in cache (2026-10-05: marketer node deploys failed
-        # with 6114911 already pulled).
-        # Fail-safe ordering: prefer the form this host can reach
-        # (probed via local DNS; any probe error keeps the old order),
-        # then fall back to the other form, then local cache.
+        # Pull the as-given reference FIRST (it already arrives in the
+        # form appropriate for the executing host), then the converted
+        # internal form as fallback, then local cache. See
+        # _preferred_pull_ref for why the old convert-first order broke
+        # every node pull (2026-10-05: marketer 6114911).
         from apps.deployments.services.registry_routing import image_ref_for_internal
         pull_ref = _preferred_pull_ref(image_name)
         _internal_ref = image_ref_for_internal(image_name)
