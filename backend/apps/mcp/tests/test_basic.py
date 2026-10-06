@@ -457,6 +457,27 @@ class McpProjectScopeTests(TestCase):
         )
         self.assertEqual(denied.status_code, 403)
 
+    def test_bound_token_nonproject_lists_not_filtered_http(self):
+        """Regression: the project allow-list must only filter
+        list_projects — service/env lists carry non-project ids and
+        must pass through untouched."""
+        from apps.deployments.models import EnvironmentVariable
+        EnvironmentVariable.objects.create(
+            service=self.svc_a, key="KEEP_ME", value="v",
+        )
+        _, raw = self._token(["read"], [str(self.proj_a.id)])
+        from rest_framework.test import APIClient as RawClient
+        anon = RawClient()
+        resp = anon.post(
+            "/api/v1/mcp/tools/get_service_env_vars/call/",
+            {"args": {"service_id": str(self.svc_a.id)}},
+            format="json", HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(
+            any(v.get("key") == "KEEP_ME" for v in resp.data["result"]),
+        )
+
     def test_bound_token_transport_scoped_sse(self):
         from types import SimpleNamespace
         from apps.mcp import server as server_module

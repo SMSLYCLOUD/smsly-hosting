@@ -618,6 +618,13 @@ class AddonProvisioner:
                 "of a master addon — it must never be provisioned locally. "
                 "Reprovision on the master, then redeploy the service."
             )
+        try:
+            _lmeta = dict(getattr(addon, 'provider_metadata', None) or {})
+            _lmeta['provisioned_host'] = 'master'
+            addon.provider_metadata = _lmeta
+            addon.save(update_fields=['provider_metadata', 'updated_at'])
+        except Exception:
+            pass
         addon_type = addon.addon_type
         service_name = addon.service.name
         self._ensure_network()
@@ -1146,6 +1153,16 @@ class AddonProvisioner:
         """
         from apps.deployments.services.ssh_client import SSHClient
 
+        # Record where this backend lives so the reconciler checks the
+        # right host (a remote service's addons may live here on master
+        # via mesh, or on the node via this path — never guess).
+        try:
+            _pmeta = dict(getattr(addon, 'provider_metadata', None) or {})
+            _pmeta['provisioned_host'] = str(getattr(server, 'name', '') or '')
+            addon.provider_metadata = _pmeta
+            addon.save(update_fields=['provider_metadata', 'updated_at'])
+        except Exception:
+            pass
         addon_type = addon.addon_type
         service_name = addon.service.name
         self._ensure_network()

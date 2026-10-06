@@ -82,3 +82,68 @@ class MeshProvisionGuardTests(TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             AddonProvisioner.provision(Mock(), addon)
         self.assertIn("mesh-backed", str(ctx.exception))
+
+
+class BothHostsReconcileTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="both-hosts-user", password="x")
+        from apps.deployments.models.core import ManagedServer
+        self.server = ManagedServer.objects.create(
+            name="both-node", host="10.9.9.9", is_primary=False, owner=self.user,
+        )
+        self.service = Service.objects.create(name="both-hosts-svc", owner=self.user)
+        self.service.active_target_type = "remote"
+        self.service.active_host_ip = "10.9.9.9"
+        self.service.server = self.server
+        self.service.save()
+        self.addon = Addon.objects.create(
+            service=self.service,
+            name="both-pg",
+            addon_type="POSTGRES",
+            connection_url="postgres://u:p@host:5432/db",
+            status="ACTIVE",
+        )
+
+    def _node_resp(self, status_code=200, body=None):
+        resp = Mock()
+        resp.status_code = status_code
+        resp.json = Mock(return_value=body if body is not None else {})
+        return resp
+
+    def test_master_only_backend_not_flagged(self):
+        from apps.addons.services import addon_reconcile as rec
+        with patch(
+            "apps.deployments.services.remote_orchestrator.RemoteOrchestrator._request",
+            return_value=self._node_resp(200, {"status": "not-found"}),
+        ), patch("docker.from_env") as mock_docker:
+            mock_docker.return_value.containers.get.return_value = Mock()
+            self.assertIsNone(rec.check_addon_backend(self.addon))
+
+    def test_node_only_backend_not_flagged(self):
+        from apps.addons.services import addon_reconcile as rec
+        import docker as _docker_lib
+        with patch(
+            "apps.deployments.services.remote_orchestrator.RemoteOrchestrator._request",
+            return_value=self._node_resp(200, {"status": "running"}),
+        ), patch("docker.from_env", side_effect=_docker_lib.errors.DockerException("nope")):
+            self.assertIsNone(rec.check_addon_backend(self.addon))
+
+    def test_absent_both_hosts_flagged(self):
+        from apps.addons.services import addon_reconcile as rec
+        import docker as _docker_lib
+        with patch(
+            "apps.deployments.services.remote_orchestrator.RemoteOrchestrator._request",
+            return_value=self._node_resp(200, {"status": "not-found"}),
+        ), patch("docker.from_env", side_effect=_docker_lib.errors.DockerException("nope")):
+            verdict = rec.check_addon_backend(self.addon)
+        self.assertTrue(str(verdict).startswith("gone:"))
+
+    def test_node_unreachable_not_flagged(self):
+        from apps.addons.services import addon_reconcile as rec
+        import docker as _docker_lib
+        with patch(
+            "apps.deployments.services.remote_orchestrator.RemoteOrchestrator._request",
+            return_value=None,
+        ), patch("docker.from_env", side_effect=_docker_lib.errors.DockerException("nope")):
+            verdict = rec.check_addon_backend(self.addon)
+        self.assertTrue(str(verdict).startswith("check-failed:"))

@@ -79,7 +79,8 @@ def check_addon_backend(addon) -> str | None:
         remote = target in ('remote', 'lite_agent') or (
             server is not None and not getattr(server, 'is_primary', True)
         )
-        if remote:
+
+        def _check_node():
             try:
                 if server is None:
                     return 'check-failed: remote service has no server'
@@ -101,13 +102,32 @@ def check_addon_backend(addon) -> str | None:
                 return f'check-failed: node returned {resp.status_code}'
             except Exception as exc:
                 return f'check-failed: node probe: {exc}'[:160]
-        try:
-            import docker as _docker
-            client = _docker.from_env(timeout=10)
-            client.containers.get(name)
-            return None
-        except Exception:
-            return f'gone: local container {name} missing'
+
+        def _check_local():
+            try:
+                import docker as _docker
+                client = _docker.from_env(timeout=10)
+                client.containers.get(name)
+                return None
+            except Exception:
+                return f'gone: local container {name} missing'
+
+        if remote:
+            # A remote service's addon backend may live on EITHER host:
+            # node-provisioned addons run on the node, master-provisioned
+            # (mesh design) run here. Absent in only one home proves
+            # nothing — gone requires absence in both; any check failure
+            # is unknown, never missing.
+            node_verdict = _check_node()
+            if node_verdict is None:
+                return None
+            local_verdict = _check_local()
+            if local_verdict is None:
+                return None
+            if node_verdict.startswith('gone:') and local_verdict.startswith('gone:'):
+                return f'{local_verdict} + {node_verdict}'[:160]
+            return node_verdict if node_verdict.startswith('check-failed:') else local_verdict
+        return _check_local()
     except Exception as exc:
         return f'check-failed: {exc}'[:160]
 

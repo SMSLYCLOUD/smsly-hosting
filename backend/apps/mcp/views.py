@@ -339,7 +339,14 @@ class McpToolCallView(APIView):
                     {"ok": False, "error": scope_error},
                     status=status.HTTP_403_FORBIDDEN,
                 )
-            _project_filter = lambda result: filter_projects_result(auth, result)
+            # Project allow-list filtering applies ONLY to list_projects:
+            # other tools return service/env/deployment dicts whose "id"
+            # is not a project id — filtering them would wrongly empty
+            # every list (2026-10-06: bound tokens got [] everywhere).
+            if name == "list_projects":
+                _project_filter = lambda result: filter_projects_result(auth, result)
+            else:
+                _project_filter = lambda result: result
         else:
             _project_filter = lambda result: result
         # Coerce declared scalar params; inject the caller's identity for
