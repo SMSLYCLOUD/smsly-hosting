@@ -820,8 +820,9 @@ def get_addon_details(addon_id: str, user_id: str | None = None, user_email: str
                 netloc = parsed.hostname or ""
                 if parsed.port:
                     netloc += f":{parsed.port}"
-                if parsed.username:
-                    netloc = f"{parsed.username}:********@{netloc}"
+                if parsed.username or has_password:
+                    user = parsed.username or ""
+                    netloc = f"{user}:********@{netloc}"
                 masked_url = parsed._replace(netloc=netloc).geturl()
             except Exception:
                 masked_url = None

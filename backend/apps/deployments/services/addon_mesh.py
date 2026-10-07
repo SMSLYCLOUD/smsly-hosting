@@ -130,6 +130,22 @@ def ensure_addon_mesh_forward(addon) -> tuple[str, int] | None:
     return _get_master_mesh_ip(), int(fwd_port)
 
 
+def _mesh_netloc(parsed, mip: str, port: int) -> str:
+    """Rebuild netloc pointing at the mesh endpoint, preserving userinfo.
+
+    Password-only URLs (``redis://:pass@host`` — ``parsed.username`` empty)
+    must keep the ``:pass`` part; gating on username alone silently drops
+    the password and the rewritten URL fails auth on the far side.
+    """
+    netloc = f"{mip}:{port}"
+    if parsed.username or parsed.password:
+        cred = parsed.username or ""
+        if parsed.password:
+            cred += f":{parsed.password}"
+        netloc = f"{cred}@{netloc}"
+    return netloc
+
+
 def mesh_url_for_addon(addon) -> str | None:
     """Mesh-rewritten connection URL for one addon (node consumption).
 
@@ -149,12 +165,7 @@ def mesh_url_for_addon(addon) -> str | None:
     if not fwd:
         return None
     mip, port = fwd
-    netloc = f"{mip}:{port}"
-    if parsed.username:
-        cred = parsed.username
-        if parsed.password:
-            cred += f":{parsed.password}"
-        netloc = f"{cred}@{netloc}"
+    netloc = _mesh_netloc(parsed, mip, port)
     try:
         return urlunparse(parsed._replace(netloc=netloc))
     except Exception:
@@ -191,12 +202,7 @@ def rewrite_env_for_mesh(service, master_ip: str | None = None) -> dict[str, str
         if not fwd:
             continue
         mip, port = fwd
-        netloc = f"{mip}:{port}"
-        if parsed.username:
-            cred = parsed.username
-            if parsed.password:
-                cred += f":{parsed.password}"
-            netloc = f"{cred}@{netloc}"
+        netloc = _mesh_netloc(parsed, mip, port)
         overrides[ev.key] = urlunparse(parsed._replace(netloc=netloc))
     return overrides
 

@@ -20,7 +20,8 @@ def _mask_url_password(url: str) -> str:
     try:
         parsed = urlparse(url)
         if parsed.password:
-            netloc = f"{parsed.username}:****@{parsed.hostname}"
+            user = parsed.username or ""
+            netloc = f"{user}:****@{parsed.hostname}"
             if parsed.port:
                 netloc += f":{parsed.port}"
             masked = parsed._replace(netloc=netloc)
@@ -42,8 +43,8 @@ class PostgresSnapshotManager:
                 netloc = 'db'
                 if parsed.port:
                     netloc = f"db:{parsed.port}"
-                if parsed.username:
-                    auth = parsed.username
+                if parsed.username or parsed.password:
+                    auth = parsed.username or ""
                     if parsed.password:
                         auth += f":{parsed.password}"
                     netloc = f"{auth}@{netloc}"
