@@ -373,6 +373,7 @@ export interface Service {
   edge_jwt_required?: boolean;
   sablier_enabled?: boolean;
   sablier_session?: string;
+  addon_placement?: 'AUTO' | 'MASTER' | 'NODE';
   waf_opt_out?: boolean;
   fast_deploy_enabled?: boolean | null; // null = inherit platform default
   buildpack?: 'NIXPACKS' | 'DOCKER' | 'STATIC';

@@ -26,6 +26,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
   const [edgeJwt, setEdgeJwt] = useState(service.edge_jwt_required || false);
   const [sablier, setSablier] = useState(service.sablier_enabled || false);
   const [sablierSession, setSablierSession] = useState(service.sablier_session || '10m');
+  const [placement, setPlacement] = useState<'AUTO' | 'MASTER' | 'NODE'>(service.addon_placement || 'AUTO');
   const [wafOptOut, setWafOptOut] = useState(service.waf_opt_out || false);
   const [saving, setSaving] = useState(false);
   const [replicas, setReplicas] = useState<Replica[]>([]);
@@ -92,6 +93,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         edge_jwt_required: edgeJwt,
         sablier_enabled: sablier,
         sablier_session: sablierSession,
+        addon_placement: placement,
         waf_opt_out: wafOptOut,
       });
       toast({
@@ -376,6 +378,39 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
             </div>
             <Switch checked={wafOptOut} onCheckedChange={setWafOptOut} />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Addon backend placement */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Addon Placement</CardTitle>
+          <CardDescription>
+            Where this service&apos;s addon backends (databases, caches, queues) live. Only meaningful on a remote node.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 p-1">
+            {(['AUTO', 'MASTER', 'NODE'] as const).map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => setPlacement(opt)}
+                className={`rounded-full px-3 py-1 text-xs font-semibold transition-all ${
+                  placement === opt
+                    ? 'bg-emerald-500/20 text-emerald-300 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.35)]'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {opt === 'AUTO' ? 'Auto' : opt === 'MASTER' ? 'Master' : 'Node'}
+              </button>
+            ))}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {placement === 'AUTO' && 'Platform default: remote services provision addons on their node, everything else on master.'}
+            {placement === 'MASTER' && 'Backends stay on master and reach the service over the mesh. Data stays inside master backups.'}
+            {placement === 'NODE' && 'Backends run on the service\u2019s node next to the app. Applies to newly provisioned addons; existing backends move only via migration.'}
+          </p>
         </CardContent>
       </Card>
 

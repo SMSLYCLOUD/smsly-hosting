@@ -1128,9 +1128,24 @@ class AddonProvisioner:
         locally on the node via SSH; lite agents and local services use the
         existing local-Docker provisioning on the master.
 
+        The service's ``addon_placement`` overrides the default: MASTER
+        pins the backend to master (mesh reachability), NODE pins it to
+        the service's node. AUTO keeps the behaviour above.
+
         This is the preferred entry point for all addon provisioning.
         """
         server = getattr(addon.service, 'server', None)
+        try:
+            placement = str(getattr(addon.service, 'addon_placement', '') or 'AUTO').upper()
+        except Exception:
+            placement = 'AUTO'
+        if placement == 'MASTER':
+            return self.provision(addon)
+        if placement == 'NODE':
+            if (server and not server.is_primary
+                    and not getattr(server, 'is_lite_agent', False)):
+                return self.provision_remote(addon, server)
+            return self.provision(addon)
         if (server and not server.is_primary
                 and not getattr(server, 'is_lite_agent', False)):
             return self.provision_remote(addon, server)
@@ -3189,7 +3204,31 @@ metrics = false
                              retain_volume: bool = False) -> bool:
         """
         De-provision an addon from the correct host (master or full-stack node).
+
+        Prefers the row's stamped ``provider_metadata['provisioned_host']``
+        (written by provision/provision_remote): a remote service's backends
+        may live on either host, so re-deriving from the service would hit
+        the wrong one. Falls back to the service derivation when unstamped.
         """
+        try:
+            _meta = dict(getattr(addon, 'provider_metadata', None) or {})
+            _host = str(_meta.get('provisioned_host') or '').strip()
+        except Exception:
+            _host = ''
+        if _host and _host.lower() != 'master':
+            try:
+                from apps.deployments.models import ManagedServer
+                _srv = ManagedServer.objects.filter(name=_host).first()
+                if _srv is not None and not getattr(_srv, 'is_primary', True) \
+                        and not getattr(_srv, 'is_lite_agent', False):
+                    return self.deprovision_remote(container_id, _srv, container_name)
+            except Exception:
+                pass
+            # Stamped node unknown/missing: fall through to the service
+            # derivation below rather than deleting from the wrong host.
+        elif _host.lower() == 'master':
+            return self.deprovision(container_id, container_name,
+                                    retain_volume=retain_volume)
         server = getattr(addon.service, 'server', None) if addon else None
         if (server and not server.is_primary
                 and not getattr(server, 'is_lite_agent', False)):

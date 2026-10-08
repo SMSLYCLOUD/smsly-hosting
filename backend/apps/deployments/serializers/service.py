@@ -225,6 +225,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             # type promises them, so list consumers must see them too.
             'deploy_strategy', 'canary_percentage', 'promotion_policy',
             'sablier_enabled', 'sablier_session',
+            'addon_placement',
             # Sleep signal for the grid Zzz badge (TTL-cached inspect,
             # same budget as the detail page — see get_sleep_state).
             'sleep_state',
@@ -560,7 +561,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'migration_auto_approval_policy', 'production_requires_backup',
             'auto_rollback_enabled', 'auto_rollback_threshold',
             'deploy_strategy', 'canary_percentage',
-            'promotion_policy',
+            'promotion_policy', 'addon_placement',
             'is_preview', 'parent_service', 'pr_number',
             'health_check_path', 'health_check_port',
             'health_check_interval', 'health_check_timeout',

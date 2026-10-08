@@ -240,6 +240,17 @@ class Service(TimeStampedModel):
         related_name='services_on_node',
         help_text="The managed server where this service is currently hosted"
     )
+    addon_placement = models.CharField(  # type: ignore[var-annotated]
+        max_length=10,
+        choices=[("AUTO", "Auto"), ("MASTER", "Master"), ("NODE", "Node")],
+        default="AUTO",
+        help_text="Where this service's addon backends live. AUTO keeps the "
+                  "platform default (remote full-stack services provision on "
+                  "their node, everything else on master). MASTER pins "
+                  "backends to master with mesh reachability; NODE pins them "
+                  "to the service's node. Only meaningful for services on a "
+                  "remote full-stack node.",
+    )
 
     # Project grouping (Railway-style)
     project = models.ForeignKey(  # type: ignore[var-annotated]
