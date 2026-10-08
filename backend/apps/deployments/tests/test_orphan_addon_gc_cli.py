@@ -47,6 +47,23 @@ class OrphanGcCliTests(TestCase):
         self.assertEqual(removed, [])
         self.assertEqual(result["removed"], [])
 
+    def test_shared_cli_container_kept_with_backend_missing_row(self):
+        # 2026-10-08: hourly GC removed a live shared CLI container
+        # whose only row was BACKEND_MISSING (awaiting recovery).
+        self._addon('OPENCODE', 'opencode-x',
+                    status=Addon.Status.BACKEND_MISSING)
+        shared = f"smsly-addon-cli-{self.service.id}"
+        result, removed = self._run_gc([f"{shared}\tUp 5 minutes"])
+        self.assertEqual(removed, [])
+        self.assertEqual(result["removed"], [])
+
+    def test_shared_cli_container_removed_when_rows_deleted(self):
+        self._addon('OPENCODE', 'opencode-x',
+                    status=Addon.Status.DELETED)
+        shared = f"smsly-addon-cli-{self.service.id}"
+        result, removed = self._run_gc([f"{shared}\tUp 5 minutes"])
+        self.assertEqual(removed, [shared])
+
     def test_shared_cli_container_removed_when_no_cli_rows(self):
         self._addon('REDIS', 'redis-x')
         shared = f"smsly-addon-cli-{self.service.id}"

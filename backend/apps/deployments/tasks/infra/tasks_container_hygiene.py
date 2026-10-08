@@ -109,13 +109,17 @@ def orphan_addon_gc_task(dry_run: bool = False):
     for a in Addon.objects.exclude(status='DELETED'):
         keep.add(f"smsly-addon-{a.addon_type.lower()}-{a.id}")
     # Shared per-service CLI containers (smsly-addon-cli-<service-id>)
-    # are backed by N addon rows, not one — keep them while any ACTIVE
-    # CLI addon of the service remains (2026-10-02: the GC removed a
-    # live shared container because no single row matched its name).
+    # are backed by N addon rows, not one — keep them while any
+    # non-deleted CLI addon row of the service remains (2026-10-02: the
+    # GC removed a live shared container because no single row matched
+    # its name; 2026-10-08: it removed one again because the only row
+    # was BACKEND_MISSING — a row awaiting recovery still backs its
+    # container, only DELETED rows release it).
     try:
         from apps.addons.services import cli_addons as _cli
-        _cli_rows = Addon.objects.filter(
-            status=Addon.Status.ACTIVE,
+        _cli_rows = Addon.objects.exclude(
+            status=Addon.Status.DELETED,
+        ).filter(
             addon_type__in=sorted(_cli.CLI_ADDON_TYPES),
         ).select_related('service')
         _seen_services: set[str] = set()
