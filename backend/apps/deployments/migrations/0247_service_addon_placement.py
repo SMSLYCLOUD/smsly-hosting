@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('deployments', '0119_servicesnapshot_cloud_bucket_and_more'),
+        ('deployments', '0246_addon_provider_metadata'),
     ]
 
     operations = [
