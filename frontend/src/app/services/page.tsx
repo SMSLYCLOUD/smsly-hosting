@@ -29,6 +29,7 @@ function buildServiceFingerprint(services: Service[]): string {
       service.repository_url || '',
       service.latest_deployment?.id || '',
       service.latest_deployment?.status || '',
+      (service as { sleep_state?: string }).sleep_state || '',
     ].join(':'))
     .sort()
     .join('|');

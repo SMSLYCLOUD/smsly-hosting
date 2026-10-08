@@ -204,6 +204,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
     node_url = serializers.SerializerMethodField()
     node_url_nested = serializers.SerializerMethodField()
     running_replicas = serializers.SerializerMethodField()
+    sleep_state = serializers.SerializerMethodField()
     # NOTE: no internal_addresses here on purpose — it costs a synchronous
     # Docker inspect per row. The detail serializer serves it (TTL-cached);
     # no list consumer renders it (InternalNetworkCard is detail-fed).
@@ -223,7 +224,25 @@ class ServiceListSerializer(serializers.ModelSerializer):
             # Plain model columns (no extra queries): the shared Service
             # type promises them, so list consumers must see them too.
             'deploy_strategy', 'canary_percentage', 'promotion_policy',
+            'sablier_enabled', 'sablier_session',
+            # Sleep signal for the grid Zzz badge (TTL-cached inspect,
+            # same budget as the detail page — see get_sleep_state).
+            'sleep_state',
         ]
+
+    def get_sleep_state(self, obj):
+        """Sablier sleep signal for the grid Zzz badge: 'sleeping' when
+        the service opted into scale-to-zero and no container is
+        currently attached. Anything else is 'awake'/'na'."""
+        try:
+            if not bool(getattr(obj, 'sablier_enabled', False)):
+                return 'na'
+            addrs = getattr(obj, '_internal_addresses_cache', None)
+            if not addrs:
+                addrs = obj.generate_internal_addresses()
+            return 'awake' if addrs else 'sleeping'
+        except Exception:
+            return 'unknown'
 
     def get_running_replicas(self, obj):
         return getattr(obj, 'running_replicas_count', 0)
@@ -294,6 +313,7 @@ class ServiceSerializer(serializers.ModelSerializer):
     node_domains = serializers.SerializerMethodField()
     internal_endpoints = serializers.SerializerMethodField()
     internal_addresses = serializers.SerializerMethodField()
+    sleep_state = serializers.SerializerMethodField()
     effective_registry = serializers.SerializerMethodField()
     project_name = serializers.CharField(
         source='project.name', read_only=True, default=None)
@@ -571,6 +591,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'latest_deployment', 'service_url', 'node_url',
             'node_url_nested', 'node_domains', 'internal_endpoints',
             'internal_addresses',
+            'sleep_state',
             'project_name', 'project_slug', 'project_emoji',
             'estimated_cost', 'node_metadata', 'domain_instances',
             'running_replicas',

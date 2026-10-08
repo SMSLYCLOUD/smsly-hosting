@@ -31,6 +31,7 @@ import { toast } from '@/components/ui/use-toast';
 import { usePermissions, PERMISSION } from '@/hooks/usePermissions';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { getAddonMetadata } from '@/lib/addonRegistry';
+import { SleepingZzz } from '@/components/SleepingZzz';
 
 import { motion } from 'framer-motion';
 import Link from 'next/link';
@@ -251,6 +252,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                 </span>
               )}
               <div className={`w-2 h-2 rounded-full ${
+                  !service.isAddon && service.sleep_state === 'sleeping' ? 'bg-indigo-400 animate-pulse' :
                   service.status === 'STOPPED' ? 'bg-slate-400' :
                   service.latest_deployment?.status === 'ACTIVE' || service.latest_deployment?.status === 'LIVE' ? 'bg-emerald-500 animate-pulse' :
                   service.latest_deployment?.status === 'FAILED' ? 'bg-red-500' :
@@ -269,6 +271,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
             <div className="flex items-center gap-2">
                 <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                   service.isAddon ? 'bg-blue-500/15 text-blue-400' :
+                  !service.isAddon && service.sleep_state === 'sleeping' ? 'bg-indigo-500/15 text-indigo-300' :
                   service.status === 'STOPPED' ? 'bg-slate-500/15 text-slate-400' :
                   service.latest_deployment?.status === 'ACTIVE' || service.latest_deployment?.status === 'LIVE' ? 'bg-emerald-500/15 text-emerald-400' :
                   service.latest_deployment?.status === 'FAILED' ? 'bg-red-500/15 text-red-400' :
@@ -277,8 +280,13 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                   service.latest_deployment?.status === null ? 'bg-blue-500/15 text-blue-500' :
                   'bg-yellow-500/15 text-yellow-400'
                 }`}>
-                  {service.isAddon ? 'ADDON' : (service.status === 'STOPPED' ? 'STOPPED' : (service.latest_deployment?.status || 'Ready to Deploy'))}
+                  {service.isAddon ? 'ADDON' : (!service.isAddon && service.sleep_state === 'sleeping' ? 'Sleeping' : (service.status === 'STOPPED' ? 'STOPPED' : (service.latest_deployment?.status || 'Ready to Deploy')))}
                 </span>
+                {!service.isAddon && service.sleep_state === 'sleeping' && (
+                  <span title="Sablier put this container to sleep — it wakes automatically on the next request">
+                    <SleepingZzz />
+                  </span>
+                )}
               {service.deploy_mode === 'COMPOSE' && (
                 <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-violet-500/15 text-violet-400">Compose</span>
               )}
