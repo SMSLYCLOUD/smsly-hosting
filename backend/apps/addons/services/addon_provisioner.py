@@ -1515,6 +1515,35 @@ class AddonProvisioner:
             except Exception as exc:
                 logger.debug("Remote addon %s ready-wait skipped: %s", container_name, exc)
 
+        # Join the service's scoped network: the addon lands on the
+        # default bridge (self.network_name) but the app lives on its
+        # project-scoped net — without this the alias never resolves
+        # from the app (2026-10-09: node redis/steel unreachable until
+        # manually attached). Fail-closed: an unreachable backend must
+        # not become the row.
+        try:
+            _project = getattr(getattr(addon, 'service', None), 'project', None)
+            _scoped = None
+            if _project is not None:
+                from apps.deployments.models.network_scope import ScopedNetwork as _SN
+                _scoped = _SN.resolve_network_name(_project)
+        except Exception as exc:
+            logger.debug("Scoped net resolve skipped for %s: %s", container_name, exc)
+            _scoped = None
+        if _scoped and alias_name:
+            _attach = (
+                f"docker network connect --alias {shlex.quote(alias_name)} "
+                f"{shlex.quote(_scoped)} {shlex.quote(container_name)} 2>&1"
+            )
+            _aout, _aerr, _acode = ssh.exec_command(_attach, timeout=60, raise_on_error=False)
+            if _acode != 0 and 'already exists' not in ((_aout or '') + (_aerr or '')):
+                raise RuntimeError(
+                    f"Remote addon {container_name} unreachable: could not join "
+                    f"scoped network {_scoped} on {server.host}: "
+                    f"{((_aout or '') + (_aerr or '')).strip()[-300:]}"
+                )
+            logger.info("Remote addon %s joined %s as %s", container_name, _scoped, alias_name)
+
         # Remove remote secrets (env files / redis.conf) now that the
         # container is running.
         for remote_path in remote_temp_files:
