@@ -7,6 +7,8 @@ import re as _re
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.deployments.utils.log_scrub import mask_secrets_in_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -178,6 +180,11 @@ class LogsActionsMixin:
                 data = resp.json()
                 data['id'] = str(deployment.id)
                 data['source'] = 'remote_node_build'
+                # Node output is masked node-side too, but mask again at
+                # the edge: secrets must never reach the browser raw.
+                for _k in ('build_logs', 'runtime_logs'):
+                    if data.get(_k):
+                        data[_k] = mask_secrets_in_text(data[_k])
                 return Response(data)
         except Exception as exc:
             logger.debug("Remote build-log proxy failed: %s", exc)
@@ -222,8 +229,8 @@ class LogsActionsMixin:
         return Response({
             'id': str(deployment.id),
             'status': deployment.status,
-            'build_logs': build,
-            'runtime_logs': runtime,
+            'build_logs': mask_secrets_in_text(build),
+            'runtime_logs': mask_secrets_in_text(runtime),
             'logs_truncated': truncated,
             'started_at': deployment.started_at,
             'finished_at': deployment.finished_at,
@@ -272,7 +279,7 @@ class LogsActionsMixin:
                     if node_logs.strip():
                         return Response({
                             'id': str(deployment.id),
-                            'runtime_logs': node_logs,
+                            'runtime_logs': mask_secrets_in_text(node_logs),
                             'source': 'remote_node_container',
                             'message': '',
                         })
@@ -298,6 +305,8 @@ class LogsActionsMixin:
                     data = resp.json()
                     # Re-map ID back to local deployment ID for frontend consistency
                     data['id'] = str(deployment.id)
+                    if data.get('runtime_logs'):
+                        data['runtime_logs'] = mask_secrets_in_text(data['runtime_logs'])
                     return Response(data)
 
                 err_detail = f"HTTP {resp.status_code if resp else 'None'}"
@@ -346,7 +355,7 @@ class LogsActionsMixin:
                     )
                 return Response({
                     'id': str(deployment.id),
-                    'runtime_logs': fallback_logs,
+                    'runtime_logs': mask_secrets_in_text(fallback_logs),
                     'source': 'saved_runtime_logs',
                     'container_role': 'candidate' if _is_candidate_row(deployment) else 'live',
                     'message': 'Container is not running. Showing saved runtime/crash logs.',
@@ -361,7 +370,7 @@ class LogsActionsMixin:
                 if saved:
                     return Response({
                         'id': str(deployment.id),
-                        'runtime_logs': saved,
+                        'runtime_logs': mask_secrets_in_text(saved),
                         'source': 'saved_runtime_logs',
                         'container_role': 'candidate',
                         'candidate_gone': True,
@@ -380,7 +389,7 @@ class LogsActionsMixin:
                 'id': str(deployment.id),
                 'container_id': container.short_id,
                 'container_status': container.status,
-                'runtime_logs': log_text,
+                'runtime_logs': mask_secrets_in_text(log_text),
                 'source': 'live_container',
                 'lookup': source,
                 'container_role': 'candidate' if 'staged candidate' in source else 'live',
@@ -401,7 +410,7 @@ class LogsActionsMixin:
             fallback_logs = getattr(deployment, 'runtime_logs', '') or ''
             return Response({
                 'id': str(deployment.id),
-                'runtime_logs': fallback_logs,
+                'runtime_logs': mask_secrets_in_text(fallback_logs),
                 'source': 'saved_runtime_logs',
                 'message': f'Could not fetch live runtime logs: {err_msg}. Showing saved runtime logs.',
             })

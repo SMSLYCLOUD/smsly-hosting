@@ -138,8 +138,9 @@ class NodeExecViewSet(viewsets.ViewSet):
             if container is None:
                 return Response({"logs": "", "status": "not-found", "message": f"Container {name} not found on this node."})
             raw = container.logs(stdout=True, stderr=True, tail=tail, timestamps=True)
+            from apps.deployments.utils.log_scrub import mask_secrets_in_text
             return Response({
-                "logs": raw.decode("utf-8", errors="replace"),
+                "logs": mask_secrets_in_text(raw.decode("utf-8", errors="replace")),
                 "status": getattr(container, "status", "unknown"),
                 "container_id": getattr(container, "short_id", ""),
             })

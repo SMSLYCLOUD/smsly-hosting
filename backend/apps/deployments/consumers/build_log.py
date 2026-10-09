@@ -206,9 +206,10 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
                     payload = {"log": str(message)}
                 if not isinstance(payload, dict):
                     payload = {"log": str(payload)}
+                from apps.deployments.utils.log_scrub import mask_secrets_in_text
                 await self.send(text_data=json.dumps({
                     "type": payload.get("type", "build_log"),
-                    "log": payload.get("log", ""),
+                    "log": mask_secrets_in_text(payload.get("log", "")),
                     "status": payload.get("status", ""),
                     "timestamp": payload.get("timestamp", ""),
                     "relayed": True,
@@ -231,9 +232,10 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         return await self._verify_ownership()
 
     async def build_log(self, event):
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         await self.send(text_data=json.dumps({
             'type': 'build_log',
-            'log': event['log'],
+            'log': mask_secrets_in_text(event['log']),
             'status': event.get('status', ''),
             'timestamp': event.get('timestamp', ''),
         }))
@@ -261,11 +263,12 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _get_current_state(self):
         from apps.deployments.models import Deployment
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         try:
             d = Deployment.objects.get(id=self.deployment_id)
             safe_logs = (d.build_logs or "").replace('\x00', '')
             return {
-                'build_logs': safe_logs,
+                'build_logs': mask_secrets_in_text(safe_logs),
                 'status': d.status,
                 'started_at': d.started_at.isoformat() if d.started_at else None,
                 'finished_at': d.finished_at.isoformat() if d.finished_at else None,

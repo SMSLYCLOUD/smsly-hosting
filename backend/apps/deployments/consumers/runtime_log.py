@@ -140,9 +140,10 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 pass
 
     async def log_event(self, event):
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         await self.send(text_data=json.dumps({
             'type': 'log',
-            'log': event.get('log', ''),
+            'log': mask_secrets_in_text(event.get('log', '')),
             'timestamp': event.get('timestamp', ''),
         }))
 
@@ -152,6 +153,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _get_initial_state(self, tail=200):
         from apps.deployments.models import Deployment
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         from apps.deployments.views.deployment.logs import _find_container_for_logs
         try:
             dep = Deployment.objects.select_related('service').get(id=self.deployment_id)
@@ -164,7 +166,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 if not logs.strip():
                     logs = getattr(dep, 'runtime_logs', '') or ''
                 return {
-                    'logs': logs,
+                    'logs': mask_secrets_in_text(logs),
                     'status': dep.status,
                     'container_id': (data or {}).get("_ref", "") if data else '',
                     'container_status': (data or {}).get("status", "running") if data else "unknown",
@@ -188,7 +190,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                     )
                     fallback = crash_match.group(1).strip() if crash_match else (saved_logs[-4000:] if saved_logs else "")
                 return {
-                    'logs': fallback,
+                    'logs': mask_secrets_in_text(fallback),
                     'status': dep.status,
                     'container_id': dep.container_id or '',
                     'container_status': 'stopped',
@@ -206,7 +208,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 # candidate's logs — fall back to its saved output.
                 from apps.deployments.views.deployment.logs import _candidate_saved_logs
                 return {
-                    'logs': _candidate_saved_logs(dep),
+                    'logs': mask_secrets_in_text(_candidate_saved_logs(dep)),
                     'status': dep.status,
                     'container_id': '',
                     'container_status': 'stopped',
@@ -216,7 +218,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 }
 
             return {
-                'logs': logs,
+                'logs': mask_secrets_in_text(logs),
                 'status': dep.status,
                 'container_id': container.short_id,
                 'container_status': container.status,
@@ -293,9 +295,10 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                     break
                 if self._disconnected:
                     break
+                from apps.deployments.utils.log_scrub import mask_secrets_in_text
                 await self.send(text_data=json.dumps({
                     'type': 'log',
-                    'log': line,
+                    'log': mask_secrets_in_text(line),
                     'timestamp': '',
                 }))
         except asyncio.CancelledError:
@@ -337,6 +340,8 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
     async def _stream_remote_logs(self, remote):
         from asgiref.sync import sync_to_async
 
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
+
         server, refs = remote
         seen = set()
         failures = 0
@@ -356,7 +361,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 seen.add(line)
                 if len(seen) > 2000:
                     seen.clear()
-                await self.send(text_data=json.dumps({'type': 'log', 'log': line, 'timestamp': ''}))
+                await self.send(text_data=json.dumps({'type': 'log', 'log': mask_secrets_in_text(line), 'timestamp': ''}))
             await asyncio.sleep(2)
 
     def _fetch_remote_logs(self, server, refs):

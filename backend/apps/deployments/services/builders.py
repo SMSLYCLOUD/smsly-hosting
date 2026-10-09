@@ -642,11 +642,15 @@ class BuildManager:
     def _log(self, message, timestamp=True):
         """Append logs to the deployment atomically and push to WebSocket."""
         from apps.deployments.models import Deployment
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         from django.db.models import Value
         from django.db.models.functions import Concat
 
+        # Never persist or stream raw credentials: build output echoes
+        # clone URLs, query strings, and CLI output that may embed
+        # tokens/passwords.
         prefix = f"[{time.strftime('%H:%M:%S')}] " if timestamp else ""
-        log_line = f"{prefix}{message}\n"
+        log_line = f"{prefix}{mask_secrets_in_text(message)}\n"
 
         # Atomic append using Concat to avoid race condition
         Deployment.objects.filter(id=self.deployment.id).update(

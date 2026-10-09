@@ -13,6 +13,26 @@ from django.conf import settings
 from apps.deployments.consumers.base import authenticate_ws_token, get_websocket_subprotocol, logger
 
 
+def _resolve_addon_remote_server(addon):
+    """Return the node server for a remotely-provisioned addon, else None.
+
+    Shared/pooler addons (logical DBs, no remote container) and
+    master-placed addons always resolve to None (local lookup).
+    Never raises.
+    """
+    try:
+        if str(getattr(addon, 'provision_mode', '') or '') == 'shared':
+            return None
+        server = getattr(getattr(addon, 'service', None), 'server', None)
+        if server is None or getattr(server, 'is_primary', False):
+            return None
+        if getattr(server, 'is_lite_agent', False):
+            return None
+        return server
+    except Exception:
+        return None
+
+
 class AddonLogConsumer(AsyncWebsocketConsumer):
     """
     Real-time addon container log streaming consumer.
@@ -116,9 +136,10 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                 pass
 
     async def log_event(self, event):
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         await self.send(text_data=json.dumps({
             'type': 'log',
-            'log': event.get('log', ''),
+            'log': mask_secrets_in_text(event.get('log', '')),
             'timestamp': event.get('timestamp', ''),
         }))
 
@@ -141,17 +162,40 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _get_initial_state(self):
         from apps.deployments.models.addons import Addon
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         try:
-            addon = Addon.objects.get(id=self.addon_id)
+            addon = Addon.objects.select_related(
+                'service', 'service__server').get(id=self.addon_id)
             from apps.addons.services.addon_provisioner import addon_provisioner
             container_name, notice = addon_provisioner.resolve_log_container(addon)
+            server = _resolve_addon_remote_server(addon)
+            if server is not None:
+                try:
+                    from apps.deployments.services.remote_orchestrator import (
+                        RemoteOrchestrator,
+                    )
+                    data = RemoteOrchestrator(server).get_container_logs(
+                        container_name, tail=200)
+                    logs = (data or {}).get('logs', '') if data else ''
+                    if logs.strip():
+                        return {
+                            'logs': mask_secrets_in_text(logs),
+                            'status': addon.status,
+                            'addon_type': addon.addon_type,
+                            'container_name': container_name,
+                            'notice': notice,
+                            'source': 'remote_node_container',
+                        }
+                except Exception as exc:
+                    logger.debug("Addon-log remote initial fetch failed: %s", exc)
             logs = addon_provisioner.get_logs(container_name, tail=200)
             return {
-                'logs': logs,
+                'logs': mask_secrets_in_text(logs),
                 'status': addon.status,
                 'addon_type': addon.addon_type,
                 'container_name': container_name,
                 'notice': notice,
+                'source': 'local_container',
             }
         except Addon.DoesNotExist:
             return {'logs': '', 'status': 'unknown', 'addon_type': '', 'container_name': ''}
@@ -164,13 +208,20 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
         try:
             from apps.deployments.models.addons import Addon
             addon = await database_sync_to_async(
-                Addon.objects.get
-            )(id=self.addon_id)
+                lambda: Addon.objects.select_related(
+                    'service', 'service__server').get(id=self.addon_id)
+            )()
             from apps.addons.services.addon_provisioner import addon_provisioner
             container_name, _ = await database_sync_to_async(
                 addon_provisioner.resolve_log_container)(addon)
+            remote_server = await database_sync_to_async(
+                _resolve_addon_remote_server)(addon)
         except Exception:
             await self.send(text_data=json.dumps({'error': 'Addon not found'}))
+            return
+
+        if remote_server is not None:
+            await self._stream_remote_logs(remote_server, container_name)
             return
 
         try:
@@ -189,9 +240,10 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                     break
                 if self._disconnected:
                     break
+                from apps.deployments.utils.log_scrub import mask_secrets_in_text
                 await self.send(text_data=json.dumps({
                     'type': 'log',
-                    'log': line,
+                    'log': mask_secrets_in_text(line),
                     'timestamp': '',
                 }))
         except asyncio.CancelledError:
@@ -205,6 +257,48 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                 except (ProcessLookupError, OSError):
                     pass
                 self._proc = None
+
+    async def _stream_remote_logs(self, server, container_name):
+        """Poll node container logs for remotely-provisioned addons.
+
+        Emits only lines not seen before (dedupe set, bounded). Falls
+        back to silence after repeated failures — the initial state
+        already delivered the tail. Never raises.
+        """
+        from asgiref.sync import sync_to_async
+
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
+        seen = set()
+        failures = 0
+        while not self._disconnected:
+            try:
+                data = await sync_to_async(self._fetch_remote_logs)(
+                    server, container_name)
+                failures = 0
+            except Exception:
+                failures += 1
+                if failures >= 5:
+                    break
+                await asyncio.sleep(5)
+                continue
+            for line in (data or "").splitlines():
+                if not line or line in seen:
+                    continue
+                seen.add(line)
+                if len(seen) > 2000:
+                    seen.clear()
+                await self.send(text_data=json.dumps({
+                    'type': 'log',
+                    'log': mask_secrets_in_text(line),
+                    'timestamp': '',
+                }))
+            await asyncio.sleep(2)
+
+    def _fetch_remote_logs(self, server, container_name):
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+        data = RemoteOrchestrator(server).get_container_logs(
+            container_name, tail=100)
+        return (data or {}).get("logs", "") if data else ""
 
     async def _authenticate_token(self, token_key):
         return await authenticate_ws_token(token_key)

@@ -841,23 +841,36 @@ class AddonViewSet(viewsets.ModelViewSet):
         """
         Get runtime logs from the addon container.
         GET /api/v1/addons/{id}/logs/?tail=200
+
+        Addons provisioned on a remote full-stack node (service
+        ``addon_placement`` NODE, or AUTO with a node target) run
+        their container on the node: proxy the node's container logs
+        first and fall back to the local Docker lookup. Shared/pooler
+        addons have no remote container and always read locally.
         """
         addon = self.get_object()
         from apps.addons.services.addon_provisioner import addon_provisioner
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         container_name, notice = addon_provisioner.resolve_log_container(addon)
 
         tail = int(request.query_params.get('tail', 200))
         tail = min(tail, 2000)
 
         try:
+            if str(getattr(addon, 'provision_mode', '') or '') != 'shared':
+                proxied = self._remote_addon_logs(addon, container_name, tail)
+                if proxied is not None:
+                    proxied['notice'] = notice or proxied.get('notice', '')
+                    return Response(proxied)
             log_text = addon_provisioner.get_logs(container_name, tail=tail)
             return Response({
                 'id': str(addon.id),
                 'addon_type': addon.addon_type,
                 'container_name': container_name,
                 'status': addon.status,
-                'logs': log_text,
+                'logs': mask_secrets_in_text(log_text),
                 'notice': notice,
+                'source': 'local_container',
             })
         except Exception as e:
             logger.error("Failed to fetch addon logs for %s: %s", pk, e)
@@ -866,6 +879,39 @@ class AddonViewSet(viewsets.ModelViewSet):
                 'logs': '',
                 'message': f'Could not fetch addon logs: {e!s}',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _remote_addon_logs(self, addon, container_name: str, tail: int):
+        """Proxy node container logs for remotely-provisioned addons.
+
+        Returns a response dict on success, None to fall back to the
+        local Docker lookup. Never raises.
+        """
+        try:
+            from apps.deployments.services.remote_orchestrator import (
+                RemoteOrchestrator,
+            )
+            from apps.deployments.utils.log_scrub import mask_secrets_in_text
+            server = getattr(getattr(addon, 'service', None), 'server', None)
+            if server is None or getattr(server, 'is_primary', False):
+                return None
+            if getattr(server, 'is_lite_agent', False):
+                return None
+            data = RemoteOrchestrator(server).get_container_logs(
+                container_name, tail=tail)
+            logs = (data or {}).get('logs', '') if data else ''
+            if not logs.strip():
+                return None
+            return {
+                'id': str(addon.id),
+                'addon_type': addon.addon_type,
+                'container_name': container_name,
+                'status': addon.status,
+                'logs': mask_secrets_in_text(logs),
+                'source': 'remote_node_container',
+            }
+        except Exception as exc:
+            logger.debug("Remote addon-log proxy failed: %s", exc)
+            return None
 
     @action(detail=True, methods=['get'])
     def network_check(self, request, pk=None):
