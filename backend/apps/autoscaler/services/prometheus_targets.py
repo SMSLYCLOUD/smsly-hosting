@@ -444,22 +444,53 @@ scrape_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
     relabel_configs:
-      - source_labels: ['__meta_docker_container_label_managed_by']
-        regex: 'smsly-hosting'
+      # Keep SMSLY-managed containers (compose-deployed = has compose_project
+      # OR deployed via platform = has managed_by label). Mirrors the
+      # master promtail-config.yml docker job: a managed_by-only keep drops
+      # compose-deployed platform containers on the remote host.
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project', '__meta_docker_container_label_managed_by']
+        separator: ';'
+        regex: '.+;.*|;smsly-hosting'
         action: keep
+      # Extract compose service name (from Docker Compose auto-injected label)
       - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
         target_label: 'compose_service'
+      # Fallback: for non-compose (SINGLE mode) containers, use canonical_name.
+      # The regex ensures only non-empty values are applied, preventing
+      # empty-label overwrite of compose_service on compose containers.
       - source_labels: ['__meta_docker_container_label_smsly_blue_green_canonical_name']
         target_label: 'compose_service'
         regex: '(.+)'
+      # Promote SMSLY ownership labels so Loki queries can scope logs by the
+      # actual service/project instead of only the Docker compose container.
+      - source_labels: ['__meta_docker_container_label_smsly_service_id']
+        target_label: 'smsly_service_id'
+        regex: '(.+)'
+      - source_labels: ['__meta_docker_container_label_smsly_project_id']
+        target_label: 'smsly_project_id'
+        regex: '(.+)'
+      - source_labels: ['__meta_docker_container_label_smsly_project']
+        target_label: 'smsly_project'
+        regex: '(.+)'
+      # Extract compose project name
       - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
         target_label: 'compose_project'
+      # Extract container name (strip leading /).
+      # NOTE: the source must be the docker_sd meta label
+      # __meta_docker_container_name -- there is no Docker label literally
+      # named com.docker.container_name, so the label_ infix variant is
+      # always empty and would blank this label.
       - source_labels: ['__meta_docker_container_name']
         regex: '/(.*)'
         target_label: 'container_name'
+      # Use container ID as fallback container label (real docker_sd meta
+      # label -- same caveat as above). Guarded so an empty value can never
+      # blank the label.
       - source_labels: ['__meta_docker_container_id']
+        regex: '(.+)'
         target_label: 'container'
     pipeline_stages:
+      # Parse Docker json-file log driver format
       - json:
           expressions:
             output: log
@@ -472,6 +503,10 @@ scrape_configs:
           format: RFC3339Nano
       - output:
           source: output
+      # Drop entries with no container label (shouldn't happen with docker_sd)
+      - match:
+          selector: '{{container=""}}'
+          action: drop
 """
 
 

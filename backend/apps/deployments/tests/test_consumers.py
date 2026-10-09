@@ -40,6 +40,17 @@ def _test_channel_layer():
     return get_channel_layer()
 
 
+def _group_members(layer, group_name):
+    """Snapshot of a group's channel membership (copy -- never an alias).
+
+    The removed upstream ``communicator.instance`` API used to expose the
+    consumer's own channel name for ``assertIn`` checks. Counting the
+    membership delta around connect/disconnect asserts the same join/leave
+    contract without that API.
+    """
+    return set(layer.groups.get(group_name) or set())
+
+
 
 async def _assert_rejected_with_error(comm, expected=4001):
     """New-channels rejection contract: the consumer SENDs an error payload
@@ -216,17 +227,21 @@ class BuildLogConsumerTests(TestCase):
                 'kwargs': {'deployment_id': self.deployment_id},
             }
             comm.scope['user'] = self.user
+            group_name = f"build_logs_{self.deployment_id}"
+            layer = _test_channel_layer()
+            before = _group_members(layer, group_name)
+
             connected, _ = await comm.connect()
             self.assertTrue(connected)
             await comm.receive_json_from(timeout=2)
 
-            group_name = f"build_logs_{self.deployment_id}"
-            layer = _test_channel_layer()
-            self.assertTrue(layer.groups.get(group_name))
+            # Exactly one channel (ours) joined the group on connect.
+            joined = _group_members(layer, group_name) - before
+            self.assertEqual(len(joined), 1)
 
             await comm.disconnect()
             # After disconnect the channel should be gone from the group
-            self.assertFalse(layer.groups.get(group_name))
+            self.assertEqual(_group_members(layer, group_name) - before, set())
 
 
 # ---------------------------------------------------------------------------
@@ -350,16 +365,20 @@ class RuntimeLogConsumerTests(TestCase):
                 'kwargs': {'deployment_id': self.deployment_id},
             }
             comm.scope['user'] = self.user
+            group_name = f"runtime_logs_{self.deployment_id}"
+            layer = _test_channel_layer()
+            before = _group_members(layer, group_name)
+
             connected, _ = await comm.connect()
             self.assertTrue(connected)
             await comm.receive_json_from(timeout=2)
 
-            group_name = f"runtime_logs_{self.deployment_id}"
-            layer = _test_channel_layer()
-            self.assertTrue(layer.groups.get(group_name))
+            # Exactly one channel (ours) joined the group on connect.
+            joined = _group_members(layer, group_name) - before
+            self.assertEqual(len(joined), 1)
 
             await comm.disconnect()
-            self.assertFalse(layer.groups.get(group_name))
+            self.assertEqual(_group_members(layer, group_name) - before, set())
 
 
 # ---------------------------------------------------------------------------
@@ -467,15 +486,19 @@ class ServiceStatusConsumerTests(TestCase):
             )
             comm.scope['url_route'] = {'args': (), 'kwargs': {}}
             comm.scope['user'] = self.user
+            group_name = f"user_services_{self.user.id}"
+            layer = _test_channel_layer()
+            before = _group_members(layer, group_name)
+
             connected, _ = await comm.connect()
             self.assertTrue(connected)
 
-            group_name = f"user_services_{self.user.id}"
-            layer = _test_channel_layer()
-            self.assertTrue(layer.groups.get(group_name))
+            # Exactly one channel (ours) joined the group on connect.
+            joined = _group_members(layer, group_name) - before
+            self.assertEqual(len(joined), 1)
 
             await comm.disconnect()
-            self.assertFalse(layer.groups.get(group_name))
+            self.assertEqual(_group_members(layer, group_name) - before, set())
 
 
 # ---------------------------------------------------------------------------
