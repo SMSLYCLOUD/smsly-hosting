@@ -1,4 +1,5 @@
 """Orphan addon GC must keep shared per-service CLI containers."""
+import os
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -69,6 +70,19 @@ class OrphanGcCliTests(TestCase):
         shared = f"smsly-addon-cli-{self.service.id}"
         result, removed = self._run_gc([f"{shared}\tUp 5 minutes"])
         self.assertEqual(removed, [shared])
+
+    def test_skipped_on_node_worker_with_queue_only(self):
+        # 2026-10-09: node backend had SMSLY_NODE_ID unset; its beat
+        # wiped node addon containers. Either identity var must skip.
+        self._addon('REDIS', 'redis-x')
+        env = {'SMSLY_NODE_QUEUE': 'smsly-node-test'}
+        env.pop('SMSLY_NODE_ID', None)
+        with mock.patch.dict(os.environ, env, clear=False):
+            os.environ.pop('SMSLY_NODE_ID', None)
+            result, removed = self._run_gc(
+                ["smsly-addon-redis-deadbeef-1234-5678-9abc-def012345678\tUp 1 hour"])
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(removed, [])
 
     def test_ordinary_orphan_still_removed(self):
         pg = self._addon('POSTGRES', 'pg-x')

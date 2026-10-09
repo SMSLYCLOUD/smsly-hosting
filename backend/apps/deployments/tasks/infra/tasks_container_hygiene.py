@@ -99,7 +99,13 @@ def orphan_addon_gc_task(dry_run: bool = False):
         round-robins between live and dead instances.
     """
     import os as _os
-    if (_os.environ.get('SMSLY_NODE_ID', '') or '').strip():
+    # Node workers see an empty addon table (rows live on master): either
+    # node identity var proves node-hood. Check BOTH — 2026-10-09: a
+    # full-stack node's backend had SMSLY_NODE_ID unset and its beat
+    # deleted freshly-provisioned node addon containers within the hour.
+    _node_id = (_os.environ.get('SMSLY_NODE_ID', '') or '').strip()
+    _node_queue = (_os.environ.get('SMSLY_NODE_QUEUE', '') or '').strip()
+    if _node_id or _node_queue:
         logger.debug("orphan_addon_gc: skipping on node worker (no addon rows here)")
         return {"status": "skipped", "reason": "node-worker"}
     from urllib.parse import urlparse
