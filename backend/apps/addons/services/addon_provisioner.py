@@ -970,13 +970,16 @@ class AddonProvisioner:
             elif addon_type == 'MINIO':
                 container_id, _ = self._provision_minio(container_name, password, cast(int, port), hostname, username=username, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'POSTGRES':
+                # user/db follow the CURRENT alias (see remote comment
+                # above); the row URL converges on them below.
+                _pg_suffix = (hostname or container_name).replace('-', '_').replace('.', '_').replace(' ', '_')[:63]
                 container_id, _ = self._provision_postgres(
                     container_name,
                     password,
                     cast(int, port),
                     hostname,
-                    db_user=username or None,
-                    db_name=db_name or None,
+                    db_user=_pg_suffix or username or None,
+                    db_name=_pg_suffix or db_name or None,
                     public_domain=public_domain,
                     host_port=host_port_for_recreate,
                 )
@@ -998,6 +1001,21 @@ class AddonProvisioner:
                 raise ValueError(f"Unsupported addon type: {addon_type}")
 
             self._connect_addon_networks(container_name, addon, public_domain=public_domain, host_port=host_port_for_recreate)
+            if addon_type == 'POSTGRES':
+                # Converge the row on what the container actually seeded
+                # (user/db from the current alias) — otherwise the app
+                # dials a db the server never created.
+                from urllib.parse import urlparse as _uup, urlunparse as _uun
+                try:
+                    _pp = _uup(existing_url)
+                    _suffix = (hostname or container_name).replace('-', '_').replace('.', '_').replace(' ', '_')[:63]
+                    _cred = _suffix or ''
+                    if password:
+                        _cred += f":{password}"
+                    _netloc = f"{_cred}@{_pp.hostname or hostname}:{_pp.port or port}"
+                    existing_url = _uun(_pp._replace(netloc=_netloc, path=f"/{_suffix or db_name}"))
+                except Exception:
+                    pass
             return container_id, existing_url
 
         # First-time provisioning: generate fresh credentials for passworded addons.
@@ -1306,6 +1324,15 @@ class AddonProvisioner:
             return remote_path
 
         if addon_type == 'POSTGRES':
+            # Container recreates reuse the persisted URL's credentials
+            # (row is source of truth) — but the row's db name travels
+            # with the alias: when an alias moves to a fresh volume (e.g.
+            # cross-host consolidation), the persisted name would seed a
+            # WRONG database on the new host. Derive from the CURRENT
+            # alias instead so user/db always match the hostname the app
+            # dials (2026-10-09: node PG came up with db postgres_...pjja8
+            # from the row while the app dialed postgres-smsly-mar…; all
+            # connections landed on the empty default db).
             safe_suffix = (
                 (alias_name or container_name)
                 .replace('-', '_').replace('.', '_').replace(' ', '_')
