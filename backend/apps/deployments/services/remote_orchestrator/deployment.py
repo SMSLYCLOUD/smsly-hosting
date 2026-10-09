@@ -80,14 +80,34 @@ class DeploymentMixin:
         # node-local Addon rows, which are otherwise always empty after
         # sync. Only ACTIVE addons with mesh-routable URLs; the node
         # applies them as mesh-backed rows (never provisioned locally).
+        # Addons already living on the service's node ship with
+        # local=True and their node-local URL (no forwarder): the node
+        # gates them as local backends instead of mesh endpoints.
         # Fail-open: never blocks deploy on addon/mesh errors.
         try:
-            from apps.deployments.services.addon_mesh import mesh_url_for_addon
+            from apps.deployments.services.addon_mesh import (
+                addon_lives_on_service_node,
+                mesh_url_for_addon,
+            )
             _svc2 = getattr(deployment, "service", None)
             _addon_rows = []
             if _svc2 is not None:
                 for _addon in _svc2.addons.exclude(status="DELETED"):
                     if getattr(_addon, "status", "") != "ACTIVE":
+                        continue
+                    if addon_lives_on_service_node(_addon):
+                        _local_url = str(getattr(_addon, "connection_url", "") or "")
+                        if not _local_url:
+                            continue
+                        _addon_rows.append({
+                            "name": str(getattr(_addon, "name", "") or "")[:255],
+                            "addon_type": str(getattr(_addon, "addon_type", "") or "")[:20],
+                            "connection_url": _local_url[:512],
+                            "mesh_forward_port": None,
+                            "local": True,
+                        })
+                        if len(_addon_rows) >= 50:
+                            break
                         continue
                     _mesh_url = mesh_url_for_addon(_addon)
                     if not _mesh_url:

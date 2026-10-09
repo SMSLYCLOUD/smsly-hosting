@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from apps.deployments.services.addon_mesh import (
     _mesh_netloc,
+    addon_lives_on_service_node,
     mesh_url_for_addon,
     rewrite_env_for_mesh,
 )
@@ -66,3 +67,46 @@ class MeshUserinfoTests(TestCase):
         self.assertEqual(out["REDIS_URL"], f"redis://:s3cret@{_MIP}:{_PORT}/0")
         self.assertEqual(out["CELERY_BROKER_URL"], f"redis://:s3cret@{_MIP}:{_PORT}/0")
         self.assertNotIn("OTHER", out)
+
+
+def _node_addon(url, host="aws-full-1"):
+    addon = _addon(url)
+    addon.service = SimpleNamespace(
+        server=SimpleNamespace(name=host, is_primary=False))
+    addon.provider_metadata = {"provisioned_host": host}
+    return addon
+
+
+class MeshNodeLocalTests(TestCase):
+    def test_lives_on_node(self):
+        self.assertTrue(
+            addon_lives_on_service_node(_node_addon("redis://:p@r:6379/0")))
+
+    def test_master_stays_mesh(self):
+        addon = _addon("redis://:p@r:6379/0")
+        addon.service = SimpleNamespace(
+            server=SimpleNamespace(name="master", is_primary=True))
+        addon.provider_metadata = {"provisioned_host": "master"}
+        self.assertFalse(addon_lives_on_service_node(addon))
+
+    def test_unstamped_defaults_to_mesh(self):
+        addon = _addon("redis://:p@r:6379/0")
+        addon.service = SimpleNamespace(
+            server=SimpleNamespace(name="aws-full-1", is_primary=False))
+        addon.provider_metadata = {}
+        self.assertFalse(addon_lives_on_service_node(addon))
+
+    @patch(
+        "apps.deployments.services.addon_mesh.ensure_addon_mesh_forward",
+    )
+    def test_node_local_env_passes_through(self, fwd):
+        addon = _node_addon("redis://:s3cret@redis-alias:6379/0")
+        service = SimpleNamespace(
+            addons=SimpleNamespace(exclude=lambda **kw: [addon]),
+            env_vars=SimpleNamespace(all=lambda: [
+                SimpleNamespace(key="REDIS_URL", value="redis://:s3cret@redis-alias:6379/0"),
+            ]),
+        )
+        out = rewrite_env_for_mesh(service)
+        self.assertEqual(out["REDIS_URL"], "redis://:s3cret@redis-alias:6379/0")
+        fwd.assert_not_called()

@@ -63,7 +63,11 @@ def _ensure_addons_ready(service: Service, deployment: Deployment) -> None:
             # instead. Fail-closed like the local path on refusal.
             _probe_mesh_addon(addon)
             continue
-        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        try:
+            from apps.addons.services.addon_provisioner import addon_container_name as _canon_name
+            container_name = _canon_name(addon)
+        except Exception:
+            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
         backend_kind = "addon container"
         if _is_shared_postgres(addon):
             # Logical database on the shared server (or behind the tenant
@@ -302,9 +306,14 @@ def _probe_addon_connectivity(service, container_id: str) -> list[str]:
         # The addon's backing container follows the standard naming
         # convention (see addon_provisioner._container_name), except for
         # shared POSTGRES addons which resolve to the shared server (or
-        # tenant pooler). We look it up by both name and ID to handle
+        # tenant pooler), and CLI addons which share one container per
+        # service. We look it up by both name and ID to handle
         # renames.
-        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        try:
+            from apps.addons.services.addon_provisioner import addon_container_name as _canon_name2
+            container_name = _canon_name2(addon)
+        except Exception:
+            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
         backend_kind = "container"
         if _is_shared_postgres(addon):
             container_name, backend_kind = _shared_backend_container(addon)

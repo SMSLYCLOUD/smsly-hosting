@@ -146,6 +146,28 @@ def _mesh_netloc(parsed, mip: str, port: int) -> str:
     return netloc
 
 
+def addon_lives_on_service_node(addon) -> bool:
+    """True when the addon's backend runs on the service's own node.
+
+    Determined by the stamped ``provider_metadata['provisioned_host']``
+    matching the service's non-primary server name. Node-local backends
+    need no mesh forwarder: the consumer resolves the alias on its own
+    host, and mesh-rewriting their URLs would send traffic back to a
+    master forwarder (or create one against a dead alias).
+    """
+    try:
+        meta = dict(getattr(addon, 'provider_metadata', None) or {})
+        host = str(meta.get('provisioned_host') or '').strip()
+        if not host or host.lower() == 'master':
+            return False
+        srv = getattr(getattr(addon, 'service', None), 'server', None)
+        if srv is None or bool(getattr(srv, 'is_primary', True)):
+            return False
+        return host == str(getattr(srv, 'name', '') or '')
+    except Exception:
+        return False
+
+
 def mesh_url_for_addon(addon) -> str | None:
     """Mesh-rewritten connection URL for one addon (node consumption).
 
@@ -176,7 +198,9 @@ def rewrite_env_for_mesh(service, master_ip: str | None = None) -> dict[str, str
     """Return env overrides mapping addon-hosted URL vars to mesh endpoints.
 
     Only rewrites values whose hostname matches one of the service's ACTIVE
-    addon aliases. Everything else passes through untouched.
+    addon aliases. Addons living on the service's own node are emitted
+    as-is (their alias resolves node-locally — rewriting would bounce
+    traffic back to master). Everything else passes through untouched.
     """
     overrides: dict[str, str] = {}
     addons = list(service.addons.exclude(status='DELETED')) if hasattr(service, 'addons') else []
@@ -197,6 +221,9 @@ def rewrite_env_for_mesh(service, master_ip: str | None = None) -> dict[str, str
         except Exception:
             continue
         if not host or host not in alias_map:
+            continue
+        if addon_lives_on_service_node(alias_map[host]):
+            overrides[ev.key] = val
             continue
         fwd = ensure_addon_mesh_forward(alias_map[host])
         if not fwd:

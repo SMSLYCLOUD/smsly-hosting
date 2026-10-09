@@ -61,6 +61,28 @@ class NodeApplyTests(TestCase):
         row.refresh_from_db()
         self.assertEqual(row.connection_url, "postgres://u:p@10.100.0.1:24111/db")
 
+    def test_mesh_addons_local_flag_applies_as_non_mesh(self):
+        rows = [
+            {"name": "redis", "addon_type": "REDIS",
+             "connection_url": "redis://:pw@redis-svc:6379/0",
+             "mesh_forward_port": None, "local": True},
+        ]
+        self.assertEqual(apply_mesh_addons(self.service, rows), 1)
+        row = Addon.objects.get(service=self.service, name="redis")
+        self.assertEqual(row.status, "ACTIVE")
+        self.assertFalse(row.provider_metadata.get("mesh_backed"))
+        self.assertEqual(
+            row.connection_url, "redis://:pw@redis-svc:6379/0")
+        # A later mesh row for the same name converts it to mesh-backed.
+        mesh_rows = [
+            {"name": "redis", "addon_type": "REDIS",
+             "connection_url": "redis://:pw@10.100.0.1:24254/0",
+             "mesh_forward_port": 24254},
+        ]
+        self.assertEqual(apply_mesh_addons(self.service, mesh_rows), 1)
+        row.refresh_from_db()
+        self.assertTrue(row.provider_metadata.get("mesh_backed"))
+
     def test_volumes_create_only_valid(self):
         rows = [
             {"name": "data", "mount_path": "/data", "size_gb": 5},

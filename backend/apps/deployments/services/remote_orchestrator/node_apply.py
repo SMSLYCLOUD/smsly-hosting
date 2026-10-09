@@ -40,6 +40,10 @@ def apply_mesh_env(service, mesh_env) -> int:
 def apply_mesh_addons(service, items) -> int:
     """Upsert master-shipped addon rows as mesh-backed. Returns count.
 
+    Items flagged ``local`` describe backends already living on the
+    service's node: they apply as ordinary (non-mesh) rows so the node
+    pipeline gates them as local containers instead of mesh endpoints.
+
     Existing LOCAL (non-mesh) rows with the same name are left untouched —
     an operator's working local addon always wins.
     """
@@ -59,6 +63,7 @@ def apply_mesh_addons(service, items) -> int:
                 continue
             if not isinstance(url, str) or not url.strip():
                 continue
+            _local = bool(item.get("local"))
             existing = Addon.objects.filter(
                 service=service, name=name,
             ).exclude(status="DELETED").first()
@@ -67,18 +72,22 @@ def apply_mesh_addons(service, items) -> int:
                     meta = dict(getattr(existing, "provider_metadata", None) or {})
                 except Exception:
                     meta = {}
-                if not meta.get("mesh_backed"):
+                if not meta.get("mesh_backed") and not _local:
                     continue
                 existing.addon_type = atype
                 existing.connection_url = url[:512]
                 existing.status = "ACTIVE"
-                meta["mesh_backed"] = True
-                fport = item.get("mesh_forward_port")
-                if fport:
-                    try:
-                        meta["mesh_forward_port"] = int(fport)
-                    except (TypeError, ValueError):
-                        pass
+                if _local:
+                    meta.pop("mesh_backed", None)
+                    meta.pop("mesh_forward_port", None)
+                else:
+                    meta["mesh_backed"] = True
+                    fport = item.get("mesh_forward_port")
+                    if fport:
+                        try:
+                            meta["mesh_forward_port"] = int(fport)
+                        except (TypeError, ValueError):
+                            pass
                 existing.provider_metadata = meta
                 existing.save(update_fields=[
                     "addon_type", "connection_url", "status",
@@ -86,6 +95,9 @@ def apply_mesh_addons(service, items) -> int:
                 ])
                 applied += 1
                 continue
+            _meta = {"mesh_backed": True, "mesh_forward_port": item.get("mesh_forward_port")}
+            if _local:
+                _meta = {}
             Addon.objects.create(
                 service=service,
                 project=getattr(service, "project", None),
@@ -93,10 +105,7 @@ def apply_mesh_addons(service, items) -> int:
                 addon_type=atype,
                 connection_url=url[:512],
                 status="ACTIVE",
-                provider_metadata={
-                    "mesh_backed": True,
-                    "mesh_forward_port": item.get("mesh_forward_port"),
-                },
+                provider_metadata=_meta,
             )
             applied += 1
     except Exception as exc:
