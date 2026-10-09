@@ -1063,7 +1063,7 @@ export default function IntelligencePage() {
                     ) : (
                       filteredSecurityEvents.map((evt) => {
                         const isExpanded = expandedEventId === evt.id;
-                        const isCrowdSecBan = evt.source === 'crowdsec' && (evt.type === 'decision' || evt.target);
+                        const isCrowdSecBan = evt.source === 'crowdsec' && evt.type === 'ban';
                         const targetIp = evt.target && /^[\d\.:a-fA-F]+$/.test(evt.target) ? evt.target : null;
 
                         return (

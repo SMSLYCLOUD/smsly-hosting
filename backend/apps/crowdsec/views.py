@@ -77,9 +77,9 @@ def crowdsec_decisions(request: Request) -> Response:
                 for d in decisions
             ],
         })
-    except Exception as exc:
+    except Exception:
         logger.exception("crowdsec_decisions failed")
-        return Response({"error": str(exc)}, status=500)
+        return Response({"error": "internal error"}, status=500)
 
 
 @api_view(["GET"])
@@ -120,9 +120,9 @@ def crowdsec_service_decisions(request: Request, service_id: str) -> Response:
                 for d in decisions
             ],
         })
-    except Exception as exc:
+    except Exception:
         logger.exception("crowdsec_service_decisions failed")
-        return Response({"error": str(exc)}, status=500)
+        return Response({"error": "internal error"}, status=500)
 
 
 @api_view(["GET"])
@@ -153,9 +153,9 @@ def crowdsec_alerts(request: Request) -> Response:
                 for a in alerts
             ],
         })
-    except Exception as exc:
+    except Exception:
         logger.exception("crowdsec_alerts failed")
-        return Response({"error": str(exc)}, status=500)
+        return Response({"error": "internal error"}, status=500)
 
 
 @api_view(["GET"])
@@ -183,9 +183,9 @@ def crowdsec_service_alerts(request: Request, service_id: str) -> Response:
                 for a in alerts
             ],
         })
-    except Exception as exc:
+    except Exception:
         logger.exception("crowdsec_service_alerts failed")
-        return Response({"error": str(exc)}, status=500)
+        return Response({"error": "internal error"}, status=500)
 
 
 @api_view(["POST"])
@@ -205,7 +205,12 @@ def crowdsec_unban(request: Request) -> Response:
         
         result = get_crowdsec_service().unban(ip, range_type)
         if "error" in result:
-            return Response(result, status=500)
+            # Validation failures (bad IP/CIDR) are the caller's fault;
+            # backend/cscli failures stay generic so engine internals
+            # never leak to clients (fail closed).
+            if str(result["error"]).startswith("invalid "):
+                return Response(result, status=400)
+            return Response({"error": "unban failed"}, status=500)
 
         # Audit log (best-effort: never fail the unban response on audit errors)
         try:
@@ -221,9 +226,9 @@ def crowdsec_unban(request: Request) -> Response:
             logger.exception("crowdsec_unban audit log failed")
 
         return Response(result)
-    except Exception as exc:
+    except Exception:
         logger.exception("crowdsec_unban failed")
-        return Response({"error": str(exc)}, status=500)
+        return Response({"error": "internal error"}, status=500)
 
 
 @api_view(["GET"])
@@ -233,9 +238,9 @@ def crowdsec_metrics(request: Request) -> Response:
     try:
         metrics = get_crowdsec_service().get_metrics()
         return Response(metrics)
-    except Exception as exc:
+    except Exception:
         logger.exception("crowdsec_metrics failed")
-        return Response({"error": str(exc)}, status=500)
+        return Response({"error": "internal error"}, status=500)
 
 
 def get_service_name(service_id: str) -> Optional[str]:

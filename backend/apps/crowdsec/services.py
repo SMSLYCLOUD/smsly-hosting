@@ -537,13 +537,17 @@ class CrowdSecService:
                 self._decisions_ts = 0
                 self._alerts_ts = 0
                 return {"status": "removed", "ip": ip}
-            return {"error": result.stderr or "unban failed"}
+            # cscli stderr may carry engine internals: log server-side,
+            # return a generic failure to clients (fail closed).
+            logger.warning("unban cscli failed rc=%s: %s",
+                           result.returncode, result.stderr)
+            return {"error": "unban failed"}
         except FileNotFoundError:
             logger.warning("unban failed: docker CLI not available")
-            return {"error": "docker CLI not available on this host"}
-        except Exception as exc:
+            return {"error": "unban failed"}
+        except Exception:
             logger.exception("unban failed")
-            return {"error": str(exc)}
+            return {"error": "unban failed"}
 
     def get_service_decisions(self, service_id: str, active: bool = True) -> list[CrowdSecDecision]:
         """Convenience: all decisions for a specific service."""
