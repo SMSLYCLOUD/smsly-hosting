@@ -37,6 +37,8 @@ CORAZA_SNIPPET = """(coraza_waf) {
         load_owasp_crs
         directives `
             Include @coraza.conf-recommended
+            Include @crs-setup.conf.example
+            Include @owasp_crs/*.conf
             SecRuleEngine On
         `
     }
@@ -1872,8 +1874,10 @@ def generate_caddyfile(config) -> str:
         "    }",
         "    # Coraza WAF is a custom HTTP handler with no built-in order —",
         "    # without this, any site importing coraza_waf fails to adapt",
-        "    # ('not an ordered HTTP handler'). WAF runs before proxying.",
-        "    order coraza_waf before reverse_proxy",
+        "    # ('not an ordered HTTP handler'). Upstream requires first:",
+        "    # on routes without a proxy, relative order left WAF after",
+        "    # the responder and rules never executed.",
+        "    order coraza_waf first",
     ]
 
     # Edge Shield: when records are Cloudflare-proxied, ALL inbound

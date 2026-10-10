@@ -34,3 +34,9 @@ class WildcardWafTests(TestCase):
         self.assertIn("@waf_optout", src)
         # Opt-out handle must precede known_hosts (first match wins).
         self.assertLess(src.index("@waf_optout"), src.index("@known_hosts host"))
+
+    def test_coraza_snippet_loads_full_crs(self):
+        # Empty ruleset = silent allow-all. The CRS includes must ship.
+        self.assertIn("Include @crs-setup.conf.example", cg.CORAZA_SNIPPET)
+        self.assertIn("Include @owasp_crs/*.conf", cg.CORAZA_SNIPPET)
+        self.assertIn("SecRuleEngine On", cg.CORAZA_SNIPPET)
