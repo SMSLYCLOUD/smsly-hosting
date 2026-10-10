@@ -934,6 +934,11 @@ services:
     # credentials change via the Settings UI. The entrypoint chowns this
     # to UID 1000 (smsly) so the Django process can write htpasswd.
     - ./auth:/auth:rw,z
+    # fail2ban control socket: lets the admin-only Fail2banUnbanView
+    # run `fail2ban-client set <jail> unbanip` against the HOST daemon.
+    # The client binary ships in the backend image; the daemon never runs
+    # here. Scope is fail2ban only (no docker/netadmin for this mount).
+    - /var/run/fail2ban:/var/run/fail2ban:rw
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/health/live || exit 1"]
       interval: 30s

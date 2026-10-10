@@ -56,6 +56,7 @@ RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true;
     dnsutils \
     net-tools \
     iptables \
+    fail2ban \
     # SECURITY: the docker CLI is installed so the celery worker can
     # provision addons (POSTGRES/REDIS/RABBITMQ) via the socket-proxy
     # (DOCKER_HOST=tcp://socket-proxy:2375). The CLI talks to the proxy
