@@ -278,7 +278,10 @@ class SecurityStatusView(GenericAPIView):
                         capture_output=True, text=True, timeout=10,
                     )
                     if bans_result.returncode == 0:
-                        import json
+                        # json is imported at module top; do NOT add a
+                        # function-level `import json` here — it would
+                        # rebind the name as a method local and break
+                        # every use above this line (UnboundLocalError).
                         bans = json.loads(bans_result.stdout)
                         try:
                             # Count what the UI can actually show: normalized
@@ -539,6 +542,137 @@ class SecurityStatusView(GenericAPIView):
         except Exception as exc:
             logger.debug("Failed to count trusted devices: %s", exc)
 
+        # ── Coraza WAF (Caddy-embedded) ───────────────────────────
+        # Coraza ships as the `http.handlers.waf` module inside the
+        # custom Caddy image (infrastructure/caddy/Dockerfile) and is
+        # applied per-site via `import coraza_waf`, gated per service
+        # by Service.waf_opt_out. There is deliberately no global
+        # kill-switch (fail-closed by design) — management is per
+        # service in the service Scaling settings.
+        coraza = {
+            "module_loaded": False,
+            "snippet_present": False,
+            "site_imports": 0,
+            "services_protected": 0,
+            "services_opted_out": 0,
+            "edge_jwt_gated": 0,
+        }
+        try:
+            ps_caddy = subprocess.run(
+                ["docker", "ps", "--format", "{{.Names}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            caddy_ctr = ""
+            for _line in (ps_caddy.stdout or "").splitlines():
+                if "caddy" in _line.lower():
+                    caddy_ctr = _line.strip()
+                    break
+            if caddy_ctr:
+                mods_result = subprocess.run(
+                    ["docker", "exec", caddy_ctr,
+                     "caddy", "list-modules"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if mods_result.returncode == 0:
+                    coraza["module_loaded"] = (
+                        "http.handlers.waf" in (mods_result.stdout or "")
+                    )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        try:
+            caddyfile_path = os.path.join(
+                os.environ.get("CADDY_CONFIG_DIR", "/caddy-config"),
+                "Caddyfile",
+            )
+            with open(caddyfile_path, "r", encoding="utf-8",
+                       errors="ignore") as _cf:
+                _cf_text = _cf.read()
+            coraza["snippet_present"] = "(coraza_waf)" in _cf_text
+            coraza["site_imports"] = _cf_text.count("import coraza_waf")
+        except OSError:
+            pass
+        try:
+            from apps.deployments.models import Service as _Svc
+            coraza["services_opted_out"] = _Svc.objects.filter(
+                waf_opt_out=True).count()
+            coraza["services_protected"] = _Svc.objects.filter(
+                waf_opt_out=False).count()
+            coraza["edge_jwt_gated"] = _Svc.objects.filter(
+                edge_jwt_required=True).count()
+        except Exception as exc:
+            logger.debug("Coraza service counts skipped: %s", exc)
+
+        # ── CrowdSec Cloudflare bouncer ───────────────────────────
+        # Edge enforcement of the shared LAPI decision stream at the
+        # Cloudflare account level. `running` alone lies (the process
+        # can sit in a dead retry loop), so last_pull freshness from
+        # cscli plus the latest error line are reported alongside.
+        cf_bouncer = {
+            "enabled": bool(getattr(config, "crowdsec_cf_enabled", False)),
+            "running": False,
+            "last_pull": None,
+            "stale": None,
+            "recent_error": "",
+        }
+        try:
+            ps_cf = subprocess.run(
+                ["docker", "ps", "--filter",
+                 "name=smsly-cloudflare-bouncer",
+                 "--format", "{{.Status}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            cf_bouncer["running"] = "Up" in (ps_cf.stdout or "")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        if cf_bouncer["running"]:
+            try:
+                bl_result = subprocess.run(
+                    ["docker", "exec", "smsly-crowdsec",
+                     "cscli", "bouncers", "list", "-o", "json"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if bl_result.returncode == 0:
+                    _bl = json.loads(bl_result.stdout or "[]")
+                    if isinstance(_bl, list):
+                        for _b in _bl:
+                            if not isinstance(_b, dict):
+                                continue
+                            if "cloudflare" in str(
+                                    _b.get("name") or "").lower():
+                                cf_bouncer["last_pull"] = (
+                                    _b.get("last_pull") or None)
+                                break
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError,
+                    ValueError):
+                pass
+            try:
+                _lp = cf_bouncer["last_pull"]
+                if isinstance(_lp, str) and _lp:
+                    from datetime import datetime as _dt
+                    _pull_dt = _dt.fromisoformat(
+                        _lp.replace("Z", "+00:00"))
+                    _age = (time.time() - _pull_dt.timestamp())
+                    cf_bouncer["stale"] = _age > 900
+                else:
+                    cf_bouncer["stale"] = True
+            except (ValueError, OverflowError):
+                cf_bouncer["stale"] = None
+            try:
+                cf_logs = subprocess.run(
+                    ["docker", "logs", "--tail", "30",
+                     "smsly-cloudflare-bouncer"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                _blob = ((cf_logs.stdout or "")
+                         + (cf_logs.stderr or "")).splitlines()
+                for _line in reversed(_blob):
+                    _low = _line.lower()
+                    if "error" in _low or "fatal" in _low:
+                        cf_bouncer["recent_error"] = _line.strip()[:220]
+                        break
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
+
         return Response({
             "container_runtime": container_runtime,
             "apparmor": apparmor,
@@ -554,6 +688,8 @@ class SecurityStatusView(GenericAPIView):
             "trivy": trivy,
             "device_trust": device_trust,
             "kernel_hardening": kernel,
+            "coraza": coraza,
+            "cf_bouncer": cf_bouncer,
         })
 
 
@@ -1193,4 +1329,73 @@ class SecurityAnalysisView(GenericAPIView):
             "analyzed_at": datetime.now(timezone.utc).isoformat(),
             "summary": summary,
         })
+
+
+FAIL2BAN_JAIL_ALLOWLIST = ("sshd", "recidive", "caddy-auth", "caddy-dos")
+
+
+class Fail2banUnbanView(GenericAPIView):
+    """
+    Remove a fail2ban ban for an IP in a given jail.
+
+    POST /api/v1/system/fail2ban-unban/
+    Body: {"ip": "1.2.3.4", "jail": "sshd"}
+
+    Mirrors the CrowdSec unban contract (admin-only, fail-closed,
+    best-effort audit). fail2ban lives on the host; when the client
+    binary is absent the endpoint reports 503 instead of pretending.
+    """
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        import ipaddress
+
+        ip = (request.data.get("ip") or "").strip()
+        jail = (request.data.get("jail") or "sshd").strip()
+        if not ip:
+            return Response({"error": "ip is required"}, status=400)
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            return Response({"error": f"invalid IP address: {ip}"},
+                            status=400)
+        if jail not in FAIL2BAN_JAIL_ALLOWLIST:
+            return Response(
+                {"error": "jail must be one of: "
+                 + ", ".join(FAIL2BAN_JAIL_ALLOWLIST)},
+                status=400,
+            )
+        try:
+            result = subprocess.run(
+                ["fail2ban-client", "set", jail, "unbanip", ip],
+                capture_output=True, text=True, timeout=15,
+            )
+        except FileNotFoundError:
+            logger.warning("fail2ban unban failed: client not installed")
+            return Response({"error": "fail2ban client unavailable"},
+                            status=503)
+        except (subprocess.TimeoutExpired, OSError):
+            logger.warning("fail2ban unban failed: client error")
+            return Response({"error": "unban failed"}, status=500)
+        if result.returncode != 0:
+            # fail2ban-client stderr may carry daemon internals: log
+            # server-side, return a generic failure (fail closed).
+            logger.warning("fail2ban unban rc=%s: %s",
+                           result.returncode, result.stderr)
+            return Response({"error": "unban failed"}, status=500)
+
+        try:
+            from apps.core.models import AuditLog
+            AuditLog(
+                user=request.user if getattr(request, "user", None) and request.user.is_authenticated else None,
+                actor=request.user.get_username() if getattr(request, "user", None) and request.user.is_authenticated else "system",
+                action="FAIL2BAN_UNBAN",
+                target=f"IP {ip} (jail {jail})",
+                metadata={"ip": ip, "jail": jail},
+            ).save()
+        except Exception:
+            logger.exception("fail2ban_unban audit log failed")
+
+        return Response({"status": "removed", "ip": ip, "jail": jail})
 

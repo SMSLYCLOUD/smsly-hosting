@@ -17,6 +17,7 @@ from apps.core.views.security import (
     SecurityStatusView,
     SecurityEventsView,
     SecurityAnalysisView,
+    Fail2banUnbanView,
 )
 from .server_backup import ServerBackupViewSet
 from .service import ServiceViewSet

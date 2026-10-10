@@ -9,7 +9,8 @@ import {
   Gauge, CircuitBoard, Bot, MessageSquare, AlertTriangle, Flame,
   Target, Lightbulb, DollarSign, Clock, ArrowUpRight, Settings, Lock,
   Code2, Server, Siren, ShieldCheck, ShieldAlert, Bug,
-  Search, Filter, Ban, ChevronDown, ChevronUp, Copy, Check, Terminal
+  Search, Filter, Ban, ChevronDown, ChevronUp, Copy, Check, Terminal,
+  Globe
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import CodeMapView from '@/components/intelligence/CodeMapView';
@@ -18,6 +19,7 @@ import {
   aiApi,
   type AIProvidersResponse,
   serversApi,
+  systemApi,
   systemSecurityApi,
   type SecurityStatusData,
   type SecurityEventsResponse,
@@ -113,6 +115,8 @@ export default function IntelligencePage() {
   const securitySourceRef = useRef<string>('all');
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [unbanningIp, setUnbanningIp] = useState<string | null>(null);
+  const [unbanningF2bIp, setUnbanningF2bIp] = useState<string | null>(null);
+  const [domainUpdating, setDomainUpdating] = useState<string | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -283,6 +287,117 @@ export default function IntelligencePage() {
     } finally {
       setUnbanningIp(null);
     }
+  };
+
+  const handleUnbanFail2banIp = async (ip: string, jail?: string) => {
+    const jailLabel = jail || 'sshd';
+    if (!await confirm({
+      title: 'Remove fail2ban ban?',
+      message: `Revoking the ban lets ${ip} (jail ${jailLabel}) reach this host again. Continue?`,
+      confirmText: 'Unban IP',
+      variant: 'destructive',
+    })) return;
+    setUnbanningF2bIp(ip);
+    try {
+      await systemSecurityApi.unbanFail2ban(ip, jail);
+      toast({
+        title: "Fail2ban Ban Removed",
+        description: `Ban for IP ${ip} in jail ${jailLabel} has been revoked.`,
+      });
+      await refreshSecurityData(securitySourceFilter !== 'all' ? securitySourceFilter : undefined);
+    } catch (err: any) {
+      toast({
+        title: "Failed to Unban IP",
+        description: err?.response?.data?.error || err.message || `Could not unban ${ip}`,
+        variant: "destructive",
+      });
+    } finally {
+      setUnbanningF2bIp(null);
+    }
+  };
+
+  // Generic admin control-plane write via PUT /system/domain-config/.
+  // Every patch here mirrors an existing Settings control — the Intel
+  // tab only surfaces the same real endpoints, never new semantics.
+  const handleDomainUpdate = async (
+    key: string,
+    patch: Record<string, unknown>,
+    opts: { title: string; message: string; confirmText: string; success: string; destructive?: boolean },
+  ) => {
+    if (!await confirm({
+      title: opts.title,
+      message: opts.message,
+      confirmText: opts.confirmText,
+      variant: opts.destructive ? 'destructive' : 'default',
+    })) return;
+    setDomainUpdating(key);
+    try {
+      await systemApi.updateDomainConfig(patch);
+      toast({ title: opts.success });
+      await refreshSecurityData(securitySourceFilter !== 'all' ? securitySourceFilter : undefined);
+    } catch (err: any) {
+      toast({
+        title: "Update failed",
+        description: err?.response?.data?.error || err.message || "Could not apply change (admin required).",
+        variant: "destructive",
+      });
+    } finally {
+      setDomainUpdating(null);
+    }
+  };
+
+  const handleOpenAppSecModeSwitch = () => {
+    const current = securityStatus?.openappsec?.mode_configured || 'detect-learn';
+    const target = current === 'prevent' ? 'detect-learn' : 'prevent';
+    const toPrevent = target === 'prevent';
+    return handleDomainUpdate(`openappsec-mode-${target}`, { openappsec_mode: target }, {
+      title: toPrevent ? 'Promote WAF to prevent mode?' : 'Demote WAF to detect-learn?',
+      message: toPrevent
+        ? 'The ML WAF will start blocking malicious payloads inline. Only do this once baseline traffic is stable.'
+        : 'The ML WAF will stop blocking and only log (shadow mode). Protections are reduced — continue only for baselining.',
+      confirmText: toPrevent ? 'Promote to prevent' : 'Demote to shadow',
+      success: `open-appsec mode set to ${target} (converging in background).`,
+      destructive: !toPrevent,
+    });
+  };
+
+  const handleCrowdSecToggle = () => {
+    const enabling = !securityStatus?.crowdsec?.enabled;
+    return handleDomainUpdate('crowdsec-enabled', { enable_crowdsec_waf: enabling }, {
+      title: enabling ? 'Enable CrowdSec IPS?' : 'Disable CrowdSec IPS?',
+      message: enabling
+        ? 'CrowdSec will arm its behavioral bouncers on the edge.'
+        : 'CrowdSec bouncers will stop blocking hostile IPs. Protections are reduced — continue only for maintenance.',
+      confirmText: enabling ? 'Enable CrowdSec' : 'Disable CrowdSec',
+      success: enabling ? 'CrowdSec IPS enabled.' : 'CrowdSec IPS disabled.',
+      destructive: !enabling,
+    });
+  };
+
+  const handleTrivyToggle = () => {
+    const enabling = !securityStatus?.trivy?.enabled;
+    return handleDomainUpdate('trivy-enabled', { trivy_enabled: enabling }, {
+      title: enabling ? 'Enable Trivy CVE gates?' : 'Disable Trivy CVE gates?',
+      message: enabling
+        ? 'Builds will be scanned for container vulnerabilities again.'
+        : 'Builds will skip vulnerability scanning. Supply-chain protections are reduced.',
+      confirmText: enabling ? 'Enable scanning' : 'Disable scanning',
+      success: enabling ? 'Trivy scanning enabled.' : 'Trivy scanning disabled.',
+      destructive: !enabling,
+    });
+  };
+
+  const handleDeviceTrustToggle = () => {
+    const enabling = !securityStatus?.device_trust?.enabled;
+    return handleDomainUpdate('device-trust', { enforce_device_trust: enabling }, {
+      title: enabling ? 'Enforce device trust?' : 'Disable device trust enforcement?',
+      message: enabling
+        ? 'Unrecognized devices will be blocked from the API until registered. You can lock yourself out — keep a registered device handy.'
+        : 'Any device will be able to call the API again. Device-level protections are reduced.',
+      confirmText: enabling ? 'Enforce device trust' : 'Disable enforcement',
+      success: enabling ? 'Device trust enforcement enabled (Beta).' : 'Device trust enforcement disabled.',
+      destructive: !enabling,
+    });
   };
 
   const handleCopyJson = (id: string, data: any) => {
@@ -742,6 +857,20 @@ export default function IntelligencePage() {
                         <span className="font-mono font-medium">{securityStatus?.crowdsec?.first_strike_enabled ? "Active" : "Standard"}</span>
                       </div>
                     </div>
+                    <div className="pt-2 flex items-center justify-between">
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Control</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-[11px]"
+                        disabled={domainUpdating === 'crowdsec-enabled'}
+                        onClick={handleCrowdSecToggle}
+                      >
+                        {domainUpdating === 'crowdsec-enabled'
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : (securityStatus?.crowdsec?.enabled ? 'Disable IPS' : 'Enable IPS')}
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
 
@@ -788,7 +917,9 @@ export default function IntelligencePage() {
                         "text-xs px-2 py-0.5",
                         securityStatus?.openappsec?.agent_running ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400"
                       )}>
-                        {securityStatus?.openappsec?.policy_mode?.toUpperCase() || "MONITORING"}
+                        {!securityStatus?.openappsec?.enabled
+                          ? "DISABLED"
+                          : (securityStatus?.openappsec?.policy_mode?.toUpperCase() || "MONITORING")}
                       </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground">
@@ -804,6 +935,46 @@ export default function IntelligencePage() {
                       <div>
                         <span className="text-muted-foreground block text-[10px] uppercase">Shadow Port</span>
                         <span className="font-mono font-medium">:{securityStatus?.openappsec?.shadow_port || 8089}</span>
+                      </div>
+                    </div>
+                    <div className="pt-2 flex items-center justify-between">
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Policy Mode</span>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-[11px]"
+                          disabled={domainUpdating === 'openappsec-enabled'}
+                          onClick={() => {
+                            const enabling = !securityStatus?.openappsec?.enabled;
+                            return handleDomainUpdate('openappsec-enabled', { openappsec_enabled: enabling }, {
+                              title: enabling ? 'Enable open-appsec stack?' : 'Disable open-appsec stack?',
+                              message: enabling
+                                ? 'The 6-container ML WAF stack will be started (images pull on first run) and traffic shadow screening resumes.'
+                                : 'All 6 open-appsec containers will be stopped and removed. WAF protections are reduced.',
+                              confirmText: enabling ? 'Enable stack' : 'Disable stack',
+                              success: enabling ? 'open-appsec stack converging (starting).' : 'open-appsec stack converging (stopping).',
+                              destructive: !enabling,
+                            });
+                          }}
+                        >
+                          {domainUpdating === 'openappsec-enabled'
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : (securityStatus?.openappsec?.enabled ? 'Disable' : 'Enable')}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-[11px]"
+                          disabled={domainUpdating?.startsWith('openappsec-mode-') || !securityStatus?.openappsec?.enabled}
+                          onClick={handleOpenAppSecModeSwitch}
+                          title={securityStatus?.openappsec?.enabled ? undefined : 'Enable the stack first'}
+                        >
+                          {domainUpdating?.startsWith('openappsec-mode-')
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : ((securityStatus?.openappsec?.mode_configured || 'detect-learn') === 'prevent'
+                              ? 'Demote to shadow' : 'Promote to prevent')}
+                        </Button>
                       </div>
                     </div>
                   </CardContent>
@@ -869,6 +1040,154 @@ export default function IntelligencePage() {
                         <span className="text-muted-foreground block text-[10px] uppercase">Device Trust</span>
                         <span className="font-mono font-medium">{securityStatus?.device_trust?.enabled ? "MFA Enforced" : "Standard"}</span>
                       </div>
+                    </div>
+                    <div className="pt-2 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">CVE Gate</span>
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            className="h-7 rounded-md border border-input bg-background px-1.5 text-[11px]"
+                            value={(securityStatus?.trivy?.fail_on_severity || "CRITICAL").split(',')[0]}
+                            disabled={domainUpdating === 'trivy-severity' || !securityStatus?.trivy?.enabled}
+                            onChange={(e) => handleDomainUpdate('trivy-severity', { trivy_fail_on_severity: e.target.value }, {
+                              title: 'Change CVE gate threshold?',
+                              message: `Builds will block on ${e.target.value} and above. Lowering the threshold blocks more builds.`,
+                              confirmText: 'Apply threshold',
+                              success: `Trivy gate set to ${e.target.value}.`,
+                            })}
+                            title="Fail builds on this severity and above"
+                          >
+                            {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map((sev) => (
+                              <option key={sev} value={sev}>{sev}+</option>
+                            ))}
+                          </select>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-[11px]"
+                            disabled={domainUpdating === 'trivy-enabled'}
+                            onClick={handleTrivyToggle}
+                          >
+                            {domainUpdating === 'trivy-enabled'
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : (securityStatus?.trivy?.enabled ? 'Disable' : 'Enable')}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Device Trust (Beta)</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-[11px]"
+                          disabled={domainUpdating === 'device-trust'}
+                          onClick={handleDeviceTrustToggle}
+                        >
+                          {domainUpdating === 'device-trust'
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : (securityStatus?.device_trust?.enabled ? 'Disable' : 'Enforce')}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                {/* CrowdSec Cloudflare edge bouncer */}
+                <Card className="bg-card border-border">
+                  <CardContent className="p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-semibold text-sm">
+                        <Globe className="w-4 h-4 text-sky-400" />
+                        <span>Cloudflare Edge Bouncer</span>
+                      </div>
+                      <Badge variant="outline" className={cn(
+                        "text-xs px-2 py-0.5",
+                        !securityStatus?.cf_bouncer?.enabled
+                          ? "bg-zinc-500/10 text-zinc-400"
+                          : securityStatus?.cf_bouncer?.running && securityStatus?.cf_bouncer?.stale === false
+                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                            : securityStatus?.cf_bouncer?.running
+                              ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                              : "bg-red-500/10 text-red-400 border-red-500/20"
+                      )}>
+                        {!securityStatus?.cf_bouncer?.enabled
+                          ? "Off"
+                          : securityStatus?.cf_bouncer?.running && securityStatus?.cf_bouncer?.stale === false
+                            ? "Enforcing"
+                            : securityStatus?.cf_bouncer?.running
+                              ? "Degraded"
+                              : "Down"}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Pushes the shared LAPI decision stream to Cloudflare account IP lists.
+                    </p>
+                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-muted-foreground block text-[10px] uppercase">Last LAPI Pull</span>
+                        <span className="font-mono font-medium">
+                          {securityStatus?.cf_bouncer?.last_pull
+                            ? new Date(securityStatus.cf_bouncer.last_pull).toLocaleString()
+                            : "never"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[10px] uppercase">Edge Decisions</span>
+                        <span className="font-mono font-medium">{securityEvents?.summary?.crowdsec_bans_count ?? 0} shared</span>
+                      </div>
+                    </div>
+                    {securityStatus?.cf_bouncer?.recent_error && (
+                      <p className="text-[10px] font-mono text-amber-400/90 break-words leading-relaxed">
+                        {securityStatus.cf_bouncer.recent_error}
+                      </p>
+                    )}
+                    <div className="pt-2 flex items-center justify-between">
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Account Token</span>
+                      <a href="/settings">
+                        <Button variant="outline" size="sm" className="h-7 text-[11px]">
+                          Configure
+                        </Button>
+                      </a>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Coraza WAF (Caddy-embedded) */}
+                <Card className="bg-card border-border">
+                  <CardContent className="p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-semibold text-sm">
+                        <Filter className="w-4 h-4 text-orange-400" />
+                        <span>Coraza WAF (Caddy)</span>
+                      </div>
+                      <Badge variant="outline" className={cn(
+                        "text-xs px-2 py-0.5",
+                        securityStatus?.coraza?.module_loaded
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                          : "bg-red-500/10 text-red-400 border-red-500/20"
+                      )}>
+                        {securityStatus?.coraza?.module_loaded ? "Enforcing" : "Missing"}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      OWASP CRS inspection embedded in Caddy. Per-service opt-out only — no global kill-switch (fail-closed).
+                    </p>
+                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-muted-foreground block text-[10px] uppercase">Protected / Opted-out</span>
+                        <span className="font-mono font-medium">
+                          {securityStatus?.coraza?.services_protected ?? 0} / {securityStatus?.coraza?.services_opted_out ?? 0}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[10px] uppercase">Edge-JWT Gated</span>
+                        <span className="font-mono font-medium">{securityStatus?.coraza?.edge_jwt_gated ?? 0} services</span>
+                      </div>
+                    </div>
+                    <div className="pt-2 flex items-center justify-between">
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                        {securityStatus?.coraza?.site_imports ?? 0} site imports
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">Manage per-service in service Scaling settings</span>
                     </div>
                   </CardContent>
                 </Card>
@@ -1081,7 +1400,14 @@ export default function IntelligencePage() {
                       filteredSecurityEvents.map((evt) => {
                         const isExpanded = expandedEventId === evt.id;
                         const isCrowdSecBan = evt.source === 'crowdsec' && evt.type === 'ban';
+                        const isF2bBan = evt.source === 'fail2ban' && (evt.type === 'ban' || evt.type === 'restore_ban');
                         const targetIp = evt.target && /^[\d\.:a-fA-F]+$/.test(evt.target) ? evt.target : null;
+                        const f2bJail = (() => {
+                          const raw = evt.raw as any;
+                          if (raw && typeof raw === 'object' && typeof raw.jail === 'string' && raw.jail) return raw.jail;
+                          const m = /Jail:\s*(\S+)/.exec(evt.details || '');
+                          return m ? m[1] : 'sshd';
+                        })();
 
                         return (
                           <div
@@ -1145,6 +1471,23 @@ export default function IntelligencePage() {
                                     onClick={() => handleUnbanIp(targetIp)}
                                   >
                                     {unbanningIp === targetIp ? (
+                                      <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                                    ) : (
+                                      <Ban className="w-3 h-3 mr-1" />
+                                    )}
+                                    Unban IP
+                                  </Button>
+                                )}
+                                {targetIp && isF2bBan && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-2 text-[10px] text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                                    disabled={unbanningF2bIp === targetIp}
+                                    onClick={() => handleUnbanFail2banIp(targetIp, f2bJail)}
+                                    title={`Unban from fail2ban jail ${f2bJail}`}
+                                  >
+                                    {unbanningF2bIp === targetIp ? (
                                       <Loader2 className="w-3 h-3 animate-spin mr-1" />
                                     ) : (
                                       <Ban className="w-3 h-3 mr-1" />

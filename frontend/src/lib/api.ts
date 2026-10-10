@@ -3438,6 +3438,21 @@ export interface SecurityStatusData {
   trivy: { enabled: boolean; fail_on_severity: string; installed: boolean };
   device_trust: { enabled: boolean; beta: boolean; registered_devices: number };
   kernel_hardening: { enabled: boolean };
+  coraza: {
+    module_loaded: boolean;
+    snippet_present: boolean;
+    site_imports: number;
+    services_protected: number;
+    services_opted_out: number;
+    edge_jwt_gated: number;
+  };
+  cf_bouncer: {
+    enabled: boolean;
+    running: boolean;
+    last_pull: string | null;
+    stale: boolean | null;
+    recent_error: string;
+  };
 }
 
 export interface SecurityActivityEvent {
@@ -3500,6 +3515,10 @@ export const systemSecurityApi = {
   },
   unbanCrowdSec: async (ip: string): Promise<any> => {
     const res = await api.post('/crowdsec/unban/', { ip });
+    return res.data;
+  },
+  unbanFail2ban: async (ip: string, jail?: string): Promise<any> => {
+    const res = await api.post('/system/fail2ban-unban/', { ip, ...(jail ? { jail } : {}) });
     return res.data;
   },
 };
