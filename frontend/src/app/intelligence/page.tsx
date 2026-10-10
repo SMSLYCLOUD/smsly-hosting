@@ -105,6 +105,12 @@ export default function IntelligencePage() {
   const [securityEventsSource, setSecurityEventsSource] = useState<string>('all');
   const [securitySeverityFilter, setSecuritySeverityFilter] = useState<string>('all');
   const [securitySearchQuery, setSecuritySearchQuery] = useState('');
+  // The 30s auto-poll (fetchData) must respect the active source tab:
+  // it used to refetch UNFILTERED events and clobber a filtered view —
+  // with 180 total events but a 100-row page, the latest page can hold
+  // zero rows of the selected source while the (global) pills still show
+  // its count. A ref (not state) so fetchData's useCallback stays stable.
+  const securitySourceRef = useRef<string>('all');
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [unbanningIp, setUnbanningIp] = useState<string | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
@@ -170,7 +176,10 @@ export default function IntelligencePage() {
           null,
         ),
         withTimeout(
-          systemSecurityApi.getEvents(undefined, 100).catch(() => null),
+          systemSecurityApi.getEvents(
+            securitySourceRef.current !== 'all' ? securitySourceRef.current : undefined,
+            100,
+          ).catch(() => null),
           12000,
           null,
         ),
@@ -182,7 +191,13 @@ export default function IntelligencePage() {
       setAutoscalerStatus(autoStatus);
       setServers(svrs);
       if (secStat) setSecurityStatus(secStat);
-      if (secEvts) setSecurityEvents(secEvts);
+      if (secEvts) {
+        setSecurityEvents(secEvts);
+        // Keep the list filter in sync with what was actually fetched —
+        // the poll honors securitySourceRef (see above), so the tab never
+        // filters against a mismatched page.
+        setSecurityEventsSource(securitySourceRef.current);
+      }
 
       const insights = (deps as DeploymentInsight[]).filter(
         d => d.ai_diagnosis || d.status === 'FAILED'
@@ -198,6 +213,8 @@ export default function IntelligencePage() {
 
   const refreshSecurityData = useCallback(async (source?: string) => {
     setSecurityLoading(true);
+    const effective = source && source !== 'all' ? source : 'all';
+    securitySourceRef.current = effective;
     try {
       const [stat, evts] = await Promise.all([
         systemSecurityApi.getStatus().catch(() => null),
