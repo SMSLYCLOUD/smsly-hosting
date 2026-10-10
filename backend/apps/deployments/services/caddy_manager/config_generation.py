@@ -1602,6 +1602,17 @@ def generate_node_caddyfile(node) -> str:
 
     sections: list[str] = []
 
+    # Node edge WAF: same Coraza CRS as master (the node image ships the
+    # module). Global order + snippet must precede all sites — this file
+    # otherwise carries no global block. :80 blocks stay clean: that path
+    # arrives from master already inspected.
+    sections.append(
+        "{\n"
+        "    order coraza_waf first\n"
+        "}"
+    )
+    sections.append(CORAZA_SNIPPET)
+
     # NOTE: no SECURE_HEADERS_SNIPPET here on purpose — node binaries
     # must parse this file cold (see _node_secure_header_lines); every
     # site block below carries the headers inline instead.
@@ -1618,6 +1629,7 @@ def generate_node_caddyfile(node) -> str:
     mgmt_block.extend([
         "    }",
         *_node_secure_header_lines(),
+        "    import coraza_waf",
         "    log {",
         "        output file /var/log/caddy/access.log",
         "    }",
@@ -1746,12 +1758,15 @@ def generate_node_caddyfile(node) -> str:
         # access to the node without going through Cloudflare/master.
         # Deep names stay DNS-only on free plans; orange only with paid
         # Advanced Certificates (edge_proxy_wildcards).
+        # Per-service WAF (direct grey access bypasses master inspection).
+        _waf_lines = [] if bool(getattr(service, "waf_opt_out", False)) else ["    import coraza_waf"]
         for _nested in dict.fromkeys([nested_domain, legacy_nested]):
             nested_block = [
                 f"{_nested} {{",
                 *tls_lines,
                 "    }",
                 *_node_secure_header_lines(),
+                *_waf_lines,
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
@@ -1773,6 +1788,7 @@ def generate_node_caddyfile(node) -> str:
             *tls_lines,
             "    }",
             *_node_secure_header_lines(),
+            *_waf_lines,
             "    log {",
             "        output file /var/log/caddy/access.log",
             "    }",
@@ -1809,6 +1825,7 @@ def generate_node_caddyfile(node) -> str:
                 *_block_tls,
                 "    }",
                 *_node_secure_header_lines(),
+                *_waf_lines,
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",

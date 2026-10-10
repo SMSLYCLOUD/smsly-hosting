@@ -40,3 +40,10 @@ class WildcardWafTests(TestCase):
         self.assertIn("Include @crs-setup.conf.example", cg.CORAZA_SNIPPET)
         self.assertIn("Include @owasp_crs/*.conf", cg.CORAZA_SNIPPET)
         self.assertIn("SecRuleEngine On", cg.CORAZA_SNIPPET)
+
+    def test_node_caddyfile_carries_waf(self):
+        import inspect
+        src = inspect.getsource(cg.generate_node_caddyfile)
+        self.assertIn("order coraza_waf first", src)
+        self.assertIn("CORAZA_SNIPPET", src)
+        self.assertIn("_waf_lines", src)
