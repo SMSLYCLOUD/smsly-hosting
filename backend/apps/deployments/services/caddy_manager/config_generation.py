@@ -854,6 +854,38 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     return blocks
 
 
+def _get_wildcard_waf_optout_hosts(wildcard_domain: str) -> list[str]:
+    """Public domains under the wildcard whose service opted out of WAF.
+
+    The wildcard @known_hosts handle runs Coraza; opted-out hosts get
+    their own earlier handle that proxies straight to Traefik so the
+    opt-out promise holds end to end. Empty (usual) = no extra handle.
+    """
+    hosts: set[str] = set()
+    if not wildcard_domain:
+        return []
+    try:
+        from apps.deployments.models import Service
+        if not _table_exists(Service._meta.db_table):
+            return []
+        suffix = f".{wildcard_domain}"
+        for service in Service.objects.only(
+            "id", "public_domain", "waf_opt_out",
+        ).filter(waf_opt_out=True):
+            raw = service.public_domain or ""
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            try:
+                domain = normalize_domain(raw.strip())
+            except ValueError:
+                continue
+            if domain.endswith(suffix):
+                hosts.add(domain)
+    except Exception as exc:
+        logger.debug("WAF opt-out host lookup skipped: %s", exc)
+    return sorted(hosts)
+
+
 def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
     hosts: set[str] = set()
     if not wildcard_domain:
@@ -2236,10 +2268,29 @@ def generate_caddyfile(config) -> str:
                 )
 
             if wildcard_known_hosts:
+                # WAF opt-outs bypass Coraza: their handle comes FIRST
+                # (first match wins) and proxies straight through.
+                try:
+                    _waf_optouts = [
+                        h for h in _get_wildcard_waf_optout_hosts(domain)
+                        if h in set(wildcard_known_hosts)
+                    ]
+                except Exception:
+                    _waf_optouts = []
+                if _waf_optouts:
+                    wildcard_lines.extend(
+                        [
+                            f"    @waf_optout host {' '.join(_waf_optouts)}",
+                            "    handle @waf_optout {",
+                            f"        reverse_proxy {_service_proxy_upstream()}",
+                            "    }",
+                        ]
+                    )
                 wildcard_lines.extend(
                     [
                         f"    @known_hosts host {' '.join(wildcard_known_hosts)}",
                         "    handle @known_hosts {",
+                        "        import coraza_waf",
                         f"        reverse_proxy {_service_proxy_upstream()}",
                         "    }",
                     ]
