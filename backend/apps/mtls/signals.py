@@ -32,7 +32,15 @@ def create_mtls_config(sender, instance, created, **kwargs):
                 service=instance,
                 defaults={
                     "enabled": platform_owned,
-                    "trust_domain": "platform.local",
+                    # Control-plane mesh for control-plane services;
+                    # everything else belongs to the ecosystem mesh.
+                    # (2026-10-11: the old blanket platform.local default
+                    # stranded user workloads in the control-plane domain
+                    # whenever the enable endpoint kept the preset.)
+                    "trust_domain": (
+                        "platform.local" if platform_owned
+                        else "ecosystem.local"
+                    ),
                     "sidecar_enabled": platform_owned,
                 },
             )

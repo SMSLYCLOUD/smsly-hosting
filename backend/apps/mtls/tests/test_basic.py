@@ -29,7 +29,7 @@ class MtlsConfigModelTests(TestCase):
         """mTLS is OFF by default for non-ecosystem services."""
         self.assertFalse(self.config.enabled)
         self.assertFalse(self.config.sidecar_enabled)
-        self.assertEqual(self.config.trust_domain, 'platform.local')
+        self.assertEqual(self.config.trust_domain, 'ecosystem.local')
 
     def test_signal_keeps_mesh_enabled_for_platform_services(self):
         platform_svc = Service.objects.create(
@@ -39,15 +39,16 @@ class MtlsConfigModelTests(TestCase):
         cfg = MtlsConfig.objects.get(service=platform_svc)
         self.assertTrue(cfg.enabled)
         self.assertTrue(cfg.sidecar_enabled)
+        self.assertEqual(cfg.trust_domain, 'platform.local')
 
     def test_spiffe_id_auto_generated(self):
         self.assertEqual(
-            self.config.spiffe_id, 'spiffe://platform.local/service/test-svc'
+            self.config.spiffe_id, 'spiffe://ecosystem.local/service/test-svc'
         )
-        self.config.trust_domain = 'ecosystem.local'
+        self.config.trust_domain = 'platform.local'
         self.config.save()
         self.assertEqual(
-            self.config.spiffe_id, 'spiffe://ecosystem.local/service/test-svc'
+            self.config.spiffe_id, 'spiffe://platform.local/service/test-svc'
         )
 
     def test_custom_trust_domain(self):
