@@ -814,14 +814,14 @@ class PlatformConfig(models.Model):
                   "their thresholds to avoid false positives.")
 
     # ── Trulay Promos (dashboard cross-sell banner) ───────────────────
-    # OSS-safe: OFF by default so self-hosts are ad-free. Trulay Cloud
-    # enables it. Precedence: admin kill-switch (here) > user opt-out
-    # (browser localStorage) > session dismiss (in-memory). No tracking
-    # in the client; measurement is landing-page UTM only.
+    # ON by default (operator decision). Precedence: admin kill-switch
+    # (here) > user opt-out (browser localStorage) > session dismiss
+    # (in-memory). No tracking in the client; measurement is
+    # landing-page UTM only.
     promos_enabled = models.BooleanField(  # type: ignore[var-annotated]
-        default=False,
+        default=True,
         help_text="Master kill-switch for the dashboard Trulay cross-sell "
-                  "banner. Off by default (OSS self-hosts stay ad-free).")
+                  "banner. On by default; turn off for ad-free self-hosts.")
     promos_rotate_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=8,
         help_text="Seconds each promo card shows before rotating (5-60).")

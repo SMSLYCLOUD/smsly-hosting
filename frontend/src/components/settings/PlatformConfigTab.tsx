@@ -313,7 +313,7 @@ export function PlatformConfigTab() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><Megaphone className="h-5 w-5 text-amber-500" /> Trulay Promos</CardTitle>
-            <CardDescription>Master kill-switch for the dashboard cross-sell banner. Off by default so OSS self-hosts stay ad-free. Admin setting wins over every user&apos;s opt-out.</CardDescription>
+            <CardDescription>Master kill-switch for the dashboard cross-sell banner. On by default; turn off for ad-free self-hosts. Admin setting wins over every user&apos;s opt-out.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
