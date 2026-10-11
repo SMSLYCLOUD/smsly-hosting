@@ -132,6 +132,17 @@ def _sleep_sablier_services(client) -> dict:
             container.stop(timeout=30)
             slept.append(name)
             logger.info("Sleeper: stopped idle sablier service %s", name)
+            # Co-sleep the Envoy sidecar (if any) so sablier's group
+            # state stays consistent: wake starts the whole group
+            # together, and the repair beat never sees a lone sidecar
+            # it would otherwise remove as an orphan.
+            try:
+                sidecar = client.containers.get(f"envoy-{name}")
+                if getattr(sidecar, "status", "") == "running":
+                    sidecar.stop(timeout=15)
+                    logger.info("Sleeper: co-slept sidecar envoy-%s", name)
+            except Exception:
+                pass
         except Exception as exc:
             skipped[name] = f"stop failed: {exc}"
     return {"slept": slept, "skipped": skipped}

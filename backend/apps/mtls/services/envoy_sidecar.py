@@ -67,6 +67,21 @@ SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 LEGACY_TEMPLATE_MOUNT_SOURCE = "/opt/smsly-hosting/builds/envoy.yaml.template"
 
 
+def sidecar_sablier_labels(service) -> dict[str, str]:
+    """Sablier co-sleep labels for a sidecar (empty for always-on apps).
+
+    A sidecar of a sablier-enabled service joins the service's sablier
+    group so both sleep and wake together. Returns {} otherwise.
+    Never raises.
+    """
+    try:
+        if not bool(getattr(service, "sablier_enabled", False)):
+            return {}
+        return {"sablier.enable": "true", "sablier.group": service.name}
+    except Exception:
+        return {}
+
+
 def spire_volumes_for(trust_domain: str | None) -> tuple[str, str]:
     """Return (socket_volume, svids_volume) for a trust domain.
 
@@ -454,6 +469,12 @@ class EnvoySidecar:
                     "com.paas.service": service.name,
                     "com.paas.mtls": "true",
                     "com.paas.spiffe_id": mtls_config.spiffe_id or f"spiffe://{mtls_config.trust_domain}/service/{service.name}",
+                    # Sablier co-sleep: when the app scales to zero, the
+                    # sidecar must sleep and wake WITH it. Without these
+                    # labels sablier wakes only the app while the repair
+                    # beat has meanwhile removed the "orphan" sidecar —
+                    # leaving every wake without mTLS for up to 15m.
+                    **sidecar_sablier_labels(service),
                 },
                 environment={
                     "SPIFFE_TRUST_DOMAIN": mtls_config.trust_domain or "ecosystem.local",
@@ -1123,6 +1144,7 @@ class EnvoySidecar:
                 "managed_by": "smsly-hosting",
                 "envoy_sidecar": "true",
                 "smsly.blue_green.canonical_name": service.name,
+                **sidecar_sablier_labels(service),
             },
             "depends_on": {
                 service.name: {
