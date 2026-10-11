@@ -107,15 +107,16 @@ class GenerateNodeCaddyfileTests(TestCase):
             content,
         )
 
-    def test_sablier_enabled_https_goes_via_traefik_plain_stays_direct(self):
+    def test_sablier_enabled_all_blocks_go_via_traefik(self):
         svc = self._svc()
         svc.sablier_enabled = True
         svc.save(update_fields=["sablier_enabled"])
         content = generate_node_caddyfile(self.node)
-        # HTTPS blocks wake through node Traefik (sablier plugin).
+        # Every block (HTTPS + plain-:80) wakes through node Traefik
+        # (sablier plugin). A direct container:port upstream 503s while
+        # asleep and never wakes.
         self.assertIn("reverse_proxy traefik:80 {", content)
-        # Plain-:80 master->node proxy path never sleeps: stays direct.
-        self.assertIn("reverse_proxy my-app:8000 {", content)
+        self.assertNotIn("reverse_proxy my-app:8000 {", content)
 
     def test_other_node_services_excluded(self):
         other = ManagedServer.objects.create(

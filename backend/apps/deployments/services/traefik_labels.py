@@ -30,6 +30,10 @@ def sablier_service_labels(
     Every generator (traefik_labels, local adapter, pipeline
     compose_networking) must use this — a drifted group name or URL
     means wake-on-request silently stops working for that path.
+
+    Waiting page is deliberately generic: displayName never carries
+    the service name and showDetails stays false, so the wake screen
+    leaks no container/group names or topology to the public.
     """
     session = str(session or "10m").strip() or "10m"
     group = str(group or router_name or "").strip() or router_name
@@ -37,7 +41,10 @@ def sablier_service_labels(
         f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.group": group,
         f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sablierUrl": SABLIER_URL,
         f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.sessionDuration": session,
-        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.displayName": group,
+        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.displayName": "Waking up — one moment",
+        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.showDetails": "false",
+        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.theme": "ghost",
+        f"traefik.http.middlewares.{router_name}-sablier.plugin.sablier.dynamic.refreshFrequency": "2s",
         "sablier.enable": "true",
         "sablier.group": group,
         "traefik.docker.allownonrunning": "true",

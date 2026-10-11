@@ -50,9 +50,9 @@ http:
           sessionDuration: "10m"
           dynamic:
             displayName: "Starting service"
-            showDetails: true
-            theme: "hacker-terminal"
-            refreshFrequency: "5s"
+            showDetails: false
+            theme: "ghost"
+            refreshFrequency: "2s"
 """
 
 

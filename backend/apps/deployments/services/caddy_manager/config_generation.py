@@ -1668,10 +1668,10 @@ def generate_node_caddyfile(node) -> str:
         # DNS resolves — never localhost (that's Caddy itself).
         container = (service.name or "").strip() or slug
         port = getattr(service, "internal_port", 8000) or 8000
-        # Sablier wake path (opt-in): HTTPS blocks proxy through node
+        # Sablier wake path (opt-in): ALL blocks proxy through node
         # Traefik so stopped containers wake on request (same pattern
-        # as master: Caddy -> traefik:80 -> sablier plugin). Plain-:80
-        # blocks stay direct (master->node proxy path never sleeps).
+        # as master: Caddy -> traefik:80 -> sablier plugin). Direct
+        # container:port upstreams 503 while asleep and never wake.
         sab = bool(getattr(service, "sablier_enabled", False))
         proxy_target = "traefik:80" if sab else f"{container}:{port}"
         proxy_retry_lines = (
@@ -1740,13 +1740,19 @@ def generate_node_caddyfile(node) -> str:
         # in this Caddy build). An explicit :80 address deterministically
         # opts out of automatic HTTPS: served plainly with NO https
         # redirect — this is the master→node proxy path.
+        # Sablier services ride node Traefik here too: a direct
+        # container:port upstream 503s while asleep and never wakes
+        # (the sablier plugin only runs in the Traefik chain).
+        _plain_target = proxy_target if sab else f"{container}:{port}"
+        _plain_retry = proxy_retry_lines if sab else []
         for http_host in http_hosts:
             flat_block = [
                 f"{http_host}:80 {{",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
-                f"    reverse_proxy {container}:{port} {{",
+                f"    reverse_proxy {_plain_target} {{",
+                *_plain_retry,
                 "        header_up Host {host}",
                 "    }",
                 "    encode gzip",
