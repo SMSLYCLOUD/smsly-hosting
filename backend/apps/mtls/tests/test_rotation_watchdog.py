@@ -157,3 +157,46 @@ class RotationWatchdogTests(TestCase):
 
     def test_recreate_never_raises(self):
         self.assertTrue(_recreate_spire_agent({}).startswith("error:"))
+
+
+class EnsureEntryServerTargetingTests(TestCase):
+    """_ensure_spire_entry_best_effort must create platform entries on the
+    PLATFORM server (2026-10-11: it defaulted to the ecosystem server, so
+    platform services never got entries and stayed SVID-less)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="spire-target", password="x")
+        self.service = Service.objects.create(
+            name="target-svc", owner=self.user, deploy_type="DOCKER")
+        config = MtlsConfig.objects.get(service=self.service)
+        config.trust_domain = "platform.local"
+        config.save()
+
+    def test_platform_entry_created_on_platform_server(self):
+        from apps.mtls.tasks import _ensure_spire_entry_best_effort
+        with mock.patch(
+                "apps.deployments.tasks_spiffe._list_platform_spire_entries",
+                return_value=[]), \
+             mock.patch("apps.deployments.tasks_spiffe._create_spire_entry",
+                        return_value=True) as create:
+            _ensure_spire_entry_best_effort(self.service, None)
+        self.assertEqual(create.call_count, 1)
+        _, kwargs = create.call_args
+        self.assertEqual(kwargs.get("trust_domain"), "platform.local")
+        # Must NOT fall through to the ecosystem-server default.
+        self.assertTrue(kwargs.get("server_container", "").endswith(
+            "spire-server") and "ecosystem" not in kwargs.get(
+                "server_container", ""))
+        self.assertIn("server_socket", kwargs)
+
+    def test_existing_entry_not_recreated(self):
+        from apps.mtls.tasks import _ensure_spire_entry_best_effort
+        existing = [{"spiffe_id": {"path": "/service/target-svc"},
+                     "selectors": []}]
+        with mock.patch(
+                "apps.deployments.tasks_spiffe._list_platform_spire_entries",
+                return_value=existing), \
+             mock.patch("apps.deployments.tasks_spiffe._create_spire_entry") as create:
+            _ensure_spire_entry_best_effort(self.service, None)
+        create.assert_not_called()

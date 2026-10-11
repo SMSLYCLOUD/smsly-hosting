@@ -217,10 +217,16 @@ def _ensure_spire_entry_best_effort(service, mtls_config=None) -> None:
             return
         created = False
         if trust_domain == PLATFORM_SPIFFE_TRUST_DOMAIN:
+            from apps.deployments.tasks_spiffe import (
+                PLATFORM_SPIRE_SERVER_CONTAINER,
+                PLATFORM_SPIRE_SERVER_SOCKET,
+            )
             created = bool(_create_spire_entry(
                 service.name,
                 parent_id=_live_platform_agent_id(),
                 trust_domain=PLATFORM_SPIFFE_TRUST_DOMAIN,
+                server_container=PLATFORM_SPIRE_SERVER_CONTAINER,
+                server_socket=PLATFORM_SPIRE_SERVER_SOCKET,
             ))
         else:
             created = bool(_create_spire_entry(
