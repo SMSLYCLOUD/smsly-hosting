@@ -643,17 +643,52 @@ export default function ServiceDetailPage() {
                                 <span className="text-muted-foreground font-medium">Internal DNS</span>
                                 <span className="font-mono text-primary bg-primary/10 px-2 py-1 rounded">{service.name}.default.svc</span>
                             </div>
-                            <div className="flex justify-between border-b border-border pb-3">
+                            <div className="flex justify-between items-center border-b border-border pb-3 gap-4">
                                 <span className="text-muted-foreground font-medium">Public Domain</span>
-                                <a
-                                    href={`https://${service.public_domain || `${service.name}.cloud.trulay.co`}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="font-mono text-primary hover:underline flex items-center gap-1"
-                                >
-                                    <Globe className="w-3 h-3" />
-                                    {service.public_domain || `${service.name}.cloud.trulay.co`}
-                                </a>
+                                <div className="flex items-center gap-2 ml-4 min-w-0">
+                                    <a
+                                        href={`https://${service.public_domain || `${service.name}.cloud.trulay.co`}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`font-mono hover:underline flex items-center gap-1 truncate ${service.wildcard_url_enabled !== false ? 'text-primary' : 'text-muted-foreground line-through'}`}
+                                    >
+                                        <Globe className="w-3 h-3 shrink-0" />
+                                        {service.public_domain || `${service.name}.cloud.trulay.co`}
+                                    </a>
+                                    <button
+                                        onClick={async () => {
+                                            const currentlyEnabled = service.wildcard_url_enabled !== false;
+                                            if (currentlyEnabled) {
+                                                if (!await confirm({ title: 'Destroy wildcard domain?', message: 'The auto-generated platform domain is removed from routing entirely (no proxy, no redirect). Custom domains keep working.', confirmText: 'Destroy', variant: 'destructive' })) return;
+                                            }
+                                            try {
+                                                const updated = await servicesApi.toggleWildcardUrl(service.id, !currentlyEnabled);
+                                                setService(prev => (prev ? { ...prev, wildcard_url_enabled: updated.wildcard_url_enabled } : prev));
+                                                toast({
+                                                    title: !currentlyEnabled ? 'Wildcard domain restored' : 'Wildcard domain destroyed',
+                                                    description: !currentlyEnabled
+                                                        ? 'The auto-generated domain routes to the service again.'
+                                                        : 'Auto-generated domain removed from all routing. Custom domains keep working.',
+                                                });
+                                            } catch (err) {
+                                                console.error(err);
+                                                toast({ title: 'Failed to update wildcard domain', variant: 'destructive' });
+                                            }
+                                        }}
+                                        title={service.wildcard_url_enabled !== false ? 'Destroy wildcard domain' : 'Restore wildcard domain'}
+                                        className={`flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold transition-all shrink-0 ${
+                                            service.wildcard_url_enabled !== false
+                                                ? 'bg-emerald-500/10 text-emerald-500 hover:bg-red-500/20 hover:text-red-500'
+                                                : 'bg-zinc-500/10 text-zinc-400 hover:bg-emerald-500/20 hover:text-emerald-500'
+                                        }`}
+                                    >
+                                        {service.wildcard_url_enabled !== false ? (
+                                            <><Shield className="w-3 h-3" /> Destroy</>
+                                        ) : (
+                                            <><Globe className="w-3 h-3" /> Restore</>
+                                        )}
+                                    </button>
+                                </div>
                             </div>
                             {(service.node_url && (service.node_domains?.master || service.public_domain)) && (
                                 <div className="border-b border-border pb-3">
