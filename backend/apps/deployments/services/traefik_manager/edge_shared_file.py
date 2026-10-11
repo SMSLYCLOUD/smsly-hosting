@@ -48,11 +48,8 @@ http:
         sablier:
           sablierUrl: "http://sablier:10000"
           sessionDuration: "10m"
-          dynamic:
-            displayName: "Starting service"
-            showDetails: false
-            theme: "ghost"
-            refreshFrequency: "2s"
+          blocking:
+            timeout: "1m"
 """
 
 
