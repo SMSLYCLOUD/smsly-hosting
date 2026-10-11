@@ -198,16 +198,22 @@ services:
 
         echo "=== Starting Platform Agent ==="
         docker rm -f smsly-spire-agent 2>/dev/null || true
+        # --pid host + --cgroupns host are REQUIRED (not optional): the
+        # docker workload attestor maps caller PID -> container via /proc
+        # cgroups. Without them every fetch fails "could not resolve
+        # caller information" and rotation stops (2026-10-11 outage).
         docker run -d \
           --name smsly-spire-agent \
           --hostname spire-agent \
+          --pid host --cgroupns host \
           --restart unless-stopped \
           --network smsly-net \
           -e SPIFFE_TRUST_DOMAIN=$${SPIFFE_TRUST_DOMAIN} \
-          -e DOCKER_HOST=tcp://traefik-socket-proxy:2375 \
+          -e DOCKER_HOST=unix:///var/run/docker.sock \
           -v smsly-hosting_spire-agent-data:/opt/spire/data \
           -v smsly-hosting_spire-agent-socket:/opt/spire/run \
           -v smsly-hosting_spire-agent-svids:/opt/spire/svids \
+          -v /var/run/docker.sock:/var/run/docker.sock:ro \
           -v /opt/smsly-hosting/infrastructure/spire/agent.conf:/etc/spire/agent.conf:ro \
           --security-opt no-new-privileges:true \
           --cap-drop ALL \
@@ -221,13 +227,15 @@ services:
         docker run -d \
           --name smsly-spire-agent-ecosystem \
           --hostname spire-agent-ecosystem \
+          --pid host --cgroupns host \
           --restart unless-stopped \
           --network smsly-net \
           -e SPIFFE_TRUST_DOMAIN=$${ECOSYSTEM_TRUST_DOMAIN} \
-          -e DOCKER_HOST=tcp://traefik-socket-proxy:2375 \
+          -e DOCKER_HOST=unix:///var/run/docker.sock \
           -v smsly-hosting_spire-ecosystem-agent-data:/opt/spire/data \
           -v smsly-hosting_spire-ecosystem-agent-socket:/opt/spire/run \
           -v smsly-hosting_spire-ecosystem-agent-svids:/opt/spire/svids \
+          -v /var/run/docker.sock:/var/run/docker.sock:ro \
           -v /opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf:/etc/spire/agent.conf:ro \
           --security-opt no-new-privileges:true \
           --cap-drop ALL \
