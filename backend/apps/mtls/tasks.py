@@ -390,6 +390,255 @@ def repair_stale_sidecars_task():
     return result
 
 
+# ── SPIRE rotation watchdog (2026-10-11 outage) ──────────────────────
+# The ecosystem agent was recreated without --pid host/--cgroupns host
+# and without the docker socket: every workload fetch failed "could not
+# resolve caller information" for ~24h, all ecosystem SVIDs expired, and
+# nothing alerted because the repair beat only ensures ENTRIES (which
+# were fine) and the sync beat only persists whatever expiry it reads.
+# This task closes that gap: it verifies agent runtime flags, server
+# reachability, entry coverage, and SVID freshness per trust domain,
+# and self-heals a misconfigured agent (6h cooldown per domain).
+_SPIRE_WATCHDOG_HEAL_COOLDOWN_SECONDS = 6 * 3600
+_SPIRE_WATCHDOG_STALE_ROTATION_SECONDS = 3 * 3600
+
+_SPIRE_WATCHDOG_DOMAINS = (
+    {
+        "trust_domain": "platform.local",
+        "agent_container": "smsly-spire-agent",
+        "server_container": "smsly-spire-server",
+        "server_socket": "/tmp/spire-server/private/api.sock",
+        "agent_conf_path": "/opt/smsly-hosting/infrastructure/spire/agent.conf",
+        "data_volume": "smsly-hosting_spire-agent-data",
+        "socket_volume": "smsly-hosting_spire-agent-socket",
+        "svids_volume": "smsly-hosting_spire-agent-svids",
+    },
+    {
+        "trust_domain": "ecosystem.local",
+        "agent_container": "smsly-spire-agent-ecosystem",
+        "server_container": "smsly-spire-server-ecosystem",
+        "server_socket": "/tmp/spire-server/private/api.sock",
+        "agent_conf_path": "/opt/smsly-hosting/infrastructure/spire/agent-ecosystem.conf",
+        "data_volume": "smsly-hosting_spire-ecosystem-agent-data",
+        "socket_volume": "smsly-hosting_spire-ecosystem-agent-socket",
+        "svids_volume": "smsly-hosting_spire-ecosystem-agent-svids",
+    },
+)
+
+
+def _spire_agent_runtime(agent_container: str, client=None) -> dict:
+    """Inspect an agent container's attestation-critical runtime flags.
+
+    Returns {"running": bool, "pid_host": bool, "cgroupns_host": bool,
+    "docker_sock": bool}. Any False means the agent cannot attest Docker
+    workloads. Never raises.
+    """
+    report = {"running": False, "pid_host": False,
+              "cgroupns_host": False, "docker_sock": False}
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        client = client or get_docker_client()
+        container = client.containers.get(agent_container)
+        if getattr(container, "status", "") != "running":
+            try:
+                container.reload()
+            except Exception:
+                pass
+            if getattr(container, "status", "") != "running":
+                return report
+        report["running"] = True
+        try:
+            host_config = (container.attrs or {}).get("HostConfig", {}) or {}
+        except Exception:
+            host_config = {}
+        report["pid_host"] = str(host_config.get("PidMode", "") or "") == "host"
+        report["cgroupns_host"] = str(
+            host_config.get("CgroupnsMode", "") or "") == "host"
+        try:
+            mounts = (container.attrs or {}).get("Mounts", []) or []
+        except Exception:
+            mounts = []
+        report["docker_sock"] = any(
+            isinstance(m, dict) and m.get("Destination") == "/var/run/docker.sock"
+            for m in mounts
+        )
+        return report
+    except Exception as exc:
+        logger.debug("SPIRE agent runtime inspect failed for %s: %s",
+                     agent_container, exc)
+        return report
+
+
+def _recreate_spire_agent(spec: dict) -> str:
+    """Force-recreate an agent with installer-grade flags (never raises).
+
+    Unlike the deploy-path starter (which leaves an already-running
+    agent alone), the watchdog calls this only after proving the live
+    agent cannot attest, so the rm is intentional.
+    """
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        from apps.mtls.views import _start_agent_with_token
+        try:
+            client = get_docker_client()
+            container = client.containers.get(spec["agent_container"])
+            try:
+                container.stop(timeout=10)
+            except Exception:
+                pass
+            try:
+                container.remove(force=True)
+            except Exception as exc:
+                return f"error: could not remove broken agent: {exc}"
+        except Exception as exc:
+            logger.debug("Agent %s already absent: %s",
+                         spec["agent_container"], exc)
+        outcome = _start_agent_with_token(
+            agent_container=spec["agent_container"],
+            server_container=spec["server_container"],
+            agent_conf_path=spec["agent_conf_path"],
+            data_volume=spec["data_volume"],
+            socket_volume=spec["socket_volume"],
+            svids_volume=spec["svids_volume"],
+        )
+        return outcome
+    except Exception as exc:
+        return f"error: {exc}"
+
+
+@shared_task(
+    name="apps.mtls.tasks.check_spire_rotation_task",
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
+)
+def check_spire_rotation_task():
+    """Watch SPIRE rotation health per trust domain (every 15m).
+
+    Per domain: agent runtime flags (pid/cgroupns host + docker socket),
+    server reachability, registration coverage for enabled services, and
+    SVID freshness for locally-running apps. A misconfigured agent is
+    recreated automatically (6h cooldown per domain); everything else is
+    reported loudly so the dashboard signal stays honest. Never raises —
+    failures are collected into the result.
+    """
+    import datetime
+
+    from django.core.cache import cache
+
+    from apps.deployments.tasks_spiffe import (
+        _entry_path,
+        _list_spire_entries_from,
+    )
+    from apps.mtls.models import MtlsConfig
+    from apps.mtls.services.envoy_sidecar import EnvoySidecar
+
+    report: dict = {"domains": {}, "healed": [], "errors": []}
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        client = get_docker_client()
+    except Exception as exc:
+        logger.warning("SPIRE rotation check skipped (docker unavailable): %s", exc)
+        report["errors"].append(f"docker unavailable: {exc}")
+        return report
+
+    try:
+        configs = list(MtlsConfig.objects.filter(
+            enabled=True).select_related("service"))
+    except Exception as exc:
+        logger.warning("SPIRE rotation check skipped (DB unavailable): %s", exc)
+        report["errors"].append(f"DB unavailable: {exc}")
+        return report
+
+    now = timezone.now()
+    for spec in _SPIRE_WATCHDOG_DOMAINS:
+        domain = spec["trust_domain"]
+        entry: dict = {"runtime_ok": False, "server_ok": False,
+                       "missing_entries": [], "stale": [], "healed": None}
+        report["domains"][domain] = entry
+        runtime = _spire_agent_runtime(spec["agent_container"], client=client)
+        runtime_ok = all(runtime.values())
+        entry["runtime_ok"] = runtime_ok
+        if not runtime_ok:
+            logger.error(
+                "SPIRE agent %s cannot attest (running=%s pid_host=%s "
+                "cgroupns_host=%s docker_sock=%s) — rotation for %s is "
+                "down until healed", spec["agent_container"], *runtime.values(),
+                domain,
+            )
+            cooldown_key = f"spire:heal:{domain}"
+            try:
+                on_cooldown = bool(cache.get(cooldown_key))
+            except Exception:
+                on_cooldown = False
+            if not on_cooldown:
+                outcome = _recreate_spire_agent(spec)
+                entry["healed"] = outcome
+                if outcome in ("started", "already_running"):
+                    report["healed"].append(domain)
+                    logger.warning("SPIRE agent %s recreated: %s",
+                                   spec["agent_container"], outcome)
+                else:
+                    logger.error("SPIRE agent %s heal failed: %s",
+                                 spec["agent_container"], outcome)
+                    report["errors"].append(f"{domain}: heal failed: {outcome}")
+                try:
+                    cache.set(cooldown_key, True,
+                              timeout=_SPIRE_WATCHDOG_HEAL_COOLDOWN_SECONDS)
+                except Exception:
+                    pass
+            else:
+                report["errors"].append(
+                    f"{domain}: agent misconfigured, heal on cooldown")
+            continue
+
+        listed = _list_spire_entries_from(
+            spec["server_container"], spec["server_socket"])
+        if listed is None:
+            logger.error("SPIRE server %s unreachable — cannot verify %s "
+                         "rotation", spec["server_container"], domain)
+            report["errors"].append(f"{domain}: server unreachable")
+            continue
+        entry["server_ok"] = True
+        have_paths = {_entry_path(e) for e in listed}
+
+        stale_cutoff = now - datetime.timedelta(
+            seconds=_SPIRE_WATCHDOG_STALE_ROTATION_SECONDS)
+        for config in configs:
+            if (config.trust_domain or "") != domain:
+                continue
+            svc = config.service
+            want_path = f"/service/{svc.name}"
+            if want_path not in have_paths:
+                entry["missing_entries"].append(svc.name)
+                continue
+            # Freshness only for apps actually running HERE: a stopped or
+            # node-local service keeps a stale row the local agent can
+            # never refresh (marketer pattern) — flagging it every 15m
+            # would drown the real signal.
+            try:
+                local = EnvoySidecar._find_main_container(client, svc) is not None
+            except Exception:
+                local = False
+            if not local:
+                continue
+            expired = (config.svid_expiry is None) or (config.svid_expiry <= now)
+            sync_dead = (config.last_rotation is None) or (
+                config.last_rotation < stale_cutoff)
+            if expired and sync_dead:
+                entry["stale"].append(svc.name)
+        if entry["missing_entries"]:
+            logger.warning("SPIRE %s missing entries for: %s (repair beat "
+                           "covers creation)", domain,
+                           ", ".join(entry["missing_entries"]))
+        if entry["stale"]:
+            logger.error("SPIRE %s rotation stale for locally-running: %s "
+                         "(expiry past + no sync in 3h)", domain,
+                         ", ".join(entry["stale"]))
+            report["errors"].append(
+                f"{domain}: stale rotation: {', '.join(entry['stale'])}")
+    return report
+
+
 def _read_workload_cert_expiry(client, service):
     """Legacy fallback: openssl probe of cert.pem inside the workload."""
     try:

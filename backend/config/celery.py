@@ -200,6 +200,7 @@ app.conf.task_routes = {
     'apps.mtls.tasks.inject_mtls_task': {'queue': 'deploy'},
     'apps.mtls.tasks.sync_svid_metadata_task': {'queue': 'celery'},
     'apps.mtls.tasks.repair_stale_sidecars_task': {'queue': 'deploy'},
+    'apps.mtls.tasks.check_spire_rotation_task': {'queue': 'celery'},
     'apps.deployments.services.provisioner.provision_server': {'queue': 'deploy'},
     # Health monitoring is long-running and must not starve deployment work.
     'apps.core.services.health_monitor.monitor_health_task': {'queue': 'celery'},
@@ -669,6 +670,14 @@ app.conf.beat_schedule = {
     },
     'repair-stale-sidecars-every-15m': {
         'task': 'apps.mtls.tasks.repair_stale_sidecars_task',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
+    # SPIRE rotation watchdog: agent runtime flags + entry coverage +
+    # SVID freshness per trust domain, with misconfigured-agent auto-heal.
+    # 15m cadence matches the repair beat (same failure class).
+    'check-spire-rotation-every-15m': {
+        'task': 'apps.mtls.tasks.check_spire_rotation_task',
         'schedule': 900.0,
         'options': {'expires': 900.0},
     },
