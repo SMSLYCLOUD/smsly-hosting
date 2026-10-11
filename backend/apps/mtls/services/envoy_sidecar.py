@@ -50,6 +50,12 @@ ENVOY_BUILD_CONTEXT_CANDIDATES = (
 # Volume mounts for SPIRE agent socket and SVIDs
 SPIRE_AGENT_SOCKET_VOLUME = "spire-ecosystem-agent-socket"
 SPIRE_SVIDS_VOLUME = "spire-ecosystem-agent-svids"
+# Platform trust-domain agent volumes (services with
+# trust_domain == "platform.local" are attested by the platform agent;
+# mounting the ecosystem socket there yields "not authorized" forever).
+PLATFORM_SPIRE_AGENT_SOCKET_VOLUME = "spire-agent-socket"
+PLATFORM_SPIRE_SVIDS_VOLUME = "spire-agent-svids"
+PLATFORM_SPIFFE_TRUST_DOMAIN = "platform.local"
 SPIRE_AGENT_SOCKET_CONTAINER_PATH = "/opt/spire/run"
 SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 
@@ -59,6 +65,19 @@ SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 # inject_sidecar removes it (directory only, never a real file) so already-
 # poisoned hosts self-heal on the next deploy.
 LEGACY_TEMPLATE_MOUNT_SOURCE = "/opt/smsly-hosting/builds/envoy.yaml.template"
+
+
+def spire_volumes_for(trust_domain: str | None) -> tuple[str, str]:
+    """Return (socket_volume, svids_volume) for a trust domain.
+
+    Platform-trust services are attested by the platform agent; every
+    other domain uses the ecosystem agent. Mounting the wrong socket
+    yields "not authorized for the requested identities" forever while
+    everything looks healthy (2026-10-11).
+    """
+    if (trust_domain or "").strip() == PLATFORM_SPIFFE_TRUST_DOMAIN:
+        return PLATFORM_SPIRE_AGENT_SOCKET_VOLUME, PLATFORM_SPIRE_SVIDS_VOLUME
+    return SPIRE_AGENT_SOCKET_VOLUME, SPIRE_SVIDS_VOLUME
 
 
 class EnvoySidecar:
@@ -406,10 +425,14 @@ class EnvoySidecar:
                 "cannot start"
             )
 
+        socket_base, svids_base = spire_volumes_for(
+            getattr(mtls_config, "trust_domain", "")
+        )
+        socket_volume, svids_volume = socket_base, svids_base
         try:
             from apps.deployments.services.mtls_integration import resolve_spire_volume_name
-            socket_volume = resolve_spire_volume_name(SPIRE_AGENT_SOCKET_VOLUME)
-            svids_volume = resolve_spire_volume_name(SPIRE_SVIDS_VOLUME)
+            socket_volume = resolve_spire_volume_name(socket_base)
+            svids_volume = resolve_spire_volume_name(svids_base)
             run_kwargs = dict(
                 image=ENVOY_IMAGE,
                 name=sidecar_name,
@@ -1061,14 +1084,15 @@ class EnvoySidecar:
         # (2026-09-15: every sidecar mounted the empty decoy, SDS never
         # reached agent.sock, no SVID ever issued). Falls back to bare
         # only when the daemon is unreachable at compose-render time.
-        socket_vol = SPIRE_AGENT_SOCKET_VOLUME
-        svids_vol = SPIRE_SVIDS_VOLUME
+        socket_vol, svids_vol = spire_volumes_for(
+            getattr(mtls_config, "trust_domain", "")
+        )
         try:
             from apps.deployments.services.mtls_integration import (
                 resolve_spire_volume_name as _resolve_vol,
             )
-            socket_vol = _resolve_vol(SPIRE_AGENT_SOCKET_VOLUME)
-            svids_vol = _resolve_vol(SPIRE_SVIDS_VOLUME)
+            socket_vol = _resolve_vol(socket_vol)
+            svids_vol = _resolve_vol(svids_vol)
         except Exception:
             pass
 
