@@ -288,15 +288,20 @@ class RemoteClientMixin:
             redirected = False
 
             for index, mode in enumerate(modes):
-                headers = self._get_headers(
-                    method_upper,
-                    request_path,
-                    body=body,
-                    auth_mode=None if mode == "none" else mode,
-                )
                 attempts = 2 if method_upper in SAFE_METHODS else 1
 
                 for attempt in range(attempts):
+                    # Headers are minted FRESH per attempt: HMAC carries a
+                    # single-use nonce + timestamp, so re-sending the same
+                    # headers on retry is rejected as a replay ("Remote sync
+                    # nonce already used") whenever the first attempt
+                    # actually arrived but its response was lost.
+                    headers = self._get_headers(
+                        method_upper,
+                        request_path,
+                        body=body,
+                        auth_mode=None if mode == "none" else mode,
+                    )
                     try:
                         verify_ssl = _should_verify(url)
                         response = requests.request(
