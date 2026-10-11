@@ -26,6 +26,16 @@ export interface ApiResponse<T = unknown> {
   statusText: string;
 }
 
+export interface PromoItem {
+  id: string;
+  title: string;
+  description?: string;
+  href: string;
+  cta?: string;
+  color?: string;
+  bg?: string;
+}
+
 interface AxiosRequestConfigProxy {
   _skipRemoteProxy?: boolean;
   _isProxied?: boolean;
@@ -1211,6 +1221,26 @@ export const systemApi = {
   getConfig: async (): Promise<{ ALLOW_REGISTRATION: boolean; require_email_verification: boolean; [key: string]: unknown }> => {
     const response = await api.get('/system/config/');
     return response.data;
+  },
+  getPromos: async (): Promise<{ enabled: boolean; configured: boolean; items: PromoItem[]; rotateSeconds: number }> => {
+    const response = await api.get('/system/config/');
+    const data = response.data as Record<string, unknown>;
+    const configured = 'PROMOS_ENABLED' in data;
+    const rawItems = Array.isArray(data.PROMOS_ITEMS) ? data.PROMOS_ITEMS : [];
+    const items = (rawItems as unknown[]).filter(
+      (e): e is PromoItem =>
+        typeof e === 'object' && e !== null &&
+        typeof (e as PromoItem).id === 'string' &&
+        typeof (e as PromoItem).title === 'string' &&
+        typeof (e as PromoItem).href === 'string',
+    );
+    const rotate = Number(data.PROMOS_ROTATE_SECONDS ?? 8);
+    return {
+      enabled: data.PROMOS_ENABLED === true,
+      configured,
+      items,
+      rotateSeconds: Number.isFinite(rotate) ? Math.max(5, Math.min(60, rotate)) : 8,
+    };
   },
   updateConfig: async (data: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const response = await api.patch('/system/config/', data);

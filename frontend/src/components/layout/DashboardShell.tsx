@@ -15,10 +15,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
       {/* Content */}
       <div className="relative z-10 flex-1 flex flex-col mt-4 sm:mt-0 pb-safe">
-        <div className="px-4 sm:px-6 pt-3 max-w-7xl mx-auto w-full">
+        {children}
+        {/* Promos sit below page content — never above deploys or billing actions. */}
+        <div className="px-4 sm:px-6 pb-3 pt-6 max-w-7xl mx-auto w-full">
           <TrulayAdBanner />
         </div>
-        {children}
       </div>
     </main>
   );

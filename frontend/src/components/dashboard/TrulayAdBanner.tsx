@@ -7,7 +7,7 @@ import { SmslyCrossSell } from "@/components/dashboard/SmslyCrossSell";
 export const ADS_DISMISSED_KEY = "smsly_ads_dismissed";
 const ADS_EVENT = "smsly-ads-changed";
 
-function readDismissed(): boolean {
+function readOptedOut(): boolean {
     if (typeof window === "undefined") return true;
     try {
         return window.localStorage.getItem(ADS_DISMISSED_KEY) === "1";
@@ -17,30 +17,29 @@ function readDismissed(): boolean {
 }
 
 /**
- * Trulay ad banner — renders the rotating cross-sell promo (SmslyCrossSell)
- * until the user dismisses it. Dismissal persists in localStorage and can be
- * re-enabled from Settings → Privacy.
+ * Trulay ad banner — renders the rotating cross-sell promo (SmslyCrossSell).
+ * Three levels: admin kill-switch (server, inside SmslyCrossSell) >
+ * permanent opt-out (localStorage, Settings → Privacy) > session dismiss
+ * (in-memory X button, reappears on next visit).
  */
 export function TrulayAdBanner() {
-    const [dismissed, setDismissed] = useAdsDismissed();
+    const [optedOut] = useAdsDismissed();
+    const [sessionDismissed, setSessionDismissed] = useState(false);
     const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
         setMounted(true);
     }, []);
 
-    const dismiss = useCallback(() => {
-        setDismissed(true);
-    }, [setDismissed]);
-
-    if (!mounted || dismissed) return null;
+    if (!mounted || optedOut || sessionDismissed) return null;
 
     return (
         <div className="relative">
             <button
                 type="button"
-                aria-label="Dismiss ad"
-                onClick={dismiss}
+                aria-label="Dismiss ad for this visit"
+                title="Dismiss for this visit (reappears next visit; disable permanently in Settings → Privacy)"
+                onClick={() => setSessionDismissed(true)}
                 className="absolute top-2 right-2 z-10 text-muted-foreground/60 hover:text-foreground transition-colors p-1 rounded-md"
             >
                 <X size={14} />
@@ -50,12 +49,15 @@ export function TrulayAdBanner() {
     );
 }
 
-/** Shared hook for the banner + Settings → Privacy "Show Trulay promos" toggle. Single source of truth, synced across components and tabs. */
+/**
+ * Shared hook for the permanent opt-out (Settings → Privacy toggle).
+ * Single source of truth, synced across components and tabs.
+ */
 export function useAdsDismissed(): [boolean, (v: boolean) => void] {
-    const [dismissed, setDismissedState] = useState<boolean>(readDismissed);
+    const [optedOut, setOptedOutState] = useState<boolean>(readOptedOut);
 
     useEffect(() => {
-        const sync = () => setDismissedState(readDismissed());
+        const sync = () => setOptedOutState(readOptedOut());
         window.addEventListener("storage", sync);
         window.addEventListener(ADS_EVENT, sync);
         return () => {
@@ -65,7 +67,7 @@ export function useAdsDismissed(): [boolean, (v: boolean) => void] {
     }, []);
 
     const set = useCallback((v: boolean) => {
-        setDismissedState(v);
+        setOptedOutState(v);
         try {
             if (v) {
                 window.localStorage.setItem(ADS_DISMISSED_KEY, "1");
@@ -78,5 +80,5 @@ export function useAdsDismissed(): [boolean, (v: boolean) => void] {
         window.dispatchEvent(new Event(ADS_EVENT));
     }, []);
 
-    return [dismissed, set];
+    return [optedOut, set];
 }

@@ -200,6 +200,10 @@ class SystemConfigView(GenericAPIView):
             'MAPBOX_TOKEN': PlatformConfig.get_config_value('mapbox_token'),
             **self._get_storage_metrics(),
             **infra_health,
+            # Trulay promos: readable by every authenticated user (the
+            # banner needs the kill-switch + items). Fail-closed: banner
+            # hidden when the row/columns are missing (migration pending).
+            **self._get_public_promos(),
         }
 
         if not request.user.is_superuser:
@@ -337,9 +341,34 @@ class SystemConfigView(GenericAPIView):
         'DEFAULT_ENV_SCAN_DEPTH': ('default_env_scan_depth', str),
         # Internal network (project-scoped bridges)
         'DEFAULT_INTERNAL_SUBNET': ('default_internal_subnet', str),
+        # Trulay promos (admin writes; public reads via _get_public_promos)
+        'PROMOS_ENABLED': ('promos_enabled', bool),
+        'PROMOS_ROTATE_SECONDS': ('promos_rotate_seconds', int),
+        'PROMOS_ITEMS': ('promos_items', 'json'),
     }
 
     _PC_SECRET_FIELDS = {'SMTP_PASSWORD', 'SMSLY_INTERNAL_API_KEY', 'REGISTRY_PASSWORD'}
+
+    def _get_public_promos(self):
+        """Promo kill-switch + items for every authenticated user.
+
+        Fail-closed: any error (migration pending, ghost row) returns
+        enabled=False so the banner stays hidden rather than leaking
+        ads an admin never approved.
+        """
+        try:
+            pc, _ = PlatformConfig.objects.get_or_create(pk=1)
+            items = getattr(pc, 'promos_items', None) or []
+            if not isinstance(items, list):
+                items = []
+            return {
+                'PROMOS_ENABLED': bool(getattr(pc, 'promos_enabled', False)),
+                'PROMOS_ITEMS': items,
+                'PROMOS_ROTATE_SECONDS': int(getattr(pc, 'promos_rotate_seconds', 8) or 8),
+            }
+        except Exception as exc:
+            logger.debug("Promo config unavailable (fail-closed, hidden): %s", exc)
+            return {'PROMOS_ENABLED': False, 'PROMOS_ITEMS': [], 'PROMOS_ROTATE_SECONDS': 8}
 
     def _get_platform_config(self):
         pc, _ = PlatformConfig.objects.get_or_create(pk=1)
@@ -397,6 +426,59 @@ class SystemConfigView(GenericAPIView):
                     # the UI must never wipe stored secrets with empty
                     # strings (same convention as domain-config's
                     # registry_password guard).
+                    continue
+                if cast_type == 'json':
+                    # Promo items: must be a list of small dicts. Reject
+                    # anything else instead of writing (fail-closed).
+                    if not isinstance(raw, list):
+                        return Response(
+                            {'error': f'{api_key} must be a list.'},
+                            status=400,
+                        )
+                    cleaned = []
+                    for entry in raw[:10]:
+                        if not isinstance(entry, dict):
+                            return Response(
+                                {'error': f'{api_key} entries must be objects.'},
+                                status=400,
+                            )
+                        item_id = str(entry.get('id') or '').strip()[:64]
+                        title = str(entry.get('title') or '').strip()[:120]
+                        href = str(entry.get('href') or '').strip()[:512]
+                        if not item_id or not title or not href:
+                            return Response(
+                                {'error': f'{api_key} entries need id, title and href.'},
+                                status=400,
+                            )
+                        if not re.match(r'^https://', href):
+                            return Response(
+                                {'error': f'{api_key} href must be an https:// URL.'},
+                                status=400,
+                            )
+                        cleaned.append({
+                            'id': item_id,
+                            'title': title,
+                            'description': str(entry.get('description') or '').strip()[:240],
+                            'href': href,
+                            'cta': str(entry.get('cta') or '').strip()[:64] or 'Learn more',
+                            'color': str(entry.get('color') or '').strip()[:64] or 'text-blue-500',
+                            'bg': str(entry.get('bg') or '').strip()[:64] or 'bg-blue-500/10',
+                        })
+                    setattr(pc, field, cleaned)
+                    changed.append(api_key)
+                    update_fields.append(field)
+                    continue
+                if api_key == 'PROMOS_ROTATE_SECONDS':
+                    try:
+                        seconds = int(raw)
+                    except (TypeError, ValueError):
+                        return Response(
+                            {'error': 'PROMOS_ROTATE_SECONDS must be a number.'},
+                            status=400,
+                        )
+                    setattr(pc, field, max(5, min(60, seconds)))
+                    changed.append(api_key)
+                    update_fields.append(field)
                     continue
                 if cast_type == bool:
                     setattr(pc, field, bool(raw))

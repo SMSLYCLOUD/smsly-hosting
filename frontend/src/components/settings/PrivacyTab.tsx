@@ -58,7 +58,9 @@ export function PrivacyTab() {
               <h3 className="text-sm font-semibold">Show Trulay promos</h3>
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-lg">
                 Show the rotating Trulay product banner (communication APIs, identity, growth
-                automation) in the dashboard. You can also dismiss it directly from the banner.
+                automation) in the dashboard. The banner&apos;s X button only dismisses it for
+                the current visit — turn this off to never see it. Your choice is saved in
+                this browser. Admins can disable promos for everyone from Settings → Platform.
               </p>
             </div>
           </div>

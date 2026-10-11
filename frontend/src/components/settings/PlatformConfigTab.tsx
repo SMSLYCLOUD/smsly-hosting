@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
-import { Cloud, Search, Globe } from "lucide-react";
+import { Cloud, Search, Globe, Megaphone } from "lucide-react";
 import { systemApi } from "@/lib/api";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 
@@ -302,6 +302,82 @@ export function PlatformConfigTab() {
                     toast({ title: "Saved", description: "Security toggles updated." });
                   } catch { toast({ title: "Failed", variant: "destructive" }); }
                 }}>Save Security</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </ScrollReveal>
+
+      {/* Trulay Promos — blurReveal */}
+      <ScrollReveal variant="blurReveal" delay={0.22}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Megaphone className="h-5 w-5 text-amber-500" /> Trulay Promos</CardTitle>
+            <CardDescription>Master kill-switch for the dashboard cross-sell banner. Off by default so OSS self-hosts stay ad-free. Admin setting wins over every user&apos;s opt-out.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <Switch checked={!!config.PROMOS_ENABLED} onCheckedChange={(v) => setConfig({ ...config, PROMOS_ENABLED: v })} />
+                <Label className="text-sm">Show promo banner on the dashboard</Label>
+              </div>
+              <div className="space-y-2 max-w-xs">
+                <Label>Rotate every (seconds, 5-60)</Label>
+                <Input type="number" min={5} max={60} value={config.PROMOS_ROTATE_SECONDS ?? 8} onChange={(e) => setConfig({ ...config, PROMOS_ROTATE_SECONDS: Math.max(5, Math.min(60, parseInt(e.target.value) || 8)) })} />
+              </div>
+              <div className="space-y-3">
+                <Label>Promo cards (empty uses the built-in Trulay defaults)</Label>
+                {((config.PROMOS_ITEMS as { id: string; title: string; description?: string; href: string; cta?: string }[] | undefined) ?? []).map((item, i) => (
+                  <div key={`${item.id}-${i}`} className="grid grid-cols-1 md:grid-cols-2 gap-2 p-3 rounded-lg border border-border">
+                    <Input placeholder="id (e.g. sms-apis)" value={item.id} onChange={(e) => {
+                      const items = [...((config.PROMOS_ITEMS as object[] | undefined) ?? [])] as { id: string; title: string; description?: string; href: string; cta?: string }[];
+                      items[i] = { ...items[i], id: e.target.value };
+                      setConfig({ ...config, PROMOS_ITEMS: items });
+                    }} className="font-mono" />
+                    <Input placeholder="Title" value={item.title} onChange={(e) => {
+                      const items = [...((config.PROMOS_ITEMS as object[] | undefined) ?? [])] as { id: string; title: string; description?: string; href: string; cta?: string }[];
+                      items[i] = { ...items[i], title: e.target.value };
+                      setConfig({ ...config, PROMOS_ITEMS: items });
+                    }} />
+                    <Input placeholder="Description" value={item.description ?? ""} onChange={(e) => {
+                      const items = [...((config.PROMOS_ITEMS as object[] | undefined) ?? [])] as { id: string; title: string; description?: string; href: string; cta?: string }[];
+                      items[i] = { ...items[i], description: e.target.value };
+                      setConfig({ ...config, PROMOS_ITEMS: items });
+                    }} className="md:col-span-2" />
+                    <Input placeholder="https:// link" value={item.href} onChange={(e) => {
+                      const items = [...((config.PROMOS_ITEMS as object[] | undefined) ?? [])] as { id: string; title: string; description?: string; href: string; cta?: string }[];
+                      items[i] = { ...items[i], href: e.target.value };
+                      setConfig({ ...config, PROMOS_ITEMS: items });
+                    }} className="font-mono" />
+                    <div className="flex gap-2">
+                      <Input placeholder="CTA (e.g. Learn more)" value={item.cta ?? ""} onChange={(e) => {
+                        const items = [...((config.PROMOS_ITEMS as object[] | undefined) ?? [])] as { id: string; title: string; description?: string; href: string; cta?: string }[];
+                        items[i] = { ...items[i], cta: e.target.value };
+                        setConfig({ ...config, PROMOS_ITEMS: items });
+                      }} />
+                      <Button variant="outline" onClick={() => {
+                        const items = [...((config.PROMOS_ITEMS as object[] | undefined) ?? [])];
+                        items.splice(i, 1);
+                        setConfig({ ...config, PROMOS_ITEMS: items });
+                      }}>Remove</Button>
+                    </div>
+                  </div>
+                ))}
+                <div>
+                  <Button variant="outline" onClick={() => setConfig({ ...config, PROMOS_ITEMS: [...((config.PROMOS_ITEMS as object[] | undefined) ?? []), { id: "", title: "", description: "", href: "https://", cta: "Learn more" }] })}>Add card</Button>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={async () => {
+                  try {
+                    const result = await systemApi.updateConfig({ PROMOS_ENABLED: config.PROMOS_ENABLED, PROMOS_ROTATE_SECONDS: config.PROMOS_ROTATE_SECONDS, PROMOS_ITEMS: config.PROMOS_ITEMS ?? [] });
+                    setConfig(result);
+                    toast({ title: "Saved", description: "Promo settings updated." });
+                  } catch (err: unknown) {
+                    const message = err instanceof Error ? err.message : "Could not save config.";
+                    toast({ title: "Failed", description: message, variant: "destructive" });
+                  }
+                }}>Save Promos</Button>
               </div>
             </div>
           </CardContent>

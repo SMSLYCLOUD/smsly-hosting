@@ -813,6 +813,24 @@ class PlatformConfig(models.Model):
                   "buckets (404 probing, crawlers, bruteforce) always keep "
                   "their thresholds to avoid false positives.")
 
+    # ── Trulay Promos (dashboard cross-sell banner) ───────────────────
+    # OSS-safe: OFF by default so self-hosts are ad-free. Trulay Cloud
+    # enables it. Precedence: admin kill-switch (here) > user opt-out
+    # (browser localStorage) > session dismiss (in-memory). No tracking
+    # in the client; measurement is landing-page UTM only.
+    promos_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Master kill-switch for the dashboard Trulay cross-sell "
+                  "banner. Off by default (OSS self-hosts stay ad-free).")
+    promos_rotate_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=8,
+        help_text="Seconds each promo card shows before rotating (5-60).")
+    promos_items = models.JSONField(  # type: ignore[var-annotated]
+        blank=True, default=list,
+        help_text="Cross-sell cards: list of {id, title, description, href, "
+                  "cta, color, bg}. Empty falls back to the built-in "
+                  "Trulay defaults in the frontend.")
+
 
     # Secrets backend: SOPS-age files by default (zero daemons);
     # Infisical vault is opt-in for whoever needs the SaaS UI.
