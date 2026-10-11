@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { SmslyCrossSell } from "@/components/dashboard/SmslyCrossSell";
 
-const ADS_DISMISSED_KEY = "smsly_ads_dismissed";
+export const ADS_DISMISSED_KEY = "smsly_ads_dismissed";
+const ADS_EVENT = "smsly-ads-changed";
+
+function readDismissed(): boolean {
+    if (typeof window === "undefined") return true;
+    try {
+        return window.localStorage.getItem(ADS_DISMISSED_KEY) === "1";
+    } catch {
+        return false;
+    }
+}
 
 /**
  * Trulay ad banner — renders the rotating cross-sell promo (SmslyCrossSell)
@@ -12,28 +22,18 @@ const ADS_DISMISSED_KEY = "smsly_ads_dismissed";
  * re-enabled from Settings → Privacy.
  */
 export function TrulayAdBanner() {
-    const [dismissed, setDismissed] = useState(false);
+    const [dismissed, setDismissed] = useAdsDismissed();
     const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
         setMounted(true);
-        try {
-            setDismissed(window.localStorage.getItem(ADS_DISMISSED_KEY) === "1");
-        } catch {
-            // storage unavailable — show the banner
-        }
     }, []);
 
-    if (!mounted || dismissed) return null;
-
-    const dismiss = () => {
+    const dismiss = useCallback(() => {
         setDismissed(true);
-        try {
-            window.localStorage.setItem(ADS_DISMISSED_KEY, "1");
-        } catch {
-            // ignore
-        }
-    };
+    }, [setDismissed]);
+
+    if (!mounted || dismissed) return null;
 
     return (
         <div className="relative">
@@ -50,19 +50,22 @@ export function TrulayAdBanner() {
     );
 }
 
-/** Hook for the Settings → Privacy "Show Trulay promos" toggle. */
+/** Shared hook for the banner + Settings → Privacy "Show Trulay promos" toggle. Single source of truth, synced across components and tabs. */
 export function useAdsDismissed(): [boolean, (v: boolean) => void] {
-    const [dismissed, setDismissed] = useState<boolean>(() => {
-        if (typeof window === "undefined") return true;
-        try {
-            return window.localStorage.getItem(ADS_DISMISSED_KEY) === "1";
-        } catch {
-            return true;
-        }
-    });
+    const [dismissed, setDismissedState] = useState<boolean>(readDismissed);
 
-    const set = (v: boolean) => {
-        setDismissed(v);
+    useEffect(() => {
+        const sync = () => setDismissedState(readDismissed());
+        window.addEventListener("storage", sync);
+        window.addEventListener(ADS_EVENT, sync);
+        return () => {
+            window.removeEventListener("storage", sync);
+            window.removeEventListener(ADS_EVENT, sync);
+        };
+    }, []);
+
+    const set = useCallback((v: boolean) => {
+        setDismissedState(v);
         try {
             if (v) {
                 window.localStorage.setItem(ADS_DISMISSED_KEY, "1");
@@ -72,7 +75,8 @@ export function useAdsDismissed(): [boolean, (v: boolean) => void] {
         } catch {
             // ignore
         }
-    };
+        window.dispatchEvent(new Event(ADS_EVENT));
+    }, []);
 
     return [dismissed, set];
 }
