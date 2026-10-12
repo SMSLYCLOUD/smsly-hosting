@@ -521,12 +521,17 @@ class LocalAdapter(BaseCloudAdapter):
         if svc is not None and getattr(svc, "sablier_enabled", False):
             from apps.deployments.services.traefik_labels import (
                 sablier_middleware_ref,
+                sablier_retry_labels,
+                sablier_retry_ref,
                 sablier_service_labels,
             )
             session = str(getattr(svc, "sablier_session", "") or "10m").strip() or "10m"
             labels.update(sablier_service_labels(
                 router_name=router_name, group=name, session=session,
             ))
+            labels.update(sablier_retry_labels(router_name=router_name))
+            if sablier_retry_ref(router_name) not in existing:
+                existing.append(sablier_retry_ref(router_name))
             if sablier_middleware_ref(router_name) not in existing:
                 existing.append(sablier_middleware_ref(router_name))
         if svc is not None and getattr(svc, "edge_jwt_required", False):

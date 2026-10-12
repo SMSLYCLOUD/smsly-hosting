@@ -5,6 +5,8 @@ which leaks container/group names and topology to the public. The
 platform now uses the blocking strategy everywhere — the request
 simply holds until the container is ready, then proxies normally.
 """
+from unittest import mock
+
 from django.test import SimpleTestCase
 
 from apps.deployments.services.traefik_labels import sablier_service_labels
@@ -49,3 +51,37 @@ class SablierBlockingStrategyTests(SimpleTestCase):
         self.assertIn("timeout:", EDGE_SHARED_YML)
         self.assertNotIn("dynamic:", EDGE_SHARED_YML)
         self.assertNotIn("showDetails", EDGE_SHARED_YML)
+
+
+class SablierWakeRetryTests(SimpleTestCase):
+    def test_retry_labels_present(self):
+        from apps.deployments.services.traefik_labels import (
+            sablier_retry_labels,
+            sablier_retry_ref,
+        )
+        labels = sablier_retry_labels(router_name="myapp")
+        self.assertEqual(
+            labels["traefik.http.middlewares.myapp-wakeretry.retry.attempts"],
+            "3")
+        self.assertEqual(
+            labels["traefik.http.middlewares.myapp-wakeretry.retry.initialinterval"],
+            "1s")
+        self.assertEqual(sablier_retry_ref("myapp"), "myapp-wakeretry")
+
+    def test_generate_labels_chains_retry_before_sablier(self):
+        from apps.deployments.services.traefik_labels import (
+            generate_traefik_labels,
+        )
+        svc = mock.Mock()
+        svc.sablier_enabled = True
+        svc.edge_jwt_required = False
+        svc.sablier_session = "10m"
+        labels = generate_traefik_labels(
+            service_name="my-app", domain="my-app.example.com",
+            internal_port=8000, service=svc)
+        chain = labels["traefik.http.routers.my_app.middlewares"]
+        retry_at = chain.index("my_app-wakeretry")
+        sab_at = chain.index("my_app-sablier")
+        self.assertLess(retry_at, sab_at)
+        self.assertIn(
+            "traefik.http.middlewares.my_app-wakeretry.retry.attempts", labels)

@@ -206,6 +206,8 @@ class ComposeNetworkingMixin:
             if svc_flags is not None:
                 if bool(getattr(svc_flags, "sablier_enabled", False)):
                     from apps.deployments.services.traefik_labels import (
+                        sablier_retry_labels,
+                        sablier_retry_ref,
                         sablier_service_labels,
                     )
                     session = str(getattr(svc_flags, "sablier_session", "") or "10m").strip() or "10m"
@@ -213,6 +215,8 @@ class ComposeNetworkingMixin:
                     labels.update(sablier_service_labels(
                         router_name=router, group=group, session=session,
                     ))
+                    labels.update(sablier_retry_labels(router_name=router))
+                    chain.append(sablier_retry_ref(router))
                     chain.append(f"{router}-sablier")
                 if bool(getattr(svc_flags, "edge_jwt_required", False)):
                     chain.append("edge-forward-auth@file")

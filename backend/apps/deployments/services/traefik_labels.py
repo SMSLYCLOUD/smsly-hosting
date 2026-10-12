@@ -22,6 +22,31 @@ def sablier_middleware_ref(router_name: str) -> str:
     return f"{router_name}-sablier"
 
 
+def sablier_retry_ref(router_name: str) -> str:
+    """Router-chain entry for a service's wake-retry middleware."""
+    return f"{router_name}-wakeretry"
+
+
+def sablier_retry_labels(router_name: str) -> dict[str, str]:
+    """Retry wrapper for the Sablier wake path (Traefik built-in).
+
+    Closes the wake race: sablier reports "ready" when the container
+    is RUNNING, but Traefik's docker provider may not have
+    re-inspected it yet, so the first forward dials an empty server
+    URL and Traefik answers 500 (proven in access logs:
+    DownstreamStatus=OriginStatus=500 with ServiceAddr empty). The
+    retry re-runs the remainder of the chain after refresh lands.
+
+    Tradeoff: a genuine app-level 500 also retries (attempts=3), so a
+    non-idempotent request can execute twice. Scoped to sablier
+    routers only, where the alternative is a guaranteed failed wake.
+    """
+    return {
+        f"traefik.http.middlewares.{router_name}-wakeretry.retry.attempts": "3",
+        f"traefik.http.middlewares.{router_name}-wakeretry.retry.initialinterval": "1s",
+    }
+
+
 def sablier_service_labels(
     router_name: str, group: str, session: str = "10m",
 ) -> dict[str, str]:
@@ -198,6 +223,8 @@ def generate_traefik_labels(
         labels.update(sablier_service_labels(
             router_name=router_name, group=service_name, session=session,
         ))
+        labels.update(sablier_retry_labels(router_name=router_name))
+        extra_chain.append(sablier_retry_ref(router_name))
         extra_chain.append(sablier_middleware_ref(router_name))
     if jwt_on:
         extra_chain.append("edge-forward-auth@file")
