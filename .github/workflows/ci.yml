@@ -248,7 +248,7 @@ jobs:
               --output-certificate "$sbom.cert"
           done
       - name: Upload SBOMs and signatures
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sboms
           path: |
