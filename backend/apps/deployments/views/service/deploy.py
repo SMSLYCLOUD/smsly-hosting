@@ -180,6 +180,25 @@ class DeployActionsMixin:
                         pass
             except Exception:
                 pass
+        # Node-local build handoff (remote sync only): the master skips
+        # its own build and the node clones + builds itself. The shipped
+        # GitHub token lands on the deployment metadata only (never
+        # logged, never echoed) where the node's builder picks it up;
+        # blank means "keep existing" and never wipes a stored value.
+        if is_remote_sync:
+            try:
+                _node_build = request.data.get('node_build', False)
+                if _node_build is True or str(_node_build).strip().lower() in (
+                        '1', 'true', 'yes', 'on'):
+                    _meta = dict(getattr(deployment, 'metadata', None) or {})
+                    _meta['node_build'] = True
+                    _gtok = str(request.data.get('github_token') or '')
+                    if _gtok.strip() and len(_gtok) <= 2048:
+                        _meta['github_token'] = _gtok.strip()
+                    deployment.metadata = _meta
+                    deployment.save(update_fields=['metadata'])
+            except Exception:
+                pass
         try:
             enqueue_smart_deploy_task(
                 deployment_id=str(deployment.id),

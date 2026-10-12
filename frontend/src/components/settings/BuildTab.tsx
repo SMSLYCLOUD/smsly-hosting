@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Service, servicesApi, githubApi, gitlabApi, bitbucketApi } from '@/lib/api';
+import { Service, servicesApi, systemApi, githubApi, gitlabApi, bitbucketApi } from '@/lib/api';
 import { firstApiError } from '@/lib/apiErrors';
 import { useToast } from '@/components/ui/use-toast';
 import { BuildpackSelector, BuildpackType } from '@/components/deployments/BuildpackSelector';
@@ -25,6 +25,10 @@ export function BuildTab({ service }: BuildTabProps) {
   const [deployMode, setDeployMode] = useState<'SINGLE' | 'COMPOSE'>(service.deploy_mode || 'SINGLE');
   const [watchPaths, setWatchPaths] = useState<string>((service.watch_paths || []).join('\n'));
   const [botPrStrategy, setBotPrStrategy] = useState<string>(service.bot_pr_strategy || 'DEPLOY');
+  const [nodeLocalBuild, setNodeLocalBuild] = useState<'inherit' | 'node' | 'master'>(
+    service.node_local_build === true ? 'node' : service.node_local_build === false ? 'master' : 'inherit'
+  );
+  const [platformNodeBuildDefault, setPlatformNodeBuildDefault] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Seed-once keyed by service id (AGENTS.md #21): the parent polls a
@@ -43,6 +47,7 @@ export function BuildTab({ service }: BuildTabProps) {
     setDeployMode(service.deploy_mode || 'SINGLE');
     setWatchPaths((service.watch_paths || []).join('\n'));
     setBotPrStrategy(service.bot_pr_strategy || 'DEPLOY');
+    setNodeLocalBuild(service.node_local_build === true ? 'node' : service.node_local_build === false ? 'master' : 'inherit');
     setPinnedCommit('');
     setCommits([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -57,6 +62,12 @@ export function BuildTab({ service }: BuildTabProps) {
   const [commits, setCommits] = useState<{ sha: string; message: string }[]>([]);
   const [loadingCommits, setLoadingCommits] = useState(false);
   const [pinnedCommit, setPinnedCommit] = useState('');
+
+  useEffect(() => {
+    systemApi.getConfig()
+      .then((cfg: any) => setPlatformNodeBuildDefault(cfg?.NODE_LOCAL_BUILD_DEFAULT === true))
+      .catch(() => setPlatformNodeBuildDefault(false));
+  }, []);
 
   useEffect(() => {
     if (!repositoryUrl) return;
@@ -117,6 +128,7 @@ export function BuildTab({ service }: BuildTabProps) {
         deploy_mode: deployMode,
         watch_paths: watchPaths.split('\n').map(s => s.trim()).filter(Boolean),
         bot_pr_strategy: botPrStrategy as 'DEPLOY' | 'SKIP' | 'COMMENT_ONLY',
+        node_local_build: nodeLocalBuild === 'inherit' ? null : nodeLocalBuild === 'node',
       });
       toast({
         title: "Build settings updated",
@@ -300,6 +312,24 @@ export function BuildTab({ service }: BuildTabProps) {
             <p className="text-xs text-muted-foreground">
               For monorepos, set this to the subdirectory containing your app (e.g. <code>/backend</code>).
               The build will run from this directory.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="node-local-build">Build Location</Label>
+            <select
+              id="node-local-build"
+              value={nodeLocalBuild}
+              onChange={(e) => setNodeLocalBuild(e.target.value as 'inherit' | 'node' | 'master')}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <option value="inherit">Inherit platform default (currently {platformNodeBuildDefault ? 'on-node' : 'on master'})</option>
+              <option value="node">Build on target node</option>
+              <option value="master">Build on master</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              On-node builds clone and build on the target node — no master build/push/pull round-trip.
+              Applies to GIT services on full remote nodes; lite agents always build on master.
             </p>
           </div>
 

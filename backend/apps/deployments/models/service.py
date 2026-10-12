@@ -374,6 +374,14 @@ class Service(TimeStampedModel):
                   "forces the full review path, empty inherits the platform-wide "
                   "fast_deploy_default.",
     )
+    node_local_build = models.BooleanField(  # type: ignore[var-annotated]
+        null=True, blank=True, default=None,
+        help_text="Per-service node-local build override: True clones and "
+                  "builds on the target node (no master build/push/pull "
+                  "round-trip), False always builds on master, empty inherits "
+                  "the platform-wide node_local_build_default. Only applies "
+                  "to GIT services on full remote nodes.",
+    )
     preview_environments_enabled = models.BooleanField(default=True)  # type: ignore[var-annotated]
     auto_create_preview_on_branch_push = models.BooleanField(default=False)  # type: ignore[var-annotated]
     MIGRATION_AUTO_APPROVAL_CHOICES = [('NEVER', 'Never'), ('LOW_RISK_ONLY', 'Low Risk Only'), ('LOW_AND_MEDIUM', 'Low and Medium'), ('ALWAYS_REQUIRE_MANUAL', 'Always Require Manual')]

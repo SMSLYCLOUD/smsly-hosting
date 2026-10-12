@@ -731,6 +731,13 @@ class PlatformConfig(models.Model):
         help_text="Platform-wide fast deploy default: skip AI analysis and review "
                   "gates, deploy straight to live. Per-service fast_deploy_enabled "
                   "overrides this (True forces on, False forces off, empty inherits).")
+    node_local_build_default = models.BooleanField(
+        default=False,
+        help_text="Platform-wide node-local build default: GIT services on full "
+                  "remote nodes clone and build on the node itself instead of "
+                  "building on master and pushing/pulling the image. Per-service "
+                  "node_local_build overrides this (True forces on, False forces "
+                  "off, empty inherits).")
 
     # ── Blue-Green Rollback ─────────────────────────────────────────────
     rollback_grace_minutes = models.PositiveIntegerField(

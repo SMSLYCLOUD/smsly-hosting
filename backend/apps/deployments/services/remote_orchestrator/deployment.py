@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 class DeploymentMixin:
     def trigger_deploy(self, deployment, remote_service_id, skip_review=False, image_name=None,
-                         fast_deploy=False):
+                         fast_deploy=False, node_build=False):
         path = f"/api/v1/services/{remote_service_id}/deploy/"
         config = PlatformConfig.load()
         ref = deployment.commit_hash or "HEAD"
@@ -20,7 +20,24 @@ class DeploymentMixin:
             "source_node": config.server_ip or "controller",
             "skip_review": skip_review,
             "fast_deploy": fast_deploy,
+            "node_build": bool(node_build),
         }
+        if node_build:
+            # Node-local build: the node clones + builds itself, so the
+            # master ships the owner's GitHub token transiently (same
+            # HMAC+TLS channel and never-log handling as the vault
+            # token). The node stores it on the deployment metadata
+            # only, never in logs.
+            try:
+                from apps.deployments.services.builders import (
+                    get_github_access_token_for_service,
+                )
+                _gtok = get_github_access_token_for_service(
+                    getattr(deployment, "service", None))
+                if _gtok:
+                    payload["github_token"] = _gtok
+            except Exception as exc:
+                logger.debug("Remote trigger github token skipped: %s", exc)
         # Ship the master-resolved project bridge: the node has no scope
         # rows, so without this every node deploy lands on flat smsly-net
         # and loses project isolation (internal IP/DNS/egress scoping).

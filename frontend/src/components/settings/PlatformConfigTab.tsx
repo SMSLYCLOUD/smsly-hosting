@@ -180,6 +180,34 @@ export function PlatformConfigTab() {
         </Card>
       </ScrollReveal>
 
+      {/* Node-Local Builds — slideRight */}
+      <ScrollReveal variant="slideRight" delay={0.185}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">Node-Local Builds</CardTitle>
+            <CardDescription>Clone and build GIT services on the target node instead of building on master and pushing/pulling the image. Per-service overrides live on the service&apos;s Build tab.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <Switch checked={!!config.NODE_LOCAL_BUILD_DEFAULT} onCheckedChange={(v) => setConfig({ ...config, NODE_LOCAL_BUILD_DEFAULT: v })} />
+                <Label className="text-sm">Build on target node by default</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">Applies to GIT services on full remote nodes only — lite agents and prebuilt images always use the master path. Services set to &quot;Build on master&quot; ignore this.</p>
+              <div className="flex justify-end">
+                <Button onClick={async () => {
+                  try {
+                    const result = await systemApi.updateConfig({ NODE_LOCAL_BUILD_DEFAULT: config.NODE_LOCAL_BUILD_DEFAULT });
+                    setConfig(result);
+                    toast({ title: "Saved", description: "Node-local build default updated." });
+                  } catch { toast({ title: "Failed", variant: "destructive" }); }
+                }}>Save Node Builds</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </ScrollReveal>
+
       {/* Retention Hygiene — env-driven, read-only */}
       <ScrollReveal variant="slideRight" delay={0.185}>
         <Card>

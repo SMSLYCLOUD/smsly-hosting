@@ -155,6 +155,80 @@ def _before_retry(retry_state):
         prune_buildkit_cache()
 
 
+def _deployment_github_token(deployment) -> str | None:
+    """Transient clone token shipped by the master for node-local builds.
+
+    The master resolves the owner's GitHub token at trigger time and
+    stores it on the deployment metadata (same HMAC+TLS channel and
+    never-log handling as the vault token). Returns None when absent
+    so callers fall back to the owner's linked token. Never raises.
+    """
+    try:
+        meta = getattr(deployment, "metadata", None) or {}
+        if not isinstance(meta, dict):
+            return None
+        token = str(meta.get("github_token") or "").strip()
+        return token or None
+    except Exception:
+        return None
+
+
+def get_github_access_token_for_service(service) -> str | None:
+    """Module-level owner-OAuth lookup shared by builders and triggers.
+
+    Extracted from BuildManager._get_github_access_token so the remote
+    deploy trigger can resolve the same token without a builder
+    instance. Never raises; None means "no linked token".
+    """
+    try:
+        user = getattr(service, "owner", None)
+        if not user:
+            return None
+        try:
+            from allauth.socialaccount.models import SocialAccount, SocialToken
+        except Exception:
+            return None
+
+        account = (
+            SocialAccount.objects.filter(user=user, provider="github")
+            .order_by("-id")
+            .first()
+        )
+        if not account:
+            return None
+
+        token_obj = (
+            SocialToken.objects.filter(account=account)
+            .order_by("-id")
+            .first()
+        )
+        if not token_obj or not token_obj.token:
+            return None
+
+        # Check if token is expired and attempt refresh
+        if token_obj.expires_at:
+            from django.utils import timezone
+            if token_obj.expires_at <= timezone.now():
+                logger.info("GitHub token expired for user %s, attempting refresh", user)
+                try:
+                    from apps.deployments.views.github import _refresh_github_token
+                    refreshed = _refresh_github_token(token_obj)
+                    if not refreshed:
+                        logger.warning(
+                            "GitHub token refresh failed for user %s — "
+                            "user may need to reconnect GitHub", user
+                        )
+                        return None
+                    logger.info("GitHub token refreshed successfully for deployment")
+                except Exception as exc:
+                    logger.error("GitHub token refresh error: %s", exc)
+                    return None
+
+        return token_obj.token
+    except Exception:
+        return None
+
+
 class BuildManager:
     """
     Manages the build process (Code -> Docker Image).
@@ -562,51 +636,10 @@ class BuildManager:
         Checks token expiration and refreshes if needed. This relies on
         django-allauth storing social tokens.
         """
-        user = getattr(self.service, "owner", None)
-        if not user:
-            return None
-
-        try:
-            from allauth.socialaccount.models import SocialAccount, SocialToken
-        except Exception:
-            return None
-
-        account = (
-            SocialAccount.objects.filter(user=user, provider="github")
-            .order_by("-id")
-            .first()
-        )
-        if not account:
-            return None
-
-        token_obj = (
-            SocialToken.objects.filter(account=account)
-            .order_by("-id")
-            .first()
-        )
-        if not token_obj or not token_obj.token:
-            return None
-
-        # Check if token is expired and attempt refresh
-        if token_obj.expires_at:
-            from django.utils import timezone
-            if token_obj.expires_at <= timezone.now():
-                logger.info("GitHub token expired for user %s, attempting refresh", user)
-                try:
-                    from apps.deployments.views.github import _refresh_github_token
-                    refreshed = _refresh_github_token(token_obj)
-                    if not refreshed:
-                        logger.warning(
-                            "GitHub token refresh failed for user %s — "
-                            "user may need to reconnect GitHub", user
-                        )
-                        return None
-                    logger.info("GitHub token refreshed successfully for deployment")
-                except Exception as exc:
-                    logger.error("GitHub token refresh error: %s", exc)
-                    return None
-
-        return token_obj.token
+        shipped = _deployment_github_token(getattr(self, "deployment", None))
+        if shipped:
+            return shipped
+        return get_github_access_token_for_service(self.service)
 
     def _clone_github_repo_with_token(self, repo_url: str, branch: str, token: str) -> None:
         """

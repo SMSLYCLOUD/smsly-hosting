@@ -220,6 +220,29 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 return
 
             if service.deploy_type == 'GIT' and not str(service.docker_image or "").strip():
+                from apps.deployments.tasks.tasks_utils import (
+                    resolve_node_local_build,
+                )
+                _node_build = (
+                    resolve_node_local_build(service)
+                    and not getattr(effective_server, 'is_lite_agent', False)
+                )
+                if _node_build:
+                    # Node-local build: skip the master clone/build/push
+                    # entirely — the node clones + builds itself (token +
+                    # flag ship in the trigger). No image_name means the
+                    # node runs its own build phase instead of pull + run.
+                    append_log(
+                        deployment,
+                        "Node-local build enabled — cloning and building "
+                        f"on {effective_server.name} instead of master.\n",
+                    )
+                    _handle_remote_deployment(
+                        deployment, effective_server,
+                        skip_review=skip_review, image_name=None,
+                        fast_deploy=fast_deploy, node_build=True,
+                    )
+                    return
                 with fleet_build_lock(deployment):
                     pipeline = PipelineManager(
                         deployment,
@@ -355,6 +378,25 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
             prebuilt = str(service.docker_image or "").strip()
             if prebuilt and deployment.source_node:
                 built_image = prebuilt
+            elif service.deploy_type == 'GIT' and not prebuilt:
+                from apps.deployments.tasks.tasks_utils import (
+                    resolve_node_local_build,
+                )
+                if (resolve_node_local_build(service)
+                        and not getattr(effective_server, 'is_lite_agent', False)):
+                    append_log(
+                        deployment,
+                        "Node-local build enabled — cloning and building "
+                        f"on {effective_server.name} instead of master.\n",
+                    )
+                    _handle_remote_deployment(
+                        deployment, effective_server, image_name=None,
+                        node_build=True,
+                    )
+                    return
+                with fleet_build_lock(deployment):
+                    manager = PipelineManager(deployment)
+                    built_image = manager.run_build_only()
             else:
                 with fleet_build_lock(deployment):
                     manager = PipelineManager(deployment)

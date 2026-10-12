@@ -386,6 +386,7 @@ export interface Service {
   addon_placement?: 'AUTO' | 'MASTER' | 'NODE';
   waf_opt_out?: boolean;
   fast_deploy_enabled?: boolean | null; // null = inherit platform default
+  node_local_build?: boolean | null; // null = inherit platform default
   buildpack?: 'NIXPACKS' | 'DOCKER' | 'STATIC';
   root_directory?: string;
   build_command?: string;

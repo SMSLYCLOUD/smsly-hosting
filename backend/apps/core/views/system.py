@@ -204,6 +204,10 @@ class SystemConfigView(GenericAPIView):
             # banner needs the kill-switch + items). Fail-closed: banner
             # hidden when the row/columns are missing (migration pending).
             **self._get_public_promos(),
+            # Node-local build default: readable by every authenticated
+            # user so service pages can show the inherited effective
+            # value. Fail-closed: master build when unreadable.
+            **self._get_public_build_flags(),
         }
 
         if not request.user.is_superuser:
@@ -345,6 +349,8 @@ class SystemConfigView(GenericAPIView):
         'PROMOS_ENABLED': ('promos_enabled', bool),
         'PROMOS_ROTATE_SECONDS': ('promos_rotate_seconds', int),
         'PROMOS_ITEMS': ('promos_items', 'json'),
+        # Node-local builds (admin writes; public read below, fail-closed)
+        'NODE_LOCAL_BUILD_DEFAULT': ('node_local_build_default', bool),
     }
 
     _PC_SECRET_FIELDS = {'SMTP_PASSWORD', 'SMSLY_INTERNAL_API_KEY', 'REGISTRY_PASSWORD'}
@@ -369,6 +375,22 @@ class SystemConfigView(GenericAPIView):
         except Exception as exc:
             logger.debug("Promo config unavailable (fail-closed, hidden): %s", exc)
             return {'PROMOS_ENABLED': False, 'PROMOS_ITEMS': [], 'PROMOS_ROTATE_SECONDS': 8}
+
+    def _get_public_build_flags(self):
+        """Node-local build default for every authenticated user.
+
+        Fail-closed: any error (migration pending, ghost row) returns
+        disabled so deploys keep the proven master-build path.
+        """
+        try:
+            pc, _ = PlatformConfig.objects.get_or_create(pk=1)
+            return {
+                'NODE_LOCAL_BUILD_DEFAULT': bool(
+                    getattr(pc, 'node_local_build_default', False)),
+            }
+        except Exception as exc:
+            logger.debug("Node-local build flag unavailable (fail-closed, off): %s", exc)
+            return {'NODE_LOCAL_BUILD_DEFAULT': False}
 
     def _get_platform_config(self):
         pc, _ = PlatformConfig.objects.get_or_create(pk=1)

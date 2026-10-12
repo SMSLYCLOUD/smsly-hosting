@@ -557,6 +557,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'regions', 'primary_region',
             'safedeploy_enabled', 'preview_environments_enabled',
             'fast_deploy_enabled',
+            'node_local_build',
             'auto_create_preview_on_branch_push',
             'migration_auto_approval_policy', 'production_requires_backup',
             'auto_rollback_enabled', 'auto_rollback_threshold',

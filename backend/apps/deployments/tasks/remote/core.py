@@ -139,12 +139,13 @@ def _remote_deploy_failed(deployment, orchestrator, fallback_msg, stage):
     _handle_failure(None, deployment, _remote_failure_message(orchestrator, fallback_msg), stage)
 
 def _handle_remote_deployment(deployment, server, skip_review: bool = False, image_name: str | None = None,
-                              fast_deploy: bool = False):
+                              fast_deploy: bool = False, node_build: bool = False):
     """Delegate deployment to a remote server and poll for status.
 
     When ``image_name`` is provided (master pre-built and pushed the image),
     it is forwarded to the remote so that node can skip its own build phase
-    and go straight to pull + run (build-agent optimization).
+    and go straight to pull + run (build-agent optimization). When
+    ``node_build`` is True (and no image), the node clones + builds itself.
     """
     from apps.deployments.services.server_guard import ServerGuard
     from apps.deployments.tasks.deploy.helpers import _abort_if_cancelled
@@ -237,7 +238,7 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
 
     remote_dep_id = orchestrator.trigger_deploy(
         deployment, remote_svc_id, skip_review=skip_review, image_name=image_name,
-        fast_deploy=fast_deploy,
+        fast_deploy=fast_deploy, node_build=node_build,
     )
     if not remote_dep_id:
         _remote_deploy_failed(
