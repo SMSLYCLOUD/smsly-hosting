@@ -246,14 +246,31 @@ def ensure_node_registry(server: ManagedServer, project=None) -> dict:
                     result["error"] = "CA reinstall failed"
                     return result
                 result["repaired"].append("registry-ca")
-            if _docker_login_all(ssh, server, project=project):
+            login_ok, login_auth_failed = _docker_login_all(
+                ssh, server, project=project)
+            if login_ok:
                 result["ok"] = True
                 if "registry-ca" in result["repaired"]:
                     result["repaired"].append("registry-login")
                 else:
                     result["repaired"].append("registry-login-refresh")
             else:
-                result["error"] = "registry login failed"
+                # Password drift (master rotated, node htpasswd stale) is
+                # the classic persistent cause: resync the node's htpasswd
+                # from PlatformConfig once, then retry a single time.
+                # Transient failures (timeouts) skip the resync — it
+                # restarts the node registry (~10s pull outage).
+                if login_auth_failed and _resync_node_htpasswd(ssh):
+                    result["repaired"].append("registry-htpasswd-resync")
+                    retry_ok, _ = _docker_login_all(
+                        ssh, server, project=project)
+                    if retry_ok:
+                        result["ok"] = True
+                        result["repaired"].append("registry-login")
+                    else:
+                        result["error"] = "registry login failed"
+                else:
+                    result["error"] = "registry login failed"
         finally:
             ssh.close()
     except Exception as exc:
@@ -261,20 +278,23 @@ def ensure_node_registry(server: ManagedServer, project=None) -> dict:
         _logger.debug("ensure_node_registry failed for %s: %s",
                       getattr(server, "name", "?"), exc)
     return result
-def _docker_login_all(ssh, server: ManagedServer, project=None) -> bool:
+def _docker_login_all(ssh, server: ManagedServer, project=None) -> tuple:
     """docker login on the node without leaking passwords.
 
     The SSH wrapper returns ``(out, err, code)`` tuples (no stdin
     channel), so the password travels inside a base64 pipe evaluated
     on the NODE. Logs only outcomes, never secrets.
     *project* scopes an additional per-project login for pulls of
-    project-scoped images. Returns True when every registry login
-    succeeded, False otherwise.
+    project-scoped images. Returns ``(all_ok, auth_failed)`` — the
+    second flag is True when at least one login was rejected on
+    credentials (vs timeouts), so callers can attempt an htpasswd
+    resync instead of retrying blindly.
     """
     import base64 as _b64
     import logging as _logging
     _logger = _logging.getLogger(__name__)
     all_ok = True
+    auth_failed = False
     for url, user, pwd in _registry_credential_list(server, project=project):
         try:
             import shlex as _shlex
@@ -287,15 +307,84 @@ def _docker_login_all(ssh, server: ManagedServer, project=None) -> bool:
             if code == 0:
                 _logger.info("Node docker login succeeded for %s", url)
             else:
+                detail = ((err or out) or "").strip()[:200]
                 _logger.error(
                     "Node docker login FAILED for registry %s (exit %s)%s",
-                    url, code, f": {(err or out).strip()[:200]}" if (err or out) else "",
+                    url, code, f": {detail}" if detail else "",
                 )
                 all_ok = False
+                lowered = detail.lower()
+                if any(s in lowered for s in (
+                        "denied", "unauthorized", "401",
+                        "authentication failure", "incorrect username")):
+                    auth_failed = True
         except Exception as exc:
             _logger.error("Node docker login failed for registry %s: %s", url, exc)
             all_ok = False
-    return all_ok
+    return all_ok, auth_failed
+
+
+def _resync_node_htpasswd(ssh) -> bool:
+    """Rewrite the node's registry htpasswd from PlatformConfig (hash-only).
+
+    Password drift (master rotated or re-seeded, node file stale) makes
+    every node pull 401 forever; the login step alone can never heal
+    it. Only the bcrypt HASH crosses SSH (base64 pipe, same convention
+    as logins) — never plaintext. Restarts the node registry so the
+    new file takes effect. Best-effort: False keeps the old error.
+    """
+    import base64 as _b64
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        user = (PlatformConfig.get_config_value("registry_user")
+                or "smsly-registry").strip()
+        pwd = (PlatformConfig.get_config_value("registry_password")
+               or "").strip()
+        if not user or not pwd:
+            return False
+        from apps.deployments.services.registry_credentials import (
+            _bcrypt_hash,
+        )
+        hashed = _bcrypt_hash(pwd)
+        if not hashed:
+            _logger.warning("Node htpasswd resync skipped (no bcrypt backend)")
+            return False
+        import shlex as _shlex
+        line = f"{user}:{hashed}"
+        base64_line = _b64.b64encode(line.encode("utf-8")).decode("ascii")
+        out, err, code = ssh.exec_command(
+            f"echo {base64_line} | base64 -d > /tmp/htpasswd.smsly-new && "
+            f"sudo cp /opt/smsly-hosting/auth/htpasswd "
+            f"/opt/smsly-hosting/auth/htpasswd.bak.smsly 2>/dev/null; "
+            f"sudo sh -c 'grep -v \"^{_shlex.quote(user)}:\" "
+            f"/opt/smsly-hosting/auth/htpasswd > /tmp/htpasswd.smsly-merged; "
+            f"cat /tmp/htpasswd.smsly-new >> /tmp/htpasswd.smsly-merged && "
+            f"cat /tmp/htpasswd.smsly-merged > /opt/smsly-hosting/auth/htpasswd' && "
+            f"sudo chmod 644 /opt/smsly-hosting/auth/htpasswd && "
+            f"rm -f /tmp/htpasswd.smsly-new /tmp/htpasswd.smsly-merged && echo RESYNCED",
+            timeout=90,
+        )
+        if code != 0 or "RESYNCED" not in (out or ""):
+            _logger.warning("Node htpasswd resync failed: %s",
+                            ((err or out) or "")[:200])
+            return False
+        out2, _, _ = ssh.exec_command(
+            "docker restart smsly-hosting-registry-1 2>&1; sleep 12; "
+            "docker inspect smsly-hosting-registry-1 --format "
+            "'{{.State.Status}}' 2>&1",
+            timeout=120,
+        )
+        if "running" not in (out2 or "").lower():
+            _logger.warning("Node registry did not return to running: %s",
+                            (out2 or "")[:200])
+            return False
+        _logger.info("Node registry htpasswd resynced + registry restarted")
+        return True
+    except Exception as exc:
+        _logger.warning("Node htpasswd resync skipped: %s", exc)
+        return False
 
 
 def _registry_login_commands(server: ManagedServer, project=None) -> str:

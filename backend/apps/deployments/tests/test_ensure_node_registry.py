@@ -6,12 +6,13 @@ from django.test import SimpleTestCase
 from apps.deployments.services.provisioner.helpers import registry as reg
 
 
-def _ssh_ca(status, login_code=0):
+def _ssh_ca(status, login_code=0, login_text=None):
     ssh = mock.Mock()
+    denied_text = login_text if login_text is not None else "denied"
     responses = {
         "test -s": ("CA-OK\n" if status == "ok" else "\n", "", 0),
-        "docker login": ("Login Succeeded\n" if login_code == 0 else "denied\n",
-                         "" if login_code == 0 else "denied", login_code),
+        "docker login": ("Login Succeeded\n" if login_code == 0 else denied_text + "\n",
+                         "" if login_code == 0 else denied_text, login_code),
     }
 
     def _exec(cmd, timeout=None):
@@ -77,7 +78,40 @@ class EnsureNodeRegistryTests(SimpleTestCase):
              mock.patch("apps.deployments.services.ssh_client.SSHClient",
                         return_value=ssh), \
              mock.patch.object(reg, "_registry_credential_list",
-                               return_value=[("10.100.0.1:5000", "u", "p")]):
+                               return_value=[("10.100.0.1:5000", "u", "p")]), \
+             mock.patch.object(reg, "_resync_node_htpasswd",
+                               return_value=False):
             result = reg.ensure_node_registry(self._server())
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "registry login failed")
+
+    def test_auth_failure_resyncs_htpasswd_and_retries(self):
+        ssh = _ssh_ca("ok", login_code=1)
+        with mock.patch("apps.deployments.services.registry_routing.master_registry_node_url",
+                               return_value="10.100.0.1:5000"), \
+             mock.patch("apps.deployments.services.ssh_client.SSHClient",
+                        return_value=ssh), \
+             mock.patch.object(reg, "_registry_credential_list",
+                               return_value=[("10.100.0.1:5000", "u", "p")]), \
+             mock.patch.object(reg, "_resync_node_htpasswd",
+                               return_value=True) as resync:
+            result = reg.ensure_node_registry(self._server())
+        resync.assert_called_once()
+        self.assertFalse(result["ok"])
+        self.assertIn("registry-htpasswd-resync", result["repaired"])
+        self.assertEqual(result["error"], "registry login failed")
+
+    def test_transient_failure_skips_htpasswd_resync(self):
+        ssh = _ssh_ca("ok", login_code=1,
+                      login_text="net/http: TLS handshake timeout")
+        with mock.patch("apps.deployments.services.registry_routing.master_registry_node_url",
+                               return_value="10.100.0.1:5000"), \
+             mock.patch("apps.deployments.services.ssh_client.SSHClient",
+                        return_value=ssh), \
+             mock.patch.object(reg, "_registry_credential_list",
+                               return_value=[("10.100.0.1:5000", "u", "p")]), \
+             mock.patch.object(reg, "_resync_node_htpasswd") as resync:
+            result = reg.ensure_node_registry(self._server())
+        resync.assert_not_called()
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "registry login failed")
