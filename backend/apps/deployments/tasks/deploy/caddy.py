@@ -213,6 +213,40 @@ def push_caddy_to_node(server_id: str) -> dict:
         ssh.close()
 
 
+def _node_live_caddy_matches(node, want_hash: str) -> bool:
+    """True when the node's live Caddyfile hashes to ``want_hash``.
+
+    Fail-open: any SSH/read error returns True (trust the stamp) so a
+    monitoring hiccup can never trigger a push storm. Never raises.
+    """
+    try:
+        from apps.deployments.services.ssh_client import SSHClient
+        ssh = SSHClient(
+            ip=node.host,
+            key_content=node.ssh_key,
+            key_passphrase=node.ssh_key_passphrase,
+            password=node.ssh_password,
+            user=node.ssh_user,
+            port=node.ssh_port,
+            wg_address=node.wg_address,
+        )
+        ssh.connect()
+        try:
+            out, _, _ = ssh.exec_command(
+                "sha256sum /opt/smsly-hosting/infrastructure/docker/Caddyfile.node "
+                "2>/dev/null | awk '{print $1}'",
+                timeout=30,
+                raise_on_error=False,
+            )
+        finally:
+            ssh.close()
+        live = (out or "").strip().split()[0] if (out or "").strip() else ""
+        return bool(live) and live == want_hash
+    except Exception as exc:
+        logger.debug("reconcile_node_caddyfiles: live check failed: %s", exc)
+        return True
+
+
 @shared_task(
     soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
     time_limit=TASK_TIME_LIMIT_MEDIUM[1],
@@ -228,10 +262,24 @@ def reconcile_node_caddyfiles_task() -> dict:
     on drift (or when never stamped). OFFLINE nodes are skipped (a push
     cannot succeed); empty content is never pushed. Never raises —
     per-node failures are reported, not fatal.
+
+    Single-writer rule: the MASTER owns fanout. Node-local beats must
+    NOT run this task — a node regenerating from its own (possibly
+    older) code would clobber the master's push and the stamp would
+    keep matching, hiding the drift forever (2026-10-13: node served
+    a pre-WAF-exemption Caddyfile while master reported converged).
+
+    The stamp alone is not trusted either: when it matches, the live
+    node file hash is read back over SSH and a mismatch still pushes.
     """
+    import os as _os
+
     from apps.deployments.models.core import ManagedServer
     report: dict = {"pushed": [], "converged": [], "skipped": [], "failed": []}
     try:
+        if str(_os.environ.get("INSTALL_MODE", "") or "").strip().lower() == "node":
+            report["skipped"].append("non-master host (master owns fanout)")
+            return {"status": "ok", **report}
         nodes = ManagedServer.objects.filter(is_primary=False, is_lite_agent=False)
     except Exception as exc:
         logger.warning("reconcile_node_caddyfiles: node query failed: %s", exc)
@@ -257,8 +305,13 @@ def reconcile_node_caddyfiles_task() -> dict:
             except Exception:
                 have = ""
             if have and have == want:
-                report["converged"].append(name)
-                continue
+                if _node_live_caddy_matches(node, want):
+                    report["converged"].append(name)
+                    continue
+                logger.warning(
+                    "reconcile_node_caddyfiles: %s stamp matches but live "
+                    "content differs — re-pushing", name,
+                )
             result = push_caddy_to_node(str(node.id))
             if result.get("ok"):
                 report["pushed"].append(name)

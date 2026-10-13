@@ -58,6 +58,7 @@ class ReconcileCaddyTaskTests(TestCase):
         return caddy_tasks.reconcile_node_caddyfiles_task()
 
     def test_converged_skips_push(self):
+        import apps.deployments.tasks.deploy.caddy as caddy_tasks
         content = "same\n"
         node = _node(self.user)
         node.provider_metadata = {
@@ -67,6 +68,8 @@ class ReconcileCaddyTaskTests(TestCase):
         with patch(
             "apps.deployments.services.caddy_manager.config_generation.generate_node_caddyfile",
             return_value=content,
+        ), patch.object(
+            caddy_tasks, "_node_live_caddy_matches", return_value=True,
         ), patch(
             "apps.deployments.tasks.deploy.caddy.push_caddy_to_node",
         ) as mock_push:
@@ -112,3 +115,47 @@ class ReconcileCaddyTaskTests(TestCase):
             report = self._run()
         self.assertEqual(report["status"], "ok")
         self.assertTrue(any(node.name in f for f in report["failed"]))
+
+    def test_stamp_match_but_live_differs_pushes(self):
+        import apps.deployments.tasks.deploy.caddy as caddy_tasks
+        content = "same\n"
+        node = _node(self.user, name="caddy-node-clobbered")
+        node.provider_metadata = {
+            "caddy_config_sha256": hashlib.sha256(content.encode()).hexdigest(),
+        }
+        node.save(update_fields=["provider_metadata"])
+        with patch(
+            "apps.deployments.services.caddy_manager.config_generation.generate_node_caddyfile",
+            return_value=content,
+        ), patch.object(
+            caddy_tasks, "_node_live_caddy_matches", return_value=False,
+        ), patch(
+            "apps.deployments.tasks.deploy.caddy.push_caddy_to_node",
+            return_value={"ok": True},
+        ) as mock_push:
+            report = self._run()
+        mock_push.assert_called_once_with(str(node.id))
+        self.assertIn(node.name, report["pushed"])
+
+    def test_node_host_skips_fanout(self):
+        import os
+        node = _node(self.user, name="caddy-node-onnode")
+        with patch.dict(os.environ, {"INSTALL_MODE": "node"}), patch(
+            "apps.deployments.services.caddy_manager.config_generation.generate_node_caddyfile",
+        ) as mock_gen, patch(
+            "apps.deployments.tasks.deploy.caddy.push_caddy_to_node",
+        ) as mock_push:
+            report = self._run()
+        mock_gen.assert_not_called()
+        mock_push.assert_not_called()
+        self.assertTrue(any("non-master" in s for s in report["skipped"]))
+
+    def test_live_check_fail_open(self):
+        import apps.deployments.tasks.deploy.caddy as caddy_tasks
+        node = _node(self.user, name="caddy-node-unreachable")
+        with patch(
+            "apps.deployments.services.ssh_client.SSHClient",
+            side_effect=Exception("ssh down"),
+        ):
+            self.assertTrue(
+                caddy_tasks._node_live_caddy_matches(node, "abc"))
