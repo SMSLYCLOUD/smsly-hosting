@@ -40,6 +40,17 @@ CORAZA_SNIPPET = """(coraza_waf) {
             Include @crs-setup.conf.example
             Include @owasp_crs/*.conf
             SecRuleEngine On
+            # Platform inter-server sync bypass: master<->node control
+            # traffic (service sync, deploy triggers, heartbeats) carries
+            # X-SMSLY-Remote-Sync and is HMAC-authenticated downstream in
+            # Django. CRS method-enforcement (e.g. PATCH) and anomaly
+            # scoring otherwise 403 every node sync with an empty body,
+            # breaking all remote deploys (2026-10-13: 949110 on PATCH
+            # /api/v1/services/<uuid>/). WAF is not an auth boundary —
+            # the header alone grants nothing without the gateway secret
+            # (verified per-request in RemoteSyncHMACAuthentication), and
+            # the direct mesh :8000 path never traverses WAF anyway.
+            SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync "@streq 1" "id:1000001,phase:1,pass,nolog,ctl:ruleEngine=Off"
         `
     }
 }"""

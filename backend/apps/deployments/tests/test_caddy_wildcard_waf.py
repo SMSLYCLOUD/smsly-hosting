@@ -41,6 +41,12 @@ class WildcardWafTests(TestCase):
         self.assertIn("Include @owasp_crs/*.conf", cg.CORAZA_SNIPPET)
         self.assertIn("SecRuleEngine On", cg.CORAZA_SNIPPET)
 
+    def test_coraza_snippet_bypasses_platform_sync(self):
+        # Inter-server sync (HMAC-authed downstream) must not be
+        # CRS-blocked: 949110 killed every node PATCH with empty 403.
+        self.assertIn("X-SMSLY-Remote-Sync", cg.CORAZA_SNIPPET)
+        self.assertIn("ctl:ruleEngine=Off", cg.CORAZA_SNIPPET)
+
     def test_node_caddyfile_carries_waf(self):
         import inspect
         src = inspect.getsource(cg.generate_node_caddyfile)
