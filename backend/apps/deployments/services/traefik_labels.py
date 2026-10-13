@@ -37,13 +37,18 @@ def sablier_retry_labels(router_name: str) -> dict[str, str]:
     DownstreamStatus=OriginStatus=500 with ServiceAddr empty). The
     retry re-runs the remainder of the chain after refresh lands.
 
-    Tradeoff: a genuine app-level 500 also retries (attempts=3), so a
-    non-idempotent request can execute twice. Scoped to sablier
-    routers only, where the alternative is a guaranteed failed wake.
+    NOTE: plain attempts/initialinterval alone do NOT retry the 500 —
+    Traefik only retries unanswered requests by default. The explicit
+    ``status: 500-599`` is what covers the empty-URL race. Non-
+    idempotent methods (POST/PATCH/LOCK) are still never retried
+    (retryNonIdempotentMethod defaults off), bounding duplication
+    risk to idempotent requests against a backend that never saw
+    the first attempt anyway.
     """
     return {
         f"traefik.http.middlewares.{router_name}-wakeretry.retry.attempts": "3",
         f"traefik.http.middlewares.{router_name}-wakeretry.retry.initialinterval": "1s",
+        f"traefik.http.middlewares.{router_name}-wakeretry.retry.status": "500-599",
     }
 
 

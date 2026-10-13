@@ -66,6 +66,9 @@ class SablierWakeRetryTests(SimpleTestCase):
         self.assertEqual(
             labels["traefik.http.middlewares.myapp-wakeretry.retry.initialinterval"],
             "1s")
+        self.assertEqual(
+            labels["traefik.http.middlewares.myapp-wakeretry.retry.status"],
+            "500-599")
         self.assertEqual(sablier_retry_ref("myapp"), "myapp-wakeretry")
 
     def test_generate_labels_chains_retry_before_sablier(self):
