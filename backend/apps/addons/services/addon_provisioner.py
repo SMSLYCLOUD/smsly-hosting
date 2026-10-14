@@ -260,7 +260,29 @@ class AddonProvisioner:
             project = getattr(addon.service, 'project', None)
             if not project:
                 return False
-            network_name = _Net.resolve_network_name(project)
+            # Nodes carry no scope rows: local resolution falls back to
+            # flat smsly-net while the service itself runs on the
+            # master-shipped bridge from deployment metadata (2026-10-15:
+            # marketer service on smsly-net-9da4e64b, addons left on
+            # smsly-net, connectivity gate failed). Prefer the shipped
+            # name exactly like _scoped_network_for does.
+            network_name = ""
+            try:
+                from apps.deployments.models import Deployment as _Dep
+                from apps.deployments.services.network_scope import (
+                    resolve_effective_network_name as _eff_net,
+                )
+                _dep = (
+                    _Dep.objects.filter(service=addon.service)
+                    .order_by('-created_at')
+                    .only('metadata')
+                    .first()
+                )
+                network_name = str(_eff_net(addon.service, _dep) or "")
+            except Exception:
+                network_name = ""
+            if not network_name:
+                network_name = _Net.resolve_network_name(project)
             if not network_name or network_name == self.network_name:
                 return False
             # Alias MUST match the hostname apps actually dial — the
