@@ -258,12 +258,13 @@ class RemoteSyncHMACAuthentication(BaseAuthentication):
         if not gateway_secret:
             raise AuthenticationFailed("Remote sync gateway secret is not configured.")
 
-        # SECURITY (Batch G): nonce replay protection.
+        # SECURITY (Batch G): nonce replay protection. Each nonce is one-use within
+        # the freshness window. The nonce is recorded atomically with
+        # cache.add (set-if-absent) AFTER the signature verifies: marking
+        # it before verification burns nonces on failed attempts and turns
+        # every client retry into a false replay rejection.
         from django.core.cache import cache
         nonce_key = f"remote_sync_nonce:{nonce}"
-        if cache.get(nonce_key):
-            raise AuthenticationFailed("Remote sync nonce already used.")
-        cache.set(nonce_key, "1", timeout=600)
 
         body_hash = hashlib.sha256(request.body).hexdigest()
         payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{nonce}|{body_hash}"
@@ -275,6 +276,15 @@ class RemoteSyncHMACAuthentication(BaseAuthentication):
 
         if not hmac.compare_digest(expected, signature):
             raise AuthenticationFailed("Invalid remote sync signature.")
+
+        try:
+            already_used = not cache.add(nonce_key, "1", timeout=600)
+        except Exception:
+            # Fail-closed: an unverifiable replay store must not become
+            # an open door. A cache outage fails the request, loudly.
+            raise AuthenticationFailed("Remote sync replay store unavailable.")
+        if already_used:
+            raise AuthenticationFailed("Remote sync nonce already used.")
 
         User = get_user_model()
         admin = User.objects.filter(is_superuser=True, is_active=True).first()

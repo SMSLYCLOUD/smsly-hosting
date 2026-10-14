@@ -104,6 +104,32 @@ class DiagnosticsMixin:
         service_name = getattr(deployment.service, "name", "") if hasattr(deployment, "service") else ""
         container_name = getattr(deployment, "container_id", "") or ""
 
+        # Control-plane failures (master<->node sync, registry login) are
+        # NOT container failures: restarting a healthy container cannot
+        # fix a 403 PATCH, a burned HMAC nonce, or a stale htpasswd
+        # (2026-10-13: marketer sync 403 -> blind restart claimed
+        # SUCCESS then looped). Classify early, suggest no restart.
+        try:
+            _logs = str(getattr(deployment, "build_logs", "") or "")
+            _remote_markers = (
+                "Remote Sync Failure",
+                "Failed to sync service to remote",
+                "Failed to update service on remote",
+                "registry login failed",
+                "Remote sync nonce already used",
+                "Remote request failed for",
+            )
+            if any(m in _logs for m in _remote_markers):
+                result.failure_type = FailureType.REMOTE_CONTROL_PLANE
+                result.error_details = (
+                    "Deployment failed in master<->node control-plane "
+                    "(sync/auth/registry); container restart cannot fix it."
+                )
+                self._log("Remote control-plane failure — no container action")
+                return
+        except Exception:
+            pass
+
         if container_name:
             self._inspect_container(container_name, result)
             self._get_container_logs(container_name, result)

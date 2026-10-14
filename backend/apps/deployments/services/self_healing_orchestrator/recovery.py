@@ -51,7 +51,25 @@ class RecoveryMixin:
             actions = diagnostics.suggested_actions
 
             if not actions:
-                actions = [RecoveryAction.RESTART_CONTAINER]
+                # Never blind-restart: when diagnostics found nothing
+                # (healthy running container, or a control-plane failure
+                # classified above), restarting is cargo-cult that claims
+                # SUCCESS without fixing anything. Escalate instead.
+                from .enums import FailureType as _FT
+                self._log(
+                    "No recovery action indicated "
+                    f"(failure={diagnostics.failure_type.value}); escalating"
+                )
+                return RecoveryResult(
+                    action_taken=RecoveryAction.NONE,
+                    details=(
+                        f"No container action indicated (failure: "
+                        f"{diagnostics.failure_type.value}; "
+                        f"{diagnostics.error_details or 'container healthy or control-plane issue'}). "
+                        "Escalating without restarting."
+                    ),
+                    next_action=RecoveryAction.ESCALATE_TO_AI,
+                )
 
             for action in actions:
                 if attempt > max_attempts:

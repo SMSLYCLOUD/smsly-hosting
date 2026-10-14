@@ -262,15 +262,26 @@ def ensure_node_registry(server: ManagedServer, project=None) -> dict:
                 # restarts the node registry (~10s pull outage).
                 if login_auth_failed and _resync_node_htpasswd(ssh):
                     result["repaired"].append("registry-htpasswd-resync")
-                    retry_ok, _ = _docker_login_all(
+                    retry_ok, retry_auth_failed = _docker_login_all(
                         ssh, server, project=project)
                     if retry_ok:
                         result["ok"] = True
                         result["repaired"].append("registry-login")
                     else:
-                        result["error"] = "registry login failed"
+                        # Surfaced verbatim in deploy logs: keep the
+                        # failing URL + transient/auth distinction so the
+                        # next reader knows whether to wait or rotate.
+                        result["error"] = (
+                            "registry login failed after htpasswd resync "
+                            f"({'auth-rejected' if retry_auth_failed else 'transient/network'}; "
+                            f"node_url={node_url})"
+                        )
                 else:
-                    result["error"] = "registry login failed"
+                    result["error"] = (
+                        "registry login failed "
+                        f"({'auth-rejected' if login_auth_failed else 'transient/network; no resync attempted'}; "
+                        f"node_url={node_url})"
+                    )
         finally:
             ssh.close()
     except Exception as exc:
@@ -315,8 +326,9 @@ def _docker_login_all(ssh, server: ManagedServer, project=None) -> tuple:
                 all_ok = False
                 lowered = detail.lower()
                 if any(s in lowered for s in (
-                        "denied", "unauthorized", "401",
-                        "authentication failure", "incorrect username")):
+                        "denied", "unauthorized", "401", "403",
+                        "forbidden", "authentication failure",
+                        "incorrect username")):
                     auth_failed = True
         except Exception as exc:
             _logger.error("Node docker login failed for registry %s: %s", url, exc)

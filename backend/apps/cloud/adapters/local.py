@@ -1621,7 +1621,7 @@ class LocalAdapter(BaseCloudAdapter):
         try:
             import subprocess as _sp
             ev = _sp.run(
-                ["docker", "events", "--since", "2h", "--until", "1m",
+                ["docker", "events", "--since", "2h",
                  "--filter", "event=die", "--filter", "event=destroy",
                  "--filter", "event=oom", "--format", "{{.Time}} {{.Action}} {{.ActorID}}"],
                 capture_output=True, text=True, timeout=20,

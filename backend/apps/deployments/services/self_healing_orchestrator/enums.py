@@ -13,6 +13,7 @@ class FailureType(Enum):
     PORT_CONFLICT = "port_conflict"
     CONFIG_ERROR = "config_error"
     DEPLOYMENT_TIMEOUT = "deployment_timeout"
+    REMOTE_CONTROL_PLANE = "remote_control_plane"
     UNKNOWN = "unknown"
 
 

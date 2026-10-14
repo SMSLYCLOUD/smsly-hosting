@@ -217,7 +217,7 @@ class RemoteClientMixin:
         return urls
 
     @staticmethod
-    def _filter_reachable(urls: list[str], probe_timeout: float = 1.0) -> list[str]:
+    def _filter_reachable(urls: list[str], probe_timeout: float = 2.0) -> list[str]:
         import socket as sock_module
         reachable: list[str] = []
         for url in urls:
@@ -233,16 +233,22 @@ class RemoteClientMixin:
             except (TimeoutError, OSError):
                 logger.debug("Pre-filter skipped unreachable %s", url)
         if not reachable and urls:
-            logger.warning("All %d candidate URLs unreachable: %s", len(urls), urls[:3])
+            # Fail-closed but try anyway: a 1-2s TCP probe flapping
+            # under load must not become a silent "no response" without
+            # ever attempting a real request (2026-10-13: mesh :8000
+            # passed TCP then hung at TLS; the reverse — probe fails
+            # but the API would answer — must still be attempted).
+            logger.warning("All %d candidate URLs unreachable on probe, trying anyway: %s", len(urls), urls[:3])
+            return list(urls)
         return reachable
 
     @staticmethod
     def _timeout(timeout: int | float | tuple | None):
         if timeout is None:
-            return (5, 20)
+            return (8, 30)
         if isinstance(timeout, tuple):
             return timeout
-        return (5, timeout)
+        return (8, timeout)
 
     def _request(
         self,
@@ -288,7 +294,12 @@ class RemoteClientMixin:
             redirected = False
 
             for index, mode in enumerate(modes):
-                attempts = 2 if method_upper in SAFE_METHODS else 1
+                # Network-exception retries apply to ALL methods (2x): HMAC
+                # headers are minted fresh per attempt (single-use nonce)
+                # and the node apply path is update-only/idempotent, so a
+                # retried PATCH/POST after a lost response cannot double-
+                # apply. Status-based retries stay SAFE_METHODS-only below.
+                attempts = 2
 
                 for attempt in range(attempts):
                     # Headers are minted FRESH per attempt: HMAC carries a
@@ -304,13 +315,20 @@ class RemoteClientMixin:
                     )
                     try:
                         verify_ssl = _should_verify(url)
+                        # Redirects are NEVER followed: the signed path is
+                        # part of the HMAC payload, so following a 301/302/
+                        # 307/308 would re-send the same single-use nonce
+                        # to the new URL and burn it as a replay (notably
+                        # node Caddy :80 308s IP hosts into the https/IP-
+                        # cert dead end). 3xx surfaces below as an explicit
+                        # configuration error instead.
                         response = requests.request(
                             method_upper,
                             url,
                             data=body if payload is not None else None,
                             headers=headers,
                             timeout=self._timeout(timeout),
-                            allow_redirects=True,
+                            allow_redirects=False,
                             verify=verify_ssl,
                         )
                     except requests.RequestException as exc:

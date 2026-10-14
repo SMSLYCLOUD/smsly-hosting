@@ -189,11 +189,15 @@ class ServiceSyncMixin:
     def _sync_remote_service_config(self, service: Service, remote_service_id: str) -> bool:
         path = f"/api/v1/services/{remote_service_id}/"
         try:
+            # 45s read budget: the node PATCH traverses mesh TLS + WAF +
+            # Django auth under load; 15s timed out on TLS handshakes
+            # (2026-10-13: 10.100.0.1:5000 handshake timeout) and every
+            # timeout burned a single-use nonce with no retry.
             resp = self._request(
                 "PATCH",
                 path,
                 payload=self._service_sync_payload(service),
-                timeout=15,
+                timeout=45,
             )
             if resp and resp.status_code in (200, 202):
                 return True
