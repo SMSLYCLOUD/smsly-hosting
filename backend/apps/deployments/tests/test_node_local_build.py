@@ -91,7 +91,7 @@ class TriggerNodeBuildPayloadTests(SimpleTestCase):
         captured = {}
         helper = _mixin_self(self._ok_response(), captured)
         with mock.patch(
-                "apps.deployments.services.builders.get_github_access_token_for_service",
+                "apps.deployments.utils.get_github_token_for_repo",
                 return_value="gh-token"), mock.patch(
                 "apps.deployments.services.remote_orchestrator.deployment.PlatformConfig") as pc:
             pc.load.return_value = _platform_config_mock()
@@ -99,7 +99,9 @@ class TriggerNodeBuildPayloadTests(SimpleTestCase):
                 helper, _deployment_stub(), "remote-svc", node_build=True)
         self.assertEqual(rid, "remote-1")
         self.assertTrue(captured.get("node_build"))
-        self.assertEqual(captured.get("github_token"), "gh-token")
+        self.assertEqual(captured.get("github_token"), "gh-token"
+
+)
 
     def test_master_build_sends_no_token(self):
         captured = {}

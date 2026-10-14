@@ -24,18 +24,42 @@ class DeploymentMixin:
         }
         if node_build:
             # Node-local build: the node clones + builds itself, so the
-            # master ships the owner's GitHub token transiently (same
-            # HMAC+TLS channel and never-log handling as the vault
-            # token). The node stores it on the deployment metadata
-            # only, never in logs.
+            # master ships a GitHub token transiently (same HMAC+TLS
+            # channel and never-log handling as the vault token). The
+            # node stores it on the deployment metadata only, never in
+            # logs. Same priority chain as the master clone path
+            # (GitHub App installation token > owner OAuth): OAuth-only
+            # lookup ships nothing when the owner relies on the App
+            # (2026-10-14: marketer node clone died with no credentials
+            # while the master clone worked via the App token).
             try:
-                from apps.deployments.services.builders import (
-                    get_github_access_token_for_service,
-                )
-                _gtok = get_github_access_token_for_service(
-                    getattr(deployment, "service", None))
+                _svc = getattr(deployment, "service", None)
+                _gtok = None
+                try:
+                    from urllib.parse import urlparse as _up
+                    from apps.deployments.utils import get_github_token_for_repo
+                    _parsed = _up(str(getattr(_svc, "repository_url", "") or ""))
+                    _full = "/".join(
+                        (_parsed.path or "").lstrip("/").rstrip(".git").split("/")[:2]
+                    )
+                    _gtok = get_github_token_for_repo(
+                        getattr(_svc, "owner", None), _full)
+                except Exception:
+                    _gtok = None
+                if not _gtok:
+                    from apps.deployments.services.builders import (
+                        get_github_access_token_for_service,
+                    )
+                    _gtok = get_github_access_token_for_service(_svc)
                 if _gtok:
                     payload["github_token"] = _gtok
+                else:
+                    logger.warning(
+                        "Remote trigger for %s ships no GitHub token "
+                        "(no App installation or OAuth for this repo); "
+                        "node clone of a private repo will fail.",
+                        getattr(_svc, "name", "?"),
+                    )
             except Exception as exc:
                 logger.debug("Remote trigger github token skipped: %s", exc)
         # Ship the master-resolved project bridge: the node has no scope

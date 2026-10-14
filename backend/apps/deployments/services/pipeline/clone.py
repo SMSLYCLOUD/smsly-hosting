@@ -37,13 +37,32 @@ class CloneMixin:
                 if (parsed.scheme in ("http", "https") and
                         (parsed.hostname or "").lower().endswith("github.com")):
                     service_owner = getattr(self.service, "owner", None)
-                    # Use the priority chain: GitHub App token > user OAuth token > None.
-                    # Falls back gracefully when App is not configured.
-                    repo_full_name = "/".join(
-                        (parsed.path or "").lstrip("/").rstrip(".git").split("/")[:2]
-                    )
-                    from apps.deployments.utils import get_github_token_for_repo
-                    repo_token = get_github_token_for_repo(service_owner, repo_full_name)
+                    # Use the priority chain: shipped node-build token >
+                    # GitHub App token > user OAuth token > None. The
+                    # shipped token covers nodes, which own neither App
+                    # installations nor owner OAuth rows (2026-10-14:
+                    # marketer node clone died credential-less while the
+                    # master clone worked via the App token).
+                    repo_token = None
+                    try:
+                        from apps.deployments.services.builders import (
+                            _deployment_github_token,
+                        )
+                        repo_token = _deployment_github_token(
+                            getattr(self, "deployment", None))
+                    except Exception:
+                        repo_token = None
+                    if repo_token:
+                        append_log(
+                            self.deployment,
+                            "GitHub credentials resolved for private repo access...\n"
+                        )
+                    else:
+                        repo_full_name = "/".join(
+                            (parsed.path or "").lstrip("/").rstrip(".git").split("/")[:2]
+                        )
+                        from apps.deployments.utils import get_github_token_for_repo
+                        repo_token = get_github_token_for_repo(service_owner, repo_full_name)
                     if repo_token:
                         append_log(
                             self.deployment,
