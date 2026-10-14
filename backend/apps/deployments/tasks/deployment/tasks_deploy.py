@@ -39,6 +39,38 @@ from ..tasks_utils import (
 )
 
 
+def _explicit_local_requested(deployment) -> bool:
+    """True when the operator explicitly routed this run at master."""
+    try:
+        if str(getattr(deployment, "commit_message", "") or "").startswith("Multi-deploy:"):
+            return True
+        meta = dict(getattr(deployment, "metadata", None) or {})
+        return bool(meta.get("explicit_local"))
+    except Exception:
+        return False
+
+
+def _reroute_node_service_to_owner(deployment, service):
+    """Fail-closed routing guard.
+
+    A node-owned service must never execute the master-local pipeline:
+    master holds no node addon containers, so the run always burns a full
+    build and then dies at the addon gate (2026-10-14: marketer push ran
+    master-local and failed on node-local STEEL). Returns the owner node
+    when the caller must reroute, else None. Explicit-local runs
+    (multi-deploy local leg, explicit target_server_id=local) are honored.
+    """
+    try:
+        owner = getattr(service, "server", None)
+        if owner is None or getattr(owner, "is_primary", False):
+            return None
+        if _explicit_local_requested(deployment):
+            return None
+        return owner
+    except Exception:
+        return None
+
+
 @shared_task(
     bind=True,
     max_retries=3,
@@ -214,6 +246,25 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         effective_server = _deployment_effective_server(deployment)
         is_local = _is_local_deployment_server(effective_server, config)
 
+        if is_local:
+            _owner = _reroute_node_service_to_owner(deployment, service)
+            if _owner is not None:
+                # Implicit-local run for a node-owned service: reroute to
+                # the owner node and fall through to the remote branches
+                # below (which apply the node-local-build decision).
+                append_log(
+                    deployment,
+                    f"Routing guard: {service.name} is assigned to {_owner.name}; "
+                    "implicit-local run rerouted to the owner node instead of "
+                    "building on master.\n",
+                )
+                logger.warning(
+                    "Deployment %s rerouted to owner node %s (implicit-local refused)",
+                    deployment_id, getattr(_owner, "name", "?"),
+                )
+                effective_server = _owner
+                is_local = False
+
         if not is_local:
             if deployment.remote_deployment_id:
                 _resume_remote_deployment(deployment, effective_server)
@@ -369,6 +420,22 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         is_delegated = deployment.source_node is not None
         effective_server = _deployment_effective_server(deployment)
         is_local = is_delegated or _is_local_deployment_server(effective_server, config)
+
+        if is_local and not is_delegated:
+            _owner = _reroute_node_service_to_owner(deployment, service)
+            if _owner is not None:
+                append_log(
+                    deployment,
+                    f"Routing guard: {service.name} is assigned to {_owner.name}; "
+                    "implicit-local run rerouted to the owner node instead of "
+                    "building on master.\n",
+                )
+                logger.warning(
+                    "Deployment %s rerouted to owner node %s (implicit-local refused)",
+                    deployment_id, getattr(_owner, "name", "?"),
+                )
+                effective_server = _owner
+                is_local = False
 
         if not is_local:
             if deployment.remote_deployment_id:

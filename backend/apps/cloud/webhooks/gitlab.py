@@ -58,6 +58,9 @@ class GitLabWebhookHandler:
                 status='QUEUED',
                 commit_hash=(payload.get('checkout_sha') or payload.get('after', ''))[:40],
                 commit_message=(payload.get('commits') or [{}])[-1].get('message', ''),
+                branch=branch,
+                target_server=getattr(service, 'server', None),
+                target_is_local=False,
             )
             provider_id = str(service.provider.id) if service.provider else None
             if provider_id:

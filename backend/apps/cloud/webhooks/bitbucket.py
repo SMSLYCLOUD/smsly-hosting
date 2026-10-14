@@ -75,6 +75,9 @@ class BitbucketWebhookHandler:
             deployment = Deployment.objects.create(
                 service=service, status='QUEUED',
                 commit_hash=commit_hash, commit_message=commit_message,
+                branch=branch,
+                target_server=getattr(service, 'server', None),
+                target_is_local=False,
             )
             provider_id = str(service.provider.id) if service.provider else None
             if provider_id:

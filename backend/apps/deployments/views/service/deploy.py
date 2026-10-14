@@ -129,6 +129,18 @@ class DeployActionsMixin:
             scan_depth=scan_depth if scan_depth in ('shallow', 'standard', 'deep') else '',
             is_fast_deploy=fast_deploy,
         )
+        # Explicit-local stamp: an operator-picked local target stays
+        # master-local even for node-owned services. The routing guard in
+        # smart/resume deploy honors this; implicit runs reroute to the
+        # owner node instead of dying at the node-addon gate.
+        if target.get("specified") and target_is_local:
+            try:
+                _meta = dict(getattr(deployment, 'metadata', None) or {})
+                _meta['explicit_local'] = True
+                deployment.metadata = _meta
+                deployment.save(update_fields=['metadata'])
+            except Exception:
+                pass
         # Remote masters ship their resolved project bridge (nodes carry
         # no scope rows). Stash it validated on metadata so the pipeline
         # attaches the container to the project bridge, not flat smsly-net.

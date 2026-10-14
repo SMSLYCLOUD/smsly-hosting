@@ -160,7 +160,14 @@ class GitHubWebhookHandler:
                 service=service,
                 commit_hash=commit_hash,
                 commit_message=commit_message,
-                status=Deployment.Status.QUEUED
+                branch=branch,
+                status=Deployment.Status.QUEUED,
+                # Push deploys follow the service assignment: a node-owned
+                # service must delegate to its node (never build master-
+                # local and die at the node-addon gate). Master-owned
+                # services resolve local exactly as before.
+                target_server=getattr(service, 'server', None),
+                target_is_local=False,
             )
 
             # Use the service's assigned provider, resolving dynamically
