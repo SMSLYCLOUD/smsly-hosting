@@ -280,6 +280,16 @@ def reconcile_node_caddyfiles_task() -> dict:
         if str(_os.environ.get("INSTALL_MODE", "") or "").strip().lower() == "node":
             report["skipped"].append("non-master host (master owns fanout)")
             return {"status": "ok", **report}
+        # Same single-writer rule via the established node-identity vars
+        # (mirror of orphan_addon_gc): full-stack nodes run the same image
+        # as master, and INSTALL_MODE is unset on older installs
+        # (2026-10-14: node beat kept clobbering the WAF-sync exemption
+        # because its env lacked INSTALL_MODE). Either var proves node-hood.
+        _node_id = (_os.environ.get("SMSLY_NODE_ID", "") or "").strip()
+        _node_queue = (_os.environ.get("SMSLY_NODE_QUEUE", "") or "").strip()
+        if _node_id or _node_queue:
+            report["skipped"].append("node worker (master owns fanout)")
+            return {"status": "ok", **report}
         nodes = ManagedServer.objects.filter(is_primary=False, is_lite_agent=False)
     except Exception as exc:
         logger.warning("reconcile_node_caddyfiles: node query failed: %s", exc)
