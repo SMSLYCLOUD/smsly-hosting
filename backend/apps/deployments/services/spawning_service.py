@@ -393,6 +393,18 @@ class SpawningService:
         scoped_net = _scoped_network_for(service)
         net = scoped_net  # primary network — isolate from other services
         _attach_service_addons_to_scoped_net(service)
+        try:
+            # Internal wake: let sibling containers dial this service via
+            # <name>.internal through Traefik (sablier chain) so idle
+            # sleepers wake on internal traffic. No-op for always-on
+            # services and mesh-served apps (see internal_wake).
+            from apps.deployments.services.internal_wake import (
+                ensure_internal_wake_alias,
+            )
+            if bool(getattr(service, "sablier_enabled", False)):
+                ensure_internal_wake_alias(service.name, scoped_net)
+        except Exception:
+            pass
         router = name.replace('.', '-').replace('_', '-')
 
         # Traefik labels — point Traefik at the scoped bridge for routing
@@ -743,6 +755,25 @@ class SpawningService:
         scoped_net = _scoped_network_for(service)
         net = scoped_net
         _attach_service_addons_to_scoped_net(service)
+        try:
+            # Internal wake alias (see remote-twin site above).
+            from apps.deployments.services.internal_wake import (
+                ensure_internal_wake_alias,
+                rewrite_env_for_internal_wake,
+            )
+            if bool(getattr(service, "sablier_enabled", False)):
+                ensure_internal_wake_alias(service.name, scoped_net)
+        except Exception:
+            pass
+        # Internal wake overlay: sibling-service http URLs resolve via
+        # Traefik so dials wake a sleeping target (see internal_wake).
+        try:
+            from apps.deployments.services.internal_wake import (
+                rewrite_env_for_internal_wake as _wake_overlay,
+            )
+            env_vars.update(_wake_overlay(service, env_vars))
+        except Exception:
+            pass
         router = name.replace('.', '-').replace('_', '-')
 
         # LB POOLING (see remote twin above): carry the CANONICAL service

@@ -72,12 +72,15 @@ def sidecar_sablier_labels(service) -> dict[str, str]:
 
     A sidecar of a sablier-enabled service joins the service's sablier
     group so both sleep and wake together. Returns {} otherwise.
-    Never raises.
+
+    Mesh-served apps are EXCLUDED entirely (see internal_wake): a
+    sidecar-attached app never enrolls (sidecar-to-sidecar dials have
+    no in-band wake path), so enrolling the sidecar alone would leave
+    a group sablier can stop but nothing can wake. The sidecar stays
+    up with its app. Never raises.
     """
     try:
-        if not bool(getattr(service, "sablier_enabled", False)):
-            return {}
-        return {"sablier.enable": "true", "sablier.group": service.name}
+        return {}
     except Exception:
         return {}
 

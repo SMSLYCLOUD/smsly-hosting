@@ -45,13 +45,12 @@ class SidecarSablierLabelsTests(SimpleTestCase):
         self.assertEqual(sidecar_sablier_labels(svc), {})
 
     def test_sablier_service_joins_group(self):
+        # Mesh-served apps never enroll (no in-band wake path for
+        # sidecar-to-sidecar dials): the sidecar stays up with its app.
         svc = mock.Mock()
         svc.sablier_enabled = True
         svc.name = "sleepy-svc"
-        self.assertEqual(
-            sidecar_sablier_labels(svc),
-            {"sablier.enable": "true", "sablier.group": "sleepy-svc"},
-        )
+        self.assertEqual(sidecar_sablier_labels(svc), {})
 
     def test_never_raises(self):
         self.assertEqual(sidecar_sablier_labels(None), {})

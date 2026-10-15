@@ -519,21 +519,41 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception:
             svc = None
         if svc is not None and getattr(svc, "sablier_enabled", False):
+            from apps.deployments.services.internal_wake import (
+                internal_wake_host,
+                service_has_mesh_sidecar,
+            )
             from apps.deployments.services.traefik_labels import (
+                internal_wake_labels,
                 sablier_middleware_ref,
                 sablier_retry_labels,
                 sablier_retry_ref,
                 sablier_service_labels,
             )
-            session = str(getattr(svc, "sablier_session", "") or "10m").strip() or "10m"
-            labels.update(sablier_service_labels(
-                router_name=router_name, group=name, session=session,
-            ))
-            labels.update(sablier_retry_labels(router_name=router_name))
-            if sablier_retry_ref(router_name) not in existing:
-                existing.append(sablier_retry_ref(router_name))
-            if sablier_middleware_ref(router_name) not in existing:
-                existing.append(sablier_middleware_ref(router_name))
+            if service_has_mesh_sidecar(svc):
+                # Mesh-served: no in-band wake path (see internal_wake).
+                # Skip enrollment so the provider never sleeps stranded.
+                logger.warning(
+                    "sablier deferred for %s: mesh sidecar attached",
+                    name,
+                )
+            else:
+                session = str(getattr(svc, "sablier_session", "") or "10m").strip() or "10m"
+                labels.update(sablier_service_labels(
+                    router_name=router_name, group=name, session=session,
+                ))
+                labels.update(sablier_retry_labels(router_name=router_name))
+                labels.update(internal_wake_labels(
+                    router_name=router_name,
+                    service_ref=router_name,
+                    internal_host=internal_wake_host(name),
+                    group=name,
+                    session=session,
+                ))
+                if sablier_retry_ref(router_name) not in existing:
+                    existing.append(sablier_retry_ref(router_name))
+                if sablier_middleware_ref(router_name) not in existing:
+                    existing.append(sablier_middleware_ref(router_name))
         if svc is not None and getattr(svc, "edge_jwt_required", False):
             if "edge-forward-auth@file" not in existing:
                 existing.append("edge-forward-auth@file")
@@ -704,6 +724,19 @@ class LocalAdapter(BaseCloudAdapter):
             logger.debug("Defaulted HOME=/tmp for %s (read-only rootfs)", name)
         if not env.get("XDG_RUNTIME_DIR"):
             env["XDG_RUNTIME_DIR"] = "/tmp"
+        # Internal wake overlay: rewrite sibling-service http URLs to
+        # <name>.internal via Traefik so internal dials wake sleeping
+        # targets (see internal_wake). Overlay only, rows untouched.
+        try:
+            from apps.deployments.models import Service as _SvcW
+            from apps.deployments.services.internal_wake import (
+                rewrite_env_for_internal_wake,
+            )
+            _svc_w = _SvcW.objects.filter(name=name).only("id", "name").first()
+            if _svc_w is not None:
+                env.update(rewrite_env_for_internal_wake(_svc_w, env))
+        except Exception as exc:
+            logger.debug("internal-wake overlay skipped for %s: %s", name, exc)
         # Resolve scoped network for this service
         network_name = self._resolve_network_name()
 
@@ -725,6 +758,22 @@ class LocalAdapter(BaseCloudAdapter):
             except Exception as exc:
                 logger.debug("Failed to resolve scoped network driver for service: %s", exc)
             self.docker_client.networks.create(network_name, driver=driver)
+
+        # Internal wake alias: <name>.internal -> Traefik on this bridge
+        # so sibling dials reach the wake router (see internal_wake).
+        # Gated on sablier enrollment; best-effort, never raises.
+        try:
+            from apps.deployments.models import Service as _SvcA
+            from apps.deployments.services.internal_wake import (
+                ensure_internal_wake_alias,
+            )
+            _svc_a = _SvcA.objects.filter(name=name).only(
+                "id", "sablier_enabled").first()
+            if _svc_a is not None and bool(
+                    getattr(_svc_a, "sablier_enabled", False)):
+                ensure_internal_wake_alias(name, network_name)
+        except Exception as exc:
+            logger.debug("internal-wake alias skipped for %s: %s", name, exc)
 
         # Prepare volumes
         docker_volumes = {}

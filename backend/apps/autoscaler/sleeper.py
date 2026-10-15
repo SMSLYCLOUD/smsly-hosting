@@ -120,6 +120,21 @@ def _sleep_sablier_services(client) -> dict:
         if not _service_is_idle(service, session_min * 2):
             skipped[name] = "recent traffic"
             continue
+        # Mesh-served apps must never sleep: sidecar-to-sidecar dials
+        # bypass Traefik (no in-band wake path) and the provider Envoy
+        # requires client certs, so a slept provider strands mesh
+        # callers with no recovery. Label enrollment is likewise
+        # withheld at deploy (see internal_wake); this covers rows
+        # deployed before the exclusion. Availability over savings.
+        try:
+            from apps.deployments.services.internal_wake import (
+                service_has_mesh_sidecar,
+            )
+            if service_has_mesh_sidecar(service):
+                skipped[name] = "mesh-served: no internal wake path"
+                continue
+        except Exception:
+            pass
         try:
             container = client.containers.get(name)
         except Exception:

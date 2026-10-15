@@ -27,6 +27,36 @@ def sablier_retry_ref(router_name: str) -> str:
     return f"{router_name}-wakeretry"
 
 
+def internal_wake_labels(
+    router_name: str, service_ref: str, internal_host: str, group: str,
+    session: str = "10m",
+) -> dict[str, str]:
+    """Internal wake-on-request router (see internal_wake.py).
+
+    Second router on the ``web`` entrypoint matching
+    ``Host(`<service>.internal`)`` with the SAME sablier blocking +
+    wakeretry chain as the edge router, bound to the SAME Traefik
+    service (``service_ref`` differs per generator: ``<router>-service``
+    in generate_traefik_labels, ``<router>`` in compose mode). No
+    CrowdSec/auth middlewares — Docker-DNS-only names never leave the
+    host, and the mesh path (which needs client certs) must never
+    match here. ``group`` is the sablier wake target (service name).
+    """
+    irouter = f"{router_name}-internal"
+    session = str(session or "10m").strip() or "10m"
+    labels = {
+        f"traefik.http.routers.{irouter}.rule": f"Host(`{internal_host}`)",
+        f"traefik.http.routers.{irouter}.entrypoints": "web",
+        f"traefik.http.routers.{irouter}.service": service_ref,
+        f"traefik.http.middlewares.{irouter}-sablier.plugin.sablier.group": group,
+        f"traefik.http.middlewares.{irouter}-sablier.plugin.sablier.sablierUrl": SABLIER_URL,
+        f"traefik.http.middlewares.{irouter}-sablier.plugin.sablier.sessionDuration": session,
+        f"traefik.http.middlewares.{irouter}-sablier.plugin.sablier.blocking.timeout": "1m",
+    }
+    labels.update(sablier_retry_labels(irouter))
+    return labels
+
+
 def sablier_retry_labels(router_name: str) -> dict[str, str]:
     """Retry wrapper for the Sablier wake path (Traefik built-in).
 
@@ -225,12 +255,35 @@ def generate_traefik_labels(
 
     extra_chain = []
     if sablier_on:
-        labels.update(sablier_service_labels(
-            router_name=router_name, group=service_name, session=session,
-        ))
-        labels.update(sablier_retry_labels(router_name=router_name))
-        extra_chain.append(sablier_retry_ref(router_name))
-        extra_chain.append(sablier_middleware_ref(router_name))
+        from apps.deployments.services.internal_wake import (
+            internal_wake_host,
+            service_has_mesh_sidecar,
+        )
+        if service is not None and service_has_mesh_sidecar(service):
+            # Mesh-served apps cannot sleep: sidecar-to-sidecar dials
+            # bypass Traefik (no in-band wake path) and the provider
+            # Envoy requires client certs Traefik cannot present.
+            # Staying up is the fail-closed direction. See internal_wake.
+            logger = __import__("logging").getLogger(__name__)
+            logger.warning(
+                "sablier deferred for %s: mesh sidecar attached, "
+                "service stays up (no internal wake path)",
+                service_name,
+            )
+        else:
+            labels.update(sablier_service_labels(
+                router_name=router_name, group=service_name, session=session,
+            ))
+            labels.update(sablier_retry_labels(router_name=router_name))
+            labels.update(internal_wake_labels(
+                router_name=router_name,
+                service_ref=f"{router_name}-service",
+                internal_host=internal_wake_host(service_name),
+                group=service_name,
+                session=session,
+            ))
+            extra_chain.append(sablier_retry_ref(router_name))
+            extra_chain.append(sablier_middleware_ref(router_name))
     if jwt_on:
         extra_chain.append("edge-forward-auth@file")
     if extra_chain:

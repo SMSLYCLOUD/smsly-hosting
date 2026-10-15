@@ -205,19 +205,38 @@ class ComposeNetworkingMixin:
             svc_flags = getattr(self, "service", None)
             if svc_flags is not None:
                 if bool(getattr(svc_flags, "sablier_enabled", False)):
+                    from apps.deployments.services.internal_wake import (
+                        internal_wake_host,
+                        service_has_mesh_sidecar,
+                    )
                     from apps.deployments.services.traefik_labels import (
+                        internal_wake_labels,
                         sablier_retry_labels,
                         sablier_retry_ref,
                         sablier_service_labels,
                     )
-                    session = str(getattr(svc_flags, "sablier_session", "") or "10m").strip() or "10m"
-                    group = str(getattr(svc_flags, "name", "") or router)
-                    labels.update(sablier_service_labels(
-                        router_name=router, group=group, session=session,
-                    ))
-                    labels.update(sablier_retry_labels(router_name=router))
-                    chain.append(sablier_retry_ref(router))
-                    chain.append(f"{router}-sablier")
+                    if service_has_mesh_sidecar(svc_flags):
+                        # Mesh-served: no in-band wake path (see internal_wake).
+                        logger.warning(
+                            "sablier deferred for %s: mesh sidecar attached",
+                            getattr(svc_flags, "name", router),
+                        )
+                    else:
+                        session = str(getattr(svc_flags, "sablier_session", "") or "10m").strip() or "10m"
+                        group = str(getattr(svc_flags, "name", "") or router)
+                        labels.update(sablier_service_labels(
+                            router_name=router, group=group, session=session,
+                        ))
+                        labels.update(sablier_retry_labels(router_name=router))
+                        labels.update(internal_wake_labels(
+                            router_name=router,
+                            service_ref=router,
+                            internal_host=internal_wake_host(group),
+                            group=group,
+                            session=session,
+                        ))
+                        chain.append(sablier_retry_ref(router))
+                        chain.append(f"{router}-sablier")
                 if bool(getattr(svc_flags, "edge_jwt_required", False)):
                     chain.append("edge-forward-auth@file")
         except Exception:
@@ -449,6 +468,22 @@ class ComposeNetworkingMixin:
                 })
                 apply_egress_restrictions(network_name, ["0.0.0.0/0"])
             ensure_router_on_network(network_name)
+            try:
+                # Internal wake alias: <name>.internal -> Traefik on this
+                # bridge so sibling dials reach the wake router.
+                # Compose env overlay is the caller's (user compose file);
+                # labels still enroll the router so manual .internal URLs
+                # wake. Gated on sablier enrollment; best-effort.
+                if bool(getattr(self.service, "sablier_enabled", False)):
+                    from apps.deployments.services.internal_wake import (
+                        ensure_internal_wake_alias,
+                    )
+                    ensure_internal_wake_alias(
+                        str(getattr(self.service, "name", "") or ""),
+                        network_name,
+                    )
+            except Exception:
+                pass
             self._attach_service_addons(network_name)
         except Exception as e:
             append_log(self.deployment, f"Warning: could not ensure Docker network '{network_name}': {e}\n")
