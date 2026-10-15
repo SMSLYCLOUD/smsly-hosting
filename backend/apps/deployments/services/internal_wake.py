@@ -164,14 +164,19 @@ def _local_sablier_siblings(exclude_service) -> set[str]:
 
 
 def rewrite_env_for_internal_wake(service, env: dict) -> dict:
-    """Overlay: point sibling-service http URLs at the internal wake router.
+    """Overlay: point sibling-service http(s) URLs at the internal wake router.
 
-    For every plain-``http`` URL value whose hostname exactly matches a
+    For every http OR https URL value whose hostname exactly matches a
     sablier-enabled local sibling, rewrite host to ``<sibling>.internal``
-    and an explicit non-80 port to 80 (Traefik's ``web`` entrypoint).
-    https URLs, mesh-rewritten IPs, public domains, and non-siblings
-    pass through untouched. Never mutates rows — returns an overlay
-    dict (empty when nothing applies). Never raises.
+    as plain http on Traefik's entrypoint port. https is included
+    deliberately: nothing serves TLS on app ports inside the platform
+    (Caddy terminates at the edge), so an ``https://sibling:port``
+    dial can never succeed today — and ``.internal`` names never leave
+    the Docker bridge, the same trust zone as the plaintext
+    service-to-addon traffic already flowing there. Mesh-rewritten IPs,
+    public domains, and non-siblings pass through untouched. Never
+    mutates rows — returns an overlay dict (empty when nothing
+    applies). Never raises.
     """
     try:
         base = dict(env or {})
@@ -183,11 +188,13 @@ def rewrite_env_for_internal_wake(service, env: dict) -> dict:
         if not siblings:
             return {}
         overlay: dict[str, str] = {}
+        rewritten_keys: list[str] = []
         for key, val in base.items():
             if not isinstance(val, str) or "://" not in val:
                 continue
             text = val.strip()
-            if not text.lower().startswith("http://"):
+            lowered = text.lower()
+            if not (lowered.startswith("http://") or lowered.startswith("https://")):
                 continue
             try:
                 parsed = _up(text)
@@ -203,19 +210,25 @@ def rewrite_env_for_internal_wake(service, env: dict) -> dict:
                 port = parsed.port
             except Exception:
                 continue
-            if port is None or port == INTERNAL_WAKE_PORT:
-                new_netloc = new_host
+            # Entry point is always plain http :80; the service LB port
+            # lives on the Traefik service definition. Preserve userinfo.
+            userinfo = ""
+            if parsed.username:
+                userinfo = parsed.username
+                if parsed.password:
+                    userinfo += f":{parsed.password}"
+                userinfo += "@"
+            if port is None:
+                new_netloc = f"{userinfo}{new_host}" if not userinfo else f"{userinfo}{new_host}"
             else:
-                # Service LB ports live on the Traefik service definition;
-                # the entrypoint is always :80. Preserve userinfo if any.
-                userinfo = ""
-                if parsed.username:
-                    userinfo = parsed.username
-                    if parsed.password:
-                        userinfo += f":{parsed.password}"
-                    userinfo += "@"
                 new_netloc = f"{userinfo}{new_host}:{INTERNAL_WAKE_PORT}"
-            overlay[key] = _uu(parsed._replace(netloc=new_netloc))
+            overlay[key] = _uu(parsed._replace(scheme="http", netloc=new_netloc))
+            rewritten_keys.append(str(key))
+        if rewritten_keys:
+            logger.info(
+                "internal-wake: rewrote %d env URL(s) to .internal: %s",
+                len(rewritten_keys), ",".join(sorted(rewritten_keys)[:8]),
+            )
         return overlay
     except Exception as exc:
         logger.debug("internal-wake rewrite skipped: %s", exc)

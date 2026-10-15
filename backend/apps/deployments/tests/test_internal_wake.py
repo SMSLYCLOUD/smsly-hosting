@@ -98,13 +98,25 @@ class RewriteEnvTests(SimpleTestCase):
                 caller, {"API": "http://svc-b/v1"})
         self.assertEqual(out, {"API": "http://svc-b.internal/v1"})
 
-    def test_https_nonsibling_self_mesh_untouched(self):
+    def test_https_sibling_downgraded_to_internal_http(self):
+        # Nothing serves TLS on app ports (Caddy terminates at the edge)
+        # and .internal never leaves the bridge: https sibling dials can
+        # never succeed today, so routing them at the wake router only
+        # fixes. Keys (never values) are logged by the rewriter.
+        caller = _svc(name="caller")
+        with mock.patch(
+                "apps.deployments.services.internal_wake._local_sablier_siblings",
+                return_value={"svc-b"}):
+            out = rewrite_env_for_internal_wake(
+                caller, {"API": "https://svc-b:8000/v1"})
+        self.assertEqual(out, {"API": "http://svc-b.internal:80/v1"})
+
+    def test_http_nonsibling_self_mesh_untouched(self):
         caller = _svc(name="caller")
         with mock.patch(
                 "apps.deployments.services.internal_wake._local_sablier_siblings",
                 return_value={"svc-b"}):
             env = {
-                "A": "https://svc-b:8000/x",
                 "B": "http://other:8000/x",
                 "C": "http://caller:8000/x",
                 "D": "http://10.100.0.1:21597/x",
