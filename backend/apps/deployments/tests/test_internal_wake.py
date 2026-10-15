@@ -58,8 +58,8 @@ class InternalWakeLabelsTests(SimpleTestCase):
         self.assertEqual(
             labels[chain + "sablierUrl"], "http://sablier:10000")
         self.assertEqual(
-            labels["traefik.http.middlewares.svc_a-internal-wakeretry.retry.status"],
-            "500-599")
+            labels["traefik.http.middlewares.svc_a-internal-wakeretry.retry.retryexpression"],
+            "IsNetworkError() || ResponseCode() >= 500")
 
     def test_no_edge_only_middlewares(self):
         labels = internal_wake_labels(

@@ -58,27 +58,31 @@ def internal_wake_labels(
 
 
 def sablier_retry_labels(router_name: str) -> dict[str, str]:
-    """Retry wrapper for the Sablier wake path (Traefik built-in).
+    """Retry wrapper for the Sablier wake path (Traefik v3 built-in).
 
     Closes the wake race: sablier reports "ready" when the container
-    is RUNNING, but Traefik's docker provider may not have
-    re-inspected it yet, so the first forward dials an empty server
-    URL and Traefik answers 500 (proven in access logs:
-    DownstreamStatus=OriginStatus=500 with ServiceAddr empty). The
-    retry re-runs the remainder of the chain after refresh lands.
+    is RUNNING, but the app inside may need several more seconds to
+    listen — and Traefik's docker provider may not have re-inspected
+    yet. The first forward then dies against an empty/refusing
+    backend and Traefik answers 500 with no origin attempt
+    (proven: DownstreamStatus=500, OriginStatus=0, ServiceAddr empty,
+    RetryAttempts 0 — reproduced live 2026-10-15: wake held 12.8s,
+    sablier "ready" at docker start, app listening later).
 
-    NOTE: plain attempts/initialinterval alone do NOT retry the 500 —
-    Traefik only retries unanswered requests by default. The explicit
-    ``status: 500-599`` is what covers the empty-URL race. Non-
-    idempotent methods (POST/PATCH/LOCK) are still never retried
-    (retryNonIdempotentMethod defaults off), bounding duplication
-    risk to idempotent requests against a backend that never saw
-    the first attempt anyway.
+    Traefik v3 retries ONLY on network errors by default, and the old
+    ``retry.status: 500-599`` key was never a real option (silently
+    ignored — which is why RetryAttempts stayed 0). The v3
+    ``retryExpression`` actually matches answered 5xx. Attempts x
+    interval covers post-start boot lag; the backend never saw the
+    failed attempt (refused/empty dial), so even non-idempotent
+    redials cannot double-apply.
     """
     return {
-        f"traefik.http.middlewares.{router_name}-wakeretry.retry.attempts": "3",
-        f"traefik.http.middlewares.{router_name}-wakeretry.retry.initialinterval": "1s",
-        f"traefik.http.middlewares.{router_name}-wakeretry.retry.status": "500-599",
+        f"traefik.http.middlewares.{router_name}-wakeretry.retry.attempts": "5",
+        f"traefik.http.middlewares.{router_name}-wakeretry.retry.initialinterval": "2s",
+        f"traefik.http.middlewares.{router_name}-wakeretry.retry.retryexpression": (
+            "IsNetworkError() || ResponseCode() >= 500"
+        ),
     }
 
 
