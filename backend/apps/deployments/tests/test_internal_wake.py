@@ -61,6 +61,19 @@ class InternalWakeLabelsTests(SimpleTestCase):
             labels["traefik.http.middlewares.svc_a-internal-wakeretry.retry.retryexpression"],
             "IsNetworkError() || ResponseCode() >= 500")
 
+    def test_internal_router_carries_wake_chain(self):
+        # The router itself must reference the chain: without this the
+        # router proxies straight at a stopped container and Traefik
+        # 503s with no wake attempt (2026-10-17). Order mirrors edge:
+        # retry outer, sablier inner.
+        labels = internal_wake_labels(
+            router_name="svc_a", service_ref="svc_a-service",
+            internal_host="svc-a.internal", group="svc-a", session="10m",
+        )
+        self.assertEqual(
+            labels["traefik.http.routers.svc_a-internal.middlewares"],
+            "svc_a-internal-wakeretry,svc_a-internal-sablier")
+
     def test_no_edge_only_middlewares(self):
         labels = internal_wake_labels(
             router_name="r", service_ref="s",

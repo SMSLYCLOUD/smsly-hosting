@@ -48,6 +48,14 @@ def internal_wake_labels(
         f"traefik.http.routers.{irouter}.rule": f"Host(`{internal_host}`)",
         f"traefik.http.routers.{irouter}.entrypoints": "web",
         f"traefik.http.routers.{irouter}.service": service_ref,
+        # The wake chain MUST be attached to the router itself: without
+        # this line the router proxies straight at the (possibly stopped)
+        # container and Traefik 503s with no wake attempt (2026-10-17:
+        # every .internal dial to a sleeping service 503'd). Order
+        # mirrors the edge chain: retry outer, sablier inner.
+        f"traefik.http.routers.{irouter}.middlewares": (
+            f"{irouter}-wakeretry,{irouter}-sablier"
+        ),
         f"traefik.http.middlewares.{irouter}-sablier.plugin.sablier.group": group,
         f"traefik.http.middlewares.{irouter}-sablier.plugin.sablier.sablierUrl": SABLIER_URL,
         f"traefik.http.middlewares.{irouter}-sablier.plugin.sablier.sessionDuration": session,

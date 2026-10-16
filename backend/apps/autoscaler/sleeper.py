@@ -8,7 +8,11 @@ Two jobs, both backstops (the primary mechanisms own the fast path):
    running forever. When a sablier-enabled service shows NO traffic
    for 2x its session duration and is NOT deploying, the agent stops
    (never removes) the container. Wake stays automatic on next
-   request. Remote/node services are skipped — master Sablier cannot
+   request. Enrollment is verified on the live container first
+   (sablier.enable + sablier.group labels): rows deployed before
+   enrollment carry no wake path, and sleeping those 503s with no
+   wake attempt — so they are skipped until a redeploy enrolls them.
+   Remote/node services are skipped — master Sablier cannot
    start node containers, and stopping them would strand traffic.
 2. Orphaned buildkit builder containers (``buildx_buildkit_*`` with no
    builder referencing them): with the ``docker`` driver, builds run
@@ -61,6 +65,43 @@ def _recent_build_activity(minutes: int = _NO_BUILD_QUIET_MINUTES) -> bool:
         ).exists()
     except Exception:
         return True
+
+
+def _container_labels(container) -> dict:
+    """Create-time labels of a container (never raises; {} on failure)."""
+    try:
+        attrs = getattr(container, "attrs", None) or {}
+        config = attrs.get("Config", None) or {}
+        labels = config.get("Labels", None) or {}
+        if isinstance(labels, dict) and labels:
+            return labels
+    except Exception:
+        pass
+    try:
+        labels = getattr(container, "labels", None) or {}
+        return dict(labels) if isinstance(labels, dict) else {}
+    except Exception:
+        return {}
+
+
+def _wake_path_enrolled(container) -> tuple[bool, str]:
+    """True when stopping this container is wakeable via sablier.
+
+    Enrollment is create-time labels: ``sablier.enable=true`` plus a
+    non-empty ``sablier.group`` (the middleware group key). A container
+    deployed before enrollment (or via a path that skipped labels)
+    must NEVER be slept — Traefik would 503 with no wake attempt.
+    Unreadable labels fail closed (not enrolled).
+    """
+    try:
+        labels = _container_labels(container)
+        if str(labels.get("sablier.enable", "")).strip().lower() != "true":
+            return False, "sablier.enable label missing"
+        if not str(labels.get("sablier.group", "") or "").strip():
+            return False, "sablier.group label missing"
+        return True, ""
+    except Exception as exc:
+        return False, f"label read failed: {exc}"
 
 
 def _service_is_idle(service, idle_minutes: int) -> bool:
@@ -143,6 +184,18 @@ def _sleep_sablier_services(client) -> dict:
         try:
             if getattr(container, "status", "") != "running":
                 skipped[name] = f"already {getattr(container, 'status', 'not-running')}"
+                continue
+            # Fail-closed: never sleep a container with no wake path.
+            # DB enrollment (sablier_enabled) is not enough — the wake
+            # chain lives in create-time container labels, and rows
+            # deployed before enrollment carry none (2026-10-17: all 9
+            # enrolled services unlabeled live → every sleep ended in
+            # 503 with no wake attempt). Redeploy enrolls; until then
+            # the service stays up.
+            enrolled, why = _wake_path_enrolled(container)
+            if not enrolled:
+                skipped[name] = f"no wake path enrolled ({why}; redeploy to enroll)"
+                logger.warning("Sleeper: NOT sleeping %s: %s", name, why)
                 continue
             container.stop(timeout=30)
             slept.append(name)
