@@ -44,7 +44,7 @@ SHARED_CONTAINER = "smsly-shared-postgres"
 SHARED_VOLUME = "smsly-shared-postgres-data"
 SHARED_IMAGE = "pgvector/pgvector:pg16"
 SHARED_PORT = 5432
-SHARED_MAX_CONNECTIONS = 400
+SHARED_MAX_CONNECTIONS = 600
 SHARED_RESERVED_CONNECTIONS = 10
 # Passed as `postgres -c` flags on BOTH primary and standby: command-line
 # settings do not replicate, and recovery refuses to start when the
