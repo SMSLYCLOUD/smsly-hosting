@@ -99,9 +99,13 @@ def verify_cloudflare_dns_proof(domain: str, expected_cnames: set[str], acceptab
         return False, "no cloudflare token"
     try:
         from apps.domains.services.dns import _get_zone_id, _get_records
-        import tldextract as _tldextract
-        ext = _tldextract.extract(host)
-        zone = ".".join(p for p in [ext.domain, ext.suffix] if p)
+        try:
+            import tldextract as _tldextract
+            ext = _tldextract.extract(host)
+            zone = ".".join(p for p in [ext.domain, ext.suffix] if p)
+        except Exception:
+            parts = host.split(".")
+            zone = ".".join(parts[-2:]) if len(parts) >= 2 else host
         if not zone:
             return False, "no zone"
         zone_id = _get_zone_id(token, zone)
@@ -147,7 +151,7 @@ def verify_http_proof(domain_obj, timeout: float = 10, attempts: int = 3) -> tup
     url = f"http://{host}/.well-known/smsly-verify/{token}"
     last_detail = "no attempt"
     for attempt in range(max(1, int(attempts or 1))):
-        ok, last_detail, retryable = _fetch_http_proof_once(url, token, timeout)
+        ok, last_detail, retryable = _fetch_http_proof_once(url, token, timeout, host=host)
         if ok:
             return True, "served token over public edge"
         if not retryable:
@@ -157,26 +161,64 @@ def verify_http_proof(domain_obj, timeout: float = 10, attempts: int = 3) -> tup
     return False, last_detail
 
 
-def _fetch_http_proof_once(url: str, token: str, timeout: float) -> tuple:
+def _fetch_http_proof_once(url: str, token: str, timeout: float, host: str = "") -> tuple:
     """One HTTP-proof fetch. Returns (ok, detail, retryable).
 
     Deterministic answers (wrong body, 404) are NOT retryable;
     transport errors and 5xx/429 are.
     """
+    headers = {"User-Agent": "smsly-domain-verify/1.0"}
+    resp = None
     try:
         import requests
         resp = requests.get(
             url,
             timeout=timeout, allow_redirects=True,
-            headers={"User-Agent": "smsly-domain-verify/1.0"},
+            headers=headers,
         )
+        if resp.status_code == 200 and (resp.text or "").strip() == token:
+            return True, "served token over public edge", False
+        if resp.status_code == 404:
+            return False, f"HTTP {resp.status_code}", False
     except Exception as exc:
-        return False, f"fetch failed: {exc!s}"[:160], True
-    if resp.status_code == 200 and (resp.text or "").strip() == token:
-        return True, "served token over public edge", False
-    detail = f"HTTP {resp.status_code}"
-    retryable = resp.status_code in (408, 425, 429, 500, 502, 503, 504)
-    return False, detail, retryable
+        resp = None
+
+    # Anti-poisoning resilience: if standard libc resolution failed (e.g. /etc/hosts
+    # or container loopback 127.0.0.1 where port 80 is refused), query public
+    # resolvers (1.1.1.1, 8.8.8.8) to get the authoritative public edge IPs
+    # and fetch directly with Host header over the public internet.
+    clean_host = host or (_clean_hostname(url.split("/")[2]) if "/" in url else "")
+    if clean_host and clean_host not in ("localhost", "127.0.0.1", "::1"):
+        try:
+            import requests
+            public_ips = resolve_host_ips(clean_host)
+            for pub_ip in sorted(public_ips):
+                if pub_ip.startswith("127.") or pub_ip in ("::1", "0.0.0.0"):
+                    continue
+                ip_url = f"http://{pub_ip}/.well-known/smsly-verify/{token}"
+                try:
+                    resp_ip = requests.get(
+                        ip_url,
+                        timeout=timeout,
+                        allow_redirects=True,
+                        headers={
+                            "Host": clean_host,
+                            "User-Agent": "smsly-domain-verify/1.0",
+                        },
+                    )
+                    if resp_ip.status_code == 200 and (resp_ip.text or "").strip() == token:
+                        return True, "served token over public edge", False
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    if resp is not None:
+        detail = f"HTTP {resp.status_code}"
+        retryable = resp.status_code in (408, 425, 429, 500, 502, 503, 504)
+        return False, detail, retryable
+
+    return False, "fetch failed", True
 
 
 def _clean_hostname(value: str) -> str:

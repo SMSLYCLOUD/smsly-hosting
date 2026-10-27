@@ -889,6 +889,28 @@ ensure_postgres_archiving() {
     fi
 }
 
+# ── 19. Host firewall must be active (napd + edge-sidecar trust it) ──
+# Both Go daemons (napd :8972, edge-sidecar :8971) bind 0.0.0.0 by
+# design — Docker containers reach them via the bridge gateway IP, so a
+# loopback bind is impossible. Their ONLY network isolation is the host
+# firewall's default-deny. If UFW is inactive, those ports (and every
+# internal service) are internet-exposed on every node.
+ensure_host_firewall() {
+    command -v ufw >/dev/null 2>&1 || { log "ufw not installed — skipping host-firewall check"; return 0; }
+    if ufw status 2>/dev/null | head -n 1 | grep -q "Status: active"; then
+        if ufw status 2>/dev/null | grep -qE '8971|8972'; then
+            log "ALERT: UFW active but 8971/8972 have allow rules — edge daemons exposed; remove those rules"
+        else
+            log "host firewall active (edge daemon ports isolated)"
+        fi
+        return 0
+    fi
+    # Do NOT auto-enable from cron: lib/harden_ufw.sh owns the ruleset and
+    # a blind enable could lock SSH on a host whose rules were never
+    # installed. Alert loudly instead.
+    log "ALERT: UFW is INACTIVE — napd (:8972) and edge-sidecar (:8971) bind 0.0.0.0 and rely on the host firewall. Run: bash lib/harden_ufw.sh or enable UFW with SSH allowed."
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -914,4 +936,19 @@ ensure_containerd_healthy
 ensure_tenants_pooler_healthy
 ensure_mesh_dns_serving
 ensure_postgres_archiving
+ensure_host_firewall
+
+# ── 20. Host /etc/hosts must not hijack customer or platform domains ──
+# 127.0.0.1 mapping of customer/platform domains in /etc/hosts poisons
+# Docker container DNS (127.0.0.11), breaking domain verification HTTP challenges
+# with Connection Refused against the container loopback.
+ensure_hosts_clean() {
+    [ -f "/etc/hosts" ] || return 0
+    if grep -E "^127\.0\.0\.1\s+.*(trulay\.co|smsly\.cloud)" /etc/hosts >/dev/null 2>&1; then
+        log "ALERT: Poisoned domain entries found in /etc/hosts — sanitizing"
+        sed -i -E '/^127\.0\.0\.1\s+.*(trulay\.co|smsly\.cloud)/d' /etc/hosts
+    fi
+}
+ensure_hosts_clean
+
 log "integrity check complete"

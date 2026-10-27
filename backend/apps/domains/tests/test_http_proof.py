@@ -74,6 +74,22 @@ class HttpProofTests(SimpleTestCase):
         self.assertFalse(ok)
         self.assertIn("fetch failed", detail)
 
+    @mock.patch("apps.domains.verification.resolve_host_ips")
+    @mock.patch("requests.get")
+    def test_loopback_connection_error_falls_back_to_public_ip(self, mock_get, mock_resolve_ips):
+        mock_resolve_ips.return_value = {"104.21.34.183"}
+        mock_get.side_effect = [
+            OSError("Connection refused on 127.0.0.1"),
+            _resp(200, "tok-abc-123"),
+        ]
+        ok, detail = verify_http_proof(_domain())
+        self.assertTrue(ok)
+        self.assertEqual(mock_get.call_count, 2)
+        call_url = mock_get.call_args_list[1][0][0]
+        call_headers = mock_get.call_args_list[1][1]["headers"]
+        self.assertIn("104.21.34.183", call_url)
+        self.assertEqual(call_headers.get("Host"), "shop.example.com")
+
     def test_missing_token_skips(self):
         ok, detail = verify_http_proof(_domain(token=""))
         self.assertFalse(ok)
