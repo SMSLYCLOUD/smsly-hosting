@@ -68,29 +68,15 @@ def internal_wake_labels(
 def sablier_retry_labels(router_name: str) -> dict[str, str]:
     """Retry wrapper for the Sablier wake path (Traefik v3 built-in).
 
-    Closes the wake race: sablier reports "ready" when the container
-    is RUNNING, but the app inside may need several more seconds to
-    listen — and Traefik's docker provider may not have re-inspected
-    yet. The first forward then dies against an empty/refusing
-    backend and Traefik answers 500 with no origin attempt
-    (proven: DownstreamStatus=500, OriginStatus=0, ServiceAddr empty,
-    RetryAttempts 0 — reproduced live 2026-10-15: wake held 12.8s,
-    sablier "ready" at docker start, app listening later).
-
-    Traefik v3 retries ONLY on network errors by default, and the old
-    ``retry.status: 500-599`` key was never a real option (silently
-    ignored — which is why RetryAttempts stayed 0). The v3
-    ``retryExpression`` actually matches answered 5xx. Attempts x
-    interval covers post-start boot lag; the backend never saw the
-    failed attempt (refused/empty dial), so even non-idempotent
-    redials cannot double-apply.
+    Traefik v3.6 OSS Retry middleware supports only ``attempts`` and
+    ``initialinterval`` (it rejects ``retryexpression`` and ``status`` with
+    ``field not found``, which caused Traefik to drop the entire router).
+    Built-in retry handles network dial/EOF errors while the woken container
+    starts listening.
     """
     return {
         f"traefik.http.middlewares.{router_name}-wakeretry.retry.attempts": "5",
         f"traefik.http.middlewares.{router_name}-wakeretry.retry.initialinterval": "2s",
-        f"traefik.http.middlewares.{router_name}-wakeretry.retry.retryexpression": (
-            "IsNetworkError() || ResponseCode() >= 500"
-        ),
     }
 
 

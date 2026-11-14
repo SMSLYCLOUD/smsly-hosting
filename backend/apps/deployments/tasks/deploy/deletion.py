@@ -112,6 +112,17 @@ def _is_stale_maintenance_container(
             return False, "green is referenced by a live deployment (staged)"
         if live_container_names and name in live_container_names:
             return False, "green is referenced by a live deployment (staged)"
+        if not stopped:
+            try:
+                _attrs = getattr(container, "attrs", None)
+                _created = _attrs.get("Created", "") if isinstance(_attrs, dict) else ""
+                if isinstance(_created, str) and len(_created) >= 19:
+                    from datetime import datetime as _dt
+                    _cdt = _dt.fromisoformat(_created[:26].rstrip("Z") + "+00:00")
+                    if (timezone.now() - _cdt).total_seconds() < 1200:
+                        return False, "running green container within 20m deploy grace"
+            except Exception:
+                pass
         return True, "stale blue-green candidate (not referenced by any deployment)"
 
     # ── Expired rollback backups ───────────────────────────────────────
@@ -267,7 +278,7 @@ def _clear_orphaned_runtime_resources() -> dict:
 
     image_prune: dict = {}
     try:
-        image_prune = client.images.prune(filters={"dangling": ["false"]}) or {}
+        image_prune = client.images.prune(filters={"dangling": ["false"], "label!": ["smsly.keep=true"]}) or {}
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Failed to prune unused images: %s", exc)
         errors.append({"name": "unused-images", "error": str(exc)})

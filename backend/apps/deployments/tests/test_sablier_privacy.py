@@ -66,9 +66,8 @@ class SablierWakeRetryTests(SimpleTestCase):
         self.assertEqual(
             labels["traefik.http.middlewares.myapp-wakeretry.retry.initialinterval"],
             "2s")
-        self.assertEqual(
-            labels["traefik.http.middlewares.myapp-wakeretry.retry.retryexpression"],
-            "IsNetworkError() || ResponseCode() >= 500")
+        self.assertNotIn(
+            "traefik.http.middlewares.myapp-wakeretry.retry.retryexpression", labels)
         self.assertNotIn(
             "traefik.http.middlewares.myapp-wakeretry.retry.status", labels)
         self.assertEqual(sablier_retry_ref("myapp"), "myapp-wakeretry")

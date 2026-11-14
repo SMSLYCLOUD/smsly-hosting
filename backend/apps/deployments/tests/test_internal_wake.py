@@ -58,8 +58,14 @@ class InternalWakeLabelsTests(SimpleTestCase):
         self.assertEqual(
             labels[chain + "sablierUrl"], "http://sablier:10000")
         self.assertEqual(
-            labels["traefik.http.middlewares.svc_a-internal-wakeretry.retry.retryexpression"],
-            "IsNetworkError() || ResponseCode() >= 500")
+            labels["traefik.http.middlewares.svc_a-internal-wakeretry.retry.attempts"],
+            "5")
+        self.assertEqual(
+            labels["traefik.http.middlewares.svc_a-internal-wakeretry.retry.initialinterval"],
+            "2s")
+        self.assertNotIn(
+            "traefik.http.middlewares.svc_a-internal-wakeretry.retry.retryexpression",
+            labels)
 
     def test_internal_router_carries_wake_chain(self):
         # The router itself must reference the chain: without this the

@@ -294,7 +294,8 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
 
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
         try:
-            os.chmod(CADDY_CONFIG_DIR, 0o775)
+            if (os.stat(CADDY_CONFIG_DIR).st_mode & 0o777) != 0o775:
+                os.chmod(CADDY_CONFIG_DIR, 0o775)
         except (OSError, PermissionError) as chmod_exc:
             logger.warning("chmod on %s failed (%s) — continuing with probe", CADDY_CONFIG_DIR, chmod_exc)
         probe = os.path.join(CADDY_CONFIG_DIR, ".perm_probe")
@@ -343,7 +344,8 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             handle.write(content)
         os.replace(tmp_path, CADDY_FILE_PATH)
         try:
-            os.chmod(CADDY_FILE_PATH, 0o664)
+            if (os.stat(CADDY_FILE_PATH).st_mode & 0o777) != 0o664:
+                os.chmod(CADDY_FILE_PATH, 0o664)
         except (OSError, PermissionError) as chmod_exc:
             logger.warning("chmod on %s failed (%s) — continuing", CADDY_FILE_PATH, chmod_exc)
 

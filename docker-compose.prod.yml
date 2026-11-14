@@ -833,6 +833,7 @@ services:
           memory: ${VERDACCIO_MEMORY_LIMIT:-256M}
 
   backend:
+    init: true
     security_opt:
       - apparmor:docker-default
     # napd reachability: backend wakes sleeping infra tiers via the host
@@ -971,6 +972,7 @@ services:
     - traefik.docker.network=smsly-net
     - managed_by=smsly-hosting
   celery:
+    init: true
     security_opt:
       - apparmor:docker-default
     # napd reachability (cooperative tier wake from worker tasks).
@@ -1066,6 +1068,7 @@ services:
         limits:
           memory: ${CELERY_MEMORY_LIMIT:-4G}
   celery-beat:
+    init: true
     security_opt:
       - apparmor:docker-default
     # napd reachability (cooperative tier wake from worker tasks).
@@ -1180,6 +1183,7 @@ services:
     - traefik.docker.network=smsly-net
     - managed_by=smsly-hosting
   celery-fast:
+    init: true
     security_opt:
       - apparmor:docker-default
     # napd reachability (cooperative tier wake from worker tasks).
@@ -1268,6 +1272,7 @@ services:
         limits:
           memory: ${CELERY_FAST_MEMORY_LIMIT:-2G}
   celery-deploy:
+    init: true
     security_opt:
       - apparmor:docker-default
     # napd reachability: builds wake the buildcache tier from this worker.

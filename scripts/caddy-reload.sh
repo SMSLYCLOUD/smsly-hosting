@@ -218,6 +218,12 @@ apply_validated_caddyfile() {
     return 0
 }
 
+CANDIDATE_CADDY=""
+cleanup_candidate() {
+    rm -f "${CANDIDATE_CADDY:-}" 2>/dev/null || true
+}
+trap cleanup_candidate EXIT
+
 while true; do
     # Check for reload flag
     if [ -f "$RELOAD_FLAG" ]; then
@@ -248,8 +254,8 @@ while true; do
                         fi
                         echo "$LOG_PREFIX Caddy reloaded successfully"
                         # Post-reload smoke (non-blocking)
-                        host_line=$(grep -m1 -E '^[^#].*{?$' "$CANDIDATE_CADDY" | head -n1 | awk '{print $1}')
-                        wildcard_line=$(grep -m1 -E '^\\*\\.' "$CANDIDATE_CADDY" | head -n1 | awk '{print $1}')
+                        host_line=$( { grep -m1 -E '^[a-zA-Z0-9.-]+(\.[a-zA-Z0-9-]+)+' "$CANDIDATE_CADDY" || true; } | awk '{print $1}' | tr -d '{' )
+                        wildcard_line=$( { grep -m1 -E '^\*\.' "$CANDIDATE_CADDY" || true; } | awk '{print $1}' | tr -d '{' )
                         if command -v bash  && [ -x "/opt/smsly-hosting/scripts/smoke_routes.sh" ]; then
                             /opt/smsly-hosting/scripts/smoke_routes.sh "$host_line" "$wildcard_line" >/var/log/caddy/smoke.log  || true
                         fi

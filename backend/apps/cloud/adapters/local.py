@@ -253,7 +253,7 @@ def _probe_health_status(
         f"code=$(curl -s -o /dev/null -w '%{{http_code}}' -m {timeout_seconds} '{url}'); "
         "fi; "
         "if [ \"$code\" = \"000\" ] && command -v node >/dev/null 2>&1; then "
-        "code=$(node -e \"const u=URL('{url}');const x=require('http').get(u,r=>"
+        f"code=$(node -e \"const x=require('http').get('{url}',r=>"
         "{console.log(r.statusCode);process.exit(0)});"
         "x.on('error',()=>{console.log(0);process.exit(0)})\"); "
         "fi; "
@@ -261,7 +261,10 @@ def _probe_health_status(
     )
     try:
         exec_result = container.exec_run(["sh", "-c", script], demux=True)
-        raw = (exec_result[1] or b'').decode(errors='replace').strip()
+        out = exec_result[1]
+        if isinstance(out, tuple):
+            out = out[0] or b''
+        raw = (out or b'').decode(errors='replace').strip()
         code_str = raw.splitlines()[-1].strip() if raw else ''
         return int(code_str) if code_str.isdigit() else 0
     except Exception:
@@ -291,13 +294,15 @@ def _all_paths_auth_locked(
             docker_client, container, port, path,
             timeout_seconds=timeout_seconds,
         )
-        if code in (0,):
+        if code in (0, 404):
+            # Missing fallback route (e.g. /api/health -> 404 while /health -> 401)
+            # must not falsely classify an auth-locked service as unguarded.
             continue
         answered += 1
         if code in (401, 403):
             auth_locked += 1
         else:
-            # A 2xx/3xx/404/5xx answer exists — not every path is locked.
+            # A 2xx/3xx/5xx answer exists — not every existing path is locked.
             return False
     return answered > 0 and auth_locked == answered
 
@@ -354,6 +359,140 @@ def _detect_working_health_path(
             path, code,
         )
     return None
+
+
+def _promote_hold_dir() -> str:
+    """Resolve Traefik dynamic config directory for promote hold files."""
+    env_dir = os.environ.get("TRAEFIK_DYNAMIC_DIR")
+    if env_dir:
+        return env_dir
+    try:
+        from apps.deployments.services.traefik_manager import canary_file
+        return canary_file.TRAEFIK_DYNAMIC_DIR
+    except Exception:
+        return "/traefik-dynamic"
+
+
+def _discover_container_router(
+    labels: dict[str, Any] | None,
+    preferred_rule: str = "",
+    default_port: str = "8000",
+) -> tuple[str, dict[str, Any]] | None:
+    """Extract primary Traefik router metadata from a container's labels."""
+    labels = labels or {}
+    candidates: list[tuple[str, str]] = []
+    for key, val in labels.items():
+        if not isinstance(key, str):
+            continue
+        match = re.fullmatch(r"traefik\.http\.routers\.([^.]+)\.rule", key)
+        if not match:
+            continue
+        rname = match.group(1)
+        rule = str(val or "").strip()
+        if not rule or rname.endswith("-internal") or "disabled.localhost" in rule:
+            continue
+        candidates.append((rname, rule))
+    if not candidates:
+        return None
+    rname, rule = next(
+        (c for c in candidates if preferred_rule and c[1] == preferred_rule),
+        candidates[0],
+    )
+    svc_ref = str(labels.get(f"traefik.http.routers.{rname}.service") or rname).strip()
+    port = str(
+        labels.get(f"traefik.http.services.{svc_ref}.loadbalancer.server.port")
+        or default_port
+    ).strip()
+    entrypoints = [
+        e.strip()
+        for e in str(labels.get(f"traefik.http.routers.{rname}.entrypoints", "web") or "web").split(",")
+        if e.strip()
+    ] or ["web"]
+    raw_mws = [
+        mw.strip()
+        for mw in str(labels.get(f"traefik.http.routers.{rname}.middlewares", "") or "").split(",")
+        if mw.strip()
+    ]
+    middlewares = [mw if "@" in mw else f"{mw}@docker" for mw in raw_mws]
+    try:
+        priority = int(labels.get(f"traefik.http.routers.{rname}.priority") or 100)
+    except (TypeError, ValueError):
+        priority = 100
+    tls_resolver = str(labels.get(f"traefik.http.routers.{rname}.tls.certresolver") or "").strip()
+    return rname, {
+        "rule": rule,
+        "port": port,
+        "entrypoints": entrypoints,
+        "middlewares": middlewares,
+        "priority": priority,
+        "tls_resolver": tls_resolver,
+    }
+
+
+def _write_promote_hold_file(
+    hold_name: str,
+    old_ip: str,
+    router_info: dict[str, Any],
+) -> str | None:
+    """Write temporary Traefik file-provider hold router pointing to old_ip."""
+    import tempfile
+    import yaml
+
+    try:
+        dynamic_dir = _promote_hold_dir()
+        if not dynamic_dir or not os.path.isdir(dynamic_dir):
+            return None
+        safe = re.sub(r"[^A-Za-z0-9-]", "-", str(hold_name or "svc"))
+        target = os.path.join(dynamic_dir, f"promote-{safe}.yml")
+        router_id = f"{safe}-promote-hold"
+        svc_id = f"{safe}-promote-hold-svc"
+        router_cfg: dict[str, Any] = {
+            "rule": router_info["rule"],
+            "priority": int(router_info.get("priority", 100)) + 50,
+            "entryPoints": list(router_info.get("entrypoints") or ["web"]),
+            "service": svc_id,
+        }
+        if router_info.get("middlewares"):
+            router_cfg["middlewares"] = list(router_info["middlewares"])
+        if router_info.get("tls_resolver"):
+            router_cfg["tls"] = {"certResolver": router_info["tls_resolver"]}
+        payload = {
+            "http": {
+                "routers": {router_id: router_cfg},
+                "services": {
+                    svc_id: {
+                        "loadBalancer": {
+                            "passHostHeader": True,
+                            "servers": [{"url": f"http://{old_ip}:{router_info['port']}"}],
+                        }
+                    }
+                },
+            }
+        }
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".promote-", suffix=".yml.tmp", dir=dynamic_dir,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(payload, handle, default_flow_style=False, sort_keys=False)
+            os.chmod(tmp_path, 0o644)
+            os.replace(tmp_path, target)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+        return target
+    except Exception as exc:
+        logger.warning("Promote hold file write skipped for %s: %s", hold_name, exc)
+        return None
+
+
+def _remove_promote_hold_file(hold_path: str | None) -> None:
+    """Remove temporary promote hold file if present."""
+    if not hold_path:
+        return
+    with contextlib.suppress(FileNotFoundError, OSError):
+        os.unlink(hold_path)
 
 
 class LocalAdapter(BaseCloudAdapter):
@@ -437,11 +576,12 @@ class LocalAdapter(BaseCloudAdapter):
             logger.exception("Failed to apply egress restrictions for %s", network_name)
 
     def _get_traefik_labels(self, name: str, host_rule: str, port: str,
-                            is_public: bool = True, network_name: str | None = None) -> dict[str, str]:
+                            is_public: bool = True, network_name: str | None = None,
+                            router_name: str | None = None) -> dict[str, str]:
         """Generate consistent Traefik labels for routing."""
         if not network_name:
             network_name = self._resolve_network_name()
-        router_name = name.replace('.', '-').replace('_', '-')
+        router_name = (router_name or name).replace('.', '-').replace('_', '-')
 
         enable_tls = (
             str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower()
@@ -462,12 +602,12 @@ class LocalAdapter(BaseCloudAdapter):
             labels[f'traefik.http.routers.{router_name}.tls.certresolver'] = 'letsencrypt'
 
         labels[f'traefik.http.routers.{router_name}.entrypoints'] = ','.join(entrypoints)
-        self._apply_crowdsec_middleware(labels, name)
-        self._apply_edge_middlewares(labels, name)
+        self._apply_crowdsec_middleware(labels, name, router_name=router_name)
+        self._apply_edge_middlewares(labels, name, router_name=router_name)
         return labels
 
     def _apply_crowdsec_middleware(
-        self, labels: dict[str, str], name: str,
+        self, labels: dict[str, str], name: str, router_name: str | None = None,
     ) -> None:
         """Attach the CrowdSec bouncer middleware to a service router.
 
@@ -481,7 +621,7 @@ class LocalAdapter(BaseCloudAdapter):
             "1", "true", "yes", "on",
         }:
             return
-        router_name = name.replace('.', '-').replace('_', '-')
+        router_name = (router_name or name).replace('.', '-').replace('_', '-')
         key = f'traefik.http.routers.{router_name}.middlewares'
         existing = [m.strip() for m in str(labels.get(key, "") or "").split(",") if m.strip()]
         if "crowdsec-bouncer@docker" not in existing:
@@ -489,7 +629,7 @@ class LocalAdapter(BaseCloudAdapter):
         labels[key] = ",".join(existing)
 
     def _apply_edge_middlewares(
-        self, labels: dict[str, str], name: str,
+        self, labels: dict[str, str], name: str, router_name: str | None = None,
     ) -> None:
         """Attach shared secure-headers + opt-in sablier/forward-auth.
 
@@ -507,7 +647,7 @@ class LocalAdapter(BaseCloudAdapter):
             ensure_edge_shared_file()
         except Exception:
             logger.warning("Edge shared file ensure failed for %s", name)
-        router_name = name.replace('.', '-').replace('_', '-')
+        router_name = (router_name or name).replace('.', '-').replace('_', '-')
         key = f'traefik.http.routers.{router_name}.middlewares'
         existing = [m.strip() for m in str(labels.get(key, "") or "").split(",") if m.strip()]
         if "secure-headers-strict@file" not in existing:
@@ -563,6 +703,7 @@ class LocalAdapter(BaseCloudAdapter):
         labels: dict[str, str],
         name: str,
         env: dict[str, str] | None,
+        router_name: str | None = None,
     ) -> None:
         """Attach extra Traefik labels needed by managed routers."""
         env = env or {}
@@ -574,7 +715,7 @@ class LocalAdapter(BaseCloudAdapter):
         if not str(env.get('LITELLM_MASTER_KEY', '')).strip():
             return
 
-        router_name = name.replace('.', '-').replace('_', '-')
+        router_name = (router_name or name).replace('.', '-').replace('_', '-')
         normalized_base = api_base if api_base.startswith('/') else f'/{api_base}'
         middleware_name = f'{router_name}-api-base'
         labels[f'traefik.http.middlewares.{middleware_name}.replacepathregex.regex'] = (
@@ -584,7 +725,7 @@ class LocalAdapter(BaseCloudAdapter):
         labels[f'traefik.http.routers.{router_name}.middlewares'] = middleware_name
         labels[f'traefik.http.routers.{router_name}.priority'] = '1000'
         # Keep CrowdSec enforcement alongside the rewrite middleware.
-        self._apply_crowdsec_middleware(labels, name)
+        self._apply_crowdsec_middleware(labels, name, router_name=router_name)
 
     def authenticate(self) -> bool:
         return self.docker_client is not None
@@ -1166,6 +1307,7 @@ class LocalAdapter(BaseCloudAdapter):
             "labels": labels,
             "volumes": docker_volumes if docker_volumes else None,
             "restart_policy": rp,
+            "init": True,
             "security_opt": ["no-new-privileges:true", "apparmor:docker-default"],
             "cap_drop": ["ALL"],
             "cap_add": ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
@@ -1742,17 +1884,76 @@ class LocalAdapter(BaseCloudAdapter):
         green_host_config = green.attrs.get('HostConfig', {}) or {}
         green_env = green_config.get('Env', [])
 
+        base_router_name = name.replace('.', '-').replace('_', '-')
+        old_container = None
+        old_is_live_running = False
+        old_ip = ""
+        old_router_info = None
+        backup_name = ""
+        try:
+            if self.docker_client is None:
+                raise RuntimeError("Docker client unavailable")
+            old_container = self.docker_client.containers.get(name)
+            with contextlib.suppress(Exception):
+                old_container.reload()
+            old_is_live_running = (
+                str(getattr(old_container, "status", "") or "").lower() == "running"
+            )
+            if old_is_live_running:
+                old_attrs = getattr(old_container, "attrs", None) or {}
+                old_net_map = ((old_attrs.get("NetworkSettings") or {}).get("Networks") or {})
+                old_ip = str((old_net_map.get(network_name) or {}).get("IPAddress") or "").strip()
+                if not old_ip:
+                    for _nd in old_net_map.values():
+                        if isinstance(_nd, dict) and _nd.get("IPAddress"):
+                            old_ip = str(_nd["IPAddress"]).strip()
+                            break
+                old_labels_map = (
+                    getattr(old_container, "labels", None)
+                    or (old_attrs.get("Config") or {}).get("Labels")
+                    or {}
+                )
+                old_router_info = _discover_container_router(
+                    old_labels_map, preferred_rule=host_rule, default_port=str(port),
+                )
+        except docker.errors.NotFound:
+            old_container = None
+            logger.info("Blue-green promote: no existing live container for %s", name)
+
+        if old_is_live_running:
+            slot = secrets.token_hex(3)
+            target_router_name = f"{base_router_name}-bg-{slot}"
+            old_router_name = old_router_info[0] if old_router_info else ""
+            while old_router_name and target_router_name == old_router_name:
+                slot = secrets.token_hex(3)
+                target_router_name = f"{base_router_name}-bg-{slot}"
+            create_name = f"{name}-promoting-{slot}"
+        else:
+            target_router_name = base_router_name
+            create_name = name
+
         live_labels = {
             'managed_by': 'smsly-hosting',
         }
         # Add core routing labels
-        live_labels.update(self._get_traefik_labels(name, host_rule, port, is_public, network_name=network_name))
+        live_labels.update(
+            self._get_traefik_labels(
+                name,
+                host_rule,
+                port,
+                is_public,
+                network_name=network_name,
+                router_name=target_router_name,
+            )
+        )
         promoted_env = {}
         for item in green_env:
             key, _sep, value = str(item).partition("=")
             if key:
                 promoted_env[key] = value
-        self._apply_router_special_labels(live_labels, name, promoted_env)
+        self._apply_router_special_labels(
+            live_labels, name, promoted_env, router_name=target_router_name,
+        )
 
         # Preserve metadata labels. com.paas.* MUST survive promotion:
         # SPIRE entries select docker:label:com.paas.service, so dropping
@@ -1797,7 +1998,7 @@ class LocalAdapter(BaseCloudAdapter):
         hc_timeout = green_labels.get('smsly.blue_green.hc_timeout')
         hc_port = green_labels.get('smsly.blue_green.port', '8000')
         if hc_path:
-            router_name = name.replace('.', '-').replace('_', '-')
+            router_name = target_router_name
             hc_paths = _health_paths(hc_path)
             hc_path_primary = hc_paths[0] if hc_paths else hc_path or "/"
             auth_locked = False
@@ -1889,52 +2090,46 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             rp = {"Name": promoted_restart_policy, "MaximumRetryCount": 5}
 
-        old_container = None
-        backup_name = ""
-        try:
-            if self.docker_client is None:
-                raise RuntimeError("Docker client unavailable")
-            old_container = self.docker_client.containers.get(name)
-            backup_name = f"{name}-rollback-{secrets.token_hex(3)}"
-            # Stop the old container BEFORE renaming/creating the new one
-            # to avoid a Traefik router conflict: both containers would
-            # share identical routing labels (Docker labels are immutable on
-            # running containers).  The rollback logic below restarts the
-            # backup if promote fails.
-            try:
-                old_container.stop(timeout=10)
-            except Exception:
-                pass
-            old_container.rename(backup_name)
-            # Labels are immutable on running containers — Docker SDK update()
-            # does not support them. Store TTL as an env var instead so the
-            # stale scanner can read it from inspect.
+        import time as _time
+
+        def _preserve_old_container(target_old, stop_first: bool) -> str:
+            b_name = f"{name}-rollback-{secrets.token_hex(3)}"
+            if stop_first:
+                try:
+                    target_old.stop(timeout=10)
+                except Exception:
+                    pass
+            target_old.rename(b_name)
             try:
                 grace_min = 10
                 from apps.deployments.models.platform import PlatformConfig
                 grace_min = PlatformConfig.load().rollback_grace_minutes or 10
             except Exception:
                 grace_min = 10
-            import time as _time
             ttl_epoch = str(_time.time() + grace_min * 60)
             try:
-                old_container.update(labels={'smsly.rollback.ttl': ttl_epoch})
+                target_old.update(labels={'smsly.rollback.ttl': ttl_epoch})
             except (TypeError, ValueError):
                 # Docker SDK update() does not support labels — non-fatal.
                 pass
             logger.info(
                 "Blue-green promote: preserved live container as %s (TTL %s min)",
-                backup_name,
+                b_name,
                 grace_min,
             )
-        except docker.errors.NotFound:
-            logger.info("Blue-green promote: no existing live container for %s", name)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to preserve current live container before promote: {exc}"
-            ) from exc
+            return b_name
+
+        if old_container is not None and not old_is_live_running:
+            try:
+                backup_name = _preserve_old_container(old_container, stop_first=True)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to preserve current live container before promote: {exc}"
+                ) from exc
 
         promoted = None
+        hold_path = None
+        old_container_cutover = False
         promote_health_timeout = _env_int(
             "BLUE_GREEN_PROMOTE_HEALTH_TIMEOUT_SECONDS",
             300,
@@ -1952,6 +2147,23 @@ class LocalAdapter(BaseCloudAdapter):
 
             self._apply_egress_restrictions(network_name)
 
+            # Hold external edge traffic on the running old container while
+            # the promoted container starts and passes healthchecks using a
+            # distinct Traefik router/container name.
+            if old_is_live_running and is_public and old_ip:
+                fallback_info = {
+                    "rule": host_rule,
+                    "port": str(port),
+                    "entrypoints": ["web"],
+                    "middlewares": ["crowdsec-bouncer@docker", "secure-headers-strict@file"],
+                    "priority": 100,
+                    "tls_resolver": "",
+                }
+                hold_info = old_router_info[1] if old_router_info else fallback_info
+                hold_path = _write_promote_hold_file(base_router_name, old_ip, hold_info)
+                if hold_path:
+                    _time.sleep(0.8)
+
             # Same dual-homing logic as _deploy_docker. The promoted
             # container must be on BOTH the project-scoped bridge and the
             # platform-wide bridge so service-to-service traffic (intra- AND
@@ -1966,21 +2178,24 @@ class LocalAdapter(BaseCloudAdapter):
                     promote_aliases.append(_mesh_alias2)
             except Exception as exc:
                 logger.debug("Mesh alias lookup skipped on promote for %s: %s", name, exc)
+            initial_aliases = [create_name] if old_is_live_running else promote_aliases
             promote_networks_dict: dict[str, Any] = {
                 network_name: self.docker_client.api.create_endpoint_config(
-                    aliases=promote_aliases
+                    aliases=initial_aliases
                 )
             }
+            use_platform_bridge = False
             try:
                 _promote_svc = Service.objects.filter(
                     id=getattr(self, '_service_id', None)
                 ).only('use_internal_network').first() if getattr(self, '_service_id', None) else None
                 if _promote_svc and getattr(_promote_svc, 'use_internal_network', True):
                     platform_bridge = ensure_platform_bridge()
-                    if platform_bridge != network_name:
+                    use_platform_bridge = platform_bridge != network_name
+                    if use_platform_bridge:
                         promote_networks_dict[platform_bridge] = (
                             self.docker_client.api.create_endpoint_config(
-                                aliases=promote_aliases
+                                aliases=initial_aliases
                             )
                         )
             except Exception as exc:
@@ -1988,7 +2203,7 @@ class LocalAdapter(BaseCloudAdapter):
 
             create_kwargs = {
                 "image": image_ref,
-                "name": name,
+                "name": create_name,
                 "environment": green_env,
                 # docker-py 7.x quirk (see _deploy_docker for the full
                 # story): networking_config alone is silently dropped by
@@ -2001,6 +2216,7 @@ class LocalAdapter(BaseCloudAdapter):
                 "labels": live_labels,
                 "volumes": green_volumes,
                 "restart_policy": rp,
+                "init": True,
                 "command": green_cmd,
                 "entrypoint": green_entrypoint,
                 "security_opt": ["no-new-privileges:true", "apparmor:docker-default"],
@@ -2016,28 +2232,26 @@ class LocalAdapter(BaseCloudAdapter):
             try:
                 promoted = self.docker_client.containers.create(**create_kwargs)
             except docker.errors.APIError as create_exc:
-                # 409 race: another actor (concurrent deploy/refresh) recreated
-                # the canonical name between our preserve step and this create.
-                # Rename the current holder aside and retry ONCE instead of
-                # failing the whole promotion (2026-09-26 audit 409 incident).
+                # 409 race: another actor (concurrent deploy/refresh) created
+                # create_name concurrently. Move holder aside and retry once.
                 if "409" not in str(create_exc) and "Conflict" not in str(create_exc):
                     raise
                 logger.warning(
-                    "Blue-green promote: canonical name %s taken at create "
+                    "Blue-green promote: name %s taken at create "
                     "(concurrent actor?) — moving holder aside and retrying once",
-                    name,
+                    create_name,
                 )
                 try:
-                    _holder = self.docker_client.containers.get(name)
+                    _holder = self.docker_client.containers.get(create_name)
                     _holder.stop(timeout=10)
                 except Exception:
                     pass
                 try:
-                    _holder = self.docker_client.containers.get(name)
-                    _holder.rename(f"{name}-promote-conflict-{secrets.token_hex(3)}")
+                    _holder = self.docker_client.containers.get(create_name)
+                    _holder.rename(f"{create_name}-promote-conflict-{secrets.token_hex(3)}")
                 except Exception as rename_exc:
                     raise RuntimeError(
-                        f"Promote create conflict on {name} and holder "
+                        f"Promote create conflict on {create_name} and holder "
                         f"could not be moved aside: {rename_exc}"
                     ) from create_exc
                 promoted = self.docker_client.containers.create(**create_kwargs)
@@ -2050,45 +2264,87 @@ class LocalAdapter(BaseCloudAdapter):
                     f"Promoted container failed health checks: {promoted.id[:12]}"
                 )
 
-            # Self-heal the network attachments. The create() call above
-            # SHOULD have attached both bridges (plain-dict networking_config),
-            # but if the Docker daemon raced us or the endpoint config was
-            # rejected, the container may be missing a bridge. Verify actual
-            # attachment and repair it instead of blindly disconnecting
-            # (the old disconnect-then-connect pattern threw
-            # "container is not connected to network" and left the promoted
-            # container unreachable by Traefik).
-            try:
-                promoted.reload()
-                attached = set(
-                    ((promoted.attrs.get('NetworkSettings') or {}).get('Networks') or {}).keys()
-                )
-                expected = {network_name}
+            if old_is_live_running and old_container is not None:
+                backup_name = _preserve_old_container(old_container, stop_first=False)
+                old_container_cutover = True
+                promoted.rename(name)
+
                 try:
-                    _bridge_check = ensure_platform_bridge()
-                    expected.add(_bridge_check)
-                except Exception:
-                    pass
-                for needed_net in sorted(expected):
-                    if needed_net in attached:
-                        continue
+                    promoted.reload()
+                    attached = set(
+                        ((promoted.attrs.get('NetworkSettings') or {}).get('Networks') or {}).keys()
+                    )
+                    expected = {network_name}
                     try:
-                        missing_net = self.docker_client.networks.get(needed_net)
-                        missing_net.connect(promoted, aliases=[name, f"{name}.default.internal"])
-                        logger.info(
-                            "Blue-green promote: repaired missing network attachment %s for %s",
-                            needed_net, name,
-                        )
-                    except Exception as repair_exc:
-                        logger.warning(
-                            "Blue-green promote: could not attach %s to %s: %s",
-                            name, needed_net, repair_exc,
-                        )
-            except Exception as exc:
-                logger.warning(
-                    "Blue-green promote: network attachment check failed: %s",
-                    exc,
-                )
+                        _bridge_check = ensure_platform_bridge()
+                        if use_platform_bridge or _bridge_check in attached:
+                            expected.add(_bridge_check)
+                    except Exception:
+                        pass
+                    for needed_net in sorted(expected):
+                        try:
+                            net_obj = self.docker_client.networks.get(needed_net)
+                            if needed_net in attached:
+                                net_obj.disconnect(promoted)
+                            net_obj.connect(promoted, aliases=promote_aliases)
+                        except Exception as alias_exc:
+                            logger.warning(
+                                "Blue-green promote: alias cutover failed on %s for %s: %s",
+                                needed_net, name, alias_exc,
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "Blue-green promote: network alias cutover check failed: %s",
+                        exc,
+                    )
+
+                # Allow Traefik Docker provider to observe promoted's final IP and
+                # run its initial active health probe while the hold router keeps
+                # serving edge traffic cleanly via old_container.
+                _time.sleep(1.5)
+                _remove_promote_hold_file(hold_path)
+                hold_path = None
+                _time.sleep(0.8)
+            else:
+                # Self-heal the network attachments. The create() call above
+                # SHOULD have attached both bridges (plain-dict networking_config),
+                # but if the Docker daemon raced us or the endpoint config was
+                # rejected, the container may be missing a bridge. Verify actual
+                # attachment and repair it instead of blindly disconnecting
+                # (the old disconnect-then-connect pattern threw
+                # "container is not connected to network" and left the promoted
+                # container unreachable by Traefik).
+                try:
+                    promoted.reload()
+                    attached = set(
+                        ((promoted.attrs.get('NetworkSettings') or {}).get('Networks') or {}).keys()
+                    )
+                    expected = {network_name}
+                    try:
+                        _bridge_check = ensure_platform_bridge()
+                        expected.add(_bridge_check)
+                    except Exception:
+                        pass
+                    for needed_net in sorted(expected):
+                        if needed_net in attached:
+                            continue
+                        try:
+                            missing_net = self.docker_client.networks.get(needed_net)
+                            missing_net.connect(promoted, aliases=[name, f"{name}.default.internal"])
+                            logger.info(
+                                "Blue-green promote: repaired missing network attachment %s for %s",
+                                needed_net, name,
+                            )
+                        except Exception as repair_exc:
+                            logger.warning(
+                                "Blue-green promote: could not attach %s to %s: %s",
+                                name, needed_net, repair_exc,
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "Blue-green promote: network attachment check failed: %s",
+                        exc,
+                    )
 
             # Cache the platform-bridge IP for the API surface. The
             # promote path is the canonical case (skip_review=True
@@ -2157,7 +2413,12 @@ class LocalAdapter(BaseCloudAdapter):
                 with contextlib.suppress(Exception):
                     promoted.remove(force=True)
 
-            if old_container is not None and backup_name:
+            if old_is_live_running and not old_container_cutover and old_container is not None:
+                logger.info(
+                    "Blue-green promote failed before cutover for %s — live container untouched",
+                    name,
+                )
+            elif old_container is not None and backup_name:
                 try:
                     old_container.reload()
                 except docker.errors.NotFound:
@@ -2241,6 +2502,7 @@ class LocalAdapter(BaseCloudAdapter):
                             networking_config=emergency_networks,
                             labels=live_labels,
                             restart_policy=rp,
+                            init=True,
                             command=green_cmd,
                             security_opt=["no-new-privileges:true", "apparmor:docker-default"],
                             cap_drop=["ALL"],
@@ -2259,6 +2521,8 @@ class LocalAdapter(BaseCloudAdapter):
                         )
 
             raise RuntimeError(f"Blue-green promote failed: {exc}") from exc
+        finally:
+            _remove_promote_hold_file(hold_path)
 
     def _wait_container_healthy(
         self, container_id: str, timeout_seconds: int = 240, poll_seconds: int = 5

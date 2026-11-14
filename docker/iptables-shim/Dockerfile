@@ -1,4 +1,5 @@
 FROM alpine:3.20
+LABEL smsly.keep="true"
 
 # One-shot host-network firewall shim used by the SMSLY backend.
 #

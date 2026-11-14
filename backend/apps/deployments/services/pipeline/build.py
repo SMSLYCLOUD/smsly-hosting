@@ -1171,11 +1171,11 @@ class BuildMixin:
                     "--builder", builder_name,
                 ]
             else:
-                # Default path: daemon BuildKit via the plain CLI. No
-                # builder selection, no --load/--output flags (plain
-                # `docker build` loads into the daemon by default).
+                # Default path: BuildKit via buildx with explicit --load so
+                # both docker-container drivers and daemon drivers export to daemon.
                 cmd = [
-                    "docker", "build",
+                    "docker", "buildx", "build",
+                    "--load",
                     "--progress=plain",
                     "-t", tag, "-f", dockerfile_rel,
                 ]

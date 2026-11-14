@@ -767,3 +767,186 @@ class WaitContainerHealthyTests(SimpleTestCase):
                 "deadbeef", timeout_seconds=1, poll_seconds=1,
             )
         )
+
+
+class AuthLockedAndZeroDowntimePromoteTests(SimpleTestCase):
+    """Verify 404 fallback handling and zero-downtime live promotion."""
+
+    def test_all_paths_auth_locked_ignores_404_fallbacks(self):
+        from apps.cloud.adapters.local import _all_paths_auth_locked
+
+        with patch(
+            "apps.cloud.adapters.local._probe_health_status",
+            side_effect=[401, 404],
+        ):
+            self.assertTrue(
+                _all_paths_auth_locked(MagicMock(), MagicMock(), "8080", ["/health", "/api/health"])
+            )
+
+        with patch(
+            "apps.cloud.adapters.local._probe_health_status",
+            side_effect=[404, 404],
+        ):
+            self.assertFalse(
+                _all_paths_auth_locked(MagicMock(), MagicMock(), "8080", ["/health", "/api/health"])
+            )
+
+    def test_zero_downtime_promote_keeps_old_running_until_cutover(self):
+        from pathlib import Path
+        import tempfile
+        import yaml
+
+        adapter = object.__new__(LocalAdapter)
+        adapter._resolve_network_name = MagicMock(return_value="smsly-net")
+        adapter._apply_egress_restrictions = MagicMock()
+        adapter._wait_container_healthy = MagicMock(return_value=True)
+
+        events: list[str] = []
+        hold_snapshots: list[dict] = []
+
+        green = MagicMock()
+        green.id = "green-id-123"
+        green.name = "myapp-green"
+        green.image.tags = ["registry:5000/proj/myapp:v2"]
+        green.labels = {
+            "smsly.blue_green.port": "8000",
+            "smsly.blue_green.host_rule": "Host(`myapp.example.com`)",
+            "smsly.blue_green.is_public": "True",
+        }
+        green.attrs = {
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "Config": {"Env": [], "Cmd": None, "Entrypoint": None, "Healthcheck": None},
+            "HostConfig": {},
+        }
+
+        old_live = MagicMock()
+        old_live.status = "running"
+        old_live.name = "myapp"
+        old_live.labels = {
+            "traefik.http.routers.myapp.rule": "Host(`myapp.example.com`)",
+            "traefik.http.routers.myapp.priority": "100",
+            "traefik.http.routers.myapp.entrypoints": "web",
+            "traefik.http.routers.myapp.middlewares": "crowdsec-bouncer@docker",
+            "traefik.http.services.myapp.loadbalancer.server.port": "8000",
+        }
+        old_live.attrs = {
+            "NetworkSettings": {"Networks": {"smsly-net": {"IPAddress": "172.18.0.42"}}},
+            "Config": {"Labels": old_live.labels},
+        }
+        old_live.stop.side_effect = lambda **kw: events.append("old.stop")
+        old_live.rename.side_effect = lambda n: events.append(f"old.rename:{n}")
+
+        promoted = MagicMock()
+        promoted.id = "promoted-id-456"
+        promoted.attrs = {"NetworkSettings": {"Networks": {"smsly-net": {"IPAddress": "172.18.0.43"}}}}
+        promoted.start.side_effect = lambda: events.append("promoted.start")
+        promoted.rename.side_effect = lambda n: events.append(f"promoted.rename:{n}")
+
+        docker_client = MagicMock()
+        docker_client.containers.get.side_effect = lambda key: green if key == "green-id-123" else old_live
+        net_mock = MagicMock()
+        docker_client.networks.get.return_value = net_mock
+        adapter.docker_client = docker_client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hold_path = os.path.join(tmpdir, "promote-myapp.yml")
+
+            def _create_side_effect(**kwargs):
+                events.append(f"create:{kwargs['name']}")
+                self.assertTrue(kwargs.get("init"))
+                self.assertIn("-promoting-", kwargs["name"])
+                # Hold router must already be on disk pointing to old_ip before create
+                self.assertTrue(os.path.exists(hold_path))
+                hold_snapshots.append(yaml.safe_load(Path(hold_path).read_text()))
+                # Old container must still be untouched before promoted is healthy
+                old_live.stop.assert_not_called()
+                old_live.rename.assert_not_called()
+                return promoted
+
+            docker_client.containers.create.side_effect = _create_side_effect
+
+            with patch.dict(os.environ, {"TRAEFIK_DYNAMIC_DIR": tmpdir}), patch("time.sleep"):
+                res = adapter.promote_container("myapp", "green-id-123")
+
+            self.assertEqual(res, "promoted-id-456")
+            self.assertFalse(os.path.exists(hold_path))
+
+        # Verify hold router targeted old container IP and bumped priority
+        svc = hold_snapshots[0]["http"]["services"]["myapp-promote-hold-svc"]["loadBalancer"]
+        self.assertEqual(svc["servers"][0]["url"], "http://172.18.0.42:8000")
+        rtr = hold_snapshots[0]["http"]["routers"]["myapp-promote-hold"]
+        self.assertEqual(rtr["priority"], 150)
+
+        # Old container stopped only AFTER promoted start & rename
+        self.assertLess(events.index("promoted.rename:myapp"), events.index("old.stop"))
+
+        # Promoted labels must use a slot router name (not colliding with myapp)
+        create_labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertNotIn("traefik.http.routers.myapp.rule", create_labels)
+        bg_rules = [k for k in create_labels if k.startswith("traefik.http.routers.myapp-bg-") and k.endswith(".rule")]
+        self.assertEqual(len(bg_rules), 1)
+
+    def test_zero_downtime_promote_failure_leaves_old_live_untouched(self):
+        import tempfile
+
+        adapter = object.__new__(LocalAdapter)
+        adapter._resolve_network_name = MagicMock(return_value="smsly-net")
+        adapter._apply_egress_restrictions = MagicMock()
+        adapter._wait_container_healthy = MagicMock(return_value=False)
+
+        green = MagicMock()
+        green.id = "green-id-fail"
+        green.name = "myapp-green"
+        green.image.tags = ["registry:5000/proj/myapp:v2"]
+        green.labels = {
+            "smsly.blue_green.port": "8000",
+            "smsly.blue_green.host_rule": "Host(`myapp.example.com`)",
+            "smsly.blue_green.is_public": "True",
+        }
+        green.attrs = {
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "Config": {"Env": [], "Cmd": None, "Entrypoint": None, "Healthcheck": None},
+            "HostConfig": {},
+        }
+
+        old_live = MagicMock()
+        old_live.status = "running"
+        old_live.name = "myapp"
+        old_live.labels = {"traefik.http.routers.myapp.rule": "Host(`myapp.example.com`)"}
+        old_live.attrs = {
+            "NetworkSettings": {"Networks": {"smsly-net": {"IPAddress": "172.18.0.99"}}},
+            "Config": {"Labels": old_live.labels},
+        }
+
+        promoted = MagicMock()
+        promoted.id = "promoted-fail"
+
+        docker_client = MagicMock()
+        docker_client.containers.get.side_effect = lambda key: green if key == "green-id-fail" else old_live
+        docker_client.containers.create.return_value = promoted
+        adapter.docker_client = docker_client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hold_path = os.path.join(tmpdir, "promote-myapp.yml")
+            with patch.dict(os.environ, {"TRAEFIK_DYNAMIC_DIR": tmpdir}), patch("time.sleep"):
+                with self.assertRaises(RuntimeError):
+                    adapter.promote_container("myapp", "green-id-fail")
+
+            # Hold file must be cleaned up even on failure
+            self.assertFalse(os.path.exists(hold_path))
+
+        # Running live container was NEVER stopped, renamed, or disconnected
+        old_live.stop.assert_not_called()
+        old_live.rename.assert_not_called()
+        promoted.remove.assert_called()
+
+    def test_probe_health_status_handles_demux_tuple(self):
+        from apps.cloud.adapters.local import _probe_health_status
+
+        c_tuple = MagicMock()
+        c_tuple.exec_run.return_value = (0, (b"401\n", b""))
+        self.assertEqual(_probe_health_status(MagicMock(), c_tuple, "8080", "/health"), 401)
+
+        c_bytes = MagicMock()
+        c_bytes.exec_run.return_value = (0, b"200\n")
+        self.assertEqual(_probe_health_status(MagicMock(), c_bytes, "8080", "/health"), 200)

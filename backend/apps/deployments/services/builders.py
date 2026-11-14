@@ -132,6 +132,7 @@ def cleanup_stuck_buildkit():
     try:
         result = subprocess.run(
             ["docker", "ps", "-a", "--filter", "name=buildx_buildkit",
+             "--filter", "status=exited", "--filter", "status=dead",
              "--format", "{{.Names}}"],
             capture_output=True, text=True, timeout=30
         )
