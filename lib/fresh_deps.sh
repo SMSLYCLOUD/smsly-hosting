@@ -15,6 +15,20 @@ for svc in nginx apache2; do
         systemctl disable "$svc" || true
     fi
 done
+# If the egress-mirror nginx was stopped (either above or before this run),
+# clear its NAT REDIRECT rules so TCP/80 builds are not blackholed on :8888
+# until fresh_deploy re-enables the shim.
+_egress_port="${SMSLY_EGRESS_MIRROR_PORT:-8888}"
+if command -v iptables >/dev/null 2>&1 && ! ss -ltn 2>/dev/null | grep -qE ":${_egress_port}([[:space:]]|$)"; then
+    for _chain in PREROUTING OUTPUT; do
+        while read -r _rule; do
+            [ -n "${_rule:-}" ] || continue
+            iptables -t nat ${_rule/-A /-D } 2>/dev/null || true
+        done < <(iptables -t nat -S "$_chain" 2>/dev/null | grep -E "REDIRECT .*--to-ports? ${_egress_port}([[:space:]]|$)" || true)
+    done
+    unset _chain _rule
+fi
+unset _egress_port
 
 # ─── NUCLEAR CLEANUP: Remove ALL stale SMSLY containers, volumes, networks ──
 # This prevents: port conflicts, stale DB password volumes, orphan containers
