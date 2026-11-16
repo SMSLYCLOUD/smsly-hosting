@@ -166,6 +166,13 @@ SMSLYCLOUD/
 .kimchi/
 playwright-report/
 
+# Security hygiene (2026-10 review): never track dev databases or
+# API-fuzzing caches — they carry credential artifacts and noise.
+backend/fallback.db
+backend/db.sqlite3
+.schemathesis/
+tmp/
+
 # Standalone PXE/HTTP Boot Server project & OS disk images
 infrastructure/pxe-server/
 *.iso
@@ -217,3 +224,6 @@ crowdsec/cloudflare-bouncer.yaml
 
 # Local operator scratch (never commit)
 .scratch/
+
+# Local tooling state (session baselines, file snapshots) - never track.
+.mimosa/

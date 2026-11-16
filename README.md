@@ -96,6 +96,8 @@ The installer prompts you to choose:
 
 > **Note:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input unless you pre-seed SSL env vars.
 
+> **Verify the installer before executing it.** Every CI run publishes the `install.sh` SHA256 (Actions → *installer checksum* → artifacts). Download the checksum from a trusted source and compare: `sha256sum install.sh` must match. The installer runs as root — an unverified download is a root-level trust decision.
+
 ### Generate Secrets (Standalone)
 
 ```bash

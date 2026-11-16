@@ -306,3 +306,28 @@ jobs:
             apps/deployments/tests/test_security.py \
             apps/deployments/tests/test_security_fixes.py \
             apps/deployments/tests/test_authentication_hardening.py
+
+  installer-checksum:
+    name: installer checksum
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Compute install.sh SHA256
+        run: |
+          sha256sum install.sh > install.sh.sha256
+          cat install.sh.sha256
+          {
+            echo "### install.sh SHA256 (publish with every release)"
+            echo '```'
+            sha256sum install.sh
+            echo '```'
+            echo "Users should verify before executing: \`sha256sum -c install.sh.sha256\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-sha256
+          path: install.sh.sha256
