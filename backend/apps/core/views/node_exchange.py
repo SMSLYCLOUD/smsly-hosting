@@ -188,17 +188,16 @@ def node_token_exchange_via_gateway(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
-    # Verify timestamp freshness
+    # Verify timestamp freshness (60s window matches agent/remote HMAC auth)
     try:
         req_ts = int(timestamp)
-        if abs(int(time.time()) - req_ts) > 15:
+        if abs(int(time.time()) - req_ts) > 60:
             return Response({"error": "Timestamp expired."}, status=status.HTTP_401_UNAUTHORIZED)
     except ValueError:
         return Response({"error": "Invalid timestamp."}, status=status.HTTP_400_BAD_REQUEST)
 
     # SECURITY: nonce replay protection. Each nonce can be used once
-    # within the freshness window. Without this, a captured request
-    # can be replayed for up to 15s. Claimed only AFTER HMAC verifies
+    # within the freshness window. Claimed only AFTER HMAC verifies
     # (atomic cache.add): claiming before burns nonces on failed attempts
     # and leaves a TOCTOU replay race.
     from django.core.cache import cache
@@ -220,7 +219,7 @@ def node_token_exchange_via_gateway(request):
         _audit_node_token_attempt(node_name, _client_ip(request), success=False, reason='invalid_hmac_gateway')
         return Response({"error": "Invalid HMAC signature."}, status=status.HTTP_403_FORBIDDEN)
     try:
-        if not cache.add(nonce_key, "1", timeout=30):
+        if not cache.add(nonce_key, "1", timeout=120):
             _audit_node_token_attempt(node_name, _client_ip(request), success=False, reason='replayed_nonce')
             return Response({"error": "Nonce already used."}, status=status.HTTP_401_UNAUTHORIZED)
     except Exception:

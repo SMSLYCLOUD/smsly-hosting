@@ -348,6 +348,13 @@ class TestHostMemoryTuning(unittest.TestCase):
         self.assertRegex(reqs, r"(?m)^uvloop==\d+\.\d+", "uvloop must be pinned")
         self.assertRegex(reqs, r"(?m)^httptools==\d+\.\d+", "httptools must be pinned")
 
+    def test_monitor_respects_node_compose_file(self):
+        monitor = read("scripts/monitor_infra.sh")
+        self.assertIn("MODE_NODE", monitor)
+        self.assertIn("docker-compose.node.yml", monitor)
+        self.assertIn("docker-compose.agent-lite.yml", monitor)
+        self.assertIn("config --services", monitor)
+
 
 if __name__ == "__main__":
     unittest.main()

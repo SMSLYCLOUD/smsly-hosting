@@ -3740,6 +3740,32 @@ _harden_fail2ban_verify() {
 # --- lib/harden_ufw.sh ---
 #!/bin/bash
 
+_harden_ufw_wg0_rules() {
+    # Allow internal registry (5000), mesh DNS (53), and node control API
+    # (8000) ONLY over WireGuard (wg0) / explicit allowlisted node IPs.
+    if ip link show wg0 >/dev/null 2>&1; then
+        local _ufw_v=""
+        _ufw_v="$(ufw status verbose 2>/dev/null || true)"
+        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+            || ufw allow in on wg0 to any port 5000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 8000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+    fi
+    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
+        local _nip
+        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
+            [ -n "$_nip" ] || continue
+            ufw allow from "$_nip" to any port 5000 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
+        done
+    fi
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
@@ -3749,29 +3775,7 @@ _harden_ufw_bootstrap() {
         for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
-        # Multi-node registry access (see the inactive branch below for
-        # the security rationale — wg0 mesh or explicit node IPs only).
-        if ip link show wg0 >/dev/null 2>&1; then
-            ufw status verbose | grep -q "5000/tcp.*ALLOW" \
-                || ufw allow in on wg0 to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
-            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
-            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
-            # keeps "5353/5355"-style ports from matching, and the wg0
-            # scope keeps global 53 rules from suppressing the mesh one.
-            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
-                || ufw allow in on wg0 to any port 53 \
-                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-        fi
-        if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-            local _nip
-            for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-                [ -n "$_nip" ] || continue
-                ufw allow from "$_nip" to any port 5000 proto tcp \
-                    || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-            done
-        fi
+        _harden_ufw_wg0_rules
         # Whitelist Docker bridges
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
@@ -3795,30 +3799,7 @@ _harden_ufw_bootstrap() {
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
-    # ── Multi-node registry access (port 5000) ─────────────────────────
-    # NEVER open 5000 to the world. The registry holds every tenant's
-    # images. Two secure paths:
-    #   1. WireGuard mesh (preferred): wg0 interface allow — encrypted,
-    #      firewalled to configured peers.
-    #   2. NODE_REGISTRY_ALLOW_IPS (optional): explicit per-node public
-    #      IPs when WireGuard is unavailable.
-    # The public bind IP remains BLOCKED for everything else.
-    if ip link show wg0 >/dev/null 2>&1; then
-        ufw allow in on wg0 to any port 5000 proto tcp \
-            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
-        # mesh-only scoping as the registry above, never world-open.
-        ufw allow in on wg0 to any port 53 \
-            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-    fi
-    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
-        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-            [ -n "$_nip" ] || continue
-            ufw allow from "$_nip" to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-        done
-    fi
+    _harden_ufw_wg0_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
@@ -4018,6 +3999,21 @@ _harden_docker_daemon_verify() {
 # --- lib/harden_crowdsec.sh ---
 #!/bin/bash
 
+_harden_crowdsec_container() {
+    local _name=""
+    _name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' | head -n 1 || true)"
+    printf '%s' "${_name:-smsly-crowdsec}"
+}
+
+_harden_crowdsec_compose_file() {
+    if command -v is_node_mode >/dev/null 2>&1 && is_node_mode \
+       && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml" ]; then
+        printf '%s' "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml"
+        return 0
+    fi
+    printf '%s' "${COMPOSE_FILE:-${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml}"
+}
+
 _harden_crowdsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
@@ -4025,7 +4021,7 @@ _harden_crowdsec_bootstrap() {
     _harden_crowdsec_traefik_plugin_gate
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
-    if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         # Container already up — just register the bouncer if needed.
         _harden_crowdsec_register_bouncer
         return 0
@@ -4035,12 +4031,19 @@ _harden_crowdsec_bootstrap() {
     # so only pass --env-file when the file exists.
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        # fresh_deps runs before fresh_config generates .env; fresh_deploy
+        # starts crowdsec right after .env is ready, and verify converges it.
+        return 0
+    fi
     docker compose \
         "${env_args[@]}" \
-        -f "$COMPOSE_FILE" \
+        -f "$_cf" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec" && break
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
         sleep 2
     done
     _harden_crowdsec_register_bouncer
@@ -4088,11 +4091,13 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        local _cs_c=""
+        _cs_c="$(_harden_crowdsec_container)"
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -4219,12 +4224,14 @@ _harden_crowdsec_cloudflare_bouncer() {
         _harden_log warn "cloudflare bouncer: no LAPI key available, skipping"
         return 0
     fi
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_cs_c}$"; then
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -4238,7 +4245,9 @@ _harden_crowdsec_cloudflare_bouncer() {
         "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
-    if docker compose "${env_args[@]}" -f "$COMPOSE_FILE" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
     else
         _harden_log warn "cloudflare bouncer compose up failed (non-fatal)"
@@ -4247,16 +4256,18 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    timeout -k 5 60 docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
+    timeout -k 5 60 docker exec "$_cs_c" cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        timeout -k 5 60 docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
+        timeout -k 5 60 docker exec "$_cs_c" cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi
@@ -10438,6 +10449,32 @@ _harden_fail2ban_verify() {
 # --- lib/harden_ufw.sh ---
 #!/bin/bash
 
+_harden_ufw_wg0_rules() {
+    # Allow internal registry (5000), mesh DNS (53), and node control API
+    # (8000) ONLY over WireGuard (wg0) / explicit allowlisted node IPs.
+    if ip link show wg0 >/dev/null 2>&1; then
+        local _ufw_v=""
+        _ufw_v="$(ufw status verbose 2>/dev/null || true)"
+        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+            || ufw allow in on wg0 to any port 5000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 8000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+    fi
+    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
+        local _nip
+        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
+            [ -n "$_nip" ] || continue
+            ufw allow from "$_nip" to any port 5000 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
+        done
+    fi
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
@@ -10447,29 +10484,7 @@ _harden_ufw_bootstrap() {
         for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
-        # Multi-node registry access (see the inactive branch below for
-        # the security rationale — wg0 mesh or explicit node IPs only).
-        if ip link show wg0 >/dev/null 2>&1; then
-            ufw status verbose | grep -q "5000/tcp.*ALLOW" \
-                || ufw allow in on wg0 to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
-            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
-            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
-            # keeps "5353/5355"-style ports from matching, and the wg0
-            # scope keeps global 53 rules from suppressing the mesh one.
-            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
-                || ufw allow in on wg0 to any port 53 \
-                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-        fi
-        if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-            local _nip
-            for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-                [ -n "$_nip" ] || continue
-                ufw allow from "$_nip" to any port 5000 proto tcp \
-                    || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-            done
-        fi
+        _harden_ufw_wg0_rules
         # Whitelist Docker bridges
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
@@ -10493,30 +10508,7 @@ _harden_ufw_bootstrap() {
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
-    # ── Multi-node registry access (port 5000) ─────────────────────────
-    # NEVER open 5000 to the world. The registry holds every tenant's
-    # images. Two secure paths:
-    #   1. WireGuard mesh (preferred): wg0 interface allow — encrypted,
-    #      firewalled to configured peers.
-    #   2. NODE_REGISTRY_ALLOW_IPS (optional): explicit per-node public
-    #      IPs when WireGuard is unavailable.
-    # The public bind IP remains BLOCKED for everything else.
-    if ip link show wg0 >/dev/null 2>&1; then
-        ufw allow in on wg0 to any port 5000 proto tcp \
-            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
-        # mesh-only scoping as the registry above, never world-open.
-        ufw allow in on wg0 to any port 53 \
-            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-    fi
-    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
-        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-            [ -n "$_nip" ] || continue
-            ufw allow from "$_nip" to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-        done
-    fi
+    _harden_ufw_wg0_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
@@ -10716,6 +10708,21 @@ _harden_docker_daemon_verify() {
 # --- lib/harden_crowdsec.sh ---
 #!/bin/bash
 
+_harden_crowdsec_container() {
+    local _name=""
+    _name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' | head -n 1 || true)"
+    printf '%s' "${_name:-smsly-crowdsec}"
+}
+
+_harden_crowdsec_compose_file() {
+    if command -v is_node_mode >/dev/null 2>&1 && is_node_mode \
+       && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml" ]; then
+        printf '%s' "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml"
+        return 0
+    fi
+    printf '%s' "${COMPOSE_FILE:-${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml}"
+}
+
 _harden_crowdsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
@@ -10723,7 +10730,7 @@ _harden_crowdsec_bootstrap() {
     _harden_crowdsec_traefik_plugin_gate
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
-    if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         # Container already up — just register the bouncer if needed.
         _harden_crowdsec_register_bouncer
         return 0
@@ -10733,12 +10740,19 @@ _harden_crowdsec_bootstrap() {
     # so only pass --env-file when the file exists.
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        # fresh_deps runs before fresh_config generates .env; fresh_deploy
+        # starts crowdsec right after .env is ready, and verify converges it.
+        return 0
+    fi
     docker compose \
         "${env_args[@]}" \
-        -f "$COMPOSE_FILE" \
+        -f "$_cf" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec" && break
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
         sleep 2
     done
     _harden_crowdsec_register_bouncer
@@ -10786,11 +10800,13 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        local _cs_c=""
+        _cs_c="$(_harden_crowdsec_container)"
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -10917,12 +10933,14 @@ _harden_crowdsec_cloudflare_bouncer() {
         _harden_log warn "cloudflare bouncer: no LAPI key available, skipping"
         return 0
     fi
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_cs_c}$"; then
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -10936,7 +10954,9 @@ _harden_crowdsec_cloudflare_bouncer() {
         "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
-    if docker compose "${env_args[@]}" -f "$COMPOSE_FILE" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
     else
         _harden_log warn "cloudflare bouncer compose up failed (non-fatal)"
@@ -10945,16 +10965,18 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    timeout -k 5 60 docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
+    timeout -k 5 60 docker exec "$_cs_c" cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        timeout -k 5 60 docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
+        timeout -k 5 60 docker exec "$_cs_c" cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi
@@ -12091,6 +12113,32 @@ _harden_fail2ban_verify() {
 # --- lib/harden_ufw.sh ---
 #!/bin/bash
 
+_harden_ufw_wg0_rules() {
+    # Allow internal registry (5000), mesh DNS (53), and node control API
+    # (8000) ONLY over WireGuard (wg0) / explicit allowlisted node IPs.
+    if ip link show wg0 >/dev/null 2>&1; then
+        local _ufw_v=""
+        _ufw_v="$(ufw status verbose 2>/dev/null || true)"
+        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+            || ufw allow in on wg0 to any port 5000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 8000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+    fi
+    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
+        local _nip
+        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
+            [ -n "$_nip" ] || continue
+            ufw allow from "$_nip" to any port 5000 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
+        done
+    fi
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
@@ -12100,29 +12148,7 @@ _harden_ufw_bootstrap() {
         for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
-        # Multi-node registry access (see the inactive branch below for
-        # the security rationale — wg0 mesh or explicit node IPs only).
-        if ip link show wg0 >/dev/null 2>&1; then
-            ufw status verbose | grep -q "5000/tcp.*ALLOW" \
-                || ufw allow in on wg0 to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
-            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
-            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
-            # keeps "5353/5355"-style ports from matching, and the wg0
-            # scope keeps global 53 rules from suppressing the mesh one.
-            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
-                || ufw allow in on wg0 to any port 53 \
-                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-        fi
-        if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-            local _nip
-            for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-                [ -n "$_nip" ] || continue
-                ufw allow from "$_nip" to any port 5000 proto tcp \
-                    || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-            done
-        fi
+        _harden_ufw_wg0_rules
         # Whitelist Docker bridges
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
@@ -12146,30 +12172,7 @@ _harden_ufw_bootstrap() {
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
-    # ── Multi-node registry access (port 5000) ─────────────────────────
-    # NEVER open 5000 to the world. The registry holds every tenant's
-    # images. Two secure paths:
-    #   1. WireGuard mesh (preferred): wg0 interface allow — encrypted,
-    #      firewalled to configured peers.
-    #   2. NODE_REGISTRY_ALLOW_IPS (optional): explicit per-node public
-    #      IPs when WireGuard is unavailable.
-    # The public bind IP remains BLOCKED for everything else.
-    if ip link show wg0 >/dev/null 2>&1; then
-        ufw allow in on wg0 to any port 5000 proto tcp \
-            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
-        # mesh-only scoping as the registry above, never world-open.
-        ufw allow in on wg0 to any port 53 \
-            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-    fi
-    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
-        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-            [ -n "$_nip" ] || continue
-            ufw allow from "$_nip" to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-        done
-    fi
+    _harden_ufw_wg0_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
@@ -12369,6 +12372,21 @@ _harden_docker_daemon_verify() {
 # --- lib/harden_crowdsec.sh ---
 #!/bin/bash
 
+_harden_crowdsec_container() {
+    local _name=""
+    _name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' | head -n 1 || true)"
+    printf '%s' "${_name:-smsly-crowdsec}"
+}
+
+_harden_crowdsec_compose_file() {
+    if command -v is_node_mode >/dev/null 2>&1 && is_node_mode \
+       && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml" ]; then
+        printf '%s' "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml"
+        return 0
+    fi
+    printf '%s' "${COMPOSE_FILE:-${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml}"
+}
+
 _harden_crowdsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
@@ -12376,7 +12394,7 @@ _harden_crowdsec_bootstrap() {
     _harden_crowdsec_traefik_plugin_gate
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
-    if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         # Container already up — just register the bouncer if needed.
         _harden_crowdsec_register_bouncer
         return 0
@@ -12386,12 +12404,19 @@ _harden_crowdsec_bootstrap() {
     # so only pass --env-file when the file exists.
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        # fresh_deps runs before fresh_config generates .env; fresh_deploy
+        # starts crowdsec right after .env is ready, and verify converges it.
+        return 0
+    fi
     docker compose \
         "${env_args[@]}" \
-        -f "$COMPOSE_FILE" \
+        -f "$_cf" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec" && break
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
         sleep 2
     done
     _harden_crowdsec_register_bouncer
@@ -12439,11 +12464,13 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        local _cs_c=""
+        _cs_c="$(_harden_crowdsec_container)"
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -12570,12 +12597,14 @@ _harden_crowdsec_cloudflare_bouncer() {
         _harden_log warn "cloudflare bouncer: no LAPI key available, skipping"
         return 0
     fi
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_cs_c}$"; then
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -12589,7 +12618,9 @@ _harden_crowdsec_cloudflare_bouncer() {
         "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
-    if docker compose "${env_args[@]}" -f "$COMPOSE_FILE" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
     else
         _harden_log warn "cloudflare bouncer compose up failed (non-fatal)"
@@ -12598,16 +12629,18 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    timeout -k 5 60 docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
+    timeout -k 5 60 docker exec "$_cs_c" cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        timeout -k 5 60 docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
+        timeout -k 5 60 docker exec "$_cs_c" cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi
@@ -23098,6 +23131,32 @@ _harden_fail2ban_verify() {
 # --- lib/harden_ufw.sh ---
 #!/bin/bash
 
+_harden_ufw_wg0_rules() {
+    # Allow internal registry (5000), mesh DNS (53), and node control API
+    # (8000) ONLY over WireGuard (wg0) / explicit allowlisted node IPs.
+    if ip link show wg0 >/dev/null 2>&1; then
+        local _ufw_v=""
+        _ufw_v="$(ufw status verbose 2>/dev/null || true)"
+        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+            || ufw allow in on wg0 to any port 5000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 8000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+    fi
+    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
+        local _nip
+        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
+            [ -n "$_nip" ] || continue
+            ufw allow from "$_nip" to any port 5000 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
+        done
+    fi
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
@@ -23107,29 +23166,7 @@ _harden_ufw_bootstrap() {
         for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
-        # Multi-node registry access (see the inactive branch below for
-        # the security rationale — wg0 mesh or explicit node IPs only).
-        if ip link show wg0 >/dev/null 2>&1; then
-            ufw status verbose | grep -q "5000/tcp.*ALLOW" \
-                || ufw allow in on wg0 to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
-            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
-            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
-            # keeps "5353/5355"-style ports from matching, and the wg0
-            # scope keeps global 53 rules from suppressing the mesh one.
-            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
-                || ufw allow in on wg0 to any port 53 \
-                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-        fi
-        if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-            local _nip
-            for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-                [ -n "$_nip" ] || continue
-                ufw allow from "$_nip" to any port 5000 proto tcp \
-                    || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-            done
-        fi
+        _harden_ufw_wg0_rules
         # Whitelist Docker bridges
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
@@ -23153,30 +23190,7 @@ _harden_ufw_bootstrap() {
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
-    # ── Multi-node registry access (port 5000) ─────────────────────────
-    # NEVER open 5000 to the world. The registry holds every tenant's
-    # images. Two secure paths:
-    #   1. WireGuard mesh (preferred): wg0 interface allow — encrypted,
-    #      firewalled to configured peers.
-    #   2. NODE_REGISTRY_ALLOW_IPS (optional): explicit per-node public
-    #      IPs when WireGuard is unavailable.
-    # The public bind IP remains BLOCKED for everything else.
-    if ip link show wg0 >/dev/null 2>&1; then
-        ufw allow in on wg0 to any port 5000 proto tcp \
-            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
-        # mesh-only scoping as the registry above, never world-open.
-        ufw allow in on wg0 to any port 53 \
-            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-    fi
-    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
-        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-            [ -n "$_nip" ] || continue
-            ufw allow from "$_nip" to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-        done
-    fi
+    _harden_ufw_wg0_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
@@ -23376,6 +23390,21 @@ _harden_docker_daemon_verify() {
 # --- lib/harden_crowdsec.sh ---
 #!/bin/bash
 
+_harden_crowdsec_container() {
+    local _name=""
+    _name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' | head -n 1 || true)"
+    printf '%s' "${_name:-smsly-crowdsec}"
+}
+
+_harden_crowdsec_compose_file() {
+    if command -v is_node_mode >/dev/null 2>&1 && is_node_mode \
+       && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml" ]; then
+        printf '%s' "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml"
+        return 0
+    fi
+    printf '%s' "${COMPOSE_FILE:-${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml}"
+}
+
 _harden_crowdsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
@@ -23383,7 +23412,7 @@ _harden_crowdsec_bootstrap() {
     _harden_crowdsec_traefik_plugin_gate
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
-    if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         # Container already up — just register the bouncer if needed.
         _harden_crowdsec_register_bouncer
         return 0
@@ -23393,12 +23422,19 @@ _harden_crowdsec_bootstrap() {
     # so only pass --env-file when the file exists.
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        # fresh_deps runs before fresh_config generates .env; fresh_deploy
+        # starts crowdsec right after .env is ready, and verify converges it.
+        return 0
+    fi
     docker compose \
         "${env_args[@]}" \
-        -f "$COMPOSE_FILE" \
+        -f "$_cf" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec" && break
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
         sleep 2
     done
     _harden_crowdsec_register_bouncer
@@ -23446,11 +23482,13 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        local _cs_c=""
+        _cs_c="$(_harden_crowdsec_container)"
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -23577,12 +23615,14 @@ _harden_crowdsec_cloudflare_bouncer() {
         _harden_log warn "cloudflare bouncer: no LAPI key available, skipping"
         return 0
     fi
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_cs_c}$"; then
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -23596,7 +23636,9 @@ _harden_crowdsec_cloudflare_bouncer() {
         "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
-    if docker compose "${env_args[@]}" -f "$COMPOSE_FILE" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
     else
         _harden_log warn "cloudflare bouncer compose up failed (non-fatal)"
@@ -23605,16 +23647,18 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    timeout -k 5 60 docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
+    timeout -k 5 60 docker exec "$_cs_c" cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        timeout -k 5 60 docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
+        timeout -k 5 60 docker exec "$_cs_c" cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi
@@ -24697,6 +24741,21 @@ if _existing_env_is_complete "$INSTALL_DIR/.env"; then
 # --- lib/harden_crowdsec.sh ---
 #!/bin/bash
 
+_harden_crowdsec_container() {
+    local _name=""
+    _name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' | head -n 1 || true)"
+    printf '%s' "${_name:-smsly-crowdsec}"
+}
+
+_harden_crowdsec_compose_file() {
+    if command -v is_node_mode >/dev/null 2>&1 && is_node_mode \
+       && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml" ]; then
+        printf '%s' "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml"
+        return 0
+    fi
+    printf '%s' "${COMPOSE_FILE:-${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml}"
+}
+
 _harden_crowdsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
@@ -24704,7 +24763,7 @@ _harden_crowdsec_bootstrap() {
     _harden_crowdsec_traefik_plugin_gate
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
-    if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         # Container already up — just register the bouncer if needed.
         _harden_crowdsec_register_bouncer
         return 0
@@ -24714,12 +24773,19 @@ _harden_crowdsec_bootstrap() {
     # so only pass --env-file when the file exists.
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        # fresh_deps runs before fresh_config generates .env; fresh_deploy
+        # starts crowdsec right after .env is ready, and verify converges it.
+        return 0
+    fi
     docker compose \
         "${env_args[@]}" \
-        -f "$COMPOSE_FILE" \
+        -f "$_cf" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec" && break
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
         sleep 2
     done
     _harden_crowdsec_register_bouncer
@@ -24767,11 +24833,13 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        local _cs_c=""
+        _cs_c="$(_harden_crowdsec_container)"
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -24898,12 +24966,14 @@ _harden_crowdsec_cloudflare_bouncer() {
         _harden_log warn "cloudflare bouncer: no LAPI key available, skipping"
         return 0
     fi
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_cs_c}$"; then
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -24917,7 +24987,9 @@ _harden_crowdsec_cloudflare_bouncer() {
         "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
-    if docker compose "${env_args[@]}" -f "$COMPOSE_FILE" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
     else
         _harden_log warn "cloudflare bouncer compose up failed (non-fatal)"
@@ -24926,16 +24998,18 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    timeout -k 5 60 docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
+    timeout -k 5 60 docker exec "$_cs_c" cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        timeout -k 5 60 docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
+        timeout -k 5 60 docker exec "$_cs_c" cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi
@@ -25528,6 +25602,21 @@ EOF
 # --- lib/harden_crowdsec.sh ---
 #!/bin/bash
 
+_harden_crowdsec_container() {
+    local _name=""
+    _name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' | head -n 1 || true)"
+    printf '%s' "${_name:-smsly-crowdsec}"
+}
+
+_harden_crowdsec_compose_file() {
+    if command -v is_node_mode >/dev/null 2>&1 && is_node_mode \
+       && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml" ]; then
+        printf '%s' "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml"
+        return 0
+    fi
+    printf '%s' "${COMPOSE_FILE:-${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml}"
+}
+
 _harden_crowdsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
@@ -25535,7 +25624,7 @@ _harden_crowdsec_bootstrap() {
     _harden_crowdsec_traefik_plugin_gate
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
-    if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         # Container already up — just register the bouncer if needed.
         _harden_crowdsec_register_bouncer
         return 0
@@ -25545,12 +25634,19 @@ _harden_crowdsec_bootstrap() {
     # so only pass --env-file when the file exists.
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        # fresh_deps runs before fresh_config generates .env; fresh_deploy
+        # starts crowdsec right after .env is ready, and verify converges it.
+        return 0
+    fi
     docker compose \
         "${env_args[@]}" \
-        -f "$COMPOSE_FILE" \
+        -f "$_cf" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec" && break
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
         sleep 2
     done
     _harden_crowdsec_register_bouncer
@@ -25598,11 +25694,13 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        local _cs_c=""
+        _cs_c="$(_harden_crowdsec_container)"
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -25729,12 +25827,14 @@ _harden_crowdsec_cloudflare_bouncer() {
         _harden_log warn "cloudflare bouncer: no LAPI key available, skipping"
         return 0
     fi
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_cs_c}$"; then
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -25748,7 +25848,9 @@ _harden_crowdsec_cloudflare_bouncer() {
         "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
-    if docker compose "${env_args[@]}" -f "$COMPOSE_FILE" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
     else
         _harden_log warn "cloudflare bouncer compose up failed (non-fatal)"
@@ -25757,16 +25859,18 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    timeout -k 5 60 docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
+    timeout -k 5 60 docker exec "$_cs_c" cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        timeout -k 5 60 docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
+        timeout -k 5 60 docker exec "$_cs_c" cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi
@@ -30851,6 +30955,7 @@ if command -v ufw ; then
     ufw allow "${WG_FALLBACK_PORT:-33500}/udp"  || true
     if ip link show wg0 >/dev/null 2>&1; then
         ufw allow in on wg0 to any port 53  || true
+        ufw allow in on wg0 to any port 8000 proto tcp  || true
     fi
     # Allow FRP if active
     if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then

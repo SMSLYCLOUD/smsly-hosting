@@ -733,6 +733,16 @@ ensure_cosign_key_readable() {
     fi
     log "ALERT: cosign key on host but invisible inside $worker (stale bind) — recreating worker"
     local compose_file="$INSTALL_DIR/docker-compose.prod.yml"
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        local _cf=""
+        _cf="$(grep -E '^COMPOSE_FILE=' "$INSTALL_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' || true)"
+        if [ -n "$_cf" ]; then
+            case "$_cf" in
+                /*) compose_file="$_cf" ;;
+                *)  compose_file="$INSTALL_DIR/$_cf" ;;
+            esac
+        fi
+    fi
     if [ -f "$compose_file" ] && timeout -k 5 180 docker compose -f "$compose_file" up -d celery-deploy >/dev/null 2>&1; then
         sleep 10
         if timeout -k 5 20 docker exec --user 1000 "$worker" test -r /opt/smsly-hosting/cosign-keys/cosign.key 2>/dev/null; then

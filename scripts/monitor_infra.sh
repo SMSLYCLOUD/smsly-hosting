@@ -11,9 +11,31 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/smsly-hosting"
-COMPOSE_FILE="$INSTALL_DIR/docker-compose.prod.yml"
 OBS_COMPOSE_FILE="$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"
 LOG_TAG="smsly-infra-monitor"
+
+_env_val() {
+    local val=""
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        val="$(grep -E "^${1}=" "$INSTALL_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" || true)"
+    fi
+    printf '%s' "${val:-$2}"
+}
+
+COMPOSE_FILE="$(_env_val COMPOSE_FILE "$INSTALL_DIR/docker-compose.prod.yml")"
+case "$COMPOSE_FILE" in
+    /*) ;;
+    *)  COMPOSE_FILE="$INSTALL_DIR/$COMPOSE_FILE" ;;
+esac
+_MODE_NODE="$(_env_val MODE_NODE false)"
+_MODE_AGENT_LITE="$(_env_val MODE_AGENT_LITE false)"
+IS_AGENT_LITE=false
+IS_NODE_MODE=false
+if [ "$_MODE_AGENT_LITE" = "true" ] || [[ "$COMPOSE_FILE" == */docker-compose.agent-lite.yml ]]; then
+    IS_AGENT_LITE=true
+elif [ "$_MODE_NODE" = "true" ] || [[ "$COMPOSE_FILE" == */docker-compose.node.yml ]]; then
+    IS_NODE_MODE=true
+fi
 
 log() {
     logger -t "$LOG_TAG" "$*"  || true
@@ -54,6 +76,13 @@ PROD_SERVICES=(
     "backend" "celery" "celery-beat"
     "frontend" "socket-proxy" "caddy"
 )
+if [ "$IS_AGENT_LITE" = "true" ]; then
+    # Worker (agent-lite) stack must never start master-only services from docker-compose.prod.yml.
+    PROD_SERVICES=("redis" "rabbitmq" "socket-proxy" "traefik" "backend" "celery-worker" "agent-registrar")
+elif [ "$IS_NODE_MODE" = "true" ]; then
+    # Worker (full-stack node) runs docker-compose.node.yml without frontend/pgcat/registry.
+    PROD_SERVICES=("db" "redis" "rabbitmq" "backend" "celery-worker" "celery-beat" "socket-proxy" "traefik" "caddy" "agent-registrar" "coredns")
+fi
 
 # ─── Autoscaled burst workers (idle-minimal) ─────────────────────────────
 # celery-fast / celery-deploy are stopped by celery-worker-autoscaler when
@@ -67,7 +96,7 @@ AUTOSCALED_SERVICES=(
 
 # Autoscale mode for this tick (default true, matching fresh installs).
 AUTOSCALE_ON=true
-_autoscale_flag="$(grep -E '^CELERY_AUTOSCALE_ENABLED=' "$INSTALL_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+_autoscale_flag="$(_env_val CELERY_AUTOSCALE_ENABLED true)"
 if [ "$_autoscale_flag" = "false" ] || [ "$_autoscale_flag" = "0" ] || [ "$_autoscale_flag" = "no" ]; then
     AUTOSCALE_ON=false
 fi
@@ -221,7 +250,15 @@ check_and_heal() {
     fi
 }
 
+_available_services=""
+if [ -f "$COMPOSE_FILE" ]; then
+    _available_services="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+fi
+
 for service in "${PROD_SERVICES[@]}"; do
+    if [ -n "$_available_services" ] && ! printf '%s\n' "$_available_services" | grep -qx "$service"; then
+        continue
+    fi
     check_and_heal "$COMPOSE_FILE" "$service"
 done
 
@@ -229,12 +266,19 @@ done
 # worker is an intended idle state, not a failure.
 if [ "$AUTOSCALE_ON" != "true" ]; then
     for service in "${AUTOSCALED_SERVICES[@]}"; do
+        if [ -n "$_available_services" ] && ! printf '%s\n' "$_available_services" | grep -qx "$service"; then
+            continue
+        fi
         check_and_heal "$COMPOSE_FILE" "$service"
     done
 fi
 
-if [ -f "$OBS_COMPOSE_FILE" ]; then
+if [ "$IS_AGENT_LITE" != "true" ] && [ -f "$OBS_COMPOSE_FILE" ]; then
+    _obs_available="$(docker compose -f "$OBS_COMPOSE_FILE" config --services 2>/dev/null || true)"
     for service in "${OBS_SERVICES[@]}"; do
+        if [ -n "$_obs_available" ] && ! printf '%s\n' "$_obs_available" | grep -qx "$service"; then
+            continue
+        fi
         check_and_heal "$OBS_COMPOSE_FILE" "$service"
     done
 fi

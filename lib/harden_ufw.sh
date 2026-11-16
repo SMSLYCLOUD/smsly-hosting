@@ -1,5 +1,31 @@
 #!/bin/bash
 
+_harden_ufw_wg0_rules() {
+    # Allow internal registry (5000), mesh DNS (53), and node control API
+    # (8000) ONLY over WireGuard (wg0) / explicit allowlisted node IPs.
+    if ip link show wg0 >/dev/null 2>&1; then
+        local _ufw_v=""
+        _ufw_v="$(ufw status verbose 2>/dev/null || true)"
+        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+            || ufw allow in on wg0 to any port 5000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 53 \
+            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
+            || ufw allow in on wg0 to any port 8000 proto tcp \
+            || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+    fi
+    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
+        local _nip
+        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
+            [ -n "$_nip" ] || continue
+            ufw allow from "$_nip" to any port 5000 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
+        done
+    fi
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
@@ -9,29 +35,7 @@ _harden_ufw_bootstrap() {
         for port in 22 80 443 51820 33500; do
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
-        # Multi-node registry access (see the inactive branch below for
-        # the security rationale — wg0 mesh or explicit node IPs only).
-        if ip link show wg0 >/dev/null 2>&1; then
-            ufw status verbose | grep -q "5000/tcp.*ALLOW" \
-                || ufw allow in on wg0 to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-            # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53).
-            # Guard matches an existing wg0-scoped 53 rule only. ufw shows
-            # the rule as bare "53" or "53/tcp"+"53/udp"; the left boundary
-            # keeps "5353/5355"-style ports from matching, and the wg0
-            # scope keeps global 53 rules from suppressing the mesh one.
-            ufw status verbose | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
-                || ufw allow in on wg0 to any port 53 \
-                || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-        fi
-        if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-            local _nip
-            for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-                [ -n "$_nip" ] || continue
-                ufw allow from "$_nip" to any port 5000 proto tcp \
-                    || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-            done
-        fi
+        _harden_ufw_wg0_rules
         # Whitelist Docker bridges
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
@@ -55,30 +59,7 @@ _harden_ufw_bootstrap() {
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
-    # ── Multi-node registry access (port 5000) ─────────────────────────
-    # NEVER open 5000 to the world. The registry holds every tenant's
-    # images. Two secure paths:
-    #   1. WireGuard mesh (preferred): wg0 interface allow — encrypted,
-    #      firewalled to configured peers.
-    #   2. NODE_REGISTRY_ALLOW_IPS (optional): explicit per-node public
-    #      IPs when WireGuard is unavailable.
-    # The public bind IP remains BLOCKED for everything else.
-    if ip link show wg0 >/dev/null 2>&1; then
-        ufw allow in on wg0 to any port 5000 proto tcp \
-            || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
-        # Mesh DNS (CoreDNS serves *.mesh.internal on UDP+TCP 53) — same
-        # mesh-only scoping as the registry above, never world-open.
-        ufw allow in on wg0 to any port 53 \
-            || echo -e "${YELLOW}    ⚠ ufw allow mesh dns on wg0 failed${NC}"
-    fi
-    if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
-        for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
-            [ -n "$_nip" ] || continue
-            ufw allow from "$_nip" to any port 5000 proto tcp \
-                || echo -e "${YELLOW}    ⚠ ufw allow registry from $_nip failed${NC}"
-        done
-    fi
+    _harden_ufw_wg0_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue

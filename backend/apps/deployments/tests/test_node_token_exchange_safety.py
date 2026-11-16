@@ -188,3 +188,45 @@ class NodeTokenExchangeSafetyTests(TestCase):
         self.assertTrue(log_rows)
         latest = log_rows[0]
         self.assertEqual(latest.metadata.get('success'), True)
+
+
+@override_settings(GATEWAY_SECRET=TEST_GATEWAY_SECRET)
+class NodeTokenExchangeHmacWindowTests(TestCase):
+    """Verify the 60s clock-skew tolerance on node-token-exchange-hmac."""
+
+    URL = "/api/v1/auth/node-token-exchange-hmac/"
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username="admin", email="admin@x.com", password="STRONG_password_123!",
+        )
+        self.client = APIClient()
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_accepts_30s_skew_within_60s_window(self):
+        kwargs = _signed_post_kwargs(
+            {"node_name": "Node-skew-ok"},
+            ts=int(time.time()) - 30,
+            nonce="skew-30s-nonce",
+            path=self.URL,
+        )
+        response = self.client.post(
+            self.URL, data=kwargs["body"], **kwargs["headers"],
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["token"].startswith("smsly_"))
+
+    def test_rejects_beyond_60s_window(self):
+        kwargs = _signed_post_kwargs(
+            {"node_name": "Node-skew-old"},
+            ts=int(time.time()) - 65,
+            nonce="skew-65s-nonce",
+            path=self.URL,
+        )
+        response = self.client.post(
+            self.URL, data=kwargs["body"], **kwargs["headers"],
+        )
+        self.assertEqual(response.status_code, 401)

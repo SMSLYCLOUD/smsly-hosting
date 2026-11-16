@@ -235,6 +235,7 @@ if command -v ufw ; then
     ufw allow "${WG_FALLBACK_PORT:-33500}/udp"  || true
     if ip link show wg0 >/dev/null 2>&1; then
         ufw allow in on wg0 to any port 53  || true
+        ufw allow in on wg0 to any port 8000 proto tcp  || true
     fi
     # Allow FRP if active
     if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then

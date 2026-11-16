@@ -873,7 +873,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                         token_errors.append(f"{candidate_url}:HTTP {response.status_code}")
                         continue
                     payload = response.json()
-                    token_value = payload.get("key") or payload.get("token", "")
+                    token_value = (
+                        payload.get("key")
+                        or payload.get("token", "")
+                        or response.cookies.get("__Host-auth_token", "")
+                        or response.cookies.get("auth_token", "")
+                    )
                     if token_value:
                         api_token = token_value
                         api_url = candidate_url

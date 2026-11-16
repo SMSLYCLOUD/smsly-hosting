@@ -58,6 +58,11 @@ _resolve_managed_workers() {
 _load_env() {
     # shellcheck disable=SC1090
     [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
+    case "${COMPOSE_FILE:-}" in
+        "") COMPOSE_FILE="${INSTALL_DIR}/docker-compose.prod.yml" ;;
+        /*) ;;
+        *)  COMPOSE_FILE="${INSTALL_DIR}/${COMPOSE_FILE}" ;;
+    esac
 }
 
 _log() {

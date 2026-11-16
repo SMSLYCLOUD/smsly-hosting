@@ -468,6 +468,7 @@ services:
   # ============================================================
   crowdsec:
     image: crowdsecurity/crowdsec:v1.7.8
+    container_name: smsly-crowdsec
     restart: unless-stopped
     cap_drop:
       - ALL

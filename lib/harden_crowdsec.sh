@@ -1,5 +1,20 @@
 #!/bin/bash
 
+_harden_crowdsec_container() {
+    local _name=""
+    _name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' | head -n 1 || true)"
+    printf '%s' "${_name:-smsly-crowdsec}"
+}
+
+_harden_crowdsec_compose_file() {
+    if command -v is_node_mode >/dev/null 2>&1 && is_node_mode \
+       && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml" ]; then
+        printf '%s' "${INSTALL_DIR:-/opt/smsly-hosting}/infrastructure/docker/docker-compose.node.yml"
+        return 0
+    fi
+    printf '%s' "${COMPOSE_FILE:-${INSTALL_DIR:-/opt/smsly-hosting}/docker-compose.prod.yml}"
+}
+
 _harden_crowdsec_bootstrap() {
     command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
@@ -7,7 +22,7 @@ _harden_crowdsec_bootstrap() {
     _harden_crowdsec_traefik_plugin_gate
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
-    if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         # Container already up — just register the bouncer if needed.
         _harden_crowdsec_register_bouncer
         return 0
@@ -17,12 +32,19 @@ _harden_crowdsec_bootstrap() {
     # so only pass --env-file when the file exists.
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        # fresh_deps runs before fresh_config generates .env; fresh_deploy
+        # starts crowdsec right after .env is ready, and verify converges it.
+        return 0
+    fi
     docker compose \
         "${env_args[@]}" \
-        -f "$COMPOSE_FILE" \
+        -f "$_cf" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec" && break
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
         sleep 2
     done
     _harden_crowdsec_register_bouncer
@@ -70,11 +92,13 @@ _harden_crowdsec_register_bouncer() {
         # Idempotent: cscli errors when re-adding an existing bouncer.
         # Pre-check keeps update logs clean; the "already exists" fallback
         # covers the race where two paths register concurrently.
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
+        local _cs_c=""
+        _cs_c="$(_harden_crowdsec_container)"
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "traefik-bouncer"; then
             echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add traefik-bouncer -k "$bouncer_key" 2>&1)"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer registered${NC}"
             elif echo "$_add_out" | grep -q "already exists"; then
                 echo -e "${GREEN}  ✓ CrowdSec bouncer already registered${NC}"
@@ -201,12 +225,14 @@ _harden_crowdsec_cloudflare_bouncer() {
         _harden_log warn "cloudflare bouncer: no LAPI key available, skipping"
         return 0
     fi
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^smsly-crowdsec$"; then
-        if timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_cs_c}$"; then
+        if timeout -k 5 30 docker exec "$_cs_c" cscli bouncers list 2>/dev/null | grep -qw "cloudflare-bouncer"; then
             _harden_log info "Cloudflare bouncer already registered"
         else
             local _add_out=""
-            if _add_out="$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
+            if _add_out="$(timeout -k 5 30 docker exec "$_cs_c" cscli bouncers add cloudflare-bouncer -k "$lapi_key" 2>&1)"; then
                 _harden_log ok "Cloudflare bouncer registered"
             elif echo "$_add_out" | grep -q "already exists"; then
                 _harden_log info "Cloudflare bouncer already registered"
@@ -220,7 +246,9 @@ _harden_crowdsec_cloudflare_bouncer() {
         "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
-    if docker compose "${env_args[@]}" -f "$COMPOSE_FILE" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
+    local _cf=""
+    _cf="$(_harden_crowdsec_compose_file)"
+    if docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
     else
         _harden_log warn "cloudflare bouncer compose up failed (non-fatal)"
@@ -229,16 +257,18 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     command -v docker >/dev/null 2>&1 || return 0
-    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
+    local _cs_c=""
+    _cs_c="$(_harden_crowdsec_container)"
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    timeout -k 5 60 docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
+    timeout -k 5 60 docker exec "$_cs_c" cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        timeout -k 5 60 docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
+        timeout -k 5 60 docker exec "$_cs_c" cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi
