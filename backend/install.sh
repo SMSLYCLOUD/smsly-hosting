@@ -1815,9 +1815,11 @@ probe_udp_port() {
 }
 
 # wg_ensure_listening WG_IFACE MESH_IP
-# Starts WireGuard on the primary port.  If no handshake appears within
-# 10 seconds (meaning the cloud firewall likely blocks the port), silently
-# rewrites the config to the fallback port and restarts.
+# Starts WireGuard on the primary port.  If a peer endpoint is configured and
+# no handshake appears within 10 seconds (meaning the cloud firewall likely
+# blocks the primary port, e.g. UpCloud blocking 51820/udp), rewrites both
+# ListenPort and the peer Endpoint port to the fallback port (33500) and
+# restarts.
 wg_ensure_listening() {
     local wg_iface="${1:?}" mesh_ip="${2:?}"
     local primary="$WG_PRIMARY_PORT" fallback="$WG_FALLBACK_PORT"
@@ -1829,11 +1831,17 @@ wg_ensure_listening() {
         return 0
     fi
 
-    # Ensure primary port config
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${primary}/" "$conf"
+    # Without a configured peer endpoint, no handshake can ever succeed
+    # during install — keep the primary port until peers are deployed.
+    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+        return 0
     fi
-    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null || true
+
+    # Ensure primary port config
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
     echo -ne "${BLUE}  → Waiting for WireGuard handshake on port ${primary}...${NC}"
     local waited=0
@@ -1849,19 +1857,19 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
-    # Primary port blocked — fall back
-    echo -e "${YELLOW}  ⚠ Port ${primary} blocked by cloud firewall, falling back to ${fallback}...${NC}"
-    systemctl stop "wg-quick@${wg_iface}" 2>/dev/null || true
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${fallback}/" "$conf"
-    fi
-    systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
-    sleep 3
+    # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
+    # (filtering cloud firewalls check destination port as well as source).
+    echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
+    sleep 4
     if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
         echo -e "${GREEN}  ✓ WireGuard mesh active on fallback port ${fallback}${NC}"
         return 0
     fi
-    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port (peer may not be configured yet)${NC}"
+    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port ${fallback} (peer/firewall may still be blocking UDP)${NC}"
     return 0
 }
 
@@ -8017,6 +8025,18 @@ print(",".join(out))
         env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
     fi
+    # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
+    # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
+    # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts
+    # the entire node compose stack on "cannot assign requested address".
+    if [ "${MODE_NODE:-false}" = "true" ]; then
+        local _nd_mesh=""
+        _nd_mesh="$(env_get_value "$env_file" "NODE_MESH_BIND_IP")"
+        if [ -n "$_nd_mesh" ] && ! echo "$_nd_mesh" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$' && ! _registry_bind_ip_is_local "$_nd_mesh"; then
+            env_set_value "$env_file" "NODE_MESH_BIND_IP" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (${_nd_mesh}) not present on host — node mesh bind parked on 127.0.0.2${NC}"
+        fi
+    fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
     # template - DOMAIN/USE_SSL/PUBLIC_IP/FRONTEND_APP_URL missing breaks
@@ -9042,6 +9062,18 @@ print(",".join(out))
         env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
     fi
+    # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
+    # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
+    # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts
+    # the entire node compose stack on "cannot assign requested address".
+    if [ "${MODE_NODE:-false}" = "true" ]; then
+        local _nd_mesh=""
+        _nd_mesh="$(env_get_value "$env_file" "NODE_MESH_BIND_IP")"
+        if [ -n "$_nd_mesh" ] && ! echo "$_nd_mesh" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$' && ! _registry_bind_ip_is_local "$_nd_mesh"; then
+            env_set_value "$env_file" "NODE_MESH_BIND_IP" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (${_nd_mesh}) not present on host — node mesh bind parked on 127.0.0.2${NC}"
+        fi
+    fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
     # template - DOMAIN/USE_SSL/PUBLIC_IP/FRONTEND_APP_URL missing breaks
@@ -9946,9 +9978,11 @@ probe_udp_port() {
 }
 
 # wg_ensure_listening WG_IFACE MESH_IP
-# Starts WireGuard on the primary port.  If no handshake appears within
-# 10 seconds (meaning the cloud firewall likely blocks the port), silently
-# rewrites the config to the fallback port and restarts.
+# Starts WireGuard on the primary port.  If a peer endpoint is configured and
+# no handshake appears within 10 seconds (meaning the cloud firewall likely
+# blocks the primary port, e.g. UpCloud blocking 51820/udp), rewrites both
+# ListenPort and the peer Endpoint port to the fallback port (33500) and
+# restarts.
 wg_ensure_listening() {
     local wg_iface="${1:?}" mesh_ip="${2:?}"
     local primary="$WG_PRIMARY_PORT" fallback="$WG_FALLBACK_PORT"
@@ -9960,11 +9994,17 @@ wg_ensure_listening() {
         return 0
     fi
 
-    # Ensure primary port config
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${primary}/" "$conf"
+    # Without a configured peer endpoint, no handshake can ever succeed
+    # during install — keep the primary port until peers are deployed.
+    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+        return 0
     fi
-    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null || true
+
+    # Ensure primary port config
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
     echo -ne "${BLUE}  → Waiting for WireGuard handshake on port ${primary}...${NC}"
     local waited=0
@@ -9980,19 +10020,19 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
-    # Primary port blocked — fall back
-    echo -e "${YELLOW}  ⚠ Port ${primary} blocked by cloud firewall, falling back to ${fallback}...${NC}"
-    systemctl stop "wg-quick@${wg_iface}" 2>/dev/null || true
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${fallback}/" "$conf"
-    fi
-    systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
-    sleep 3
+    # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
+    # (filtering cloud firewalls check destination port as well as source).
+    echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
+    sleep 4
     if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
         echo -e "${GREEN}  ✓ WireGuard mesh active on fallback port ${fallback}${NC}"
         return 0
     fi
-    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port (peer may not be configured yet)${NC}"
+    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port ${fallback} (peer/firewall may still be blocking UDP)${NC}"
     return 0
 }
 
@@ -16011,9 +16051,11 @@ probe_udp_port() {
 }
 
 # wg_ensure_listening WG_IFACE MESH_IP
-# Starts WireGuard on the primary port.  If no handshake appears within
-# 10 seconds (meaning the cloud firewall likely blocks the port), silently
-# rewrites the config to the fallback port and restarts.
+# Starts WireGuard on the primary port.  If a peer endpoint is configured and
+# no handshake appears within 10 seconds (meaning the cloud firewall likely
+# blocks the primary port, e.g. UpCloud blocking 51820/udp), rewrites both
+# ListenPort and the peer Endpoint port to the fallback port (33500) and
+# restarts.
 wg_ensure_listening() {
     local wg_iface="${1:?}" mesh_ip="${2:?}"
     local primary="$WG_PRIMARY_PORT" fallback="$WG_FALLBACK_PORT"
@@ -16025,11 +16067,17 @@ wg_ensure_listening() {
         return 0
     fi
 
-    # Ensure primary port config
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${primary}/" "$conf"
+    # Without a configured peer endpoint, no handshake can ever succeed
+    # during install — keep the primary port until peers are deployed.
+    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+        return 0
     fi
-    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null || true
+
+    # Ensure primary port config
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
     echo -ne "${BLUE}  → Waiting for WireGuard handshake on port ${primary}...${NC}"
     local waited=0
@@ -16045,19 +16093,19 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
-    # Primary port blocked — fall back
-    echo -e "${YELLOW}  ⚠ Port ${primary} blocked by cloud firewall, falling back to ${fallback}...${NC}"
-    systemctl stop "wg-quick@${wg_iface}" 2>/dev/null || true
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${fallback}/" "$conf"
-    fi
-    systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
-    sleep 3
+    # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
+    # (filtering cloud firewalls check destination port as well as source).
+    echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
+    sleep 4
     if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
         echo -e "${GREEN}  ✓ WireGuard mesh active on fallback port ${fallback}${NC}"
         return 0
     fi
-    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port (peer may not be configured yet)${NC}"
+    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port ${fallback} (peer/firewall may still be blocking UDP)${NC}"
     return 0
 }
 
@@ -17294,6 +17342,18 @@ print(",".join(out))
     if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
         env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
+    fi
+    # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
+    # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
+    # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts
+    # the entire node compose stack on "cannot assign requested address".
+    if [ "${MODE_NODE:-false}" = "true" ]; then
+        local _nd_mesh=""
+        _nd_mesh="$(env_get_value "$env_file" "NODE_MESH_BIND_IP")"
+        if [ -n "$_nd_mesh" ] && ! echo "$_nd_mesh" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$' && ! _registry_bind_ip_is_local "$_nd_mesh"; then
+            env_set_value "$env_file" "NODE_MESH_BIND_IP" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (${_nd_mesh}) not present on host — node mesh bind parked on 127.0.0.2${NC}"
+        fi
     fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
@@ -19133,9 +19193,11 @@ probe_udp_port() {
 }
 
 # wg_ensure_listening WG_IFACE MESH_IP
-# Starts WireGuard on the primary port.  If no handshake appears within
-# 10 seconds (meaning the cloud firewall likely blocks the port), silently
-# rewrites the config to the fallback port and restarts.
+# Starts WireGuard on the primary port.  If a peer endpoint is configured and
+# no handshake appears within 10 seconds (meaning the cloud firewall likely
+# blocks the primary port, e.g. UpCloud blocking 51820/udp), rewrites both
+# ListenPort and the peer Endpoint port to the fallback port (33500) and
+# restarts.
 wg_ensure_listening() {
     local wg_iface="${1:?}" mesh_ip="${2:?}"
     local primary="$WG_PRIMARY_PORT" fallback="$WG_FALLBACK_PORT"
@@ -19147,11 +19209,17 @@ wg_ensure_listening() {
         return 0
     fi
 
-    # Ensure primary port config
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${primary}/" "$conf"
+    # Without a configured peer endpoint, no handshake can ever succeed
+    # during install — keep the primary port until peers are deployed.
+    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+        return 0
     fi
-    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null || true
+
+    # Ensure primary port config
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
     echo -ne "${BLUE}  → Waiting for WireGuard handshake on port ${primary}...${NC}"
     local waited=0
@@ -19167,19 +19235,19 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
-    # Primary port blocked — fall back
-    echo -e "${YELLOW}  ⚠ Port ${primary} blocked by cloud firewall, falling back to ${fallback}...${NC}"
-    systemctl stop "wg-quick@${wg_iface}" 2>/dev/null || true
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${fallback}/" "$conf"
-    fi
-    systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
-    sleep 3
+    # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
+    # (filtering cloud firewalls check destination port as well as source).
+    echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
+    sleep 4
     if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
         echo -e "${GREEN}  ✓ WireGuard mesh active on fallback port ${fallback}${NC}"
         return 0
     fi
-    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port (peer may not be configured yet)${NC}"
+    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port ${fallback} (peer/firewall may still be blocking UDP)${NC}"
     return 0
 }
 
@@ -20980,9 +21048,11 @@ probe_udp_port() {
 }
 
 # wg_ensure_listening WG_IFACE MESH_IP
-# Starts WireGuard on the primary port.  If no handshake appears within
-# 10 seconds (meaning the cloud firewall likely blocks the port), silently
-# rewrites the config to the fallback port and restarts.
+# Starts WireGuard on the primary port.  If a peer endpoint is configured and
+# no handshake appears within 10 seconds (meaning the cloud firewall likely
+# blocks the primary port, e.g. UpCloud blocking 51820/udp), rewrites both
+# ListenPort and the peer Endpoint port to the fallback port (33500) and
+# restarts.
 wg_ensure_listening() {
     local wg_iface="${1:?}" mesh_ip="${2:?}"
     local primary="$WG_PRIMARY_PORT" fallback="$WG_FALLBACK_PORT"
@@ -20994,11 +21064,17 @@ wg_ensure_listening() {
         return 0
     fi
 
-    # Ensure primary port config
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${primary}/" "$conf"
+    # Without a configured peer endpoint, no handshake can ever succeed
+    # during install — keep the primary port until peers are deployed.
+    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+        return 0
     fi
-    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null || true
+
+    # Ensure primary port config
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
     echo -ne "${BLUE}  → Waiting for WireGuard handshake on port ${primary}...${NC}"
     local waited=0
@@ -21014,19 +21090,19 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
-    # Primary port blocked — fall back
-    echo -e "${YELLOW}  ⚠ Port ${primary} blocked by cloud firewall, falling back to ${fallback}...${NC}"
-    systemctl stop "wg-quick@${wg_iface}" 2>/dev/null || true
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${fallback}/" "$conf"
-    fi
-    systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
-    sleep 3
+    # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
+    # (filtering cloud firewalls check destination port as well as source).
+    echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
+    sleep 4
     if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
         echo -e "${GREEN}  ✓ WireGuard mesh active on fallback port ${fallback}${NC}"
         return 0
     fi
-    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port (peer may not be configured yet)${NC}"
+    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port ${fallback} (peer/firewall may still be blocking UDP)${NC}"
     return 0
 }
 
@@ -24350,28 +24426,72 @@ ensure_wireguard_mesh() {
             chmod 600 /etc/wireguard/private.key
             printf '%s' "$WG_PRIVATE_KEY" | wg pubkey > /etc/wireguard/public.key
             if [ -f "/etc/wireguard/${wg_iface}.conf" ]; then
-                if grep -q '^PrivateKey' "/etc/wireguard/${wg_iface}.conf" 2>/dev/null; then
-                    sed -i "s|^PrivateKey .*|PrivateKey = ${WG_PRIVATE_KEY}|" "/etc/wireguard/${wg_iface}.conf"
+                if grep -q '^PrivateKey[[:space:]]*=' "/etc/wireguard/${wg_iface}.conf" 2>/dev/null; then
+                    sed -i "s|^PrivateKey[[:space:]]*=.*|PrivateKey = ${WG_PRIVATE_KEY}|" "/etc/wireguard/${wg_iface}.conf"
                 else
-                    printf 'PrivateKey = %s\n' "$WG_PRIVATE_KEY" >> "/etc/wireguard/${wg_iface}.conf"
+                    sed -i "/^\[Interface\]/a PrivateKey = ${WG_PRIVATE_KEY}" "/etc/wireguard/${wg_iface}.conf"
                 fi
             fi
         elif [ ! -f /etc/wireguard/private.key ]; then
             wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
         fi
-        local privkey
+        local privkey=""
         privkey="$(cat /etc/wireguard/private.key)"
-        if [ ! -f "/etc/wireguard/${wg_iface}.conf" ]; then
-            cat > "/etc/wireguard/${wg_iface}.conf" <<WGCONF
+        local wg_conf="/etc/wireguard/${wg_iface}.conf"
+        local wg_port="${WG_PRIMARY_PORT:-51820}"
+        if [ ! -f "$wg_conf" ]; then
+            cat > "$wg_conf" <<WGCONF
 [Interface]
 PrivateKey = ${privkey}
 Address = ${mesh_ip}/24
-ListenPort = 51820
+ListenPort = ${wg_port}
 WGCONF
+        else
+            # Converge Address/PrivateKey/ListenPort under [Interface]:
+            # re-runs on a wiped or previously failed node often keep a
+            # stale .conf (e.g. .2 placeholder instead of NODE_MESH_IP),
+            # which breaks coredns bind ("cannot assign requested address").
+            if grep -q '^Address[[:space:]]*=' "$wg_conf" 2>/dev/null; then
+                sed -i "s|^Address[[:space:]]*=.*|Address = ${mesh_ip}/24|" "$wg_conf"
+            else
+                sed -i "/^\[Interface\]/a Address = ${mesh_ip}/24" "$wg_conf"
+            fi
+            if ! grep -q '^ListenPort[[:space:]]*=' "$wg_conf" 2>/dev/null; then
+                sed -i "/^\[Interface\]/a ListenPort = ${wg_port}" "$wg_conf"
+            fi
         fi
-        systemctl enable --now "wg-quick@${wg_iface}"  || true
-        if ip link show "$wg_iface" ; then
-            echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port 51820)${NC}"
+        chmod 600 "$wg_conf"
+
+        # If the bootstrap/SSH env shipped the master's WG identity, seed
+        # the [Peer] block right away so wg_ensure_listening can test the
+        # primary/fallback UDP path immediately instead of waiting for
+        # post-provision mesh deploy.
+        local master_pub="${MASTER_WG_PUBKEY:-}"
+        local master_ep="${MASTER_WG_ENDPOINT:-}"
+        if [ -z "$master_ep" ] && [ -n "${MASTER_IP:-}" ]; then
+            master_ep="${MASTER_IP}:${wg_port}"
+        fi
+        if [ -n "$master_pub" ] && [ -n "$master_ep" ] && ! grep -qF "$master_pub" "$wg_conf" 2>/dev/null; then
+            cat >> "$wg_conf" <<WGPEER
+
+[Peer]
+PublicKey = ${master_pub}
+Endpoint = ${master_ep}
+AllowedIPs = ${MASTER_MESH_IP:-10.100.0.1}/32
+PersistentKeepalive = 25
+WGPEER
+        fi
+
+        # systemctl enable --now is a silent no-op if wg-quick@wg0 stayed
+        # `active (exited)` after an out-of-band wg-quick down/rollback.
+        # Restart whenever wg0 is absent or lacks the target mesh IP.
+        if ! ip -4 addr show dev "$wg_iface" 2>/dev/null | grep -q "inet ${mesh_ip}/"; then
+            systemctl enable "wg-quick@${wg_iface}" >/dev/null 2>&1 || true
+            systemctl restart "wg-quick@${wg_iface}" >/dev/null 2>&1 \
+                || { wg-quick down "$wg_iface" >/dev/null 2>&1 || true; wg-quick up "$wg_iface" >/dev/null 2>&1 || true; }
+        fi
+        if ip link show "$wg_iface" >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port ${wg_port})${NC}"
             if declare -F wg_ensure_listening >/dev/null 2>&1; then wg_ensure_listening "$wg_iface" "$mesh_ip" || true; fi
         else
             echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"
@@ -25893,10 +26013,16 @@ if [ "${REGISTRY_BIND_IP:-127.0.0.1}" = "0.0.0.0" ]; then
     exit 1
 fi
 _reg_bind_ok=true
-for _reg_entry in "REGISTRY_BIND_IP:${REGISTRY_BIND_IP:-127.0.0.1}" \
-    "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}" \
-    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}" \
-    "COREDNS_MESH_BIND_IP:${COREDNS_MESH_BIND_IP:-10.100.0.1}"; do
+_reg_bind_entries=(
+    "REGISTRY_BIND_IP:${REGISTRY_BIND_IP:-127.0.0.1}"
+    "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}"
+    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}"
+    "COREDNS_MESH_BIND_IP:${COREDNS_MESH_BIND_IP:-10.100.0.1}"
+)
+if [ "${MODE_NODE:-false}" = "true" ] && [ -n "${NODE_MESH_BIND_IP:-}" ]; then
+    _reg_bind_entries+=("NODE_MESH_BIND_IP:${NODE_MESH_BIND_IP}")
+fi
+for _reg_entry in "${_reg_bind_entries[@]}"; do
     _reg_var="${_reg_entry%%:*}"
     _reg_ip="${_reg_entry#*:}"
     if echo "$_reg_ip" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -25912,7 +26038,7 @@ if [ "$_reg_bind_ok" != "true" ]; then
     echo -e "${YELLOW}    Then re-run with --resume: sudo bash install.sh --resume${NC}"
     exit 1
 fi
-unset _reg_bind_ok _reg_entry _reg_var _reg_ip
+unset _reg_bind_ok _reg_bind_entries _reg_entry _reg_var _reg_ip
 
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
@@ -28170,9 +28296,11 @@ probe_udp_port() {
 }
 
 # wg_ensure_listening WG_IFACE MESH_IP
-# Starts WireGuard on the primary port.  If no handshake appears within
-# 10 seconds (meaning the cloud firewall likely blocks the port), silently
-# rewrites the config to the fallback port and restarts.
+# Starts WireGuard on the primary port.  If a peer endpoint is configured and
+# no handshake appears within 10 seconds (meaning the cloud firewall likely
+# blocks the primary port, e.g. UpCloud blocking 51820/udp), rewrites both
+# ListenPort and the peer Endpoint port to the fallback port (33500) and
+# restarts.
 wg_ensure_listening() {
     local wg_iface="${1:?}" mesh_ip="${2:?}"
     local primary="$WG_PRIMARY_PORT" fallback="$WG_FALLBACK_PORT"
@@ -28184,11 +28312,17 @@ wg_ensure_listening() {
         return 0
     fi
 
-    # Ensure primary port config
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${primary}/" "$conf"
+    # Without a configured peer endpoint, no handshake can ever succeed
+    # during install — keep the primary port until peers are deployed.
+    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+        return 0
     fi
-    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null || true
+
+    # Ensure primary port config
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
     echo -ne "${BLUE}  → Waiting for WireGuard handshake on port ${primary}...${NC}"
     local waited=0
@@ -28204,19 +28338,19 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
-    # Primary port blocked — fall back
-    echo -e "${YELLOW}  ⚠ Port ${primary} blocked by cloud firewall, falling back to ${fallback}...${NC}"
-    systemctl stop "wg-quick@${wg_iface}" 2>/dev/null || true
-    if [ -f "$conf" ]; then
-        sed -i "s/^ListenPort = .*/ListenPort = ${fallback}/" "$conf"
-    fi
-    systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
-    sleep 3
+    # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
+    # (filtering cloud firewalls check destination port as well as source).
+    echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
+    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
+        || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
+    sleep 4
     if wg show "$wg_iface" 2>/dev/null | grep -q "latest handshake"; then
         echo -e "${GREEN}  ✓ WireGuard mesh active on fallback port ${fallback}${NC}"
         return 0
     fi
-    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port (peer may not be configured yet)${NC}"
+    echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on fallback port ${fallback} (peer/firewall may still be blocking UDP)${NC}"
     return 0
 }
 
@@ -29453,6 +29587,18 @@ print(",".join(out))
     if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
         env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
+    fi
+    # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
+    # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
+    # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts
+    # the entire node compose stack on "cannot assign requested address".
+    if [ "${MODE_NODE:-false}" = "true" ]; then
+        local _nd_mesh=""
+        _nd_mesh="$(env_get_value "$env_file" "NODE_MESH_BIND_IP")"
+        if [ -n "$_nd_mesh" ] && ! echo "$_nd_mesh" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$' && ! _registry_bind_ip_is_local "$_nd_mesh"; then
+            env_set_value "$env_file" "NODE_MESH_BIND_IP" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (${_nd_mesh}) not present on host — node mesh bind parked on 127.0.0.2${NC}"
+        fi
     fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full

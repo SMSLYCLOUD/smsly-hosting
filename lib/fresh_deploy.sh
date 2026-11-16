@@ -200,10 +200,16 @@ if [ "${REGISTRY_BIND_IP:-127.0.0.1}" = "0.0.0.0" ]; then
     exit 1
 fi
 _reg_bind_ok=true
-for _reg_entry in "REGISTRY_BIND_IP:${REGISTRY_BIND_IP:-127.0.0.1}" \
-    "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}" \
-    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}" \
-    "COREDNS_MESH_BIND_IP:${COREDNS_MESH_BIND_IP:-10.100.0.1}"; do
+_reg_bind_entries=(
+    "REGISTRY_BIND_IP:${REGISTRY_BIND_IP:-127.0.0.1}"
+    "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}"
+    "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}"
+    "COREDNS_MESH_BIND_IP:${COREDNS_MESH_BIND_IP:-10.100.0.1}"
+)
+if [ "${MODE_NODE:-false}" = "true" ] && [ -n "${NODE_MESH_BIND_IP:-}" ]; then
+    _reg_bind_entries+=("NODE_MESH_BIND_IP:${NODE_MESH_BIND_IP}")
+fi
+for _reg_entry in "${_reg_bind_entries[@]}"; do
     _reg_var="${_reg_entry%%:*}"
     _reg_ip="${_reg_entry#*:}"
     if echo "$_reg_ip" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -219,7 +225,7 @@ if [ "$_reg_bind_ok" != "true" ]; then
     echo -e "${YELLOW}    Then re-run with --resume: sudo bash install.sh --resume${NC}"
     exit 1
 fi
-unset _reg_bind_ok _reg_entry _reg_var _reg_ip
+unset _reg_bind_ok _reg_bind_entries _reg_entry _reg_var _reg_ip
 
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions

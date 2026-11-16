@@ -26,6 +26,7 @@ from ..helpers import (
     _docker_login_all,
     _env_bool,
     _get_master_mesh_ip,
+    _get_master_wg_pubkey,
     _load_install_script,
     _node_queue_name,
     _prepare_remote_install_lock,
@@ -437,6 +438,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 )
             _wg_addr = str(getattr(server, "wg_address", "") or "").strip()
             _wg_privkey = ""
+            _wg_port = 51820
             if _wg_addr:
                 # The node's wg0 address (NODE_MESH_IP) AND the provisioned
                 # private key must travel together: the installer converges
@@ -452,8 +454,10 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     _wg_peer_row = _WGP2.objects.filter(
                         server=server, wg_address=_wg_addr,
                         is_local=False, is_active=True,
-                    ).only("private_key").first()
+                    ).select_related("mesh").only("private_key", "mesh__listen_port").first()
                     _wg_privkey = str(getattr(_wg_peer_row, "private_key", "") or "").strip()
+                    if _wg_peer_row and getattr(_wg_peer_row, "mesh", None):
+                        _wg_port = int(getattr(_wg_peer_row.mesh, "listen_port", 51820) or 51820)
                 except Exception:
                     _wg_privkey = ""
                 install_env["WG_ADDRESS"] = _wg_addr
@@ -467,6 +471,14 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                         "node will generate its own and mesh handshake may fail.",
                         server.name,
                     )
+                _master_mesh_ip = _get_master_mesh_ip()
+                if _master_mesh_ip:
+                    install_env["MASTER_MESH_IP"] = _master_mesh_ip
+                _master_wg_pub = _get_master_wg_pubkey()
+                if _master_wg_pub:
+                    install_env["MASTER_WG_PUBKEY"] = _master_wg_pub
+                if master_ip and master_ip != "127.0.0.1":
+                    install_env["MASTER_WG_ENDPOINT"] = f"{master_ip}:{_wg_port}"
 
         stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'", timeout=30)
         remote_mode = stdout.read().decode().strip()
@@ -592,6 +604,32 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 "rm -rf /tmp/smsly-install.sh /tmp/smsly-install.env "
                 "/tmp/smsly-hosting-src.tar.gz /tmp/smsly-hosting-src"
             )
+
+        if install_mode == "node":
+            with contextlib.suppress(Exception):
+                _, _wg_out, _ = ssh.exec_command(
+                    "wg show wg0 listen-port 2>/dev/null || "
+                    "grep -m1 '^ListenPort' /etc/wireguard/wg0.conf 2>/dev/null | cut -d= -f2",
+                    timeout=15,
+                )
+                _node_wg_port_raw = _wg_out.read().decode("utf-8", errors="replace").strip()
+                if _node_wg_port_raw.isdigit():
+                    _node_wg_port = int(_node_wg_port_raw)
+                    from apps.deployments.models.mesh import WireGuardPeer as _WGP3
+                    _node_peer = _WGP3.objects.filter(
+                        server=server, is_local=False, is_active=True,
+                    ).select_related("mesh").first()
+                    if _node_peer and _node_peer.mesh and _node_wg_port == getattr(_node_peer.mesh, "listen_port_fallback", None):
+                        _meta = dict(getattr(server, "provider_metadata", None) or {})
+                        _meta["wg_port"] = _node_wg_port
+                        server.provider_metadata = _meta
+                        server.save(update_fields=["provider_metadata", "updated_at"])
+                        _ep = str(_node_peer.endpoint or "").strip()
+                        if ":" in _ep:
+                            _ep_host, _ = _ep.rsplit(":", 1)
+                            _node_peer.endpoint = f"{_ep_host}:{_node_wg_port}"
+                            _node_peer.save(update_fields=["endpoint", "updated_at"])
+                        _append_log(server, f"ℹ️ WireGuard node using fallback port {_node_wg_port}/udp")
 
         # Registry logins: passwords travel over the encrypted SSH channel
         # (stdin), never interpolated into remote argv (`ps`-visible).

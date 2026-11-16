@@ -133,14 +133,23 @@ class PeersMixin:
         if not (server.ssh_key or server.ssh_password):
             raise ValueError(f"Server '{server.name}' has no SSH credentials for automatic VPN mesh setup.")
 
-        project = getattr(server, "project", None)
-        mesh = MeshNetwork.objects.filter(
-            project=project,
-            name="default",
-        ).order_by("created_at").first()
+        mesh = (
+            MeshNetwork.objects.filter(project__isnull=True, name="default", is_active=True)
+            .order_by("created_at")
+            .first()
+            or MeshNetwork.objects.filter(name="default", is_active=True)
+            .order_by("created_at")
+            .first()
+            or MeshNetwork.objects.filter(project__isnull=True, name="default")
+            .order_by("created_at")
+            .first()
+            or MeshNetwork.objects.filter(name="default")
+            .order_by("created_at")
+            .first()
+        )
         if not mesh:
             mesh = MeshNetwork.objects.create(
-                project=project,
+                project=None,
                 name="default",
                 subnet="10.100.0.0/24",
                 listen_port=51820,

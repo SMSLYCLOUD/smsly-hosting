@@ -71,10 +71,21 @@ def check_mesh_health_task():
                                     or ""
                                 ).lower() == "private" or bool(metadata.get("prefer_private_mesh"))
 
-                                if server.private_ip and prefer_private:
-                                    expected_endpoint = f"{server.private_ip}:{mesh.listen_port}"
+                                meta_port = metadata.get("wg_port")
+                                if meta_port in (mesh.listen_port, getattr(mesh, "listen_port_fallback", None)):
+                                    target_port = int(meta_port)
+                                elif (
+                                    getattr(mesh, "listen_port_fallback", None)
+                                    and str(peer.endpoint or "").strip().endswith(f":{mesh.listen_port_fallback}")
+                                ):
+                                    target_port = int(mesh.listen_port_fallback)
                                 else:
-                                    expected_endpoint = f"{server.host}:{mesh.listen_port}"
+                                    target_port = int(mesh.listen_port)
+
+                                if server.private_ip and prefer_private:
+                                    expected_endpoint = f"{server.private_ip}:{target_port}"
+                                else:
+                                    expected_endpoint = f"{server.host}:{target_port}"
 
                                 if peer.endpoint != expected_endpoint:
                                     # SECURITY (Batch G cont): run the

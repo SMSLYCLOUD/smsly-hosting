@@ -191,28 +191,72 @@ ensure_wireguard_mesh() {
             chmod 600 /etc/wireguard/private.key
             printf '%s' "$WG_PRIVATE_KEY" | wg pubkey > /etc/wireguard/public.key
             if [ -f "/etc/wireguard/${wg_iface}.conf" ]; then
-                if grep -q '^PrivateKey' "/etc/wireguard/${wg_iface}.conf" 2>/dev/null; then
-                    sed -i "s|^PrivateKey .*|PrivateKey = ${WG_PRIVATE_KEY}|" "/etc/wireguard/${wg_iface}.conf"
+                if grep -q '^PrivateKey[[:space:]]*=' "/etc/wireguard/${wg_iface}.conf" 2>/dev/null; then
+                    sed -i "s|^PrivateKey[[:space:]]*=.*|PrivateKey = ${WG_PRIVATE_KEY}|" "/etc/wireguard/${wg_iface}.conf"
                 else
-                    printf 'PrivateKey = %s\n' "$WG_PRIVATE_KEY" >> "/etc/wireguard/${wg_iface}.conf"
+                    sed -i "/^\[Interface\]/a PrivateKey = ${WG_PRIVATE_KEY}" "/etc/wireguard/${wg_iface}.conf"
                 fi
             fi
         elif [ ! -f /etc/wireguard/private.key ]; then
             wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
         fi
-        local privkey
+        local privkey=""
         privkey="$(cat /etc/wireguard/private.key)"
-        if [ ! -f "/etc/wireguard/${wg_iface}.conf" ]; then
-            cat > "/etc/wireguard/${wg_iface}.conf" <<WGCONF
+        local wg_conf="/etc/wireguard/${wg_iface}.conf"
+        local wg_port="${WG_PRIMARY_PORT:-51820}"
+        if [ ! -f "$wg_conf" ]; then
+            cat > "$wg_conf" <<WGCONF
 [Interface]
 PrivateKey = ${privkey}
 Address = ${mesh_ip}/24
-ListenPort = 51820
+ListenPort = ${wg_port}
 WGCONF
+        else
+            # Converge Address/PrivateKey/ListenPort under [Interface]:
+            # re-runs on a wiped or previously failed node often keep a
+            # stale .conf (e.g. .2 placeholder instead of NODE_MESH_IP),
+            # which breaks coredns bind ("cannot assign requested address").
+            if grep -q '^Address[[:space:]]*=' "$wg_conf" 2>/dev/null; then
+                sed -i "s|^Address[[:space:]]*=.*|Address = ${mesh_ip}/24|" "$wg_conf"
+            else
+                sed -i "/^\[Interface\]/a Address = ${mesh_ip}/24" "$wg_conf"
+            fi
+            if ! grep -q '^ListenPort[[:space:]]*=' "$wg_conf" 2>/dev/null; then
+                sed -i "/^\[Interface\]/a ListenPort = ${wg_port}" "$wg_conf"
+            fi
         fi
-        systemctl enable --now "wg-quick@${wg_iface}"  || true
-        if ip link show "$wg_iface" ; then
-            echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port 51820)${NC}"
+        chmod 600 "$wg_conf"
+
+        # If the bootstrap/SSH env shipped the master's WG identity, seed
+        # the [Peer] block right away so wg_ensure_listening can test the
+        # primary/fallback UDP path immediately instead of waiting for
+        # post-provision mesh deploy.
+        local master_pub="${MASTER_WG_PUBKEY:-}"
+        local master_ep="${MASTER_WG_ENDPOINT:-}"
+        if [ -z "$master_ep" ] && [ -n "${MASTER_IP:-}" ]; then
+            master_ep="${MASTER_IP}:${wg_port}"
+        fi
+        if [ -n "$master_pub" ] && [ -n "$master_ep" ] && ! grep -qF "$master_pub" "$wg_conf" 2>/dev/null; then
+            cat >> "$wg_conf" <<WGPEER
+
+[Peer]
+PublicKey = ${master_pub}
+Endpoint = ${master_ep}
+AllowedIPs = ${MASTER_MESH_IP:-10.100.0.1}/32
+PersistentKeepalive = 25
+WGPEER
+        fi
+
+        # systemctl enable --now is a silent no-op if wg-quick@wg0 stayed
+        # `active (exited)` after an out-of-band wg-quick down/rollback.
+        # Restart whenever wg0 is absent or lacks the target mesh IP.
+        if ! ip -4 addr show dev "$wg_iface" 2>/dev/null | grep -q "inet ${mesh_ip}/"; then
+            systemctl enable "wg-quick@${wg_iface}" >/dev/null 2>&1 || true
+            systemctl restart "wg-quick@${wg_iface}" >/dev/null 2>&1 \
+                || { wg-quick down "$wg_iface" >/dev/null 2>&1 || true; wg-quick up "$wg_iface" >/dev/null 2>&1 || true; }
+        fi
+        if ip link show "$wg_iface" >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) starting (port ${wg_port})${NC}"
             if declare -F wg_ensure_listening >/dev/null 2>&1; then wg_ensure_listening "$wg_iface" "$mesh_ip" || true; fi
         else
             echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"

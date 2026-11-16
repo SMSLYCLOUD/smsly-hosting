@@ -8,6 +8,18 @@ logger = logging.getLogger(__name__)
 class ConfigMixin:
 
     @classmethod
+    def _effective_listen_port(cls, peer) -> int:
+        mesh = peer.mesh
+        fallback = getattr(mesh, "listen_port_fallback", None)
+        if not peer.is_local and fallback and fallback != mesh.listen_port:
+            meta = getattr(getattr(peer, "server", None), "provider_metadata", None) or {}
+            if meta.get("wg_port") == fallback:
+                return int(fallback)
+            if str(getattr(peer, "endpoint", "") or "").strip().endswith(f":{fallback}"):
+                return int(fallback)
+        return int(mesh.listen_port)
+
+    @classmethod
     def build_wg_config(cls, peer) -> str:
         from apps.deployments.models.mesh import WireGuardPeer
 
@@ -18,6 +30,7 @@ class ConfigMixin:
             )
 
         mesh = peer.mesh
+        peer_port = cls._effective_listen_port(peer)
         other_peers = WireGuardPeer.objects.filter(
             mesh=mesh, is_active=True,
         ).exclude(id=peer.id)
@@ -27,21 +40,32 @@ class ConfigMixin:
                 [Interface]
                 PrivateKey = {peer.private_key}
                 Address = {peer.wg_address}/24
-                ListenPort = {mesh.listen_port}
+                ListenPort = {peer_port}
                 # SaveConfig = false
             """)
         else:
             config = textwrap.dedent(f"""\
                 [Interface]
                 Address = {peer.wg_address}/24
-                ListenPort = {mesh.listen_port}
+                ListenPort = {peer_port}
                 # SaveConfig = false
                 # PrivateKey is server-managed (not stored on master)
             """)
 
+        nat_up = ""
+        nat_down = ""
+        if getattr(mesh, "listen_port_fallback", None) and mesh.listen_port_fallback != mesh.listen_port:
+            nat_up = (
+                f"; iptables -t nat -C PREROUTING -p udp --dport {mesh.listen_port_fallback} -j REDIRECT --to-ports {mesh.listen_port} 2>/dev/null"
+                f" || iptables -t nat -A PREROUTING -p udp --dport {mesh.listen_port_fallback} -j REDIRECT --to-ports {mesh.listen_port}"
+            )
+            nat_down = (
+                f"; iptables -t nat -D PREROUTING -p udp --dport {mesh.listen_port_fallback} -j REDIRECT --to-ports {mesh.listen_port} 2>/dev/null || true"
+            )
+
         config += textwrap.dedent(f"""\
-            PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2; iptables -A INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; iptables -A INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT
-            PostDown = iptables -D INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; iptables -D INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT; sysctl -w net.ipv4.conf.all.rp_filter=1
+            PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2; iptables -A INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; iptables -A INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT{nat_up}
+            PostDown = iptables -D INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; iptables -D INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT{nat_down}; sysctl -w net.ipv4.conf.all.rp_filter=1
         """)
 
         for other in other_peers:
@@ -53,7 +77,11 @@ class ConfigMixin:
                 AllowedIPs = {other.wg_address}/32
             """)
             if other.endpoint:
-                peer_section += f"    Endpoint = {cls.validate_endpoint(other.endpoint)}\n"
+                ep = cls.validate_endpoint(other.endpoint)
+                if other.is_local and not peer.is_local and peer_port != mesh.listen_port:
+                    ep_host, _ = ep.rsplit(":", 1)
+                    ep = f"{ep_host}:{peer_port}"
+                peer_section += f"    Endpoint = {ep}\n"
             peer_section += "    PersistentKeepalive = 25\n"
             config += peer_section
 

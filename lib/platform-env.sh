@@ -404,6 +404,18 @@ print(",".join(out))
         env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
         echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
     fi
+    # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
+    # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
+    # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts
+    # the entire node compose stack on "cannot assign requested address".
+    if [ "${MODE_NODE:-false}" = "true" ]; then
+        local _nd_mesh=""
+        _nd_mesh="$(env_get_value "$env_file" "NODE_MESH_BIND_IP")"
+        if [ -n "$_nd_mesh" ] && ! echo "$_nd_mesh" | grep -qE '^127\.[0-9]+\.[0-9]+\.[0-9]+$' && ! _registry_bind_ip_is_local "$_nd_mesh"; then
+            env_set_value "$env_file" "NODE_MESH_BIND_IP" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (${_nd_mesh}) not present on host — node mesh bind parked on 127.0.0.2${NC}"
+        fi
+    fi
     # Backfill core platform identity keys (2026-09-12: resume runs can
     # preserve a stub .env that never went through fresh_config full
     # template - DOMAIN/USE_SSL/PUBLIC_IP/FRONTEND_APP_URL missing breaks

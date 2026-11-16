@@ -168,3 +168,119 @@ class MeshNetworkTest(TestCase):
         primary.save()
         self.assertEqual(_get_master_mesh_ip(), "10.100.0.5")
 
+    def test_build_wg_config_redirects_fallback_port_to_listen_port(self):
+        mesh = MeshNetwork.objects.create(
+            name="fallback-redirect",
+            subnet="10.100.0.0/24",
+            listen_port=51820,
+            listen_port_fallback=33500,
+        )
+        local_peer = WireGuardPeer.objects.create(
+            mesh=mesh,
+            wg_address="10.100.0.1",
+            public_key="pub1",
+            private_key="priv1",
+            is_local=True,
+            is_active=True,
+        )
+
+        cfg = WireGuardService.build_wg_config(local_peer)
+
+        self.assertIn(
+            "iptables -t nat -A PREROUTING -p udp --dport 33500 -j REDIRECT --to-ports 51820",
+            cfg,
+        )
+        self.assertIn(
+            "iptables -t nat -D PREROUTING -p udp --dport 33500 -j REDIRECT --to-ports 51820",
+            cfg,
+        )
+
+    def test_build_wg_config_skips_redirect_when_fallback_matches_primary(self):
+        mesh = MeshNetwork.objects.create(
+            name="no-redirect",
+            subnet="10.100.0.0/24",
+            listen_port=51820,
+            listen_port_fallback=51820,
+        )
+        local_peer = WireGuardPeer.objects.create(
+            mesh=mesh,
+            wg_address="10.100.0.1",
+            public_key="pub1",
+            private_key="priv1",
+            is_local=True,
+            is_active=True,
+        )
+
+        cfg = WireGuardService.build_wg_config(local_peer)
+
+        self.assertNotIn("REDIRECT --to-ports", cfg)
+
+    def test_build_wg_config_uses_fallback_port_for_remote_fallback_peer(self):
+        User = get_user_model()
+        user = User.objects.create_user(username="mesh-fb-owner", password="test")
+        server = ManagedServer.objects.create(
+            name="fb-node",
+            host="203.0.113.55",
+            owner=user,
+            provider_metadata={"wg_port": 33500},
+        )
+        mesh = MeshNetwork.objects.create(
+            name="fallback-peer",
+            subnet="10.100.0.0/24",
+            listen_port=51820,
+            listen_port_fallback=33500,
+        )
+        WireGuardPeer.objects.create(
+            mesh=mesh,
+            wg_address="10.100.0.1",
+            endpoint="198.51.100.1:51820",
+            public_key="masterpub",
+            private_key="masterpriv",
+            is_local=True,
+            is_active=True,
+        )
+        remote_peer = WireGuardPeer.objects.create(
+            mesh=mesh,
+            server=server,
+            wg_address="10.100.0.3",
+            endpoint="203.0.113.55:33500",
+            public_key="nodepub",
+            private_key="nodepriv",
+            is_local=False,
+            is_active=True,
+        )
+
+        cfg = WireGuardService.build_wg_config(remote_peer)
+
+        self.assertIn("ListenPort = 33500", cfg)
+        self.assertIn("Endpoint = 198.51.100.1:33500", cfg)
+
+    @patch('apps.deployments.services.wireguard_service.WireGuardService._detect_local_endpoint',
+           return_value='198.51.100.1:51820')
+    @patch('apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task.delay')
+    def test_ensure_server_in_default_mesh_reuses_global_default_when_project_set(
+        self, _mock_deploy, _detect_endpoint
+    ):
+        from apps.deployments.models import Project
+        User = get_user_model()
+        user = User.objects.create_user(username="mesh-proj-owner", password="test")
+        project = Project.objects.create(name="proj", owner=user)
+        global_mesh = MeshNetwork.objects.create(
+            name="default", project=None, subnet="10.100.0.0/24", is_active=True,
+        )
+        ManagedServer.objects.create(
+            name="primary-p", host="198.51.100.1", owner=user,
+            is_primary=True, status=ManagedServer.Status.ONLINE,
+        )
+        server = ManagedServer.objects.create(
+            name="proj-node", host="203.0.113.60", owner=user,
+            project=project, status=ManagedServer.Status.ONLINE, ssh_password="pw",
+        )
+
+        result = WireGuardService.ensure_server_in_default_mesh(server)
+
+        self.assertEqual(result["mesh"], str(global_mesh.id))
+        self.assertEqual(MeshNetwork.objects.filter(name="default").count(), 1)
+
+
+

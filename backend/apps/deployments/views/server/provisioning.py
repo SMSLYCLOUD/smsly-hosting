@@ -123,9 +123,14 @@ class ProvisioningMixin:
         from django.db import transaction
         try:
             with transaction.atomic():
-                mesh = MeshNetwork.objects.filter(
-                    name="default", is_active=True,
-                ).first()
+                mesh = (
+                    MeshNetwork.objects.filter(
+                        name="default", project__isnull=True, is_active=True,
+                    ).order_by("created_at").first()
+                    or MeshNetwork.objects.filter(
+                        name="default", is_active=True,
+                    ).order_by("created_at").first()
+                )
                 if not mesh:
                     mesh = MeshNetwork.objects.create(
                         name="default",
