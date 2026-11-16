@@ -1031,6 +1031,7 @@ services:
     - /opt/smsly-hosting/.env:/opt/smsly-hosting/.env:ro,z
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - coredns_config:/coredns-config
     - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
@@ -1240,6 +1241,7 @@ services:
     - /opt/smsly-hosting/.env:/opt/smsly-hosting/.env:ro,z
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - coredns_config:/coredns-config
     - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z

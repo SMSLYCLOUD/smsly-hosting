@@ -74,7 +74,8 @@ class HelpersMixin:
             ssh.exec_command(add_live, timeout=15, raise_on_error=False)
 
             persist = (
-                f"grep -q '^PublicKey = {_pk}$' /etc/wireguard/wg0.conf 2>/dev/null "
+                f"! grep -q '^\\[Interface\\]' /etc/wireguard/wg0.conf 2>/dev/null "
+                f"|| grep -q '^PublicKey = {_pk}$' /etc/wireguard/wg0.conf 2>/dev/null "
                 f"|| printf '\\n[Peer]\\nPublicKey = {_pk}\\n"
                 f"AllowedIPs = {_ip}/32\\n"
                 f"Endpoint = {_ep}\\n"

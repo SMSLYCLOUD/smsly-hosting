@@ -282,5 +282,28 @@ class MeshNetworkTest(TestCase):
         self.assertEqual(result["mesh"], str(global_mesh.id))
         self.assertEqual(MeshNetwork.objects.filter(name="default").count(), 1)
 
+    @patch('apps.deployments.services.ssh_client.SSHClient')
+    def test_ensure_peer_on_node_guards_against_headless_wg_conf(self, mock_ssh_cls):
+        mock_ssh = MagicMock()
+        mock_ssh_cls.return_value = mock_ssh
+        User = get_user_model()
+        user = User.objects.create_user(username="mesh-ssh-owner", password="test")
+        server = ManagedServer.objects.create(
+            name="ssh-node", host="203.0.113.70", owner=user, ssh_password="pw",
+        )
+
+        ok = WireGuardService._ensure_peer_on_node_via_ssh(
+            server,
+            peer_pubkey="5F8ADprzDb8AzR1VSj0P66/XWy+ftHpCK5syLArYiSs=",
+            peer_wg_ip="10.100.0.1",
+            peer_endpoint="198.51.100.1:51820",
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(mock_ssh.exec_command.call_count, 2)
+        persist_cmd = mock_ssh.exec_command.call_args_list[1].args[0]
+        self.assertIn("! grep -q '^\\[Interface\\]' /etc/wireguard/wg0.conf", persist_cmd)
+
+
 
 

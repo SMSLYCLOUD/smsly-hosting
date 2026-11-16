@@ -232,12 +232,18 @@ ensure_infrastructure_permissions
 # Pre-create caddy bind-mount directories (needed by compose volume driver)
 mkdir -p "$INSTALL_DIR/caddy-config" "$INSTALL_DIR/caddy-logs"
 # Pre-create the CoreDNS mesh-DNS dir + a safety seed (SEED files are
-# replaced by the backend mesh-DNS sync within seconds of startup). A
-# missing dir breaks the coredns_config bind-mount the same way
-# caddy-config/traefik-dynamic break theirs.
-mkdir -p "$INSTALL_DIR/coredns-config"
-if [ ! -f "$INSTALL_DIR/coredns-config/Corefile" ]; then
-    cat > "$INSTALL_DIR/coredns-config/Corefile" <<'CORESEED'
+# replaced by the backend mesh-DNS sync within seconds of startup). Node
+# compose resolves ./coredns-config relative to infrastructure/docker/.
+_coredns_seed_dirs=("$INSTALL_DIR/coredns-config")
+if [ "${MODE_NODE:-false}" = "true" ]; then
+    _coredns_seed_dirs+=("$INSTALL_DIR/infrastructure/docker/coredns-config")
+fi
+for _cd_dir in "${_coredns_seed_dirs[@]}"; do
+    mkdir -p "$_cd_dir"
+    [ -d "$_cd_dir/Corefile" ] && [ ! -L "$_cd_dir/Corefile" ] && rmdir "$_cd_dir/Corefile" 2>/dev/null || true
+    [ -d "$_cd_dir/mesh.hosts" ] && [ ! -L "$_cd_dir/mesh.hosts" ] && rmdir "$_cd_dir/mesh.hosts" 2>/dev/null || true
+    if [ ! -f "$_cd_dir/Corefile" ]; then
+        cat > "$_cd_dir/Corefile" <<'CORESEED'
 .:53 {
     errors
     hosts /etc/coredns/mesh.hosts mesh.internal {
@@ -251,10 +257,14 @@ if [ ! -f "$INSTALL_DIR/coredns-config/Corefile" ]; then
     reload
 }
 CORESEED
-fi
-if [ ! -f "$INSTALL_DIR/coredns-config/mesh.hosts" ]; then
-    printf '# Seeded by install — replaced by the backend mesh-DNS sync.\n' > "$INSTALL_DIR/coredns-config/mesh.hosts"
-fi
+    fi
+    if [ ! -f "$_cd_dir/mesh.hosts" ]; then
+        printf '# Seeded by install — replaced by the backend mesh-DNS sync.\n' > "$_cd_dir/mesh.hosts"
+    fi
+    chmod 755 "$_cd_dir" 2>/dev/null || true
+    chmod 644 "$_cd_dir/Corefile" "$_cd_dir/mesh.hosts" 2>/dev/null || true
+done
+unset _coredns_seed_dirs _cd_dir
 # Pre-create the Traefik dynamic-config dir (canary WRR files). The
 # traefik_dynamic volume bind-mounts it; a missing dir breaks the mount.
 # If the dir was missing when the volume was first created, the volume
@@ -320,6 +330,19 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         docker compose -f "$COMPOSE_FILE" ps  || true
         docker compose -f "$COMPOSE_FILE" logs --tail=120  || true
         exit "$DEPLOY_RC"
+    fi
+    if is_node_mode && command -v docker >/dev/null 2>&1; then
+        # Node mode skips fresh_caddy, so newly created caddy_data/caddy_logs
+        # named volumes stay root-owned while caddy runs as uid 1000.
+        _nv=""
+        _caddy_fixed=false
+        for _nv in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)(caddy_data|caddy_logs)$' || true); do
+            timeout 60 docker run --rm -v "${_nv}:/data" alpine chown -R 1000:1000 /data >/dev/null 2>&1 && _caddy_fixed=true || true
+        done
+        if [ "$_caddy_fixed" = "true" ]; then
+            docker compose -f "$COMPOSE_FILE" restart caddy >/dev/null 2>&1 || true
+        fi
+        unset _nv _caddy_fixed
     fi
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         sync_agent_lite_rabbitmq_password

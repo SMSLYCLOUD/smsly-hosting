@@ -190,13 +190,6 @@ ensure_wireguard_mesh() {
             printf '%s' "$WG_PRIVATE_KEY" > /etc/wireguard/private.key
             chmod 600 /etc/wireguard/private.key
             printf '%s' "$WG_PRIVATE_KEY" | wg pubkey > /etc/wireguard/public.key
-            if [ -f "/etc/wireguard/${wg_iface}.conf" ]; then
-                if grep -q '^PrivateKey[[:space:]]*=' "/etc/wireguard/${wg_iface}.conf" 2>/dev/null; then
-                    sed -i "s|^PrivateKey[[:space:]]*=.*|PrivateKey = ${WG_PRIVATE_KEY}|" "/etc/wireguard/${wg_iface}.conf"
-                else
-                    sed -i "/^\[Interface\]/a PrivateKey = ${WG_PRIVATE_KEY}" "/etc/wireguard/${wg_iface}.conf"
-                fi
-            fi
         elif [ ! -f /etc/wireguard/private.key ]; then
             wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
         fi
@@ -204,18 +197,35 @@ ensure_wireguard_mesh() {
         privkey="$(cat /etc/wireguard/private.key)"
         local wg_conf="/etc/wireguard/${wg_iface}.conf"
         local wg_port="${WG_PRIMARY_PORT:-51820}"
-        if [ ! -f "$wg_conf" ]; then
+        if [ ! -f "$wg_conf" ] || ! grep -q '^\[Interface\]' "$wg_conf" 2>/dev/null; then
+            # Recreate [Interface] whenever wg0.conf is absent or was corrupted
+            # into a headless [Peer]-only file (without [Interface], sed
+            # inserts below silently do nothing). Preserve existing [Peer] blocks.
+            local _preserved_peers=""
+            if [ -f "$wg_conf" ] && grep -q '^\[Peer\]' "$wg_conf" 2>/dev/null; then
+                _preserved_peers="$(sed -n '/^\[Peer\]/,$p' "$wg_conf")"
+            fi
             cat > "$wg_conf" <<WGCONF
 [Interface]
 PrivateKey = ${privkey}
 Address = ${mesh_ip}/24
 ListenPort = ${wg_port}
 WGCONF
+            if [ -n "$_preserved_peers" ]; then
+                printf '\n%s\n' "$_preserved_peers" >> "$wg_conf"
+            fi
         else
             # Converge Address/PrivateKey/ListenPort under [Interface]:
             # re-runs on a wiped or previously failed node often keep a
             # stale .conf (e.g. .2 placeholder instead of NODE_MESH_IP),
             # which breaks coredns bind ("cannot assign requested address").
+            if grep -q '^PrivateKey[[:space:]]*=' "$wg_conf" 2>/dev/null; then
+                if [ -n "${WG_PRIVATE_KEY:-}" ]; then
+                    sed -i "s|^PrivateKey[[:space:]]*=.*|PrivateKey = ${privkey}|" "$wg_conf"
+                fi
+            else
+                sed -i "/^\[Interface\]/a PrivateKey = ${privkey}" "$wg_conf"
+            fi
             if grep -q '^Address[[:space:]]*=' "$wg_conf" 2>/dev/null; then
                 sed -i "s|^Address[[:space:]]*=.*|Address = ${mesh_ip}/24|" "$wg_conf"
             else
