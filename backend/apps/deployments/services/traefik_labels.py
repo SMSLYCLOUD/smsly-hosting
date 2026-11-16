@@ -230,7 +230,7 @@ def generate_traefik_labels(
     except Exception:
         waf_on = False
     if waf_on:
-        middlewares.insert(0, "crowdsec-bouncer")
+        middlewares.insert(0, "crowdsec-bouncer@docker")
     middlewares.append(f"{router_name}-ratelimit")
     labels[f"traefik.http.routers.{router_name}.middlewares"] = ",".join(
         middlewares)

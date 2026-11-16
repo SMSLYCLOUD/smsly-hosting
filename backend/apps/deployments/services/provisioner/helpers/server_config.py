@@ -18,6 +18,41 @@ def _node_queue_name(server: ManagedServer) -> str:
     return f"smsly-node-{slug or 'agent'}"
 
 
+def allocate_node_number(*, exclude_server_id=None) -> tuple[int, str]:
+    """Allocate the next grid{N} number+domain base under the mesh lock.
+
+    Single allocator for BOTH entry paths (provision-token view and
+    SSH provision_server). Locks the default mesh row so concurrent
+    mints cannot compute the same Max(node_number)+1. Callers still
+    compute the domain suffix from their own root domain.
+    Returns (number, "") — domain assembly stays with the caller because
+    token-path and SSH-path use different base domains.
+    """
+    from django.db import models as _models
+    from django.db import transaction as _txn
+
+    from apps.deployments.models.mesh import MeshNetwork
+    with _txn.atomic():
+        mesh = MeshNetwork.objects.filter(
+            name="default", is_active=True,
+        ).first()
+        if mesh is None:
+            mesh = MeshNetwork.objects.create(
+                name="default",
+                subnet="10.100.0.0/24",
+                listen_port=51820,
+                listen_port_fallback=33500,
+                interface_name="wg0",
+                is_active=True,
+            )
+        _locked = MeshNetwork.objects.select_for_update().get(id=mesh.id)
+        qs = ManagedServer.objects.select_for_update().filter(is_primary=False)
+        if exclude_server_id is not None:
+            qs = qs.exclude(id=exclude_server_id)
+        max_num = qs.aggregate(_m=_models.Max("node_number"))["_m"] or 0
+        return int(max_num) + 1, ""
+
+
 def server_install_mode(server: ManagedServer) -> str:
     if getattr(server, "is_lite_agent", False):
         return "agent-lite"
@@ -154,8 +189,31 @@ def build_agent_lite_install_env(
     resolved_master_ip = (
         str(master_ip or "").strip()
         or os.environ.get("PUBLIC_IP", "").strip()
-        or "127.0.0.1"
+        or ""
     )
+    if not resolved_master_ip:
+        raise ValueError(
+            "No routable MASTER_IP for lite agent (set PUBLIC_IP or pass "
+            "master_ip). Refusing 127.0.0.1 fallback — the remote node "
+            "would point at itself."
+        )
+    try:
+        import ipaddress as _ip
+        if _ip.ip_address(resolved_master_ip).is_loopback:
+            try:
+                _host_is_loopback = bool(_ip.ip_address(str(server.host or "").strip()))
+            except ValueError:
+                _host_is_loopback = False
+            if not _host_is_loopback:
+                raise ValueError(
+                    f"MASTER_IP {resolved_master_ip} is loopback while node host "
+                    f"{server.host} is remote — refusing to provision lite agent "
+                    "with an unreachable master address."
+                )
+    except ValueError:
+        raise
+    except Exception:
+        pass
 
     master_mesh_ip = _get_master_mesh_ip()
     if not master_mesh_ip:

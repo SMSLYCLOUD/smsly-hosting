@@ -10,6 +10,46 @@ from rest_framework.throttling import UserRateThrottle
 from ...models.servers import ManagedServer
 
 logger = logging.getLogger(__name__)
+
+
+def _request_user_is_staff(request) -> bool:
+    """Staff/superusers register WireGuard-mesh and VPC-internal nodes by
+    design — the private-range allowances in the field validators exist
+    for them. Everyone else gets the stricter public-target policy."""
+    user = getattr(request, "user", None)
+    return bool(
+        user is not None
+        and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    )
+
+
+def _assert_public_node_target(serializer, field: str, value: str) -> None:
+    """SSRF hardening: the field-level literal checks miss DNS rebinding —
+    a hostname whose records resolve to a private or metadata address
+    (169.254.169.254, 10.x, docker aliases) sails past a string check.
+    Require every resolved address to be public for non-admin users;
+    staff bypass (private fleets register by design)."""
+    if not value:
+        return
+    request = serializer.context.get("request")
+    user = getattr(request, "user", None)
+    if user is not None and (
+        getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+    ):
+        return
+    from apps.core.validators import validate_ssrf
+
+    try:
+        validate_ssrf(value)
+    except Exception as exc:
+        detail = (
+            getattr(exc, "message", None)
+            or "; ".join(str(m) for m in getattr(exc, "messages", []))
+            or str(exc)
+        )
+        raise serializers.ValidationError(
+            f"Node target rejected (SSRF protection): {detail}"
+        )
 class ManagedServerSerializer(serializers.ModelSerializer):
     has_ssh_credentials = serializers.SerializerMethodField()
     # Mesh DNS names for this server (gridN/node-name labels under the
@@ -104,7 +144,8 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
             "gateway_secret", "ssh_user", "ssh_password", "ssh_key",
             "ssh_key_passphrase", "ssh_port", "is_primary",
             "allow_user_workloads",
-            "provider_metadata", "is_lite_agent", "node_certificate",
+            "provider_metadata", "is_lite_agent", "node_type",
+            "node_certificate",
         ]
         extra_kwargs = {
             "api_token": {"write_only": True, "required": False},
@@ -117,6 +158,20 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         is_lite = data.get("is_lite_agent", False)
+        node_type = (data.get("node_type") or "").strip()
+        # Normalize: flag is the driver for install mode; node_type must agree.
+        # Connect-existing cannot set arbitrary types — derive when absent.
+        if not node_type:
+            data["node_type"] = (
+                ManagedServer.NodeType.AGENT_LITE if is_lite
+                else ManagedServer.NodeType.NODE
+            )
+        elif node_type == ManagedServer.NodeType.AGENT_LITE and not is_lite:
+            data["is_lite_agent"] = True
+        elif node_type in (ManagedServer.NodeType.NODE, ManagedServer.NodeType.MEDIA) and is_lite:
+            raise serializers.ValidationError(
+                {"is_lite_agent": "Contradictory flags: node/media rows cannot be lite agents."}
+            )
         if is_lite:
             cert = (data.get("node_certificate") or "").strip()
             if not cert:
@@ -180,6 +235,7 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
                 pass  # Hostname — allowed for non-primary
         if value.lower() == "localhost" and not is_primary:
             raise serializers.ValidationError("'localhost' is not allowed as a non-primary host.")
+        _assert_public_node_target(self, "host", value)
         return value
 
     def validate_api_url(self, value):
@@ -231,6 +287,7 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
                         )
             except ValueError:
                 pass  # hostname — allowed
+        _assert_public_node_target(self, "api_url", value)
         return value
 
 
@@ -268,6 +325,17 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
             "ssh_password": {"write_only": True},
             "ssh_key": {"write_only": True, "trim_whitespace": False},
         }
+
+    def validate_host(self, value):
+        """Provisioning SSHes to this host from the backend container —
+        a private/metadata target would be a connect oracle. Non-admin
+        users must point at a public address; staff register mesh/VPC
+        nodes by design."""
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Host is required.")
+        _assert_public_node_target(self, "host", value)
+        return value
 
     def validate_ssh_key(self, value):
         if value and value.strip():

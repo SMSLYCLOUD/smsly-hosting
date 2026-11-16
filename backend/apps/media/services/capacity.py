@@ -59,6 +59,7 @@ class MediaCapacityService:
         nodes = MediaNodeProfile.objects.filter(
             server__agent_ready=True,
             server__provision_status="DONE",
+            server__status="ONLINE",
         )
 
         total_calls = sum(n.active_calls for n in nodes)

@@ -50,6 +50,7 @@ def enqueue_smart_deploy_task(
     provider_id: str,
     skip_review: bool = False,
     fast_deploy: bool = False,
+    countdown: int = 0,
 ) -> Any:
     from ..deployment.tasks_deploy import smart_deploy_task
     """
@@ -66,12 +67,19 @@ def enqueue_smart_deploy_task(
         "fast_deploy": fast_deploy,
     }
     queue = _current_agent_node_queue()
+    _countdown = max(0, int(countdown or 0))
+    _opts: dict = {}
+    if _countdown:
+        _opts["countdown"] = _countdown
     if queue:
         result = smart_deploy_task.apply_async(
             kwargs=kwargs,
             queue=queue,
             routing_key=queue,
+            **_opts,
         )
+    elif _opts:
+        result = smart_deploy_task.apply_async(kwargs=kwargs, **_opts)
     else:
         result = smart_deploy_task.delay(**kwargs)
     # Persist the worker task id on the deployment: cancelling the DB row
@@ -84,7 +92,69 @@ def enqueue_smart_deploy_task(
                 celery_task_id=task_id)
     except Exception:
         pass
+    if _countdown:
+        # Stamp the broker ETA so post-restart recovery can tell a
+        # staggered wait (do not touch) from a lost publish (requeue).
+        # Without this, recover_stalled_queued_deployments duplicates every
+        # countdown-waiting task after an update (same deployment_id runs
+        # twice and self-acquires one fleet slot — "No such image").
+        try:
+            import time as _time_mod
+            _dep = Deployment.objects.filter(
+                id=str(deployment_id)).only("metadata").first()
+            if _dep is not None:
+                _meta = dict(getattr(_dep, "metadata", None) or {})
+                _meta["queue_eta"] = _time_mod.time() + _countdown
+                Deployment.objects.filter(id=str(deployment_id)).update(
+                    metadata=_meta)
+        except Exception:
+            pass
     return result
+
+def _push_stagger_seconds() -> int:
+    """Seconds between webhook-triggered builds in one push event.
+
+    A multi-repo push fans out to N services at once; without a stagger
+    every build hits the daemon together and the box OOMs even though the
+    fleet lock would eventually serialize them (waiters hold workers for
+    up to 30 min, then fail). Resolves PlatformConfig
+    ecosystem_build_stagger_seconds → env → 30s default, clamped 0-300.
+    """
+    try:
+        from apps.deployments.models import PlatformConfig
+        value = int(getattr(PlatformConfig.load(), "ecosystem_build_stagger_seconds", 0) or 0)
+        if value > 0:
+            return max(0, min(value, 300))
+    except Exception:
+        pass
+    try:
+        import os as _os
+        value = int(_os.environ.get("ECOSYSTEM_BUILD_STAGGER_SECONDS", 30) or 30)
+        return max(0, min(value, 300))
+    except (TypeError, ValueError):
+        return 30
+
+
+def enqueue_push_deploy(
+    deployment_id: str,
+    provider_id: str,
+    position: int = 0,
+    skip_review: bool = False,
+) -> Any:
+    """Enqueue one webhook-triggered build, staggered by its position.
+
+    Position 0 starts immediately; each later service waits
+    ``position * stagger`` seconds so the fleet lock sees a queue, not a
+    stampede. Persists celery_task_id exactly like enqueue_smart_deploy_task.
+    """
+    countdown = max(0, int(position or 0)) * _push_stagger_seconds()
+    return enqueue_smart_deploy_task(
+        deployment_id=str(deployment_id),
+        provider_id=str(provider_id),
+        skip_review=skip_review,
+        countdown=countdown,
+    )
+
 
 def recover_stalled_queued_deployments(limit: int = 100) -> dict:
     """
@@ -112,6 +182,22 @@ def recover_stalled_queued_deployments(limit: int = 100) -> dict:
                 "Skipping re-queue for %s: task is in state %s",
                 deployment.id,
                 task_state,
+            )
+            results["skipped"] += 1
+            continue
+        # Staggered waits read PENDING until their ETA fires — requeueing
+        # them duplicates the live task (same deployment_id self-acquires
+        # one fleet slot and both builds race the same tag). Skip while the
+        # stamped ETA is still in the future (+60s grace for clock skew).
+        try:
+            import time as _time_mod
+            _eta = float((getattr(deployment, "metadata", None) or {}).get("queue_eta") or 0)
+        except (TypeError, ValueError):
+            _eta = 0
+        if _eta and _time_mod.time() < _eta + 60:
+            logger.info(
+                "Skipping re-queue for %s: staggered start not reached (ETA %.0f)",
+                deployment.id, _eta,
             )
             results["skipped"] += 1
             continue

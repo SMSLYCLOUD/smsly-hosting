@@ -806,7 +806,8 @@ def _is_command_allowed(command: str) -> bool:
     return True
 
 
-_DOCKER_LOGS_OWNER_CACHE: dict[str, bool] = {}
+_DOCKER_LOGS_OWNER_CACHE: dict[str, tuple[bool, float]] = {}
+_DOCKER_LOGS_OWNER_TTL = 60.0
 
 
 def _user_owns_container_name(user, name: str) -> bool:
@@ -814,18 +815,21 @@ def _user_owns_container_name(user, name: str) -> bool:
 
     Cross-checks ``Service.name == name`` (the docker container name
     the caller wants to tail) and ``Service.owner == user`` (the
-    owner claim). Cached per-name for the lifetime of the worker
-    process to avoid hitting the ORM on every ``docker logs``
-    invocation.
+    owner claim). Cached per-name for 60s to avoid hitting the ORM on
+    every ``docker logs`` invocation while still picking up owner
+    changes promptly.
     """
+    import time as _time
+    now = _time.monotonic()
     cache_key = f"{getattr(user, 'id', None)}:{name}"
-    if cache_key in _DOCKER_LOGS_OWNER_CACHE:
-        return _DOCKER_LOGS_OWNER_CACHE[cache_key]
+    hit = _DOCKER_LOGS_OWNER_CACHE.get(cache_key)
+    if hit is not None and (now - hit[1]) < _DOCKER_LOGS_OWNER_TTL:
+        return hit[0]
     try:
         owned = Service.objects.filter(name=name, owner=user).exists()
     except Exception:
         owned = False
-    _DOCKER_LOGS_OWNER_CACHE[cache_key] = owned
+    _DOCKER_LOGS_OWNER_CACHE[cache_key] = (owned, now)
     return owned
 
 

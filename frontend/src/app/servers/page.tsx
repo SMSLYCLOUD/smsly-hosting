@@ -407,6 +407,9 @@ export default function ServersPage() {
                 is_primary: provisionForm.is_primary,
                 allow_user_workloads: provisionForm.allow_user_workloads,
                 is_lite_agent: provisionForm.is_lite_agent,
+                node_type: (provisionForm as any).is_media_node
+                    ? 'media'
+                    : provisionForm.is_lite_agent ? 'agent-lite' : 'node',
                 ssh_auth_method: provisionForm.ssh_auth_method,
                 node_components: provisionForm.node_components,
             };
@@ -474,7 +477,24 @@ export default function ServersPage() {
     };
 
     const handleUpdateServer = async (id: string) => {
-        return handleRetryProvision(id);
+        try {
+            await apiFetch(`/api/v1/servers/${id}/update-server/`, 'POST', {});
+            fetchServers();
+            setViewingLogs(id);
+            toast({ title: 'Update queued', description: 'Remote update task has been queued (adds ?force=1 to override).' });
+        } catch (err: any) {
+            toast({ title: 'Failed to queue update', description: err.message, variant: 'destructive' });
+        }
+    };
+
+    const handleReissueToken = async (id: string) => {
+        try {
+            const result = await apiFetch(`/api/v1/servers/${id}/reissue-token/`, 'POST', {});
+            setBootstrapCommand(result.bootstrap_command || null);
+            toast({ title: 'Bootstrap re-issued', description: 'Copy the new command and run it on the target (valid 1h, 10 fetches).' });
+        } catch (err: any) {
+            toast({ title: 'Failed to re-issue token', description: err.message, variant: 'destructive' });
+        }
     };
 
     const deleteServer = async (id: string) => {
@@ -520,7 +540,10 @@ export default function ServersPage() {
         if (!selfProvisionForm.name || !selfProvisionForm.host) return;
         setGeneratingToken(true);
         try {
-            const result = await apiFetch('/api/v1/servers/provision-token/', 'POST', selfProvisionForm);
+            const node_type = (selfProvisionForm as any).is_media_node
+                ? 'media'
+                : selfProvisionForm.is_lite_agent ? 'agent-lite' : 'node';
+            const result = await apiFetch('/api/v1/servers/provision-token/', 'POST', { ...selfProvisionForm, node_type });
             setBootstrapCommand(result.bootstrap_command);
             toast({ title: 'Bootstrap token generated', description: 'Copy the command and run it on the target server.' });
         } catch (err: any) {
@@ -673,12 +696,31 @@ export default function ServersPage() {
                                             <Button onClick={() => {
                                                 const val = (document.getElementById('batch-provision-input') as HTMLTextAreaElement).value;
                                                 const lines = val.split('\n').filter(l => l.trim());
-                                                const nodes = lines.map(l => {
-                                                    const [host, user, pass] = l.split(',').map(s => s.trim());
-                                                    return { host, ssh_user: user, ssh_password: pass, is_lite_agent: batchLite, node_components: batchComponents };
+                                                // Split on FIRST two commas only — passwords may contain commas.
+                                                const servers = lines.map(l => {
+                                                    const first = l.indexOf(',');
+                                                    const second = first === -1 ? -1 : l.indexOf(',', first + 1);
+                                                    const host = (first === -1 ? l : l.slice(0, first)).trim();
+                                                    const user = (first === -1 ? '' : second === -1 ? l.slice(first + 1) : l.slice(first + 1, second)).trim() || 'root';
+                                                    const pass = (second === -1 ? '' : l.slice(second + 1)).trim();
+                                                    return {
+                                                        name: host, host, ssh_port: 22, ssh_user: user,
+                                                        ssh_password: pass, ssh_auth_method: 'password',
+                                                        is_lite_agent: batchLite,
+                                                        node_type: batchLite ? 'agent-lite' : 'node',
+                                                        node_components: batchComponents,
+                                                    };
                                                 });
-                                                apiFetch('/api/v1/servers/provision-batch/', 'POST', { nodes }).then(() => {
+                                                apiFetch('/api/v1/servers/provision-batch/', 'POST', { servers }).then((result: any) => {
+                                                    const created = (result?.created || []).map((c: any) =>
+                                                        `${c.name}${c.generated_ssh_public_key ? ' — key: ' + String(c.generated_ssh_public_key).slice(0, 40) + '…' : ''}`
+                                                    ).join('\n');
+                                                    const errors = (result?.errors || []).map((e: any) =>
+                                                        `row ${e.index} (${e.host}): ${JSON.stringify(e.errors)}`
+                                                    ).join('\n');
+                                                    alert(`Created ${result?.total ?? 0}\n${created}${errors ? '\nErrors:\n' + errors : ''}`);
                                                     setAddMode('provision');
+                                                    fetchServers();
                                                 }).catch((e: any) => alert(e.message));
                                             }}>Provision Batch</Button>
                                         </div>

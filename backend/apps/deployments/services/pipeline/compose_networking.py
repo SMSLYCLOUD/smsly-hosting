@@ -163,7 +163,7 @@ class ComposeNetworkingMixin:
         if use_ssl and enable_traefik_tls:
             middlewares = f"{router}-redirect"
             if enable_crowdsec_waf:
-                middlewares += ",crowdsec-bouncer"
+                middlewares += ",crowdsec-bouncer@docker"
 
             labels.update(
                 {
@@ -179,7 +179,7 @@ class ComposeNetworkingMixin:
                 }
             )
             if enable_crowdsec_waf:
-                labels[f"traefik.http.routers.{router}.middlewares"] = "crowdsec-bouncer"
+                labels[f"traefik.http.routers.{router}.middlewares"] = "crowdsec-bouncer@docker"
             return labels
 
         labels.update(
@@ -200,7 +200,7 @@ class ComposeNetworkingMixin:
             logger.warning("Edge shared file ensure failed for %s", router)
         chain = ["secure-headers-strict@file"]
         if enable_crowdsec_waf:
-            chain.insert(0, "crowdsec-bouncer")
+            chain.insert(0, "crowdsec-bouncer@docker")
         try:
             svc_flags = getattr(self, "service", None)
             if svc_flags is not None:

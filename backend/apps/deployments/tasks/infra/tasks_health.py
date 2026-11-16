@@ -97,10 +97,12 @@ def check_agent_heartbeats_task():
     from apps.deployments.models.core import ManagedServer
 
     cutoff = timezone.now() - timedelta(seconds=120)
+    from django.db.models import Q
     stale = ManagedServer.objects.filter(
+        Q(last_agent_heartbeat_at__lt=cutoff)
+        | Q(last_agent_heartbeat_at__isnull=True),
         is_lite_agent=True,
         agent_ready=True,
-        last_agent_heartbeat_at__lt=cutoff,
     ).exclude(status=ManagedServer.Status.OFFLINE)
 
     flipped = 0
@@ -140,7 +142,11 @@ def check_managed_servers_health_task():
     from apps.deployments.views.server.helpers import _refresh_managed_server_health
 
     servers = ManagedServer.objects.exclude(
-        provision_status__in=("pending", "provisioning", "failed")
+        provision_status__in=(
+            ManagedServer.ProvisionStatus.PENDING,
+            ManagedServer.ProvisionStatus.PROVISIONING,
+            ManagedServer.ProvisionStatus.UPDATING,
+        )
     )
     checked = 0
     for server in servers:

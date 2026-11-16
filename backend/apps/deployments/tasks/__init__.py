@@ -64,6 +64,7 @@ from apps.deployments.tasks.resource_limits import (  # noqa: F401
 # ── Re-exports from tasks_health ──────────────────────────────────
 from apps.deployments.tasks.infra.tasks_health import (
     auto_authenticate_nodes_task,
+    check_agent_heartbeats_task,
     check_managed_servers_health_task,
     node_watchdog_task,
     refresh_managed_server_health,

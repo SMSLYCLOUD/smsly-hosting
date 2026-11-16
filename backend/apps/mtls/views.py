@@ -106,6 +106,16 @@ def _start_agent_with_token(
     if _container_running(agent_container):
         return "already_running"
 
+    import os as _os
+    # Host-namespace preflight (AGENTS.md #24): only enforced when the host
+    # path is visible from this namespace. Backend containers without an
+    # /opt mount cannot tell; blocking there would false-fail healthy hosts.
+    if _os.path.isdir("/opt/smsly-hosting") and not _os.path.isfile(agent_conf_path):
+        return (
+            f"error: agent conf missing (not a file): {agent_conf_path} — "
+            "refusing docker run (daemon would create a directory and poison retries)"
+        )
+
     token = _mint_join_token(server_container)
     if not token:
         return "error: could not mint join token (is the server healthy?)"
@@ -141,7 +151,13 @@ def _start_agent_with_token(
         )
         if r.returncode == 0:
             return "started"
-        return f"error: {r.stderr[:200]}"
+        _err = (r.stderr or "")[:200]
+        if "not a directory" in _err:
+            return (
+                f"error: host poisoned (directory at {agent_conf_path}): "
+                f"remove it on the host, restore the file, retry. docker: {_err}"
+            )
+        return f"error: {_err}"
     except Exception as exc:
         return f"error: {exc}"
 

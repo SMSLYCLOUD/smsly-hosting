@@ -149,11 +149,9 @@ def _verify_transfer_sync_hmac(request, source_ip, body):
     # one-use within the 5-minute window. Without this, a captured
     # request can be replayed to create duplicate ServerTransfer
     # rows. The nonce is also bound into the signed payload.
+    # Claimed only AFTER HMAC verifies (atomic cache.add).
     from django.core.cache import cache
     nonce_key = f"transfer_nonce:{nonce}"
-    if cache.get(nonce_key):
-        return False
-    cache.set(nonce_key, "1", timeout=600)
 
     body_hash = hashlib.sha256(body).hexdigest()
     payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{nonce}|{body_hash}"
@@ -161,6 +159,11 @@ def _verify_transfer_sync_hmac(request, source_ip, body):
     for secret in _gateway_secret_candidates(source_ip):
         expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if hmac.compare_digest(expected, signature):
+            try:
+                if not cache.add(nonce_key, "1", timeout=330):
+                    return False
+            except Exception:
+                return False
             return True
 
     return False

@@ -58,9 +58,19 @@ class ProvisioningMixin:
         """
         name = request.data.get("name", "").strip()
         host = request.data.get("host", "").strip()
-        node_type = request.data.get("node_type", "node")
+        node_type = (request.data.get("node_type") or "").strip() or "node"
         is_lite_agent = request.data.get("is_lite_agent", False)
         is_media_node = request.data.get("is_media_node", False)
+        # Normalize: flags win when node_type absent/mismatched (older UI
+        # sends booleans only). media > agent-lite > node.
+        if is_media_node:
+            node_type, is_lite_agent = "media", False
+        elif is_lite_agent:
+            node_type = "agent-lite"
+        elif node_type == "agent-lite":
+            is_lite_agent = True
+        elif node_type == "media":
+            is_media_node, is_lite_agent = True, False
         is_primary = request.data.get("is_primary", False)
         allow_user_workloads = request.data.get("allow_user_workloads", True)
         node_components = request.data.get("node_components", {})
@@ -108,6 +118,7 @@ class ProvisioningMixin:
         #    mesh address. Network I/O (WG config deploy) stays outside.
         from apps.deployments.services.provisioner.helpers.server_config import (
             _get_master_wg_pubkey,
+            allocate_node_number,
         )
         from django.db import transaction
         try:
@@ -128,10 +139,7 @@ class ProvisioningMixin:
                     id=mesh.id
                 )
 
-                max_num = ManagedServer.objects.filter(
-                    is_primary=False
-                ).aggregate(m=db_models.Max("node_number"))["m"] or 0
-                node_number = max_num + 1
+                node_number, _ = allocate_node_number()
 
                 domain_parts = base_domain.split(".")
                 if len(domain_parts) > 2:
@@ -250,6 +258,7 @@ class ProvisioningMixin:
         # master's server_ip. Only literal IPs are valid A-record targets;
         # a hostname host is skipped (its own DNS already resolves it).
         dns_result = None
+        dns_note = ""
         try:
             import ipaddress as _ipaddress
 
@@ -257,12 +266,16 @@ class ProvisioningMixin:
             try:
                 dns_target = str(_ipaddress.ip_address(host))
             except ValueError:
-                logger.info(
-                    "provision-token: host %r is a hostname, skipping "
-                    "node-domain A-record pre-provisioning.",
-                    host,
+                dns_note = (
+                    f"host {host!r} is a hostname, skipping node-domain "
+                    "A-record pre-provisioning (its own DNS already resolves it)."
                 )
+                logger.info("provision-token: %s", dns_note)
             cf_token = getattr(config, "cloudflare_api_token", "") or ""
+            if not cf_token:
+                dns_note = (dns_note + " " if dns_note else "") + (
+                    "No Cloudflare token configured — DNS not pre-provisioned."
+                )
             if dns_target and cf_token and node_domain:
                 from apps.domains.services.dns import ensure_dns_records
                 dns_result = ensure_dns_records(
@@ -272,6 +285,7 @@ class ProvisioningMixin:
             logger.warning(
                 "DNS pre-provisioning failed for %s: %s", server.name, exc,
             )
+            dns_note = f"DNS pre-provisioning failed: {exc}"
 
         # ── 6. Generate signed bootstrap token ──
         app_secret = settings.SECRET_KEY.encode()
@@ -314,12 +328,82 @@ class ProvisioningMixin:
             "node_domain": node_domain,
             "wg_address": wg_address,
             "dns_result": dns_result,
+            "dns_note": dns_note,
             "master_url": master_url,
             "bootstrap_command": (
                 f'curl -fsSL "{master_url}/api/v1/servers/bootstrap/{token}/" | bash'
             ),
         })
         return Response(data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="reissue-token")
+    @throttle_classes([ServerProvisionThrottle])
+    def reissue_token(self, request, pk=None):
+        """Mint a fresh 1h bootstrap token for a PENDING/FAILED node.
+
+        Closes the 11h dead window where the original token expired but
+        the record is retained: the operator re-issues instead of
+        deleting/recreating the server (which would churn node_number,
+        WG address, and DNS).
+        """
+        server = self.get_object()
+        if server.provision_status not in {
+            ManagedServer.ProvisionStatus.PENDING,
+            ManagedServer.ProvisionStatus.FAILED,
+        }:
+            return Response(
+                {
+                    "error": "Token re-issue only for PENDING/FAILED servers.",
+                    "provision_status": server.provision_status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        from django.db import transaction as _txn
+        with _txn.atomic():
+            server = ManagedServer.objects.select_for_update().get(id=server.id)
+            payload_data = {
+                "server_id": str(server.id),
+                "name": server.name,
+                "host": server.host,
+                "node_type": getattr(server, "node_type", "node"),
+                "is_lite_agent": bool(getattr(server, "is_lite_agent", False)),
+                "is_media_node": getattr(server, "node_type", "") == "media",
+                "is_primary": bool(getattr(server, "is_primary", False)),
+                "allow_user_workloads": bool(getattr(server, "allow_user_workloads", True)),
+                "node_components": dict(getattr(server, "node_components", None) or {}),
+                "node_number": getattr(server, "node_number", None),
+                "node_domain": getattr(server, "node_domain", ""),
+                "wg_address": str(getattr(server, "wg_address", "") or ""),
+                "wg_private_key": "",
+                "wg_public_key": "",
+                "gateway_secret": str(getattr(server, "gateway_secret", "") or ""),
+                "master_wg_pubkey": "",
+                "master_wg_endpoint": "",
+                "exp": int(time.time()) + 3600,
+                "nonce": secrets.token_hex(8),
+            }
+            if not payload_data["gateway_secret"]:
+                payload_data["gateway_secret"] = secrets.token_hex(32)
+                server.gateway_secret = payload_data["gateway_secret"]
+                server.save(update_fields=["gateway_secret", "updated_at"])
+            payload_b64 = base64.urlsafe_b64encode(
+                json_mod.dumps(payload_data).encode()
+            ).decode()
+            sig = hmac_mod.new(
+                settings.SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256,
+            ).hexdigest()
+            token = f"{payload_b64}.{sig}"
+        master_url = os.environ.get("PUBLIC_URL", "https://grid.smsly.cloud")
+        return Response(
+            {
+                "token": token,
+                "server_id": str(server.id),
+                "bootstrap_command": (
+                    f'curl -fsSL "{master_url}/api/v1/servers/bootstrap/{token}/" | bash'
+                ),
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=["post"], url_path="provision")
     @throttle_classes([ServerProvisionThrottle])
@@ -423,8 +507,15 @@ class ProvisioningMixin:
                 priv_key_pem, generated_public_key = _generate_ed25519_keypair()
                 validated["ssh_key"] = priv_key_pem
 
-            validated["is_lite_agent"] = True
+            validated["is_lite_agent"] = validated.get("is_lite_agent", True)
             validated["is_primary"] = False
+            # Normalize node_type ↔ flag like provision_new so an explicit
+            # node_type='node' + is_lite_agent=False batch entry provisions
+            # a full node instead of silently becoming lite.
+            if validated.get("node_type") == "node":
+                validated["is_lite_agent"] = False
+            elif validated.get("node_type") == "agent-lite":
+                validated["is_lite_agent"] = True
 
             try:
                 server = ManagedServer.objects.create(
@@ -443,6 +534,10 @@ class ProvisioningMixin:
             entry = ManagedServerSerializer(server).data
             if generated_public_key:
                 entry["generated_ssh_public_key"] = generated_public_key
+                entry["generated_key_warning"] = (
+                    "Private key stored encrypted; public key shown once — "
+                    "install it on the host now, it will not be shown again."
+                )
             created.append(entry)
 
         return Response(
@@ -463,8 +558,26 @@ class ProvisioningMixin:
     def retry_provision(self, request, pk=None):
         server = self.get_object()
 
+        _inflight = {
+            ManagedServer.ProvisionStatus.PENDING,
+            ManagedServer.ProvisionStatus.PROVISIONING,
+            ManagedServer.ProvisionStatus.UPDATING,
+        }
+        _force = str(request.data.get("force", "") or "").lower() in {"1", "true", "yes", "on"}
+        if server.provision_status in _inflight and not _force:
+            return Response(
+                {
+                    "error": "Server provisioning already in flight.",
+                    "provision_status": server.provision_status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         server.provision_status = ManagedServer.ProvisionStatus.PENDING
-        server.provision_logs = f"--- Retry started by {request.user.username} at {timezone.now()} ---\n"
+        prior = (server.provision_logs or "")[-50000:] if server.provision_logs else ""
+        server.provision_logs = (
+            (prior + f"\n--- Retry started by {request.user.username} at {timezone.now()} ---\n")
+            if prior else f"--- Retry started by {request.user.username} at {timezone.now()} ---\n"
+        )
         server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
 
         from apps.deployments.services.provisioner import provision_server
@@ -492,7 +605,16 @@ class ProvisioningMixin:
             ManagedServer.ProvisionStatus.UPDATING,
         }
         if server.provision_status in blocked_statuses:
-            provision_started_by = getattr(server, "_provision_started_by", None)
+            _force_update = str(request.data.get("force", "") or "").lower() in {"1", "true", "yes", "on"}
+            if not _force_update:
+                return Response(
+                    {
+                        "error": "Server update already in flight.",
+                        "provision_status": server.provision_status,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            provision_started_by = (server.provider_metadata or {}).get("provision_started_by")
             if (
                 not request.user.is_superuser
                 and provision_started_by is not None
@@ -521,8 +643,23 @@ class ProvisioningMixin:
                 server.provision_status, server.id, request.user.id,
             )
 
+        from django.core.cache import cache as _update_cache
+        _update_lock = f"server-update-request:{server.id}"
+        if not _update_cache.add(_update_lock, "1", timeout=60):
+            return Response(
+                {
+                    "error": "Update already requested in the last 60s (double-click guard).",
+                    "provision_status": server.provision_status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         server.provision_status = ManagedServer.ProvisionStatus.PENDING
-        server.provision_logs = f"--- Update started by {request.user.username} at {timezone.now()} ---\n"
+        prior = (server.provision_logs or "")[-50000:] if server.provision_logs else ""
+        server.provision_logs = (
+            (prior + f"\n--- Update started by {request.user.username} at {timezone.now()} ---\n")
+            if prior else f"--- Update started by {request.user.username} at {timezone.now()} ---\n"
+        )
         server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
 
         from apps.deployments.services.provisioner import provision_server

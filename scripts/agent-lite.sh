@@ -838,14 +838,16 @@ do_update_full() {
     }
 
     echo -e "${BLUE}  → Restarting all services...${NC}"
-    # Edge rule: never --force-recreate traefik (drops in-flight HTTP/WS).
-    # Recreate everything else, then check-then-start the edge.
-    docker compose -f "$COMPOSE_PATH" up -d --force-recreate socket-proxy redis rabbitmq backend celery-worker agent-registrar
-    if docker compose -f "$COMPOSE_PATH" ps traefik 2>/dev/null | grep -q "Up"; then
-        echo -e "${BLUE}    Traefik already running — left untouched${NC}"
+    # Edge rule: never --force-recreate traefik or socket-proxy (drops
+    # in-flight HTTP/WS). Recreate app services, then check-then-start edge.
+    docker compose -f "$COMPOSE_PATH" up -d --force-recreate redis rabbitmq backend celery-worker agent-registrar
+    for _edge in socket-proxy traefik; do
+    if docker compose -f "$COMPOSE_PATH" ps "$_edge" 2>/dev/null | grep -q "Up"; then
+        echo -e "${BLUE}    ${_edge} already running — left untouched${NC}"
     else
-        docker compose -f "$COMPOSE_PATH" up -d --no-deps traefik
+        docker compose -f "$COMPOSE_PATH" up -d --no-deps "$_edge"
     fi
+    done
 
     sync_local_rabbitmq_password
     wait_for_backend 60 3
@@ -880,14 +882,16 @@ do_update_half() {
     docker compose -f "$COMPOSE_PATH" pull || echo -e "${YELLOW}    ⚠ Image pull failed${NC}"
 
     echo -e "${BLUE}  → Restarting all services...${NC}"
-    # Edge rule: never --force-recreate traefik (drops in-flight HTTP/WS).
-    # Recreate everything else, then check-then-start the edge.
-    docker compose -f "$COMPOSE_PATH" up -d --force-recreate socket-proxy redis rabbitmq backend celery-worker agent-registrar
-    if docker compose -f "$COMPOSE_PATH" ps traefik 2>/dev/null | grep -q "Up"; then
-        echo -e "${BLUE}    Traefik already running — left untouched${NC}"
+    # Edge rule: never --force-recreate traefik or socket-proxy (drops
+    # in-flight HTTP/WS). Recreate app services, then check-then-start edge.
+    docker compose -f "$COMPOSE_PATH" up -d --force-recreate redis rabbitmq backend celery-worker agent-registrar
+    for _edge in socket-proxy traefik; do
+    if docker compose -f "$COMPOSE_PATH" ps "$_edge" 2>/dev/null | grep -q "Up"; then
+        echo -e "${BLUE}    ${_edge} already running — left untouched${NC}"
     else
-        docker compose -f "$COMPOSE_PATH" up -d --no-deps traefik
+        docker compose -f "$COMPOSE_PATH" up -d --no-deps "$_edge"
     fi
+    done
 
     sync_local_rabbitmq_password
     wait_for_backend 60 3

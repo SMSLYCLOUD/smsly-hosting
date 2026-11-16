@@ -99,44 +99,27 @@ class NodeScorer:
 
     def _query_node_mem(self, node):
         ip = self._node_ip(node)
-        result = self._promql_avg(
+        # No fleet-average fallback: averaging all nodes mis-scores this
+        # node when Prometheus has no data for it (caller defaults to 50%).
+        return self._promql_avg(
             f'100 - (node_memory_MemAvailable_bytes{{instance=~".*{ip}.*"}} '
             f'/ node_memory_MemTotal_bytes{{instance=~".*{ip}.*"}} * 100)'
         )
-        if result is None:
-            result = self._promql_avg(
-                f'100 - (node_memory_MemAvailable_bytes{{job="node"}} '
-                f'/ node_memory_MemTotal_bytes{{job="node"}} * 100)'
-            )
-        return result
 
     def _query_node_cpu(self, node):
         ip = self._node_ip(node)
-        result = self._promql_avg(
+        return self._promql_avg(
             f'100 - (avg by(instance)(rate(node_cpu_seconds_total{{mode!="idle",'
             f'instance=~".*{ip}.*"}}[2m])) * 100)'
         )
-        if result is None:
-            result = self._promql_avg(
-                f'100 - (avg by(instance)(rate(node_cpu_seconds_total{{mode!="idle",'
-                f'job="node"}}[2m])) * 100)'
-            )
-        return result
 
     def _query_node_disk(self, node):
         ip = self._node_ip(node)
-        result = self._promql_avg(
+        return self._promql_avg(
             f'100 - (node_filesystem_avail_bytes{{instance=~".*{ip}.*",'
             f'mountpoint="/"}} / node_filesystem_size_bytes{{instance=~".*{ip}.*",'
             f'mountpoint="/"}} * 100)'
         )
-        if result is None:
-            result = self._promql_avg(
-                f'100 - (node_filesystem_avail_bytes{{job="node",'
-                f'mountpoint="/"}} / node_filesystem_size_bytes{{job="node",'
-                f'mountpoint="/"}} * 100)'
-            )
-        return result
 
     def _promql_avg(self, query):
         try:

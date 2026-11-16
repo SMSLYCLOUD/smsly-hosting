@@ -42,7 +42,7 @@ service_dir() {
 
 normalize_dir() {
     # $1 = container, $2 = dir inside container
-    docker exec -u root "$1" sh -c \
+    timeout 30 docker exec -u root "$1" sh -c \
         'cd "$0" && mkdir -p . && chmod 644 svid.*.pem svid.*.key bundle.*.pem 2>/dev/null; k=$(ls -t svid.*.key 2>/dev/null | head -n 1) && [ -n "$k" ] && n=${k%.key} && b=$(ls -t bundle.*.pem 2>/dev/null | head -n 1) && [ -n "$b" ] && { cmp -s "$n.pem" cert.pem || cp -f "$n.pem" cert.pem; } && { cmp -s "$n.key" key.pem || cp -f "$n.key" key.pem; } && { cmp -s "$b" bundle.pem || cp -f "$b" bundle.pem; } && chmod 644 cert.pem key.pem bundle.pem' "$2" \
         >/dev/null 2>&1
 }
@@ -68,12 +68,12 @@ fi
 for c in $SERVICES; do
     _svc="$(service_dir "$c")"
     _subdir="$DIR/$_svc"
-    if ! docker exec -u root "$c" sh -c 'mkdir -p "$0"' "$_subdir" >/dev/null 2>&1; then
+    if ! timeout 30 docker exec -u root "$c" sh -c 'mkdir -p "$0"' "$_subdir" >/dev/null 2>&1; then
         echo "$(date -u +%FT%TZ) $c mkdir FAILED"
         fail=1
         continue
     fi
-    if ! docker exec -u root "$c" "$BIN" api fetch x509 \
+    if ! timeout 60 docker exec -u root "$c" "$BIN" api fetch x509 \
         -socketPath "$SOCK" -write "$_subdir" >/dev/null 2>&1; then
         echo "$(date -u +%FT%TZ) $c fetch FAILED"
         fail=1

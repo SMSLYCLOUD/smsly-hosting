@@ -134,7 +134,12 @@ def _fleet_lock_owner_is_stale(
 @contextmanager
 def fleet_build_lock(deployment):
     if not _env_bool("SMSLY_ENABLE_FLEET_BUILD_LOCK", True):
-        append_log(deployment, "🚀 Build starting...\n")
+        logger.warning(
+            "SMSLY_ENABLE_FLEET_BUILD_LOCK is disabled — build %s runs "
+            "with NO fleet concurrency protection (multi-push OOM risk).",
+            getattr(deployment, "id", "?"),
+        )
+        append_log(deployment, "⚠️ Fleet build lock DISABLED — building without concurrency protection.\n")
         yield
         return
 
@@ -160,7 +165,12 @@ def fleet_build_lock(deployment):
             f"(configured {configured_slots}).\n",
         )
     lock_timeout = _env_int("SMSLY_FLEET_BUILD_LOCK_TIMEOUT_SECONDS", 3600, minimum=60)
-    max_wait = _env_int("SMSLY_FLEET_BUILD_LOCK_WAIT_SECONDS", 1800, minimum=30)
+    # Bounded wait + task-level retry (not a long hold): lock-timeout now
+    # re-queues with countdown=60 instead of failing the deployment, so a
+    # short wait with revives beats one 30-min worker hold. Each attempt
+    # waits at most max_wait; 3 retries + 60s broker gaps span ~35 min
+    # wall-clock while freeing the worker between attempts.
+    max_wait = _env_int("SMSLY_FLEET_BUILD_LOCK_WAIT_SECONDS", 600, minimum=30)
     poll_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_POLL_SECONDS", 15, minimum=1)
     stale_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_STALE_SECONDS", 600, minimum=60)
 

@@ -11,7 +11,14 @@
   deploys stop serializing on one global slot.
 * Slot integration (Django cache): N holders coexist on N distinct
   keys; a stale slot-0 owner is stolen exactly like the legacy lock.
+* Push stagger (multi-repo OOM): webhook fan-out spaces builds by
+  ``position * stagger`` and stamps ``metadata.queue_eta`` so
+  post-restart recovery can tell a scheduled wait from a lost publish.
+* Lock-timeout retry: a busy fleet re-queues with countdown instead of
+  permanently failing the deployment (manual redeploys used to be the
+  only recovery).
 """
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -326,3 +333,134 @@ class FleetLockDegradedCacheTests(TestCase):
         self.assertIn("concurrency limit", str(ctx.exception))
         # No slot key claimed in the process-local fallback.
         self.assertIsNone(cache.get("smsly_fleet_build_lock"))
+
+
+class PushStaggerTests(TestCase):
+    """Multi-repo push fan-out must stagger, not stampede.
+
+    Regression for the multi-push OOM: every webhook called
+    ``smart_deploy_task.delay`` in a tight loop, so N builds hit the
+    daemon together. Position * stagger turns it into a queue.
+    """
+
+    def test_position_maps_to_stagger_multiple(self):
+        from apps.deployments.tasks.deploy import queue as queue_mod
+        with patch.object(queue_mod, "_push_stagger_seconds", return_value=30), \
+             patch.object(queue_mod, "enqueue_smart_deploy_task") as mock_enq:
+            queue_mod.enqueue_push_deploy(
+                "dep-1", "prov-1", position=3, skip_review=True)
+        mock_enq.assert_called_once_with(
+            deployment_id="dep-1", provider_id="prov-1",
+            skip_review=True, countdown=90,
+        )
+
+    def test_position_zero_dispatches_immediately(self):
+        from apps.deployments.tasks.deploy import queue as queue_mod
+        with patch.object(queue_mod, "_push_stagger_seconds", return_value=30), \
+             patch.object(queue_mod, "enqueue_smart_deploy_task") as mock_enq:
+            queue_mod.enqueue_push_deploy("dep-1", "prov-1", position=0)
+        _, kwargs = mock_enq.call_args
+        self.assertEqual(kwargs["countdown"], 0)
+
+    def test_countdown_stamps_queue_eta(self):
+        user = User.objects.create_user(username="eta-u", password="x")
+        svc = Service.objects.create(
+            name="eta-svc", owner=user, branch="main", deploy_type="GIT",
+            repository_url="https://github.com/acme/web.git")
+        dep = Deployment.objects.create(
+            service=svc, status=Deployment.Status.QUEUED)
+        from apps.deployments.tasks.deploy import queue as queue_mod
+        fake = SimpleNamespace(id="task-1")
+        with patch(
+            "apps.deployments.tasks.deployment.tasks_deploy.smart_deploy_task"
+        ) as mock_task:
+            mock_task.apply_async.return_value = fake
+            queue_mod.enqueue_smart_deploy_task(
+                str(dep.id), "prov-1", countdown=120)
+        dep.refresh_from_db()
+        self.assertGreater(
+            float((dep.metadata or {}).get("queue_eta") or 0), time.time())
+
+    def test_recover_skips_future_eta(self):
+        provider = CloudProvider.objects.create(
+            name="eta-provider",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+        user = User.objects.create_user(username="eta-r", password="x")
+        svc = Service.objects.create(
+            name="eta-rsvc", owner=user, branch="main", deploy_type="GIT",
+            repository_url="https://github.com/acme/web.git")
+        dep = Deployment.objects.create(
+            service=svc, status=Deployment.Status.QUEUED,
+            metadata={"queue_eta": time.time() + 600})
+        from apps.deployments.tasks.deploy import queue as queue_mod
+        with patch.object(
+            queue_mod, "enqueue_smart_deploy_task"
+        ) as mock_enq:
+            result = queue_mod.recover_stalled_queued_deployments(limit=10)
+        mock_enq.assert_not_called()
+        self.assertEqual(result["skipped"], 1)
+
+    def test_recover_requeues_past_eta(self):
+        CloudProvider.objects.create(
+            name="eta-provider2",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+        user = User.objects.create_user(username="eta-p", password="x")
+        svc = Service.objects.create(
+            name="eta-psvc", owner=user, branch="main", deploy_type="GIT",
+            repository_url="https://github.com/acme/web.git")
+        dep = Deployment.objects.create(
+            service=svc, status=Deployment.Status.QUEUED,
+            metadata={"queue_eta": time.time() - 600})
+        from apps.deployments.tasks.deploy import queue as queue_mod
+        with patch.object(
+            queue_mod, "enqueue_smart_deploy_task"
+        ) as mock_enq:
+            queue_mod.recover_stalled_queued_deployments(limit=10)
+        mock_enq.assert_called_once()
+
+
+class FleetLockTimeoutRetryTests(TestCase):
+    """A busy fleet must re-queue with delay, not permanently fail.
+
+    Regression for multi-push failures that only manual redeploys could
+    fix: lock-timeout raised RuntimeError straight into _handle_failure
+    (BUILD_FAILED). Now it retries with countdown so the freed slot is
+    picked up automatically.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="retry-u", password="password123")
+        self.provider = CloudProvider.objects.create(
+            name="retry-provider",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+        self.service = Service.objects.create(
+            name="retry-svc", owner=self.user, provider=self.provider,
+            branch="main", deploy_type="GIT",
+            repository_url="https://github.com/acme/web.git")
+
+    def test_lock_timeout_raises_retry(self):
+        from celery.exceptions import Retry
+        from apps.deployments.tasks.deployment.tasks_deploy import (
+            smart_deploy_task,
+        )
+        dep = Deployment.objects.create(
+            service=self.service, status=Deployment.Status.QUEUED,
+            commit_hash="d" * 40)
+        with patch(
+            "apps.deployments.tasks.deployment.tasks_deploy.fleet_build_lock"
+        ) as mock_lock, patch(
+            "apps.deployments.tasks.cicd.tasks_commit_status.update_commit_status"
+        ):
+            mock_lock.side_effect = RuntimeError(
+                "Fleet build concurrency limit reached. Please try again later.")
+            with self.assertRaises(Retry):
+                smart_deploy_task(
+                    str(dep.id), str(self.provider.id),
+                    skip_review=True, fast_deploy=True)

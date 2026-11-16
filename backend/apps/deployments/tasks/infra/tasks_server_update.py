@@ -207,7 +207,12 @@ def update_remote_server_task(server_id: str):
             # Remote full-stack node (own DB): targeted rebuild of app containers only.
             # Do NOT run install.sh --update — that restarts PG/Redis/RabbitMQ
             # which can corrupt the node's own database.
-            BUILD_TIMEOUT = int(os.environ.get('SMSLY_REMOTE_BUILD_TIMEOUT', '14400'))  # 4h default
+            # Keep under TASK_TIME_LIMIT_HEAVY (7200s soft): a 4h SSH timeout
+            # would be SIGKILLed mid-build with no cleanup.
+            BUILD_TIMEOUT = min(
+                int(os.environ.get('SMSLY_REMOTE_BUILD_TIMEOUT', '5400')),
+                6000,
+            )  # 90m default, 100m hard cap
             app_services = "backend celery celery-fast celery-deploy celery-beat"
             compose_flags = "--no-cache --pull"
             cmd_build = (

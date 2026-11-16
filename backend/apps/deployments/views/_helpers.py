@@ -740,6 +740,34 @@ def _resolve_provider_for_target(service: Service, *, target_is_local: bool = Fa
     return _resolve_provider_for_service(service)
 
 
+def _is_server_ready_for_deploy(server) -> tuple[bool, str]:
+    """Central readiness gate: ONLINE + DONE (+ agent_ready when lite).
+
+    Single helper for explicit, inherited, and multi-deploy paths so a
+    NOT-ready node cannot receive work through an unchecked branch.
+    """
+    if server is None:
+        return True, ""
+    from apps.deployments.models.core import ManagedServer as _MS
+    if getattr(server, "status", None) != _MS.Status.ONLINE:
+        return False, (
+            f"Server {getattr(server, 'name', '?')} is {getattr(server, 'status', '?')}. "
+            "Only ONLINE remote servers can receive deployments."
+        )
+    if getattr(server, "provision_status", None) != _MS.ProvisionStatus.DONE:
+        return False, (
+            f"Server {getattr(server, 'name', '?')} is not provisioned "
+            f"({getattr(server, 'provision_status', '?')}). Wait for provisioning to finish."
+        )
+    if getattr(server, "is_lite_agent", False) and not getattr(server, "agent_ready", False):
+        return False, (
+            f"Server {getattr(server, 'name', '?')} is ONLINE but its agent "
+            "has not finished registering (agent_ready=False). "
+            "Wait for installer/registrar completion before deploying."
+        )
+    return True, ""
+
+
 def _resolve_requested_deploy_target(request, service: Service):
     """
     Resolve the optional per-deploy target.
@@ -795,6 +823,15 @@ def _resolve_requested_deploy_target(request, service: Service):
                 "target_is_local": True,
                 "effective_server": None,
             }
+        _ready, _reason = _is_server_ready_for_deploy(effective_server)
+        if not _ready:
+            return {
+                "ok": False,
+                "response": Response(
+                    {'error': _reason},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            }
         return {
             "ok": True,
             "specified": False,
@@ -837,31 +874,12 @@ def _resolve_requested_deploy_target(request, service: Service):
             "effective_server": None,
         }
 
-    if getattr(target_server, "is_lite_agent", False) and not getattr(target_server, "agent_ready", False):
+    _ready, _reason = _is_server_ready_for_deploy(target_server)
+    if not _ready:
         return {
             "ok": False,
             "response": Response(
-                {
-                    'error': (
-                        f'Server {target_server.name} is ONLINE but its agent '
-                        'has not finished registering (agent_ready=False). '
-                        'Wait for installer/registrar completion before deploying.'
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            ),
-        }
-
-    if target_server.status != ManagedServer.Status.ONLINE:
-        return {
-            "ok": False,
-            "response": Response(
-                {
-                    'error': (
-                        f'Server {target_server.name} is {target_server.status}. '
-                        'Only ONLINE remote servers can receive deployments.'
-                    )
-                },
+                {'error': _reason},
                 status=status.HTTP_400_BAD_REQUEST,
             ),
         }
@@ -932,6 +950,7 @@ __all__ = [
     '_resolve_local_provider',
     '_resolve_provider_for_target',
     '_resolve_requested_deploy_target',
+    '_is_server_ready_for_deploy',
     '_is_valid_env_key',
     '_looks_masked_secret',
     'is_remote_sync_request',

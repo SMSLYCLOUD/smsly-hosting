@@ -44,23 +44,23 @@ class WebhookProviderResolutionTests(TestCase):
         )
         self.assertIsNone(self.service.provider)
 
-        with patch("apps.cloud.webhooks.github.smart_deploy_task") as mock_task:
+        with patch("apps.deployments.tasks.deploy.queue.enqueue_push_deploy") as mock_task:
             result = self.handler._handle_push(_payload())
 
         self.assertTrue(result)
-        mock_task.delay.assert_called_once()
-        _, kwargs = mock_task.delay.call_args
+        mock_task.assert_called_once()
+        _, kwargs = mock_task.call_args
         self.assertEqual(kwargs["provider_id"], str(provider.id))
         dep = Deployment.objects.filter(service=self.service).order_by("-created_at").first()
         self.assertIsNotNone(dep)
         self.assertEqual(dep.status, Deployment.Status.QUEUED)
 
     def test_push_with_no_provider_anywhere_leaves_note(self):
-        with patch("apps.cloud.webhooks.github.smart_deploy_task") as mock_task:
+        with patch("apps.deployments.tasks.deploy.queue.enqueue_push_deploy") as mock_task:
             result = self.handler._handle_push(_payload())
 
         self.assertFalse(result)
-        mock_task.delay.assert_not_called()
+        mock_task.assert_not_called()
         dep = Deployment.objects.filter(service=self.service).order_by("-created_at").first()
         self.assertIsNotNone(dep)
         self.assertIn("No active provider", dep.build_logs or "")

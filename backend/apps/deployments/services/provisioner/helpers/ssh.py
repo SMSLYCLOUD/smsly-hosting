@@ -135,7 +135,7 @@ def _generate_ed25519_keypair() -> tuple[str, str]:
     return priv_key_pem, pub_key_line
 
 
-def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
+def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> bool:
     master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
     mesh_ip = _get_master_mesh_ip()
     allowed_ips = f"{master_ip},{mesh_ip}" if mesh_ip else master_ip
@@ -167,8 +167,10 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
         server.ssh_key = priv_key_pem
         server.save(update_fields=['ssh_key', 'provider_metadata', 'updated_at'])
         _append_log(server, f"🔒 IP-restricted SSH key added (from=\"{allowed_ips}\")")
+        return True
     except Exception as exc:
         _append_log(server, f"⚠ IP-restricted SSH key skipped: {exc}")
+        return False
 
 
 def _harden_node_ssh(ssh, server: ManagedServer) -> None:

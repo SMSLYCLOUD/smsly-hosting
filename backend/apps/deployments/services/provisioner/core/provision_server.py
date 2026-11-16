@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=TASK_TIME_LIMIT_PROVISION[0], time_limit=TASK_TIME_LIMIT_PROVISION[1], name="apps.deployments.services.provisioner.provision_server")
 def provision_server(self, server_id: str, skip_reboot: bool = False):
-    # max_retries=0 is deliberate (not an omission): this 30-minute task
+    # max_retries=0 is deliberate (not an omission): this 35-minute task
     # is not idempotent, so broker-level retries must never re-run it —
     # failures mark FAILED and the operator retries explicitly via
     # retry-provision (which supports --resume). The default would imply
@@ -56,7 +56,11 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 ManagedServer.objects.select_for_update()
                 .filter(
                     host=server.host,
-                    provision_status=ManagedServer.ProvisionStatus.PROVISIONING,
+                    provision_status__in=(
+                        ManagedServer.ProvisionStatus.PENDING,
+                        ManagedServer.ProvisionStatus.PROVISIONING,
+                        ManagedServer.ProvisionStatus.UPDATING,
+                    ),
                 )
                 .exclude(id=server.id)
                 .exists()
@@ -154,8 +158,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         ssh = _get_ssh_client(server)
         _append_log(server, "✅ SSH connection established")
 
-        _restrict_ssh_key_to_master_ip(ssh, server)
-        if server.ssh_key:
+        if _restrict_ssh_key_to_master_ip(ssh, server):
             resources.track_ssh_key_added()
 
         _harden_node_ssh(ssh, server)
@@ -234,7 +237,22 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         _ensure_docker_mirror()
         _append_log(server, "⚙️ Running Grid installer (this may take 5-15 minutes)...")
 
-        master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
+        master_ip = (os.environ.get("PUBLIC_IP") or "").strip() or "127.0.0.1"
+        try:
+            import ipaddress as _ip2
+            if _ip2.ip_address(master_ip).is_loopback:
+                try:
+                    _remote_is_loopback = bool(_ip2.ip_address(str(server.host or "").strip()))
+                except ValueError:
+                    _remote_is_loopback = False
+                if not _remote_is_loopback:
+                    _append_log(
+                        server,
+                        "⚠️ PUBLIC_IP is unset/loopback — MASTER_IP falls back to 127.0.0.1; "
+                        "registry pulls from this node may fail. Set PUBLIC_IP.",
+                    )
+        except ValueError:
+            pass
         install_env = {
             "NON_INTERACTIVE": "1",
             "SKIP_REBOOT": "1",
@@ -312,6 +330,11 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 # environment (never a --repo-token flag — it would be
                 # ignored AND leak the secret in `ps` argv).
                 install_env["MEDIA_REPO_TOKEN"] = str(repo_token)
+                _append_log(
+                    server,
+                    "⚠️ Legacy media repo token placed on node env "
+                    "(profile fallback) — rotate MediaNodeProfile token after provision.",
+                )
         elif install_mode == "node":
             install_args.append("--mode=node")
             install_env["COMPOSE_FILE"] = "infrastructure/docker/docker-compose.node.yml"
@@ -326,15 +349,18 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 install_env["MASTER_URL"] = f"https://{root_domain}"
 
             if cf_token and root_domain:
-                if not server.node_number:
-                    last_num = (
-                        ManagedServer.objects
-                        .filter(node_number__isnull=False)
-                        .order_by("-node_number")
-                        .values_list("node_number", flat=True)
-                        .first()
-                    ) or 0
-                    server.node_number = last_num + 1
+                from apps.deployments.services.provisioner.helpers.server_config import (
+                    allocate_node_number as _alloc,
+                )
+                # Single allocator under the mesh lock — concurrent SSH runs
+                # for different servers cannot draw the same number.
+                locked = (
+                    ManagedServer.objects.filter(id=server.id).first()
+                )
+                if locked and locked.node_number:
+                    server.node_number = locked.node_number
+                elif not server.node_number:
+                    server.node_number, _ = _alloc(exclude_server_id=server.id)
 
                 node_number = server.node_number or 1
                 parts = root_domain.split(".")
@@ -358,7 +384,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     install_env["ACME_EMAIL"] = f"admin@{root_domain}"
                 except Exception as e:
                     logger.error("Failed to provision DNS/TLS for node %s: %s", server.name, e)
-                    _append_log(server, f"⚠️ Automated TLS: Failed to generate DNS record: {e}")
+                    _append_log(server, f"⚠️ Automated TLS: Failed to generate DNS record: {e} — keeping HTTP; retry provisioning to enable TLS.")
+                    server.node_domain = ""
+                    server.save(update_fields=["node_number", "node_domain", "updated_at"])
 
         stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'", timeout=30)
         remote_mode = stdout.read().decode().strip()
@@ -463,6 +491,18 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             server.provision_status = ManagedServer.ProvisionStatus.FAILED
             server.save(update_fields=["provision_status"])
             raise RuntimeError(f"Install script failed with exit code {exit_code}")
+
+        try:
+            from ..helpers.env import _installer_logs_confirm_success
+            _tail = (server.provision_logs or "")[-20000:]
+            if not _installer_logs_confirm_success(_tail):
+                _append_log(
+                    server,
+                    "⚠️ Installer exited 0 but no INSTALLATION SUCCESSFUL marker found — "
+                    "treating as suspect; verify node health before trusting.",
+                )
+        except Exception:
+            pass
 
         with contextlib.suppress(Exception):
             ssh.exec_command(
@@ -582,6 +622,13 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             is_ip_domain = False
 
         candidate_urls: list[str] = []
+        wg_addr = (getattr(server, "wg_address", "") or "").strip()
+        if wg_addr:
+            # Mesh first: same priority as health probes (WG :8000 before
+            # public). The provision-token flow pre-assigns wg_address, so
+            # prefer it when present; harmless when the node has no mesh yet.
+            candidate_urls.append(f"http://{wg_addr}:8000")
+            candidate_urls.append(f"http://{wg_addr}:8090")
         if env_domain and env_domain not in ("localhost", "127.0.0.1") and not is_ip_domain:
             scheme = "https" if use_ssl else "http"
             candidate_urls.append(f"{scheme}://{env_domain}")
@@ -834,12 +881,15 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             except Exception as exc:
                 logger.debug("WireGuard address recovery failed: %s", exc)
 
-        _verify_agent_db_connectivity(ssh, server, start_time=provision_start_time)
+        agent_db_ok = _verify_agent_db_connectivity(ssh, server, start_time=provision_start_time)
 
         if getattr(server, "wg_address", None) and "wg_address" not in update_fields:
             update_fields.append("wg_address")
         server.provision_status = ManagedServer.ProvisionStatus.DONE
-        server.status = ManagedServer.Status.ONLINE
+        server.status = (
+            ManagedServer.Status.ONLINE if agent_db_ok
+            else ManagedServer.Status.DEGRADED
+        )
         try:
             _meta = dict(server.provider_metadata or {})
             if _meta.pop("node_db_user_pending", None) is not None:
@@ -851,7 +901,14 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         server.save(update_fields=update_fields)
 
         _append_log(server, "✅ Grid provisioning complete!")
-        _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
+        if agent_db_ok:
+            _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
+        else:
+            _append_log(
+                server,
+                f"⚠️ Server '{server.name}' provisioned but DEGRADED "
+                f"(agent DB unhealthy) at {api_url} — check DB connectivity.",
+            )
 
         if api_token and not api_token.startswith("smsly_"):
             _append_log(server, "🔄 Attempting auto token exchange for long-lived API token...")
@@ -875,6 +932,13 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                             logger.warning(
                                 "Skipping node token exchange for %s: non-TLS URL",
                                 server.name,
+                            )
+                            _append_log(
+                                server,
+                                "⚠️ Token re-exchange requires HTTPS — skipping; "
+                                "node keeps its short-lived login token. "
+                                "Dashboard shows api_token type; switch the node "
+                                "to TLS to get a long-lived smsly_ token.",
                             )
                             break
                         resp = requests.post(
@@ -911,18 +975,25 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 write_docker_labels_targets,
             )
             _append_log(server, "Deploying observability agents...")
-            if deploy_docker_labels_exporter_on_node(server):
+            import time as _obs_time
+            _obs_start = _obs_time.monotonic()
+            _obs_budget = 240.0
+            def _obs_left() -> bool:
+                return (_obs_time.monotonic() - _obs_start) < _obs_budget
+            if _obs_left() and deploy_docker_labels_exporter_on_node(server):
                 _append_log(server, "✓ docker-labels exporter deployed")
-            if deploy_promtail_on_node(server):
+            if _obs_left() and deploy_promtail_on_node(server):
                 _append_log(server, "✓ Promtail deployed")
-            if deploy_cadvisor_on_node(server):
+            if _obs_left() and deploy_cadvisor_on_node(server):
                 _append_log(server, "✓ cAdvisor deployed")
             else:
                 _append_log(server, "⚠ cAdvisor deployment failed (non-critical)")
-            if deploy_node_exporter_on_node(server):
+            if _obs_left() and deploy_node_exporter_on_node(server):
                 _append_log(server, "✓ Node Exporter deployed")
             else:
                 _append_log(server, "⚠ Node Exporter deployment failed (non-critical)")
+            if not _obs_left():
+                _append_log(server, "⚠ observability budget exceeded — remaining agents skipped")
             write_docker_labels_targets()
         except Exception as exc:
             _append_log(server, f"⚠ observability deployment skipped: {exc}")
@@ -936,7 +1007,10 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         if not skip_reboot and _env_bool("SMSLY_PROVISION_REBOOT_ON_SUCCESS", default=True):
             _append_log(server, "Scheduling remote reboot after successful provisioning.")
             if _schedule_remote_reboot(ssh, server, "provisioning"):
-                server.status = ManagedServer.Status.UNKNOWN
+                server.status = (
+                    ManagedServer.Status.DEGRADED
+                    if not agent_db_ok else ManagedServer.Status.UNKNOWN
+                )
                 server.save(update_fields=["status", "updated_at"])
                 _append_log(
                     server,
@@ -950,7 +1024,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         except Exception as rollback_exc:
             logger.warning("Rollback raised during failure handling: %s", rollback_exc)
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
-        server.save(update_fields=["provision_status", "updated_at"])
+        server.status = ManagedServer.Status.UNKNOWN
+        server.save(update_fields=["provision_status", "status", "updated_at"])
         _append_log(
             server,
             f"\nProvisioning timed out before completion: {exc}",
@@ -962,7 +1037,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         except Exception as rollback_exc:
             logger.warning("Rollback raised during failure handling: %s", rollback_exc)
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
-        server.save(update_fields=["provision_status", "updated_at"])
+        server.status = ManagedServer.Status.UNKNOWN
+        server.save(update_fields=["provision_status", "status", "updated_at"])
         _append_log(server, f"\n❌ Provisioning failed: {exc}")
         if server.ssh_key and not server.ssh_password:
             _append_log(

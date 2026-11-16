@@ -54,7 +54,7 @@ echo -e "${BLUE}  → Rotating platform registry credential ($REG_USER)...${NC}"
 # ── 1+2. htpasswd + PlatformConfig (authoritative stores) ──────────────
 echo -e "${BLUE}  → Updating htpasswd + PlatformConfig...${NC}"
 STORE_OUT="$(NEW_REGISTRY_USER="$REG_USER" NEW_REGISTRY_PASSWORD="$NEW_PASS" \
-    docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" exec -T backend \
+    timeout 120 docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" exec -T backend \
     python manage.py shell <<'PYEOF' 2>&1 || true
 import os
 user = os.environ.get('NEW_REGISTRY_USER', 'smsly-registry')
@@ -111,7 +111,7 @@ if [ -n "$OLD_PASS" ] && [ "$OLD_PASS" != "$NEW_PASS" ]; then
 fi
 
 # ── 6. Remote nodes (listed, not touched) ──────────────────────────────
-NODES="$(docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" exec -T backend python manage.py shell -c "
+NODES="$(timeout 120 docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models.core import ManagedServer
 for s in ManagedServer.objects.filter(is_primary=False):
     print(str(s.name or s.id) + '|' + str(getattr(s, 'host', '') or ''))

@@ -80,6 +80,11 @@ class DeployActionsMixin:
         if not guard["ok"]:
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
+        from apps.deployments.views._helpers import _is_server_ready_for_deploy
+        _ready, _reason = _is_server_ready_for_deploy(effective_server)
+        if effective_server is not None and not _ready:
+            return Response({'error': _reason}, status=status.HTTP_400_BAD_REQUEST)
+
         # Prevent rapid-fire deployment spam
         # If this is a remote sync, the master has already created a tracking deployment
         # and we shouldn't block the remote worker from creating its execution deployment.

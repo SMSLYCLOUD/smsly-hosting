@@ -255,6 +255,13 @@ class ManagedServer(models.Model):
             models.Index(fields=["owner"], name="ms_owner_idx"),
             models.Index(fields=["status"], name="ms_status_idx"),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["node_number"],
+                name="ms_node_number_unique",
+                condition=models.Q(node_number__isnull=False),
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.host})"

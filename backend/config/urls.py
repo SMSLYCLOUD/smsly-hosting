@@ -43,7 +43,45 @@ def bootstrap_view(request, token):
         return HttpResponse("Corrupt token payload", status=400)
 
     if payload_data.get("exp", 0) < time.time():
-        return HttpResponse("Token expired", status=403)
+        return HttpResponse(
+            "Token expired — re-issue via POST /api/v1/servers/<id>/reissue-token/",
+            status=403,
+        )
+
+    # Bound reuse: bearer-usable for curl retry, but capped (10 fetches)
+    # so a leaked URL cannot bootstrap an unlimited fleet within 1h.
+    try:
+        from django.core.cache import cache as _cache
+        _use_key = f"bootstrap_used:{payload_data.get('nonce', '')}"
+        try:
+            _uses = _cache.get(_use_key) or 0
+        except Exception:
+            _uses = 0
+        if int(_uses) >= 10:
+            return HttpResponse("Token fetch limit reached", status=429)
+        try:
+            try:
+                _cache.incr(_use_key)
+            except ValueError:
+                _cache.set(_use_key, 1, timeout=3600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # Bind token to a live server row: deleted or DONE nodes must not
+    # re-bootstrap from a leaked URL (re-install would wipe a healthy node).
+    try:
+        from apps.deployments.models.core import ManagedServer as _MS
+        _srv = _MS.objects.filter(id=payload_data.get("server_id", "")).first()
+        if _srv is None:
+            return HttpResponse("Unknown server (deleted?)", status=404)
+        if getattr(_srv, "provision_status", "") == _MS.ProvisionStatus.DONE:
+            return HttpResponse("Server already provisioned", status=409)
+    except HttpResponse:
+        raise
+    except Exception:
+        pass
 
     host = payload_data["host"]
     name = payload_data["name"]
@@ -86,7 +124,7 @@ def bootstrap_view(request, token):
     master_ip = os.environ.get("PUBLIC_IP", "")
 
     if not gateway_secret:
-        gateway_secret = os.environ.get("GATEWAY_SECRET", "")
+        return HttpResponse("Token missing gateway_secret (re-issue provision token)", status=400)
 
     # Resolve install mode — never stack multiple --mode flags
     if is_media_node:
@@ -145,14 +183,17 @@ def bootstrap_view(request, token):
     if install_mode == "node" and compose_file:
         env_lines.append(_env_line("COMPOSE_FILE", compose_file))
     if is_media_node:
+        # Media code for private repos must come via the SSH path
+        # (App-token tarball → file:// staging, no cred on node).
+        # Baking MEDIA_REPO_TOKEN here would leak it into the node env,
+        # so bootstrap carries the URL only; private repos fail fast
+        # with a clear message telling the operator to use SSH provisioning.
         try:
             from apps.deployments.models.platform import PlatformConfig
             pc = PlatformConfig.objects.first()
             if pc:
                 if pc.media_repo_url:
                     env_lines.append(_env_line("MEDIA_REPO_URL", pc.media_repo_url))
-                if pc.media_repo_token:
-                    env_lines.append(_env_line("MEDIA_REPO_TOKEN", str(pc.media_repo_token)))
         except Exception:
             pass
     _needs_mesh_ip = is_lite_agent or install_mode == "node"
@@ -237,6 +278,44 @@ def bootstrap_view(request, token):
                 ).decode()
         except Exception:
             pass
+
+    # ── Bash-injection guard (defense in depth) ──────────────────────────
+    # The payload is HMAC-signed so only this master can mint it, but
+    # every value below is interpolated into a bash heredoc and
+    # double-quoted echo lines on the TARGET host. A value carrying
+    # newlines, the heredoc terminator, or command-substitution syntax
+    # would execute there if a poisoned token were ever minted (master
+    # compromise, an operator tricked into provisioning a hostile name).
+    # Reject at render time so a bad token cannot produce a bad script.
+    def _assert_bash_safe(key, value):
+        text = str(value or "")
+        for bad in ("\n", "\r", "`", "$(", "${", '"', "'", "ENVEOF"):
+            if bad in text:
+                return HttpResponse(
+                    f"Token field '{key}' contains characters not allowed "
+                    "in bootstrap payloads.",
+                    status=400,
+                )
+        return None
+
+    for _key, _value in (
+        ("host", host), ("name", name), ("server_id", server_id),
+        ("node_number", node_number), ("node_domain", node_domain),
+        ("master_url", master_url), ("master_ip", master_ip),
+    ):
+        _resp = _assert_bash_safe(_key, _value)
+        if _resp is not None:
+            return _resp
+    for _line in env_lines:
+        _resp = _assert_bash_safe("env", _line)
+        if _resp is not None:
+            return _resp
+    for _b64_key, _b64_val in (
+        ("zone_hosts", zone_hosts_b64), ("zone_corefile", zone_corefile_b64),
+    ):
+        _resp = _assert_bash_safe(_b64_key, _b64_val)
+        if _resp is not None:
+            return _resp
 
     script = f"""#!/bin/bash
 set -euo pipefail

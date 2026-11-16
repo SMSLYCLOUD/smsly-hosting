@@ -80,6 +80,42 @@ class AgentMixin:
         }:
             server.provision_status = ManagedServer.ProvisionStatus.DONE
             update_fields.append("provision_status")
+        # SSH-less self-provisioned nodes never pass through
+        # ensure_server_in_default_mesh (requires SSH): if the pre-provision
+        # peer was lost, allocate here (local DB + master config deploy only).
+        if not getattr(server, "wg_address", None):
+            try:
+                from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+                from apps.deployments.services.wireguard_service import WireGuardService
+                _mesh = MeshNetwork.objects.filter(name="default", is_active=True).first()
+                if _mesh is not None:
+                    _peer = WireGuardPeer.objects.filter(
+                        mesh=_mesh, server=server, is_local=False, is_active=True,
+                    ).first()
+                    if _peer is None:
+                        _priv, _pub = WireGuardService.generate_keypair()
+                        _addr = _mesh.next_available_ip()
+                        _peer = WireGuardPeer.objects.create(
+                            mesh=_mesh, server=server,
+                            private_key=_priv, public_key=_pub,
+                            wg_address=_addr, endpoint="",
+                            allowed_ips=f"{_addr}/32",
+                            is_active=True, is_local=False,
+                        )
+                    if _peer.wg_address:
+                        server.wg_address = _peer.wg_address
+                        if "wg_address" not in update_fields:
+                            update_fields.append("wg_address")
+                    try:
+                        _local = WireGuardPeer.objects.filter(
+                            mesh=_mesh, is_local=True, is_active=True,
+                        ).first()
+                        if _local is not None:
+                            WireGuardService.deploy_config(_local)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         server.save(update_fields=update_fields)
 
         _persist_media_runtime(server, runtime_info)

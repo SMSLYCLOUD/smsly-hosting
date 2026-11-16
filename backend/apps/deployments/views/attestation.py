@@ -64,8 +64,26 @@ def attestation_challenge(request):
     expires_at = int(time.time()) + CHALLENGE_TTL
     cache_key = f"{CHALLENGE_CACHE_PREFIX}{nonce}"
 
+    # Enforce CHALLENGE_CACHE_MAX_ENTRIES: atomic counter with TTL so a
+    # scanner cannot mint unbounded nonces (cache backend has no scan).
+    try:
+        _count = cache.get(CHALLENGE_COUNT_CACHE_KEY) or 0
+        if int(_count) >= CHALLENGE_CACHE_MAX_ENTRIES:
+            return Response(
+                {"error": "Challenge issuance busy, retry later."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+    except Exception:
+        pass
     # Store the nonce -> wg_address mapping
     cache.set(cache_key, target_wg_address, timeout=CHALLENGE_TTL)
+    try:
+        try:
+            cache.incr(CHALLENGE_COUNT_CACHE_KEY)
+        except ValueError:
+            cache.set(CHALLENGE_COUNT_CACHE_KEY, 1, timeout=CHALLENGE_TTL)
+    except Exception:
+        pass
 
     logger.info("Issued attestation challenge for %s (nonce: %s...)", target_wg_address, nonce[:16])
 
@@ -158,8 +176,15 @@ def attestation_verify(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
-    # Invalidate the nonce (single use)
+    # Invalidate the nonce (single use) and release issuance quota
     cache.delete(cache_key)
+    try:
+        try:
+            cache.decr(CHALLENGE_COUNT_CACHE_KEY)
+        except ValueError:
+            pass
+    except Exception:
+        pass
 
     logger.info("Attestation verified for %s", sender_wg)
     return Response({

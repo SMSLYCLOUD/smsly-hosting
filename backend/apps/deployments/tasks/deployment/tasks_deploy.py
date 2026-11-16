@@ -378,6 +378,24 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         _handle_failure(self, deployment, str(exc), "Transient Failure")
     except SoftTimeLimitExceeded:
         _handle_failure(self, deployment, "Task exceeded time limit", "Timeout Failure")
+    except RuntimeError as e:
+        # Fleet-lock contention is transient by definition: the waiter already
+        # queued behind busy builders for up to 30 min. Failing the deployment
+        # here is what made every multi-repo push need a manual redeploy —
+        # re-queue with a delay so the freed slot is picked up automatically.
+        if "Fleet build concurrency" in str(e) and self.request.retries < self.max_retries:
+            try:
+                if deployment is not None:
+                    from apps.deployments.utils import append_log
+                    append_log(
+                        deployment,
+                        "\n[fleet] Build slots busy — re-queued automatically in 60s "
+                        f"(attempt {self.request.retries + 1}/{self.max_retries}).\n",
+                    )
+            except Exception:
+                pass
+            raise self.retry(exc=e, countdown=60)
+        _handle_failure(self, deployment, str(e), "System Failure")
     except Exception as e:
         _handle_failure(self, deployment, str(e), "System Failure")
 

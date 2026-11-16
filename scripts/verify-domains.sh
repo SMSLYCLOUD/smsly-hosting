@@ -37,7 +37,7 @@ log "Backend API is responding — dispatching domain verification tasks..."
 # and the Python path are always correct.
 # `< /dev/null` is REQUIRED: under a detached screen the docker exec would
 # otherwise try to read stdin, get SIGTTIN and stop forever.
-docker exec "$BACKEND_CID" python manage.py shell -c "
+timeout 120 docker exec "$BACKEND_CID" python manage.py shell -c "
 from apps.domains.models import Domain
 from apps.domains.tasks import verify_dns_and_provision_ssl_task
 

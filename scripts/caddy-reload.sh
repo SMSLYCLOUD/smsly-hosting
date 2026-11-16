@@ -145,7 +145,7 @@ _validate_caddy_candidate() {
     local candidate="$1"
     local container="${CADDY_CONTAINER:-smsly-hosting-caddy-1}"
     if docker inspect "$container" >/dev/null 2>&1; then
-        docker exec "$container" caddy validate --adapter caddyfile --config "/etc/caddy/$(basename "$candidate")"
+        timeout 30 docker exec "$container" caddy validate --adapter caddyfile --config "/etc/caddy/$(basename "$candidate")"
         return $?
     fi
     caddy validate --adapter caddyfile --config "$candidate"

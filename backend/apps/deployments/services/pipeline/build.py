@@ -718,7 +718,6 @@ class BuildMixin:
             '-f', override_path,
             '-p', project_name,
             'up', '-d',
-            '--remove-orphans',
         ]
 
         try:

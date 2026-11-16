@@ -121,7 +121,7 @@ get_migration_database_alias() {
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
     migrate_db="$(
-        docker run --rm --network smsly-net \
+        timeout 120 docker run --rm --network smsly-net \
             --user 1000 \
             --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \

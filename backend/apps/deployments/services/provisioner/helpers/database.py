@@ -223,9 +223,9 @@ def _rerender_pgcat_config():
         )
 
 
-def _verify_agent_db_connectivity(ssh, server: ManagedServer, start_time: float):
+def _verify_agent_db_connectivity(ssh, server: ManagedServer, start_time: float) -> bool:
     if server_install_mode(server) != "agent-lite":
-        return
+        return True
 
     _append_log(server, "Verifying agent DB connectivity via health endpoint...")
     # Fresh 120s window from NOW (not from provision start — the installer
@@ -240,7 +240,7 @@ def _verify_agent_db_connectivity(ssh, server: ManagedServer, start_time: float)
             body = stdout.read().decode("utf-8", errors="replace").strip()
             if '"status":"healthy"' in body or '"database":"healthy"' in body:
                 _append_log(server, "Agent DB connectivity verified (health endpoint reports healthy).")
-                return
+                return True
         except Exception as exc:
             # Best-effort probe: SSH failures must not fail provisioning.
             logger.debug("Agent health check failed: %s", exc)
@@ -249,6 +249,7 @@ def _verify_agent_db_connectivity(ssh, server: ManagedServer, start_time: float)
     _append_log(
         server,
         "Agent health endpoint did not report healthy within the wait window. "
-        "The node will be marked ONLINE but may require a manual restart if "
-        "the database connection does not recover on its own.",
+        "The node will be marked DEGRADED (not ONLINE) until the database "
+        "connection recovers.",
     )
+    return False

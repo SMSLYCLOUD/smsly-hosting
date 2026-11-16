@@ -48,7 +48,7 @@ TASK_TIME_LIMIT_LONG = (900, 960)        # 15 min — mesh deploy, intelligence 
 TASK_TIME_LIMIT_DATA_SYNC = (1200, 1260) # 20 min — replication deploy, bundle provision
 TASK_TIME_LIMIT_DEPLOY = (3600, 3900)    # 1 hour — smart deploy, service backup/restore, scheduled ops
 TASK_TIME_LIMIT_HEAVY = (7200, 7500)     # 2 hour — server backup/restore, platform update/rollback, purge
-TASK_TIME_LIMIT_PROVISION = (1860, 1920) # 31 min — server provisioning (long SSH + install)
+TASK_TIME_LIMIT_PROVISION = (2100, 2160) # 35 min — server provisioning (long SSH + install; 5m cleanup margin over 1800s SSH timeout)
 
 # ── Celery retry defaults ───────────────────────────────────────────────────
 RETRY_DELAY_FAST = 30     # seconds — ecosystem scan, platform rollback

@@ -191,13 +191,16 @@ class GitHubWebhookHandler:
 
             if provider_id:
                 # Webhook pushes skip the REVIEW gate and go straight to
-                # the STAGED (blue-green) pipeline. The old code respected
-                # service.can_auto_deploy (default False) — every push
-                # paused at REVIEW and waited for manual approval, making
-                # push-to-deploy useless. Webhooks are already an explicit
-                # deployment intent from the operator's git push.
-                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id,
-                                       skip_review=True)
+                # the STAGED pipeline (push is explicit deploy intent).
+                # Stagger the burst: a multi-repo push fans out to N services
+                # at once; without spacing every build hits the daemon
+                # together and the box OOMs. Position * stagger (default 30s)
+                # turns the stampede into a queue the fleet lock can serialize.
+                from apps.deployments.tasks.deploy.queue import enqueue_push_deploy
+                enqueue_push_deploy(
+                    deployment_id=str(deployment.id), provider_id=provider_id,
+                    position=triggered_count, skip_review=True,
+                )
                 triggered_count += 1
             else:
                 logger.warning(
