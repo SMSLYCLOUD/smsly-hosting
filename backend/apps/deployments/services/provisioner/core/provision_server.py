@@ -339,6 +339,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         elif install_mode == "node":
             install_args.append("--mode=node")
             install_env["COMPOSE_FILE"] = "infrastructure/docker/docker-compose.node.yml"
+            if not server.gateway_secret:
+                server.gateway_secret = secrets.token_hex(32)
+                server.save(update_fields=["gateway_secret", "updated_at"])
+            install_env["SERVER_ID"] = str(server.id)
+            install_env["SMSLY_NODE_ID"] = str(server.id)
+            install_env["GATEWAY_SECRET"] = str(server.gateway_secret)
 
             from apps.deployments.models.core import PlatformConfig
             from apps.domains.services.dns import ensure_dns_records

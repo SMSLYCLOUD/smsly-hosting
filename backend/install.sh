@@ -25018,7 +25018,9 @@ else
             SECRET_KEY=*|FIELD_ENCRYPTION_KEY=*|POSTGRES_PASSWORD=*|REDIS_PASSWORD=*|RABBITMQ_PASSWORD=*|GATEWAY_SECRET=*|GITHUB_WEBHOOK_SECRET=*|AUTOSCALER_API_TOKEN=*|FRP_AUTH_TOKEN=*|PGCAT_ADMIN_PASSWORD=*|REPLICATION_PASSWORD=*|SENTINEL_PASSWORD=*|REGISTRY_HTTP_SECRET=*|CROWDSEC_BOUNCER_KEY=*|COSIGN_PASSWORD=*|PATRONI_SUPERUSER_PASSWORD=*|CADDY_ASK_SECRET=*|BACKUP_ENCRYPTION_KEY=*|GRAFANA_PASSWORD=*)
                 _smsly_secrets_key="${_smsly_secrets_line%%=*}"
                 _smsly_secrets_val="${_smsly_secrets_line#*=}"
-                printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
+                if [ -z "${!_smsly_secrets_key:-}" ]; then
+                    printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
+                fi
                 ;;
         esac
     done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" --shell  | grep -E '^[A-Z_]+=' || true)
@@ -25453,7 +25455,7 @@ EOF
     # never carried — explicit whitelist only.
     for _bk in MASTER_URL MASTER_IP NODE_NUMBER NODE_DOMAIN NODE_HOST SMSLY_NODE_HOST WG_ADDRESS NODE_MESH_BIND_IP NODE_MESH_IP WG_PRIVATE_KEY WG_PUBLIC_KEY MASTER_WG_PUBKEY MASTER_WG_ENDPOINT MASTER_MESH_IP GATEWAY_SECRET NODE_NAME SERVER_ID SMSLY_NODE_ID SMSLY_NODE_QUEUE MASTER_DB_USER MASTER_DB_PASSWORD MASTER_MQ_PASSWORD MASTER_REDIS_PASSWORD MASTER_FIELD_ENCRYPTION_KEY; do
         _bv="${!_bk:-}"
-        if [ -n "$_bv" ]; then
+        if [ -n "$_bv" ] && ! grep -q "^${_bk}=" "$ENV_TMP" 2>/dev/null; then
             printf '%s=%s\n' "$_bk" "$_bv" >> "$ENV_TMP"
         fi
     done
