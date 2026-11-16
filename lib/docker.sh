@@ -310,9 +310,18 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        # Fresh nodes pull GBs of images on first boot; the 600s cap
+        # killed healthy pulls mid-layer (exit 124) on slow pipes.
+        # 1800s default for nodes (overridable via
+        # SMSLY_NODE_COMPOSE_UP_TIMEOUT); other modes keep 600s
+        # (SMSLY_COMPOSE_UP_TIMEOUT) as their images are warm.
+        local up_timeout="${SMSLY_NODE_COMPOSE_UP_TIMEOUT:-1800}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=1800 ;; esac
+        timeout -k 30 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        local up_timeout="${SMSLY_COMPOSE_UP_TIMEOUT:-600}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=600 ;; esac
+        timeout -k 10 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 

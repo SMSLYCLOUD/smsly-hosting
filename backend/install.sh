@@ -865,7 +865,7 @@ compose_stack_service_args() {
 }
 
 compose_stack_build_service_args() {
-    local candidates="pgcat pgbouncer-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
+    local candidates="pgcat pgcat-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
     local svc=""
     if is_node_mode; then
         candidates="db backend celery-worker celery-beat caddy"
@@ -953,9 +953,18 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        # Fresh nodes pull GBs of images on first boot; the 600s cap
+        # killed healthy pulls mid-layer (exit 124) on slow pipes.
+        # 1800s default for nodes (overridable via
+        # SMSLY_NODE_COMPOSE_UP_TIMEOUT); other modes keep 600s
+        # (SMSLY_COMPOSE_UP_TIMEOUT) as their images are warm.
+        local up_timeout="${SMSLY_NODE_COMPOSE_UP_TIMEOUT:-1800}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=1800 ;; esac
+        timeout -k 30 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        local up_timeout="${SMSLY_COMPOSE_UP_TIMEOUT:-600}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=600 ;; esac
+        timeout -k 10 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -2022,7 +2031,7 @@ get_migration_database_alias() {
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
     migrate_db="$(
-        docker run --rm --network smsly-net \
+        timeout 120 docker run --rm --network smsly-net \
             --user 1000 \
             --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -2627,7 +2636,7 @@ compose_stack_service_args() {
 }
 
 compose_stack_build_service_args() {
-    local candidates="pgcat pgbouncer-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
+    local candidates="pgcat pgcat-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
     local svc=""
     if is_node_mode; then
         candidates="db backend celery-worker celery-beat caddy"
@@ -2715,9 +2724,18 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        # Fresh nodes pull GBs of images on first boot; the 600s cap
+        # killed healthy pulls mid-layer (exit 124) on slow pipes.
+        # 1800s default for nodes (overridable via
+        # SMSLY_NODE_COMPOSE_UP_TIMEOUT); other modes keep 600s
+        # (SMSLY_COMPOSE_UP_TIMEOUT) as their images are warm.
+        local up_timeout="${SMSLY_NODE_COMPOSE_UP_TIMEOUT:-1800}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=1800 ;; esac
+        timeout -k 30 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        local up_timeout="${SMSLY_COMPOSE_UP_TIMEOUT:-600}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=600 ;; esac
+        timeout -k 10 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -4798,11 +4816,7 @@ _harden_spire_start_agent() {
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    # --cgroupns host is REQUIRED, not optional: the docker workload
-    # attestor maps caller PID -> container via /proc cgroups. With the
-    # default private cgroupns every peer shows as "/" so no selectors
-    # match and every fetch fails "No identity issued" (2026-09-26).
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
@@ -5994,6 +6008,75 @@ install_agent_stack() {
             echo -e "${YELLOW}  ⚠ Orchestrator build failed — agent calls unavailable until rebuilt (non-fatal)${NC}"
         fi
     fi
+}
+
+# ─── Install LiveKit SFU server ────────────────────────────────────────────
+# LiveKit ships no apt package: pin a GitHub release tarball, verify its
+# sha256, and render /etc/livekit/livekit.yaml from the node .env (API
+# keys are generated in Phase 2). TURN stays on standalone coturn, so the
+# built-in TURN relay is disabled; RTC media uses UDP 30000-31000 to match
+# the pre-flight port check.
+LIVEKIT_VERSION="${LIVEKIT_VERSION:-v1.13.6}"
+LIVEKIT_SHA256_AMD64="2b61abef2b9ba14b4b8ca38b37de9a37ffc682b9931d5fc03ceca2f0b77d3e33"
+LIVEKIT_SHA256_ARM64="5c75f09173199f3f8fe0c3c0d5a41171f9b306ffce6843d752c276d11e77d19b"
+
+install_livekit() {
+    local env_file="${1:-/opt/smsly-hosting-media/.env}"
+    echo -e "${BLUE}  → Installing LiveKit server ${LIVEKIT_VERSION}...${NC}"
+
+    local arch
+    case "$(dpkg --print-architecture 2>/dev/null || uname -m)" in
+        amd64|x86_64) arch="amd64"; local want_sha="$LIVEKIT_SHA256_AMD64" ;;
+        arm64|aarch64) arch="arm64"; local want_sha="$LIVEKIT_SHA256_ARM64" ;;
+        *) echo -e "${YELLOW}  ⚠ Unsupported architecture for LiveKit binaries (non-fatal)${NC}"; return 0 ;;
+    esac
+
+    if command -v livekit-server >/dev/null 2>&1 && livekit-server --version 2>/dev/null | grep -q "$LIVEKIT_VERSION"; then
+        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} already installed${NC}"
+    else
+        local url="https://github.com/livekit/livekit/releases/download/${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION#v}_linux_${arch}.tar.gz"
+        rm -f /tmp/livekit.tgz
+        if ! curl -fsSL --max-time 300 "$url" -o /tmp/livekit.tgz; then
+            echo -e "${YELLOW}  ⚠ LiveKit download failed — WebRTC SFU unavailable (non-fatal)${NC}"
+            return 0
+        fi
+        local got_sha
+        got_sha="$(sha256sum /tmp/livekit.tgz | awk '{print $1}')"
+        if [ "$got_sha" != "$want_sha" ]; then
+            echo -e "${YELLOW}  ⚠ LiveKit checksum mismatch (got ${got_sha:0:12}…) — refusing to install (non-fatal)${NC}"
+            rm -f /tmp/livekit.tgz
+            return 0
+        fi
+        tar -xzf /tmp/livekit.tgz -C /tmp livekit-server
+        install -o root -g root -m 0755 /tmp/livekit-server /usr/local/bin/livekit-server
+        rm -f /tmp/livekit.tgz /tmp/livekit-server
+        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} installed${NC}"
+    fi
+
+    # Render config (idempotent — re-run picks up rotated keys).
+    [ -f "$env_file" ] && { set -a; source "$env_file"; set +a; }
+    mkdir -p /etc/livekit /var/lib/livekit
+    cat > /etc/livekit/livekit.yaml <<EOF
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  port_range_start: 30000
+  port_range_end: 31000
+  use_external_ip: true
+  node_ip: "${PUBLIC_IP:-127.0.0.1}"
+keys:
+  "${LIVEKIT_API_KEY:-devkey}": "${LIVEKIT_API_SECRET:-secret}"
+room:
+  empty_timeout: 300
+  max_participants: 200
+turn:
+  enabled: false
+EOF
+    chmod 640 /etc/livekit/livekit.yaml
+    chown root:smsly /etc/livekit/livekit.yaml
+    echo -e "${GREEN}  ✓ LiveKit config rendered${NC}"
 }
 
 install_media_node() {
@@ -11413,11 +11496,7 @@ _harden_spire_start_agent() {
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    # --cgroupns host is REQUIRED, not optional: the docker workload
-    # attestor maps caller PID -> container via /proc cgroups. With the
-    # default private cgroupns every peer shows as "/" so no selectors
-    # match and every fetch fails "No identity issued" (2026-09-26).
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
@@ -13070,11 +13149,7 @@ _harden_spire_start_agent() {
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    # --cgroupns host is REQUIRED, not optional: the docker workload
-    # attestor maps caller PID -> container via /proc cgroups. With the
-    # default private cgroupns every peer shows as "/" so no selectors
-    # match and every fetch fails "No identity issued" (2026-09-26).
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
@@ -14165,8 +14240,10 @@ fi
     esac
 
     # ─── Infisical auto-provision + secret sync ───────────────────────────
+    # Opt-in only (SECRETS_BACKEND=infisical). Default SOPS backend runs
+    # no vault container — and this must NOT resurrect a removed one.
     _INFISICAL_COMPOSE="$INSTALL_DIR/infrastructure/docker/docker-compose.infisical.yml"
-    if [ -f "$_INFISICAL_COMPOSE" ]; then
+    if [ "${SECRETS_BACKEND:-sops}" = "infisical" ] && [ -f "$_INFISICAL_COMPOSE" ]; then
         _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}'  | head -1)
         if [ -n "$_infisical_running" ]; then
             echo -e "${GREEN}  ✓ Infisical already running (${_infisical_running})${NC}"
@@ -14984,7 +15061,7 @@ compose_stack_service_args() {
 }
 
 compose_stack_build_service_args() {
-    local candidates="pgcat pgbouncer-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
+    local candidates="pgcat pgcat-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
     local svc=""
     if is_node_mode; then
         candidates="db backend celery-worker celery-beat caddy"
@@ -15072,9 +15149,18 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        # Fresh nodes pull GBs of images on first boot; the 600s cap
+        # killed healthy pulls mid-layer (exit 124) on slow pipes.
+        # 1800s default for nodes (overridable via
+        # SMSLY_NODE_COMPOSE_UP_TIMEOUT); other modes keep 600s
+        # (SMSLY_COMPOSE_UP_TIMEOUT) as their images are warm.
+        local up_timeout="${SMSLY_NODE_COMPOSE_UP_TIMEOUT:-1800}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=1800 ;; esac
+        timeout -k 30 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        local up_timeout="${SMSLY_COMPOSE_UP_TIMEOUT:-600}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=600 ;; esac
+        timeout -k 10 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -16141,7 +16227,7 @@ get_migration_database_alias() {
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
     migrate_db="$(
-        docker run --rm --network smsly-net \
+        timeout 120 docker run --rm --network smsly-net \
             --user 1000 \
             --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -18097,7 +18183,7 @@ compose_stack_service_args() {
 }
 
 compose_stack_build_service_args() {
-    local candidates="pgcat pgbouncer-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
+    local candidates="pgcat pgcat-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
     local svc=""
     if is_node_mode; then
         candidates="db backend celery-worker celery-beat caddy"
@@ -18185,9 +18271,18 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        # Fresh nodes pull GBs of images on first boot; the 600s cap
+        # killed healthy pulls mid-layer (exit 124) on slow pipes.
+        # 1800s default for nodes (overridable via
+        # SMSLY_NODE_COMPOSE_UP_TIMEOUT); other modes keep 600s
+        # (SMSLY_COMPOSE_UP_TIMEOUT) as their images are warm.
+        local up_timeout="${SMSLY_NODE_COMPOSE_UP_TIMEOUT:-1800}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=1800 ;; esac
+        timeout -k 30 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        local up_timeout="${SMSLY_COMPOSE_UP_TIMEOUT:-600}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=600 ;; esac
+        timeout -k 10 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -19254,7 +19349,7 @@ get_migration_database_alias() {
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
     migrate_db="$(
-        docker run --rm --network smsly-net \
+        timeout 120 docker run --rm --network smsly-net \
             --user 1000 \
             --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -19935,7 +20030,7 @@ compose_stack_service_args() {
 }
 
 compose_stack_build_service_args() {
-    local candidates="pgcat pgbouncer-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
+    local candidates="pgcat pgcat-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
     local svc=""
     if is_node_mode; then
         candidates="db backend celery-worker celery-beat caddy"
@@ -20023,9 +20118,18 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        # Fresh nodes pull GBs of images on first boot; the 600s cap
+        # killed healthy pulls mid-layer (exit 124) on slow pipes.
+        # 1800s default for nodes (overridable via
+        # SMSLY_NODE_COMPOSE_UP_TIMEOUT); other modes keep 600s
+        # (SMSLY_COMPOSE_UP_TIMEOUT) as their images are warm.
+        local up_timeout="${SMSLY_NODE_COMPOSE_UP_TIMEOUT:-1800}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=1800 ;; esac
+        timeout -k 30 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        local up_timeout="${SMSLY_COMPOSE_UP_TIMEOUT:-600}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=600 ;; esac
+        timeout -k 10 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -21092,7 +21196,7 @@ get_migration_database_alias() {
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
     migrate_db="$(
-        docker run --rm --network smsly-net \
+        timeout 120 docker run --rm --network smsly-net \
             --user 1000 \
             --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -21503,6 +21607,365 @@ SMSLY_WORKERS_EOF
     fi
     # Clean up marker
     rm -f "$INSTALL_DIR/.pre-update-head"  || true
+
+    # ─── Edge sidecar refresh (binary + unit + env, warn-only) ─────────
+    # Keeps the Django-independent ask/auth path current on every update.
+    if [ -f "$INSTALL_DIR/lib/edge_sidecar.sh" ]; then
+        # shellcheck disable=SC1090
+# --- lib/edge_sidecar.sh ---
+#!/bin/bash
+# lib/edge_sidecar.sh — build + install the smsly-edge-sidecar Go binary
+# and its systemd unit. Sourced (not executed) by install.sh.
+#
+# Warn loudly, never abort the update (taste: installer never blocks).
+# shellcheck disable=SC2317
+
+EDGE_SIDECAR_SRC_DIR="${SMSLY_EDGE_SIDECAR_SRC_DIR:-$INSTALL_DIR/edge-sidecar}"
+EDGE_SIDECAR_BIN="/usr/local/bin/smsly-edge-sidecar"
+EDGE_SIDECAR_UNIT_SRC="$INSTALL_DIR/infrastructure/systemd/smsly-edge-sidecar.service"
+EDGE_SIDECAR_UNIT_DST="/etc/systemd/system/smsly-edge-sidecar.service"
+EDGE_SIDECAR_ENV_FILE="/etc/smsly/edge-sidecar.env"
+
+_smsly_edge_sidecar_log() {
+    local level="$1"; shift
+    echo -e "${BLUE:-}  [edge-sidecar:$level] $*${NC:-}" || echo "  [edge-sidecar:$level] $*"
+}
+
+_smsly_edge_sidecar_warn() {
+    echo -e "${YELLOW:-}  ⚠ edge-sidecar: $*${NC:-}" || echo "  ⚠ edge-sidecar: $*"
+}
+
+# Build the static binary. Prefers a pinned prebuilt artifact when the
+# installer sets SMSLY_EDGE_SIDECAR_URL; otherwise builds with the local
+# Go toolchain (installed best-effort).
+smsly_edge_sidecar_build() {
+    if [ -n "${SMSLY_EDGE_SIDECAR_URL:-}" ] && command -v curl >/dev/null 2>&1; then
+        if curl -fsSL "$SMSLY_EDGE_SIDECAR_URL" -o "$EDGE_SIDECAR_BIN.tmp"; then
+            chmod 0755 "$EDGE_SIDECAR_BIN.tmp" || true
+            mv "$EDGE_SIDECAR_BIN.tmp" "$EDGE_SIDECAR_BIN" || {
+                _smsly_edge_sidecar_warn "could not install prebuilt binary"
+                return 0
+            }
+            _smsly_edge_sidecar_log info "installed prebuilt smsly-edge-sidecar"
+            return 0
+        fi
+        _smsly_edge_sidecar_warn "prebuilt download failed, falling back to local build"
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            (apt-get install -y golang-go 2>&1 | tail -2) || true
+        fi
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        _smsly_edge_sidecar_warn "Go toolchain unavailable — skipping build (edge keeps Django-backed ask/auth)"
+        return 0
+    fi
+    if [ ! -f "$EDGE_SIDECAR_SRC_DIR/main.go" ]; then
+        _smsly_edge_sidecar_warn "source missing at $EDGE_SIDECAR_SRC_DIR — skipping build"
+        return 0
+    fi
+    if (cd "$EDGE_SIDECAR_SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$EDGE_SIDECAR_BIN.tmp" .) 2>&1 | tail -3; then
+        chmod 0755 "$EDGE_SIDECAR_BIN.tmp" || true
+        mv "$EDGE_SIDECAR_BIN.tmp" "$EDGE_SIDECAR_BIN" || {
+            _smsly_edge_sidecar_warn "could not install built binary"
+            return 0
+        }
+        _smsly_edge_sidecar_log info "built and installed smsly-edge-sidecar"
+    else
+        _smsly_edge_sidecar_warn "go build failed — edge keeps Django-backed ask/auth"
+    fi
+    return 0
+}
+
+# Write /etc/smsly/edge-sidecar.env from .env (secrets never on cmdline).
+smsly_edge_sidecar_write_env() {
+    local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    local edge_secret="" ask_secret=""
+    if [ -f "$env_file" ]; then
+        edge_secret="$(grep -E '^EDGE_JWT_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//')" || true
+        ask_secret="$(grep -E '^CADDY_ASK_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' )" || true
+    fi
+    mkdir -p /etc/smsly || true
+    umask 027
+    {
+        echo "# Managed by smsly install — smsly-edge-sidecar env"
+        if [ -n "$edge_secret" ]; then
+            echo "EDGE_JWT_SECRET=$edge_secret"
+        fi
+        if [ -n "$ask_secret" ]; then
+            echo "CADDY_ASK_SECRET=$ask_secret"
+        fi
+    } > "$EDGE_SIDECAR_ENV_FILE.tmp" || {
+        _smsly_edge_sidecar_warn "could not write $EDGE_SIDECAR_ENV_FILE"
+        return 0
+    }
+    chmod 0640 "$EDGE_SIDECAR_ENV_FILE.tmp" || true
+    mv "$EDGE_SIDECAR_ENV_FILE.tmp" "$EDGE_SIDECAR_ENV_FILE" || {
+        _smsly_edge_sidecar_warn "could not install $EDGE_SIDECAR_ENV_FILE"
+        return 0
+    }
+    return 0
+}
+
+# Install + enable the systemd unit. Never fails the update.
+smsly_edge_sidecar_install() {
+    smsly_edge_sidecar_build || true
+    smsly_edge_sidecar_write_env || true
+    if [ ! -f "$EDGE_SIDECAR_UNIT_SRC" ]; then
+        _smsly_edge_sidecar_warn "unit source missing ($EDGE_SIDECAR_UNIT_SRC) — skipping"
+        return 0
+    fi
+    cp "$EDGE_SIDECAR_UNIT_SRC" "$EDGE_SIDECAR_UNIT_DST" 2>/dev/null || {
+        _smsly_edge_sidecar_warn "could not install systemd unit"
+        return 0
+    }
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable smsly-edge-sidecar.service 2>/dev/null || \
+        _smsly_edge_sidecar_warn "enable failed (non-fatal)"
+    if [ -x "$EDGE_SIDECAR_BIN" ]; then
+        systemctl restart smsly-edge-sidecar.service 2>/dev/null || \
+            systemctl start smsly-edge-sidecar.service 2>/dev/null || \
+            _smsly_edge_sidecar_warn "start failed (non-fatal)"
+        _smsly_edge_sidecar_log info "smsly-edge-sidecar installed and started"
+    else
+        _smsly_edge_sidecar_warn "binary missing — unit installed but not started"
+    fi
+    return 0
+}
+# --- end lib/edge_sidecar.sh ---
+        if command -v smsly_edge_sidecar_install >/dev/null 2>&1; then
+            smsly_edge_sidecar_install || true
+        fi
+    fi
+
+    # ─── napd refresh + tier mechanism refresh (warn-only) ─────────────
+    # Same as the sidecar block above: rebuild/reinstall, never abort.
+    if [ -f "$INSTALL_DIR/lib/napd.sh" ]; then
+        # shellcheck disable=SC1090
+# --- lib/napd.sh ---
+#!/bin/bash
+# lib/napd.sh — build + install the smsly-napd Go binary and its unit.
+# Sourced (not executed) by install/update flows.
+#
+# Warn loudly, never abort the update (taste: installer never blocks).
+# shellcheck disable=SC2317
+
+NAPD_SRC_DIR="${SMSLY_NAPD_SRC_DIR:-$INSTALL_DIR/napd}"
+NAPD_BIN="/usr/local/bin/smsly-napd"
+NAPD_UNIT_SRC="$INSTALL_DIR/infrastructure/systemd/smsly-napd.service"
+NAPD_UNIT_DST="/etc/systemd/system/smsly-napd.service"
+NAPD_ENV_FILE="/etc/smsly/napd.env"
+
+_smsly_napd_log() {
+    local level="$1"; shift
+    echo -e "${BLUE:-}  [napd:$level] $*${NC:-}" || echo "  [napd:$level] $*"
+}
+
+_smsly_napd_warn() {
+    echo -e "${YELLOW:-}  ⚠ napd: $*${NC:-}" || echo "  ⚠ napd: $*"
+}
+
+# Build the static binary. Prefers a pinned prebuilt artifact when the
+# installer sets SMSLY_NAPD_URL; otherwise builds with the local Go
+# toolchain (installed best-effort).
+smsly_napd_build() {
+    if [ -n "${SMSLY_NAPD_URL:-}" ] && command -v curl >/dev/null 2>&1; then
+        if curl -fsSL "$SMSLY_NAPD_URL" -o "$NAPD_BIN.tmp"; then
+            chmod 0755 "$NAPD_BIN.tmp" || true
+            mv "$NAPD_BIN.tmp" "$NAPD_BIN" || {
+                _smsly_napd_warn "could not install prebuilt binary"
+                return 0
+            }
+            _smsly_napd_log info "installed prebuilt smsly-napd"
+            return 0
+        fi
+        _smsly_napd_warn "prebuilt download failed, falling back to local build"
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            (apt-get install -y golang-go 2>&1 | tail -2) || true
+        fi
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        _smsly_napd_warn "Go toolchain unavailable — skipping build (tier sleep/wake stays manual)"
+        return 0
+    fi
+    if [ ! -f "$NAPD_SRC_DIR/main.go" ]; then
+        _smsly_napd_warn "source missing at $NAPD_SRC_DIR — skipping build"
+        return 0
+    fi
+    if (cd "$NAPD_SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$NAPD_BIN.tmp" .) 2>&1 | tail -3; then
+        chmod 0755 "$NAPD_BIN.tmp" || true
+        mv "$NAPD_BIN.tmp" "$NAPD_BIN" || {
+            _smsly_napd_warn "could not install built binary"
+            return 0
+        }
+        _smsly_napd_log info "built and installed smsly-napd"
+    else
+        _smsly_napd_warn "go build failed — tier sleep/wake stays manual"
+    fi
+    return 0
+}
+
+# Ensure NAPD_SHARED_SECRET exists in .env (generating once when absent)
+# and write /etc/smsly/napd.env for the unit. Backend/workers read the
+# same value from .env via env_file — no restart needed here because the
+# update flow recreates backend containers after this runs.
+smsly_napd_write_env() {
+    local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    local napd_secret=""
+    if [ -f "$env_file" ]; then
+        napd_secret="$(grep -E '^NAPD_SHARED_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//')" || true
+    fi
+    if [ -z "$napd_secret" ]; then
+        if command -v openssl >/dev/null 2>&1; then
+            napd_secret="$(openssl rand -hex 32 2>/dev/null)" || true
+        fi
+        if [ -z "$napd_secret" ]; then
+            napd_secret="$(head -c 32 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')" || true
+        fi
+        if [ -n "$napd_secret" ] && [ -f "$env_file" ]; then
+            printf '\nNAPD_SHARED_SECRET=%s\n' "$napd_secret" >> "$env_file" || {
+                _smsly_napd_warn "could not append NAPD_SHARED_SECRET to .env"
+                napd_secret=""
+            }
+        fi
+    fi
+    mkdir -p /etc/smsly || true
+    umask 027
+    {
+        echo "# Managed by smsly install — smsly-napd env"
+        if [ -n "$napd_secret" ]; then
+            echo "NAPD_SHARED_SECRET=$napd_secret"
+        fi
+    } > "$NAPD_ENV_FILE.tmp" || {
+        _smsly_napd_warn "could not write $NAPD_ENV_FILE"
+        return 0
+    }
+    chmod 0640 "$NAPD_ENV_FILE.tmp" || true
+    mv "$NAPD_ENV_FILE.tmp" "$NAPD_ENV_FILE" || {
+        _smsly_napd_warn "could not install $NAPD_ENV_FILE"
+        return 0
+    }
+    return 0
+}
+
+# Install + enable the systemd unit. Never fails the update.
+smsly_napd_install() {
+    smsly_napd_build || true
+    smsly_napd_write_env || true
+    if [ ! -f "$NAPD_UNIT_SRC" ]; then
+        _smsly_napd_warn "unit source missing ($NAPD_UNIT_SRC) — skipping"
+        return 0
+    fi
+    cp "$NAPD_UNIT_SRC" "$NAPD_UNIT_DST" 2>/dev/null || {
+        _smsly_napd_warn "could not install systemd unit"
+        return 0
+    }
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable smsly-napd.service 2>/dev/null || \
+        _smsly_napd_warn "enable failed (non-fatal)"
+    if [ -x "$NAPD_BIN" ]; then
+        systemctl restart smsly-napd.service 2>/dev/null || \
+            systemctl start smsly-napd.service 2>/dev/null || \
+            _smsly_napd_warn "start failed (non-fatal)"
+        _smsly_napd_log info "smsly-napd installed and started"
+    else
+        _smsly_napd_warn "binary missing — unit installed but not started"
+    fi
+    return 0
+}
+# --- end lib/napd.sh ---
+        if command -v smsly_napd_install >/dev/null 2>&1; then
+            smsly_napd_install || true
+        fi
+    fi
+    if [ -f "$INSTALL_DIR/lib/tiers_sleep.sh" ]; then
+        # shellcheck disable=SC1090
+# --- lib/tiers_sleep.sh ---
+#!/bin/bash
+# lib/tiers_sleep.sh — install the tier sleep/wake mechanism:
+# scripts/smsly-tier.sh, the smsly-tier@ units, and tiers.d definitions.
+# Sourced (not executed) by install/update flows.
+#
+# Tiers are OPT-IN per host: this installs the mechanism and enables the
+# smsly-paas.target parent only. No tier is enabled or started here — a
+# fresh install behaves exactly as before until the operator opts in
+# (see infrastructure/systemd/README.md).
+#
+# Warn loudly, never abort the update (taste: installer never blocks).
+# shellcheck disable=SC2317
+
+_smsly_tiers_log() {
+    local level="$1"; shift
+    echo -e "${BLUE:-}  [tiers:$level] $*${NC:-}" || echo "  [tiers:$level] $*"
+}
+
+_smsly_tiers_warn() {
+    echo -e "${YELLOW:-}  ⚠ tiers: $*${NC:-}" || echo "  ⚠ tiers: $*"
+}
+
+# Install script + units + tier definitions. Never fails the update.
+smsly_tiers_install() {
+    local src_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local fail=0
+
+    if [ -f "$src_dir/scripts/smsly-tier.sh" ]; then
+        # The script ships in the repo checkout — just ensure it is
+        # executable (git pulls do not always preserve the bit).
+        chmod 0755 "$src_dir/scripts/smsly-tier.sh" 2>/dev/null || true
+    else
+        _smsly_tiers_warn "scripts/smsly-tier.sh missing in repo — skipping"
+        return 0
+    fi
+
+    local unit
+    for unit in smsly-tier@.service smsly-tier-request@.path smsly-tier-autowake@.timer smsly-paas.target smsly-idle.target; do
+        if [ -f "$src_dir/infrastructure/systemd/$unit" ]; then
+            cp "$src_dir/infrastructure/systemd/$unit" "/etc/systemd/system/$unit" 2>/dev/null || {
+                _smsly_tiers_warn "could not install $unit"
+                fail=1
+            }
+        else
+            _smsly_tiers_warn "unit source missing: $unit — skipping"
+        fi
+    done
+
+    if [ -d "$src_dir/infrastructure/systemd/tiers" ]; then
+        mkdir -p /etc/smsly/tiers.d || true
+        install -m 0644 "$src_dir"/infrastructure/systemd/tiers/*.conf /etc/smsly/tiers.d/ 2>/dev/null || {
+            _smsly_tiers_warn "could not install tiers.d definitions"
+            fail=1
+        }
+    else
+        _smsly_tiers_warn "tiers.d source dir missing — skipping definitions"
+    fi
+
+    mkdir -p /var/lib/smsly/tiers /run/smsly/tier-wake || true
+    chmod 0755 /run/smsly/tier-wake 2>/dev/null || true
+
+    systemctl daemon-reload 2>/dev/null || true
+    # Parent target only — enables the mechanism, starts nothing.
+    systemctl enable smsly-paas.target 2>/dev/null || \
+        _smsly_tiers_warn "enable smsly-paas.target failed (non-fatal)"
+
+    if [ "$fail" -eq 0 ]; then
+        _smsly_tiers_log info "tier sleep mechanism installed (opt-in per host, nothing started)"
+    fi
+    return 0
+}
+# --- end lib/tiers_sleep.sh ---
+        if command -v smsly_tiers_install >/dev/null 2>&1; then
+            smsly_tiers_install || true
+        fi
+    fi
+
+    # ─── Tier sleep restore (update wakes everything — re-sleep) ───────
+    # Any `docker compose up -d` starts default-profile services again,
+    # including tiers deliberately stopped. Restore recorded sleep state.
+    if [ -x "$INSTALL_DIR/scripts/smsly-tier.sh" ]; then
+        "$INSTALL_DIR/scripts/smsly-tier.sh" resleep || true
+    fi
 
     # ─── Endpoint Verification (3 checks) ──────────────────────────────────
     echo -e "\n${BLUE}  → Running endpoint verification (3 checks)...${NC}"
@@ -22263,44 +22726,6 @@ fi
 echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
 set_checkpoint "requirements_checked"
 # --- end lib/fresh_preflight.sh ---
-# --- lib/mesh_dns.sh ---
-# Mesh DNS resolver — point node hosts at the master's CoreDNS over wg0.
-#
-# The master serves `*.mesh.internal` (MESH_DNS_DOMAIN) from its coredns
-# container on the mesh IP (default 10.100.0.1:53). Nodes configure a
-# per-link resolver on wg0 so those names resolve WITHOUT touching the
-# host's global DNS path (`~domain` = routing-only in systemd-resolved).
-configure_mesh_dns_resolver() {
-    # Master serves the zone itself (coredns container + mesh bind); lite
-    # agents address the master explicitly and need no resolver change.
-    if ! is_node_mode; then
-        return 0
-    fi
-    local mesh_domain="${MESH_DNS_DOMAIN:-mesh.internal}"
-    local dns_ip="${MASTER_MESH_IP:-10.100.0.1}"
-
-    if ! ip link show wg0 >/dev/null 2>&1; then
-        echo -e "${YELLOW}  ⚠ Mesh DNS resolver skipped — wg0 not present (CoreDNS names will resolve once the mesh is up; re-run install --resume or configure manually)${NC}"
-        return 0
-    fi
-
-    if command -v resolvectl >/dev/null 2>&1; then
-        if resolvectl dns wg0 "$dns_ip" && resolvectl domain wg0 "~${mesh_domain}"; then
-            echo -e "${GREEN}  ✓ Mesh DNS: *.${mesh_domain} → ${dns_ip} via wg0${NC}"
-        else
-            echo -e "${YELLOW}  ⚠ resolvectl mesh DNS config failed — set manually: resolvectl dns wg0 ${dns_ip}; resolvectl domain wg0 ~${mesh_domain}${NC}"
-        fi
-        return 0
-    fi
-
-    # No systemd-resolved: do NOT rewrite the global /etc/resolv.conf —
-    # that would reroute all host DNS through the mesh. Print the manual
-    # step instead (operator decision).
-    echo -e "${YELLOW}  ⚠ resolvectl not found — cannot scope mesh DNS to wg0.${NC}"
-    echo -e "${YELLOW}    Add the master's CoreDNS to your resolver for *.${mesh_domain} (e.g. dnsmasq server=/.${mesh_domain}/${dns_ip}), or install systemd-resolved.${NC}"
-    return 0
-}
-# --- end lib/mesh_dns.sh ---
 # --- lib/fresh_deps.sh ---
 # -----------------------------------------------------------------------------
 # 2. Dependency Management & cleanup
@@ -23688,11 +24113,7 @@ _harden_spire_start_agent() {
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    # --cgroupns host is REQUIRED, not optional: the docker workload
-    # attestor maps caller PID -> container via /proc cgroups. With the
-    # default private cgroupns every peer shows as "/" so no selectors
-    # match and every fetch fails "No identity issued" (2026-09-26).
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
+    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
@@ -23888,6 +24309,22 @@ fi
 
 # Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get
 # a placeholder that will be updated by WireGuardService after provisioning).
+_ensure_mesh_masquerade() {
+    # SNAT container→mesh traffic to the mesh address. The far side only
+    # routes 10.100.0.0/24 back through the tunnel — a bridge source IP
+    # (172.16.0.0/12) would strand replies on the public internet, so
+    # containers could reach mesh IPs over ping/HTTP but never complete
+    # TCP to app ports (2026-09-29: node registrar timed out to master).
+    # Idempotent; persisted with the other iptables rules by the
+    # hardening step (iptables-save → rules.v4).
+    ip link show wg0 >/dev/null 2>&1 || return 0
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -t nat -C POSTROUTING -s 172.16.0.0/12 -o wg0 -j MASQUERADE 2>/dev/null \
+            || iptables -t nat -A POSTROUTING -s 172.16.0.0/12 -o wg0 -j MASQUERADE 2>/dev/null \
+            || true
+    fi
+}
+
 ensure_wireguard_mesh() {
     local mesh_ip="${MASTER_MESH_IP:-10.100.0.1}"
     local wg_iface="wg0"
@@ -23903,7 +24340,23 @@ ensure_wireguard_mesh() {
             apt_run apt-get install -y wireguard
         fi
         mkdir -p /etc/wireguard
-        if [ ! -f /etc/wireguard/private.key ]; then
+        if [ -n "${WG_PRIVATE_KEY:-}" ]; then
+            # Provisioned mesh identity (bootstrap token): the master
+            # already registered this keypair for our mesh address — a
+            # fresh key here would fail the handshake closed (2026-09-28:
+            # node came up on a stranger key, master only trusts the
+            # provisioned one). Always converge on the provisioned key.
+            printf '%s' "$WG_PRIVATE_KEY" > /etc/wireguard/private.key
+            chmod 600 /etc/wireguard/private.key
+            printf '%s' "$WG_PRIVATE_KEY" | wg pubkey > /etc/wireguard/public.key
+            if [ -f "/etc/wireguard/${wg_iface}.conf" ]; then
+                if grep -q '^PrivateKey' "/etc/wireguard/${wg_iface}.conf" 2>/dev/null; then
+                    sed -i "s|^PrivateKey .*|PrivateKey = ${WG_PRIVATE_KEY}|" "/etc/wireguard/${wg_iface}.conf"
+                else
+                    printf 'PrivateKey = %s\n' "$WG_PRIVATE_KEY" >> "/etc/wireguard/${wg_iface}.conf"
+                fi
+            fi
+        elif [ ! -f /etc/wireguard/private.key ]; then
             wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
         fi
         local privkey
@@ -23929,6 +24382,7 @@ WGCONF
         if declare -F configure_mesh_dns_resolver >/dev/null 2>&1; then
             configure_mesh_dns_resolver || true
         fi
+        _ensure_mesh_masquerade
         return 0
     fi
 
@@ -23965,6 +24419,7 @@ WGCONF
     else
         echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start — PgCat mesh binding may fail${NC}"
     fi
+    _ensure_mesh_masquerade
 }
 ensure_wireguard_mesh
 
@@ -24865,6 +25320,22 @@ NODE_SPIRE=${NODE_SPIRE:-1}
 NODE_LOG_SHIPPING=${NODE_LOG_SHIPPING:-1}
 EOF
 
+    # ── Bootstrap mesh vars passthrough (node self-provisioning) ──
+    # The bootstrap script bakes mesh identity into .env (MASTER_URL,
+    # WG_*, NODE_*, GATEWAY_SECRET...). The template above does not
+    # list them, so regeneration silently dropped them and compose
+    # failed on missing MASTER_URL/NODE_MESH_BIND_IP (2026-09-28: every
+    # node install died at stack deploy). Re-emit whitelisted keys when
+    # present in env (sourced from the stub above). Unknown keys are
+    # never carried — explicit whitelist only.
+    for _bk in MASTER_URL MASTER_IP NODE_NUMBER NODE_DOMAIN NODE_HOST SMSLY_NODE_HOST WG_ADDRESS NODE_MESH_BIND_IP WG_PRIVATE_KEY WG_PUBLIC_KEY MASTER_WG_PUBKEY MASTER_WG_ENDPOINT MASTER_MESH_IP GATEWAY_SECRET NODE_NAME SERVER_ID SMSLY_NODE_ID SMSLY_NODE_QUEUE MASTER_DB_USER MASTER_DB_PASSWORD MASTER_MQ_PASSWORD MASTER_REDIS_PASSWORD MASTER_FIELD_ENCRYPTION_KEY; do
+        _bv="${!_bk:-}"
+        if [ -n "$_bv" ]; then
+            printf '%s=%s\n' "$_bk" "$_bv" >> "$ENV_TMP"
+        fi
+    done
+    unset _bk _bv
+
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         echo -e "${BLUE}  → Lite Agent mode: frontend build is not part of this node.${NC}"
@@ -25590,14 +26061,14 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 # smsly-net containers could not reach mesh :80). App builds run on
 # docker0, so nothing is lost; every other bridge now routes directly.
 # Host-local OUTPUT still takes the local hop, EXCEPT destinations on
-# local/docker/mesh ranges (see the RETURN converge below): the
+# local/docker/mesh ranges (see _egress_local_return_cidrs below): the
 # transparent proxy resolves the Host header, so traffic aimed at a
 # container IP with an unresolvable Host (published :80 ports via
-# docker-proxy, host diagnostics, Caddy -> traefik:80 wake probes from
-# the host) 502s instead of passing through. Those destinations bypass
-# the shim (direct); real internet egress still steers. HTTPS is
-# untouched, and nginx is monitored like any platform service. This is
-# the standard transparent-proxy pattern, not a hack.
+# docker-proxy, host diagnostics, Caddy/traefik upstreams) 502s instead
+# of passing through. Those destinations bypass the shim (direct);
+# real internet egress still steers. HTTPS is untouched, and
+# nginx is monitored like any platform service. This is the standard
+# transparent-proxy pattern, not a hack.
 #
 # Idempotent: safe to run on every install/update/resume and at boot.
 # Best-effort: never aborts the caller (returns 0); build failures still
@@ -25804,8 +26275,10 @@ ensure_egress_mirror() {
     fi
 
     # ─── Infisical auto-provision (master mode only) ─────────────────────
+    # Opt-in only: default secrets backend is SOPS (file-based, no
+    # daemon). Set SECRETS_BACKEND=infisical to provision the vault.
     _INFISICAL_COMPOSE="$INSTALL_DIR/infrastructure/docker/docker-compose.infisical.yml"
-    if [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$_INFISICAL_COMPOSE" ]; then
+    if [ "${SECRETS_BACKEND:-sops}" = "infisical" ] && [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$_INFISICAL_COMPOSE" ]; then
         _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}'  | head -1)
         if [ -n "$_infisical_running" ]; then
             echo -e "${GREEN}  ✓ Infisical already running (${_infisical_running})${NC}"
@@ -26159,8 +26632,11 @@ sleep 5
 # first boot into auth/session failures that look like app bugs. Wait
 # for at least one connected slave (5 min cap, then fail loud with the
 # replica logs attached). Skipped when the operator allows writes
-# without replicas (MIN_REPLICAS_TO_WRITE=0, e.g. single-node dev).
-if [ "${REDIS_MIN_REPLICAS_TO_WRITE:-1}" != "0" ]; then
+# without replicas (MIN_REPLICAS_TO_WRITE=0, e.g. single-node dev) and
+# when the compose stack defines no replica service at all (node mode
+# ships a single Redis — waiting would time out on every install,
+# 2026-09-28).
+if [ "${REDIS_MIN_REPLICAS_TO_WRITE:-1}" != "0" ] && grep -q "^  *redis-replica:" "${COMPOSE_FILE:-docker-compose.prod.yml}"; then
     echo -e "${BLUE}  → Waiting for Redis replica to attach (writes require 1 replica)...${NC}"
     _redis_synced=false
     _redis_slaves=""
@@ -26744,7 +27220,7 @@ compose_stack_service_args() {
 }
 
 compose_stack_build_service_args() {
-    local candidates="pgcat pgbouncer-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
+    local candidates="pgcat pgcat-tenants backend celery celery-beat frontend celery-fast celery-deploy caddy"
     local svc=""
     if is_node_mode; then
         candidates="db backend celery-worker celery-beat caddy"
@@ -26832,9 +27308,18 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        # Fresh nodes pull GBs of images on first boot; the 600s cap
+        # killed healthy pulls mid-layer (exit 124) on slow pipes.
+        # 1800s default for nodes (overridable via
+        # SMSLY_NODE_COMPOSE_UP_TIMEOUT); other modes keep 600s
+        # (SMSLY_COMPOSE_UP_TIMEOUT) as their images are warm.
+        local up_timeout="${SMSLY_NODE_COMPOSE_UP_TIMEOUT:-1800}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=1800 ;; esac
+        timeout -k 30 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 10 600 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        local up_timeout="${SMSLY_COMPOSE_UP_TIMEOUT:-600}"
+        case "$up_timeout" in ''|*[!0-9]*) up_timeout=600 ;; esac
+        timeout -k 10 "$up_timeout" docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -27901,7 +28386,7 @@ get_migration_database_alias() {
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
     migrate_db="$(
-        docker run --rm --network smsly-net \
+        timeout 120 docker run --rm --network smsly-net \
             --user 1000 \
             --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -29590,6 +30075,362 @@ EOF
     rm -f /etc/systemd/system/caddy.service
     systemctl daemon-reload
 
+    # ─── Edge sidecar (Django-independent ask + edge-JWT verify) ──────
+    # Single static Go binary as a systemd unit — survives Django AND
+    # Docker outages. Warn-only, never aborts the install/update.
+    if [ -f "$INSTALL_DIR/lib/edge_sidecar.sh" ]; then
+        # shellcheck disable=SC1090
+# --- lib/edge_sidecar.sh ---
+#!/bin/bash
+# lib/edge_sidecar.sh — build + install the smsly-edge-sidecar Go binary
+# and its systemd unit. Sourced (not executed) by install.sh.
+#
+# Warn loudly, never abort the update (taste: installer never blocks).
+# shellcheck disable=SC2317
+
+EDGE_SIDECAR_SRC_DIR="${SMSLY_EDGE_SIDECAR_SRC_DIR:-$INSTALL_DIR/edge-sidecar}"
+EDGE_SIDECAR_BIN="/usr/local/bin/smsly-edge-sidecar"
+EDGE_SIDECAR_UNIT_SRC="$INSTALL_DIR/infrastructure/systemd/smsly-edge-sidecar.service"
+EDGE_SIDECAR_UNIT_DST="/etc/systemd/system/smsly-edge-sidecar.service"
+EDGE_SIDECAR_ENV_FILE="/etc/smsly/edge-sidecar.env"
+
+_smsly_edge_sidecar_log() {
+    local level="$1"; shift
+    echo -e "${BLUE:-}  [edge-sidecar:$level] $*${NC:-}" || echo "  [edge-sidecar:$level] $*"
+}
+
+_smsly_edge_sidecar_warn() {
+    echo -e "${YELLOW:-}  ⚠ edge-sidecar: $*${NC:-}" || echo "  ⚠ edge-sidecar: $*"
+}
+
+# Build the static binary. Prefers a pinned prebuilt artifact when the
+# installer sets SMSLY_EDGE_SIDECAR_URL; otherwise builds with the local
+# Go toolchain (installed best-effort).
+smsly_edge_sidecar_build() {
+    if [ -n "${SMSLY_EDGE_SIDECAR_URL:-}" ] && command -v curl >/dev/null 2>&1; then
+        if curl -fsSL "$SMSLY_EDGE_SIDECAR_URL" -o "$EDGE_SIDECAR_BIN.tmp"; then
+            chmod 0755 "$EDGE_SIDECAR_BIN.tmp" || true
+            mv "$EDGE_SIDECAR_BIN.tmp" "$EDGE_SIDECAR_BIN" || {
+                _smsly_edge_sidecar_warn "could not install prebuilt binary"
+                return 0
+            }
+            _smsly_edge_sidecar_log info "installed prebuilt smsly-edge-sidecar"
+            return 0
+        fi
+        _smsly_edge_sidecar_warn "prebuilt download failed, falling back to local build"
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            (apt-get install -y golang-go 2>&1 | tail -2) || true
+        fi
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        _smsly_edge_sidecar_warn "Go toolchain unavailable — skipping build (edge keeps Django-backed ask/auth)"
+        return 0
+    fi
+    if [ ! -f "$EDGE_SIDECAR_SRC_DIR/main.go" ]; then
+        _smsly_edge_sidecar_warn "source missing at $EDGE_SIDECAR_SRC_DIR — skipping build"
+        return 0
+    fi
+    if (cd "$EDGE_SIDECAR_SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$EDGE_SIDECAR_BIN.tmp" .) 2>&1 | tail -3; then
+        chmod 0755 "$EDGE_SIDECAR_BIN.tmp" || true
+        mv "$EDGE_SIDECAR_BIN.tmp" "$EDGE_SIDECAR_BIN" || {
+            _smsly_edge_sidecar_warn "could not install built binary"
+            return 0
+        }
+        _smsly_edge_sidecar_log info "built and installed smsly-edge-sidecar"
+    else
+        _smsly_edge_sidecar_warn "go build failed — edge keeps Django-backed ask/auth"
+    fi
+    return 0
+}
+
+# Write /etc/smsly/edge-sidecar.env from .env (secrets never on cmdline).
+smsly_edge_sidecar_write_env() {
+    local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    local edge_secret="" ask_secret=""
+    if [ -f "$env_file" ]; then
+        edge_secret="$(grep -E '^EDGE_JWT_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//')" || true
+        ask_secret="$(grep -E '^CADDY_ASK_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' )" || true
+    fi
+    mkdir -p /etc/smsly || true
+    umask 027
+    {
+        echo "# Managed by smsly install — smsly-edge-sidecar env"
+        if [ -n "$edge_secret" ]; then
+            echo "EDGE_JWT_SECRET=$edge_secret"
+        fi
+        if [ -n "$ask_secret" ]; then
+            echo "CADDY_ASK_SECRET=$ask_secret"
+        fi
+    } > "$EDGE_SIDECAR_ENV_FILE.tmp" || {
+        _smsly_edge_sidecar_warn "could not write $EDGE_SIDECAR_ENV_FILE"
+        return 0
+    }
+    chmod 0640 "$EDGE_SIDECAR_ENV_FILE.tmp" || true
+    mv "$EDGE_SIDECAR_ENV_FILE.tmp" "$EDGE_SIDECAR_ENV_FILE" || {
+        _smsly_edge_sidecar_warn "could not install $EDGE_SIDECAR_ENV_FILE"
+        return 0
+    }
+    return 0
+}
+
+# Install + enable the systemd unit. Never fails the update.
+smsly_edge_sidecar_install() {
+    smsly_edge_sidecar_build || true
+    smsly_edge_sidecar_write_env || true
+    if [ ! -f "$EDGE_SIDECAR_UNIT_SRC" ]; then
+        _smsly_edge_sidecar_warn "unit source missing ($EDGE_SIDECAR_UNIT_SRC) — skipping"
+        return 0
+    fi
+    cp "$EDGE_SIDECAR_UNIT_SRC" "$EDGE_SIDECAR_UNIT_DST" 2>/dev/null || {
+        _smsly_edge_sidecar_warn "could not install systemd unit"
+        return 0
+    }
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable smsly-edge-sidecar.service 2>/dev/null || \
+        _smsly_edge_sidecar_warn "enable failed (non-fatal)"
+    if [ -x "$EDGE_SIDECAR_BIN" ]; then
+        systemctl restart smsly-edge-sidecar.service 2>/dev/null || \
+            systemctl start smsly-edge-sidecar.service 2>/dev/null || \
+            _smsly_edge_sidecar_warn "start failed (non-fatal)"
+        _smsly_edge_sidecar_log info "smsly-edge-sidecar installed and started"
+    else
+        _smsly_edge_sidecar_warn "binary missing — unit installed but not started"
+    fi
+    return 0
+}
+# --- end lib/edge_sidecar.sh ---
+        if command -v smsly_edge_sidecar_install >/dev/null 2>&1; then
+            smsly_edge_sidecar_install || true
+        fi
+    fi
+
+    # ─── napd + tier sleep mechanism (infra scale-to-zero) ─────────────
+    # Same pattern as the sidecar above: host systemd units, warn-only.
+    # Installs the mechanism only — no tier is enabled or started here
+    # (opt-in per host). Skipped on agent-lite/node modes with Caddy:
+    # tiers.d targets the master compose project.
+    if [ -f "$INSTALL_DIR/lib/napd.sh" ]; then
+        # shellcheck disable=SC1090
+# --- lib/napd.sh ---
+#!/bin/bash
+# lib/napd.sh — build + install the smsly-napd Go binary and its unit.
+# Sourced (not executed) by install/update flows.
+#
+# Warn loudly, never abort the update (taste: installer never blocks).
+# shellcheck disable=SC2317
+
+NAPD_SRC_DIR="${SMSLY_NAPD_SRC_DIR:-$INSTALL_DIR/napd}"
+NAPD_BIN="/usr/local/bin/smsly-napd"
+NAPD_UNIT_SRC="$INSTALL_DIR/infrastructure/systemd/smsly-napd.service"
+NAPD_UNIT_DST="/etc/systemd/system/smsly-napd.service"
+NAPD_ENV_FILE="/etc/smsly/napd.env"
+
+_smsly_napd_log() {
+    local level="$1"; shift
+    echo -e "${BLUE:-}  [napd:$level] $*${NC:-}" || echo "  [napd:$level] $*"
+}
+
+_smsly_napd_warn() {
+    echo -e "${YELLOW:-}  ⚠ napd: $*${NC:-}" || echo "  ⚠ napd: $*"
+}
+
+# Build the static binary. Prefers a pinned prebuilt artifact when the
+# installer sets SMSLY_NAPD_URL; otherwise builds with the local Go
+# toolchain (installed best-effort).
+smsly_napd_build() {
+    if [ -n "${SMSLY_NAPD_URL:-}" ] && command -v curl >/dev/null 2>&1; then
+        if curl -fsSL "$SMSLY_NAPD_URL" -o "$NAPD_BIN.tmp"; then
+            chmod 0755 "$NAPD_BIN.tmp" || true
+            mv "$NAPD_BIN.tmp" "$NAPD_BIN" || {
+                _smsly_napd_warn "could not install prebuilt binary"
+                return 0
+            }
+            _smsly_napd_log info "installed prebuilt smsly-napd"
+            return 0
+        fi
+        _smsly_napd_warn "prebuilt download failed, falling back to local build"
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            (apt-get install -y golang-go 2>&1 | tail -2) || true
+        fi
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        _smsly_napd_warn "Go toolchain unavailable — skipping build (tier sleep/wake stays manual)"
+        return 0
+    fi
+    if [ ! -f "$NAPD_SRC_DIR/main.go" ]; then
+        _smsly_napd_warn "source missing at $NAPD_SRC_DIR — skipping build"
+        return 0
+    fi
+    if (cd "$NAPD_SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$NAPD_BIN.tmp" .) 2>&1 | tail -3; then
+        chmod 0755 "$NAPD_BIN.tmp" || true
+        mv "$NAPD_BIN.tmp" "$NAPD_BIN" || {
+            _smsly_napd_warn "could not install built binary"
+            return 0
+        }
+        _smsly_napd_log info "built and installed smsly-napd"
+    else
+        _smsly_napd_warn "go build failed — tier sleep/wake stays manual"
+    fi
+    return 0
+}
+
+# Ensure NAPD_SHARED_SECRET exists in .env (generating once when absent)
+# and write /etc/smsly/napd.env for the unit. Backend/workers read the
+# same value from .env via env_file — no restart needed here because the
+# update flow recreates backend containers after this runs.
+smsly_napd_write_env() {
+    local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    local napd_secret=""
+    if [ -f "$env_file" ]; then
+        napd_secret="$(grep -E '^NAPD_SHARED_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//')" || true
+    fi
+    if [ -z "$napd_secret" ]; then
+        if command -v openssl >/dev/null 2>&1; then
+            napd_secret="$(openssl rand -hex 32 2>/dev/null)" || true
+        fi
+        if [ -z "$napd_secret" ]; then
+            napd_secret="$(head -c 32 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')" || true
+        fi
+        if [ -n "$napd_secret" ] && [ -f "$env_file" ]; then
+            printf '\nNAPD_SHARED_SECRET=%s\n' "$napd_secret" >> "$env_file" || {
+                _smsly_napd_warn "could not append NAPD_SHARED_SECRET to .env"
+                napd_secret=""
+            }
+        fi
+    fi
+    mkdir -p /etc/smsly || true
+    umask 027
+    {
+        echo "# Managed by smsly install — smsly-napd env"
+        if [ -n "$napd_secret" ]; then
+            echo "NAPD_SHARED_SECRET=$napd_secret"
+        fi
+    } > "$NAPD_ENV_FILE.tmp" || {
+        _smsly_napd_warn "could not write $NAPD_ENV_FILE"
+        return 0
+    }
+    chmod 0640 "$NAPD_ENV_FILE.tmp" || true
+    mv "$NAPD_ENV_FILE.tmp" "$NAPD_ENV_FILE" || {
+        _smsly_napd_warn "could not install $NAPD_ENV_FILE"
+        return 0
+    }
+    return 0
+}
+
+# Install + enable the systemd unit. Never fails the update.
+smsly_napd_install() {
+    smsly_napd_build || true
+    smsly_napd_write_env || true
+    if [ ! -f "$NAPD_UNIT_SRC" ]; then
+        _smsly_napd_warn "unit source missing ($NAPD_UNIT_SRC) — skipping"
+        return 0
+    fi
+    cp "$NAPD_UNIT_SRC" "$NAPD_UNIT_DST" 2>/dev/null || {
+        _smsly_napd_warn "could not install systemd unit"
+        return 0
+    }
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable smsly-napd.service 2>/dev/null || \
+        _smsly_napd_warn "enable failed (non-fatal)"
+    if [ -x "$NAPD_BIN" ]; then
+        systemctl restart smsly-napd.service 2>/dev/null || \
+            systemctl start smsly-napd.service 2>/dev/null || \
+            _smsly_napd_warn "start failed (non-fatal)"
+        _smsly_napd_log info "smsly-napd installed and started"
+    else
+        _smsly_napd_warn "binary missing — unit installed but not started"
+    fi
+    return 0
+}
+# --- end lib/napd.sh ---
+        if command -v smsly_napd_install >/dev/null 2>&1; then
+            smsly_napd_install || true
+        fi
+    fi
+    if [ -f "$INSTALL_DIR/lib/tiers_sleep.sh" ]; then
+        # shellcheck disable=SC1090
+# --- lib/tiers_sleep.sh ---
+#!/bin/bash
+# lib/tiers_sleep.sh — install the tier sleep/wake mechanism:
+# scripts/smsly-tier.sh, the smsly-tier@ units, and tiers.d definitions.
+# Sourced (not executed) by install/update flows.
+#
+# Tiers are OPT-IN per host: this installs the mechanism and enables the
+# smsly-paas.target parent only. No tier is enabled or started here — a
+# fresh install behaves exactly as before until the operator opts in
+# (see infrastructure/systemd/README.md).
+#
+# Warn loudly, never abort the update (taste: installer never blocks).
+# shellcheck disable=SC2317
+
+_smsly_tiers_log() {
+    local level="$1"; shift
+    echo -e "${BLUE:-}  [tiers:$level] $*${NC:-}" || echo "  [tiers:$level] $*"
+}
+
+_smsly_tiers_warn() {
+    echo -e "${YELLOW:-}  ⚠ tiers: $*${NC:-}" || echo "  ⚠ tiers: $*"
+}
+
+# Install script + units + tier definitions. Never fails the update.
+smsly_tiers_install() {
+    local src_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local fail=0
+
+    if [ -f "$src_dir/scripts/smsly-tier.sh" ]; then
+        # The script ships in the repo checkout — just ensure it is
+        # executable (git pulls do not always preserve the bit).
+        chmod 0755 "$src_dir/scripts/smsly-tier.sh" 2>/dev/null || true
+    else
+        _smsly_tiers_warn "scripts/smsly-tier.sh missing in repo — skipping"
+        return 0
+    fi
+
+    local unit
+    for unit in smsly-tier@.service smsly-tier-request@.path smsly-tier-autowake@.timer smsly-paas.target smsly-idle.target; do
+        if [ -f "$src_dir/infrastructure/systemd/$unit" ]; then
+            cp "$src_dir/infrastructure/systemd/$unit" "/etc/systemd/system/$unit" 2>/dev/null || {
+                _smsly_tiers_warn "could not install $unit"
+                fail=1
+            }
+        else
+            _smsly_tiers_warn "unit source missing: $unit — skipping"
+        fi
+    done
+
+    if [ -d "$src_dir/infrastructure/systemd/tiers" ]; then
+        mkdir -p /etc/smsly/tiers.d || true
+        install -m 0644 "$src_dir"/infrastructure/systemd/tiers/*.conf /etc/smsly/tiers.d/ 2>/dev/null || {
+            _smsly_tiers_warn "could not install tiers.d definitions"
+            fail=1
+        }
+    else
+        _smsly_tiers_warn "tiers.d source dir missing — skipping definitions"
+    fi
+
+    mkdir -p /var/lib/smsly/tiers /run/smsly/tier-wake || true
+    chmod 0755 /run/smsly/tier-wake 2>/dev/null || true
+
+    systemctl daemon-reload 2>/dev/null || true
+    # Parent target only — enables the mechanism, starts nothing.
+    systemctl enable smsly-paas.target 2>/dev/null || \
+        _smsly_tiers_warn "enable smsly-paas.target failed (non-fatal)"
+
+    if [ "$fail" -eq 0 ]; then
+        _smsly_tiers_log info "tier sleep mechanism installed (opt-in per host, nothing started)"
+    fi
+    return 0
+}
+# --- end lib/tiers_sleep.sh ---
+        if command -v smsly_tiers_install >/dev/null 2>&1; then
+            smsly_tiers_install || true
+        fi
+    fi
+
     set_checkpoint "caddy_configured"
 fi
 fi # end Caddy skip for agent-lite/node modes
@@ -29611,114 +30452,93 @@ cat << 'EOF' > "$OOM_SCRIPT"
 #!/usr/bin/env bash
 # oom-swap-adjuster.sh
 #
-# Monitors the system for HOST-LEVEL memory pressure. If genuine pressure
-# is detected, it grows a SINGLE swap file by 200MB per run.
-#
-# 2026-10-03 hardening: the old version fired on ANY cgroup OOM line
-# (e.g. a crash-looping 260MB cadvisor tripped it every 5 minutes) with
-# no sufficiency gate and a fresh timestamped file per run — 253 files
-# and a march toward the 4xRAM ceiling on a host that already had 16GB
-# swap for an 8GB box. Now: pressure gate + sufficiency cap + one file.
+# Monitors the system for Out Of Memory (OOM) kills. If one is detected within the last
+# X minutes, it automatically increases the swap space by 200MB up to a maximum of 4x RAM.
+# This serves as an auto-maintenance feature to prevent recurring build crashes.
 
 set -euo pipefail
 
 LOG_FILE="/var/log/smsly-oom-adjuster.log"
 MINUTES_BACK=10
-SWAPFILE="/swapfile-smsly-auto"
-# Only act when the host itself is actually pressured (MemAvailable —
-# swap-backed and reclaimable included — below this share of RAM).
-PRESSURE_PCT=15
-# Never grow total swap past 2x RAM; disk-backed swap is emergency
-# headroom, not a memory plan.
-MAX_SWAP_FACTOR=2
-# Grow in these steps per run.
-ADD_SWAP_MB=200
+SWAPFILE_PREFIX="/swapfile-smsly-auto"
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
-# 1. Recent OOM kills? (Any scope — the pressure gate below decides.)
-OOM_COUNT=$(journalctl -k --since "${MINUTES_BACK} minutes ago" | grep -ci "out of memory" || true)
+# Check for OOM events in the last N minutes using journalctl
+OOM_COUNT=$(journalctl -k --since "${MINUTES_BACK} minutes ago" | grep -i "out of memory" | wc -l || true)
 
 if [ "$OOM_COUNT" -eq 0 ]; then
+    # No OOM detected recently, exit quietly.
     exit 0
+
 fi
 
-# 2. HOST pressure gate: skip cgroup-scoped kills on an otherwise
-# healthy host (e.g. one tiny container hitting its own limit).
+log "Detected $OOM_COUNT OOM events in the last $MINUTES_BACK minutes. Evaluating swap size."
+
+# Get RAM size in MB
 RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-AVAIL_MB=$(free -m | awk '/^Mem:/{print $7}')
-if [ -z "$RAM_MB" ] || [ "$RAM_MB" -le 0 ]; then
-    exit 0
-fi
-AVAIL_PCT=$((AVAIL_MB * 100 / RAM_MB))
-if [ "$AVAIL_PCT" -ge "$PRESSURE_PCT" ]; then
-    log "OOM lines seen but host has ${AVAIL_MB}MB available (${AVAIL_PCT}% >= ${PRESSURE_PCT}% gate) — no swap change."
-    exit 0
-fi
-
-# 3. Sufficiency cap.
 CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
-MAX_SWAP_MB=$((RAM_MB * MAX_SWAP_FACTOR))
+
+# Maximum allowed swap is 4x RAM
+MAX_SWAP_MB=$((RAM_MB * 4))
+
 if [ "$CURRENT_SWAP_MB" -ge "$MAX_SWAP_MB" ]; then
-    log "Swap already ${CURRENT_SWAP_MB}MB (>= ${MAX_SWAP_FACTOR}x RAM = ${MAX_SWAP_MB}MB). No change."
+    log "Swap is already at or above the maximum allowed limit (4x RAM = ${MAX_SWAP_MB}MB). No further auto-adjustment will be made."
     exit 0
 fi
 
-# Cap the step at the ceiling.
+# Calculate new swap chunk to add (200MB)
+ADD_SWAP_MB=200
 NEW_TOTAL_MB=$((CURRENT_SWAP_MB + ADD_SWAP_MB))
+
+# Cap at max if we would overshoot
 if [ "$NEW_TOTAL_MB" -gt "$MAX_SWAP_MB" ]; then
     ADD_SWAP_MB=$((MAX_SWAP_MB - CURRENT_SWAP_MB))
+    NEW_TOTAL_MB=$MAX_SWAP_MB
 fi
+
 if [ "$ADD_SWAP_MB" -le 0 ]; then
     exit 0
 fi
 
-log "Host pressure: ${AVAIL_MB}MB available (${AVAIL_PCT}%). Growing ${SWAPFILE} toward ${NEW_TOTAL_MB}MB total."
+NEW_SWAPFILE="${SWAPFILE_PREFIX}-$(date '+%s')"
+log "Increasing swap by ${ADD_SWAP_MB}MB. Creating ${NEW_SWAPFILE}..."
 
-# 4. Single growing file. swapoff needs RAM room for what's currently
-# swapped; if it doesn't fit, leave everything untouched (fragmenting
-# further helps nothing).
-if [ -f "$SWAPFILE" ]; then
-    USED_SWAP_MB=$(free -m | awk '/^Swap:/{print $3}')
-    if [ "$AVAIL_MB" -gt "$((USED_SWAP_MB + 512))" ]; then
-        swapoff "$SWAPFILE" || true
-        rm -f "$SWAPFILE"
-    else
-        log "Not enough free RAM to regrow ${SWAPFILE} safely — leaving swap untouched."
-        exit 0
-    fi
-fi
+# Create the new swap file
+if fallocate -l ${ADD_SWAP_MB}M "$NEW_SWAPFILE" ; then
+    chmod 600 "$NEW_SWAPFILE"
+    mkswap "$NEW_SWAPFILE" 
+    # Priority 10 like the installer swapfile: below zram (100), so
+    # compressed RAM stays the first overflow tier.
+    swapon -p 10 "$NEW_SWAPFILE"  || swapon "$NEW_SWAPFILE"  || true
 
-GROW_OK=false
-if [ -f "$SWAPFILE" ]; then
-    CUR_MB=$(($(stat -c%s "$SWAPFILE" 2>/dev/null || echo 0) / 1024 / 1024))
-    if fallocate -l $((CUR_MB + ADD_SWAP_MB))M "$SWAPFILE" >/dev/null 2>&1; then
-        GROW_OK=true
+    # Make it permanent
+    if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
+        echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
     fi
+
+    log "Successfully added ${ADD_SWAP_MB}MB of swap. Total swap is now approx ${NEW_TOTAL_MB}MB."
 else
-    if fallocate -l ${ADD_SWAP_MB}M "$SWAPFILE" >/dev/null 2>&1; then
-        GROW_OK=true
-    elif dd if=/dev/zero of="$SWAPFILE" bs=1M count=$ADD_SWAP_MB status=none; then
-        GROW_OK=true
+    # Fallback to dd if fallocate fails (e.g. some filesystems don't support it)
+    log "fallocate failed, trying dd..."
+    if dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count=$ADD_SWAP_MB status=none; then
+        chmod 600 "$NEW_SWAPFILE"
+        mkswap "$NEW_SWAPFILE" 
+        swapon -p 10 "$NEW_SWAPFILE"  || swapon "$NEW_SWAPFILE"  || true
+
+        if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
+            echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
+        fi
+
+        log "Successfully added ${ADD_SWAP_MB}MB of swap via dd. Total swap is now approx ${NEW_TOTAL_MB}MB."
     else
         log "Failed to create swap file."
-        rm -f "$SWAPFILE"
+        rm -f "$NEW_SWAPFILE"
         exit 1
     fi
 fi
-chmod 600 "$SWAPFILE"
-mkswap "$SWAPFILE"
-# Priority 10 like the installer swapfile: below zram (100), so
-# compressed RAM stays the first overflow tier.
-swapon -p 10 "$SWAPFILE" || swapon "$SWAPFILE" || true
-
-# Single permanent fstab entry.
-if ! grep -q "^${SWAPFILE} none swap" /etc/fstab ; then
-    echo "$SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
-fi
-log "Swap grown. Total swap is now approx ${NEW_TOTAL_MB}MB."
 EOF
 chmod +x "$OOM_SCRIPT"
 
