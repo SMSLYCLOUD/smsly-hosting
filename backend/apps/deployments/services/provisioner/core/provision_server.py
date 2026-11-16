@@ -388,6 +388,58 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     server.node_domain = ""
                     server.save(update_fields=["node_number", "node_domain", "updated_at"])
 
+            # Pre-provision the WG peer BEFORE the installer runs: the node
+            # compose file hard-requires NODE_MESH_BIND_IP (coredns ports)
+            # and the value must be this node's own mesh address. The token
+            # flow does this at mint time; without it every fresh SSH node
+            # install dies at stack deploy (compose: required variable
+            # NODE_MESH_BIND_IP is missing).
+            try:
+                _wg_addr_now = str(getattr(server, "wg_address", "") or "").strip()
+                _wg_peer_live = False
+                if _wg_addr_now:
+                    try:
+                        from apps.deployments.models.mesh import WireGuardPeer as _WGP
+                        _wg_peer_live = _WGP.objects.filter(
+                            server=server, wg_address=_wg_addr_now,
+                            is_local=False, is_active=True,
+                        ).exists()
+                        if not _wg_peer_live:
+                            # Stale address from a rolled-back attempt (peer
+                            # row deleted, field kept) — must not be trusted
+                            # or the node binds a dead mesh IP.
+                            server.wg_address = None
+                            server.save(update_fields=["wg_address", "updated_at"])
+                    except Exception:
+                        _wg_peer_live = False
+                if not _wg_peer_live:
+                    from apps.deployments.services.wireguard_service import WireGuardService as _WGSvc
+                    _mesh_result = _WGSvc.ensure_server_in_default_mesh(
+                        server,
+                        deploy_async=True,
+                    )
+                    _wg_peer_id = (_mesh_result or {}).get("peer")
+                    if _wg_peer_id:
+                        resources.track_wg_peer(_wg_peer_id)
+                    if (_mesh_result or {}).get("wg_address"):
+                        _append_log(
+                            server,
+                            f"VPN mesh pre-provisioned: {server.wg_address}",
+                        )
+            except Exception as _wg_exc:
+                logger.warning(
+                    "Node WG pre-provision failed for %s: %s", server.name, _wg_exc,
+                )
+                _append_log(
+                    server,
+                    f"⚠️ Mesh pre-provision failed ({_wg_exc}) — continuing "
+                    "without mesh bind; coredns may fail to start.",
+                )
+            _wg_addr = str(getattr(server, "wg_address", "") or "").strip()
+            if _wg_addr:
+                install_env["WG_ADDRESS"] = _wg_addr
+                install_env["NODE_MESH_BIND_IP"] = _wg_addr
+
         stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'", timeout=30)
         remote_mode = stdout.read().decode().strip()
         if "RESUME" in remote_mode:
