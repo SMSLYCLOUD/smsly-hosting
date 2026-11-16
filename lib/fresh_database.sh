@@ -231,9 +231,18 @@ fi
     # a SELECT — holds a shared lock that blocks the ACCESS EXCLUSIVE
     # lock an ALTER TABLE needs.  Celery, backend health checks, and
     # PgCat connection pools all compete with the migration.
-    MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")"
-    echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} || echo -e "${YELLOW}    ⚠ Stop failed for some services${NC}"
+    MIGRATION_STOPPED_SVCS=""
+    _avail_svcs="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+    for _msvc in backend celery celery-deploy celery-fast celery-beat celery-worker pgcat pgcat-tenants; do
+        if printf '%s\n' "$_avail_svcs" | grep -qx "$_msvc"; then
+            MIGRATION_STOPPED_SVCS="${MIGRATION_STOPPED_SVCS}${MIGRATION_STOPPED_SVCS:+ }${_msvc}"
+        fi
+    done
+    unset _avail_svcs _msvc
+    if [ -n "$MIGRATION_STOPPED_SVCS" ]; then
+        echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
+        docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} || echo -e "${YELLOW}    ⚠ Stop failed for some services${NC}"
+    fi
     sleep 3
 
     # Kill every backend on the database so the migration owns it exclusively.

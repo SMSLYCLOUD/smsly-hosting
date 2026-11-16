@@ -26823,9 +26823,18 @@ fi
     # a SELECT — holds a shared lock that blocks the ACCESS EXCLUSIVE
     # lock an ALTER TABLE needs.  Celery, backend health checks, and
     # PgCat connection pools all compete with the migration.
-    MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")"
-    echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} || echo -e "${YELLOW}    ⚠ Stop failed for some services${NC}"
+    MIGRATION_STOPPED_SVCS=""
+    _avail_svcs="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+    for _msvc in backend celery celery-deploy celery-fast celery-beat celery-worker pgcat pgcat-tenants; do
+        if printf '%s\n' "$_avail_svcs" | grep -qx "$_msvc"; then
+            MIGRATION_STOPPED_SVCS="${MIGRATION_STOPPED_SVCS}${MIGRATION_STOPPED_SVCS:+ }${_msvc}"
+        fi
+    done
+    unset _avail_svcs _msvc
+    if [ -n "$MIGRATION_STOPPED_SVCS" ]; then
+        echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
+        docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} || echo -e "${YELLOW}    ⚠ Stop failed for some services${NC}"
+    fi
     sleep 3
 
     # Kill every backend on the database so the migration owns it exclusively.
@@ -30836,6 +30845,11 @@ if command -v ufw ; then
         ufw allow 80/tcp  || true
         ufw allow 443/tcp  || true
     fi
+    ufw allow "${WG_PRIMARY_PORT:-51820}/udp"  || true
+    ufw allow "${WG_FALLBACK_PORT:-33500}/udp"  || true
+    if ip link show wg0 >/dev/null 2>&1; then
+        ufw allow in on wg0 to any port 53  || true
+    fi
     # Allow FRP if active
     if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then
         ufw allow 7000/tcp  || true
@@ -31154,7 +31168,8 @@ else
         echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
         caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
         if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true" \
-           && curl -fsS --max-time 5 "http://127.0.0.1:2019/config/" ; then
+           && { curl -fsS --max-time 5 "http://127.0.0.1:2019/config/" >/dev/null 2>&1 \
+                || timeout -k 5 10 docker exec "$caddy_container" wget -q -O- http://127.0.0.1:2019/config/ >/dev/null 2>&1; }; then
             echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
             VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
         else
@@ -31191,7 +31206,7 @@ cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py  || {
 chmod +x /opt/smsly/autoscaler.py
 
 # Source .env for the token
-AUTOSCALER_API_TOKEN="$(env_get_value "$INSTALL_DIR/.env" "AUTOSCALER_API_TOKEN")"
+AUTOSCALER_API_TOKEN="$(env_get_value "$INSTALL_DIR/.env" "AUTOSCALER_API_TOKEN" || true)"
 
 cat <<SVCEOF > /etc/systemd/system/smsly-autoscaler.service
 [Unit]

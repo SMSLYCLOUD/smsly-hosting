@@ -203,7 +203,8 @@ else
         echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
         caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
         if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true" \
-           && curl -fsS --max-time 5 "http://127.0.0.1:2019/config/" ; then
+           && { curl -fsS --max-time 5 "http://127.0.0.1:2019/config/" >/dev/null 2>&1 \
+                || timeout -k 5 10 docker exec "$caddy_container" wget -q -O- http://127.0.0.1:2019/config/ >/dev/null 2>&1; }; then
             echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
             VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
         else
@@ -240,7 +241,7 @@ cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py  || {
 chmod +x /opt/smsly/autoscaler.py
 
 # Source .env for the token
-AUTOSCALER_API_TOKEN="$(env_get_value "$INSTALL_DIR/.env" "AUTOSCALER_API_TOKEN")"
+AUTOSCALER_API_TOKEN="$(env_get_value "$INSTALL_DIR/.env" "AUTOSCALER_API_TOKEN" || true)"
 
 cat <<SVCEOF > /etc/systemd/system/smsly-autoscaler.service
 [Unit]
