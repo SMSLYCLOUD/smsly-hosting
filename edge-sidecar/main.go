@@ -20,8 +20,8 @@
 //     host.docker.internal:host-gateway, which arrives on the bridge
 //     gateway IP — a 127.0.0.1 bind would refuse them. The port is
 //     unauthenticated only for /health ("ok"); /ask is gated by
-//     CADDY_ASK_SECRET when configured and /auth-verify needs a valid
-//     edge JWT. Do not publish this port in compose or open it in UFW.
+//     CADDY_ASK_SECRET (fail-closed when unset) and /auth-verify needs a
+//     valid edge JWT. Do not publish this port in compose or open it in UFW.
 package main
 
 import (
@@ -159,15 +159,23 @@ func askHandler(al *allowList, askSecret string) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if askSecret != "" {
-			got := r.URL.Query().Get("secret")
-			if got == "" {
-				got = r.Header.Get("X-Caddy-Secret")
-			}
-			if subtle.ConstantTimeCompare([]byte(got), []byte(askSecret)) != 1 {
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
+		// Fail closed: an unset secret would turn /ask into an
+		// unauthenticated domain-allowlist oracle. Caddy treats any
+		// non-2xx `ask` answer as "do not issue", so on-demand TLS
+		// issuance pauses until CADDY_ASK_SECRET is configured —
+		// matching the fail-closed rule of /auth-verify.
+		if askSecret == "" {
+			log.Println("ask refused: CADDY_ASK_SECRET not configured (fail-closed)")
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		got := r.URL.Query().Get("secret")
+		if got == "" {
+			got = r.Header.Get("X-Caddy-Secret")
+		}
+		if subtle.ConstantTimeCompare([]byte(got), []byte(askSecret)) != 1 {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
 		}
 		domain := r.URL.Query().Get("domain")
 		if domain == "" {
@@ -292,6 +300,11 @@ func main() {
 	flag.IntVar(&cfg.pollSecs, "poll-secs", 5, "allow-list/secret poll interval seconds")
 	flag.Parse()
 	cfg.askSecret = strings.TrimSpace(os.Getenv("CADDY_ASK_SECRET"))
+	if cfg.askSecret == "" {
+		log.Println("WARNING: CADDY_ASK_SECRET is not configured — /ask refuses all " +
+			"on-demand TLS requests (fail-closed). Caddy cert issuance for new " +
+			"domains will pause until the secret is set.")
+	}
 
 	al := &allowList{domains: map[string]bool{}, path: cfg.allowFile}
 	al.reloadIfChanged()

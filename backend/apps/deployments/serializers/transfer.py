@@ -3,6 +3,14 @@ from rest_framework import serializers
 from apps.deployments.models.transfer import ServerTransfer
 
 
+def _request_user_is_staff(serializer) -> bool:
+    user = getattr(serializer.context.get("request"), "user", None)
+    return bool(
+        user is not None
+        and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    )
+
+
 class ServerTransferSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServerTransfer
@@ -106,6 +114,32 @@ class ServerTransferCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     {'target_server_ip': "target_server_ip or target_server_id is required (local node IP not set)."}
                 )
+
+        # SECURITY (SSRF hardening): the backend probes
+        # http://{ip}:8000/health on both endpoints during a transfer.
+        # The IPAddressField format check alone let a regular user name
+        # a private/metadata address (169.254.169.254 etc.) and turn the
+        # probe into an internal-network oracle. Non-admin users may
+        # only name public addresses; staff transfer between mesh/VPC
+        # nodes by design.
+        if not _request_user_is_staff(self):
+            from apps.core.validators import validate_ssrf
+
+            for _ip_field in ("source_server_ip", "target_server_ip"):
+                _ip_value = attrs.get(_ip_field)
+                if not _ip_value:
+                    continue
+                try:
+                    validate_ssrf(str(_ip_value))
+                except Exception as exc:
+                    detail = (
+                        getattr(exc, "message", None)
+                        or "; ".join(str(m) for m in getattr(exc, "messages", []))
+                        or str(exc)
+                    )
+                    raise serializers.ValidationError(
+                        {_ip_field: f"Address rejected (SSRF protection): {detail}"}
+                    )
 
         # Determine if target is the local node (no SSH needed)
         target_is_local = not target_server_id and not target_server_ip

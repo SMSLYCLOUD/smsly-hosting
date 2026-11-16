@@ -156,6 +156,16 @@ def _normalize_path(path: str) -> str:
     return path
 
 
+def _probe_name_is_reserved(name: str) -> bool:
+    """True when a tenant-chosen service name collides with a platform
+    Docker network alias (backend, traefik, postgres, ...). Such a name
+    resolves to a CONTROL-PLANE container from the backend's network, so
+    tenant-configured probes must never target it."""
+    from apps.core.validators import BLOCKED_LITERAL_HOSTS
+
+    return (name or "").strip().lower() in BLOCKED_LITERAL_HOSTS
+
+
 def _check_readiness(service) -> tuple[bool, str]:
     """Strict readiness probe after liveness passes (seam for tests).
 
@@ -177,6 +187,11 @@ def _check_readiness(service) -> tuple[bool, str]:
     name = str(getattr(service, 'name', '') or '').strip()
     if not name:
         return False, 'readiness misconfigured: no service name'
+    if _probe_name_is_reserved(name):
+        return False, (
+            f"readiness misconfigured: service name '{name}' collides with "
+            "a reserved platform name — probe refused"
+        )
     url = f"http://{name}:{port}{path}"
     try:
         response = requests.get(url, timeout=10, allow_redirects=False)
@@ -377,7 +392,7 @@ def _build_targets(service, active_deployment):
         direct_headers = {"Host": public_domain} if public_domain else {}
 
         service_name = (service.name or "").strip()
-        if service_name:
+        if service_name and not _probe_name_is_reserved(service_name):
             for port in ports:
                 for path in paths:
                     _probe_url = f"http://{service_name}:{port}{path}"

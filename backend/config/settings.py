@@ -225,6 +225,10 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 CSRF_COOKIE_HTTPONLY = True
+# SECURITY: browsers default to `strict-origin-when-cross-origin` today, but
+# pin it explicitly so a Django response is safe even when the edge (which
+# carries the richer header set) is bypassed.
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 
 # Trusted proxy IPs for X-Real-IP header validation.
 # Only requests arriving from these IPs are allowed to set X-Real-IP.
@@ -837,6 +841,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.permissions.middleware.PermissionAuditMiddleware',
     'apps.core.middleware.security.SecurityMiddleware',  # Zero Trust HMAC V2
+    'apps.core.middleware.security.ApiContentSecurityPolicyMiddleware',  # CSP for API responses
     'apps.core.middleware.ratelimit.RateLimitMiddleware', # App-layer Rate Limiting
     'apps.core.middleware.device_trust.DeviceTrustMiddleware', # [Beta] Device trust enforcement
     'apps.core.shutdown.GracefulShutdownMiddleware', # Graceful shutdown on SIGTERM
@@ -1165,8 +1170,13 @@ REST_FRAMEWORK = {
         # expired. 5000/minute is high enough that the burst
         # guard is effectively a no-op for normal use but still
         # bounds a true abuse vector.
-        'deployments': '10000/minute',
-        'deployment_burst': '1000/minute',
+        # SECURITY (2026-10): 10000/minute was an effective no-op (the
+        # original 30-200/min values broke interactive use — see Batch I).
+        # 2000/minute (~33/sec sustained) keeps the dashboard's polling
+        # bursts safe while actually bounding abuse; deployment_burst
+        # similarly 1000 -> 500/min.
+        'deployments': '2000/minute',
+        'deployment_burst': '500/minute',
         'transfers': '30/minute',
         'server_run_command': '10/minute',
         'server_run_command_burst': '2/minute',
@@ -1247,6 +1257,28 @@ REST_FRAMEWORK = {
 API_RATE_LIMIT = config('API_RATE_LIMIT', default=10000, cast=int)
 API_RATE_LIMIT_FAIL_CLOSED = config(
     'API_RATE_LIMIT_FAIL_CLOSED',
+    default=False,
+    cast=bool,
+)
+
+# SECURITY: when enabled, staff/superuser accounts are REQUIRED to have a
+# confirmed TOTP device. Admins without one get login withheld until they
+# complete enrollment through the pending-session setup flow
+# (POST /api/v1/auth/2fa/pending-setup/ → verify via /api/v1/auth/2fa/login/).
+# Enable AFTER enrolling your admin account, or you will lock yourself out
+# of the control plane until the flag is disabled on the server.
+SMSLY_ENFORCE_ADMIN_2FA = config(
+    'SMSLY_ENFORCE_ADMIN_2FA',
+    default=False,
+    cast=bool,
+)
+
+# SECURITY: the DRF token is stamped as an HttpOnly cookie on login.
+# Returning it in the JSON body as well lets XSS persist it. Default off —
+# clients authenticate via the HttpOnly cookie; set SMSLY_TOKEN_IN_BODY=true
+# for legacy API clients that read the login response body.
+SMSLY_TOKEN_IN_BODY = config(
+    'SMSLY_TOKEN_IN_BODY',
     default=False,
     cast=bool,
 )

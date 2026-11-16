@@ -296,3 +296,26 @@ class SecurityMiddleware:
             return False
 
         return True
+
+
+class ApiContentSecurityPolicyMiddleware:
+    """Defense-in-depth CSP for API responses.
+
+    The edge (Caddy/Traefik) carries the real browser CSP; this exists for
+    the case where Django is reached directly (edge bypass, internal
+    misroute). JSON API responses get a deny-everything policy — browsers
+    ignore CSP on non-HTML payloads, and no API endpoint serves markup.
+    The Django admin is deliberately NOT covered: its inline scripts
+    would break under a static policy.
+    """
+
+    _POLICY = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        if request.path.startswith('/api/'):
+            response.headers.setdefault('Content-Security-Policy', self._POLICY)
+        return response
