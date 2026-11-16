@@ -800,7 +800,7 @@ _docker_login_one() {
         _curl_args="--cacert $_cacert"
     fi
     local _code=""
-    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null)"
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null || true)"
     if [ -n "$_code" ] && [ "$_code" != "401" ]; then
         if [ "$_code" = "200" ]; then
             echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"
@@ -2579,7 +2579,7 @@ _docker_login_one() {
         _curl_args="--cacert $_cacert"
     fi
     local _code=""
-    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null)"
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null || true)"
     if [ -n "$_code" ] && [ "$_code" != "401" ]; then
         if [ "$_code" = "200" ]; then
             echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"
@@ -8001,30 +8001,23 @@ print(",".join(out))
     fi
     # Mesh bind fallback: the compose default (10.100.0.1) only exists when
     # the WireGuard mesh is up. If wg0 failed (no kernel module, VPS
-    # without wireguard), binding it kills the ENTIRE compose deployment
-    # with "cannot assign requested address". Only the untouched default
-    # is ever rewritten — an explicitly set mesh IP is the operator's
-    # intent and is left alone (fresh_deploy validates it fail-closed).
-    # 127.0.0.2 is loopback-range (always bindable) and distinct from the
-    # 127.0.0.1 first bind, so the triple-bind stays conflict-free while
-    # single-host pulls keep working via 127.0.0.1/registry:5000.
-    local _rt_mesh=""
-    _rt_mesh="$(env_get_value "$env_file" "REGISTRY_MESH_BIND_IP")"
-    if { [ -z "$_rt_mesh" ] || [ "$_rt_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
-        env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
-        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
-    fi
-    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
-    # The compose default (10.100.0.1) only exists when the WireGuard mesh
-    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
-    # single-host installs (nothing else listens on 127.0.0.2:53 —
-    # systemd-resolved uses 127.0.0.53 only).
-    local _cd_mesh=""
-    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
-    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
-        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
-        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
-    fi
+    # without wireguard, or worker node with a different mesh IP), binding
+    # 10.100.0.1 kills compose with "cannot assign requested address".
+    # Only the untouched default is ever rewritten — 127.0.0.2 keeps binds
+    # loopback-local and conflict-free while nothing else listens there.
+    local _mesh_entry="" _mesh_var="" _mesh_msg="" _mesh_cur=""
+    for _mesh_entry in \
+        "REGISTRY_MESH_BIND_IP:registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)" \
+        "COREDNS_MESH_BIND_IP:coredns mesh bind parked on 127.0.0.2" \
+        "LOKI_MESH_BIND_IP:loki mesh bind parked on 127.0.0.2"; do
+        _mesh_var="${_mesh_entry%%:*}"
+        _mesh_msg="${_mesh_entry#*:}"
+        _mesh_cur="$(env_get_value "$env_file" "$_mesh_var")"
+        if { [ -z "$_mesh_cur" ] || [ "$_mesh_cur" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+            env_set_value "$env_file" "$_mesh_var" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — ${_mesh_msg}${NC}"
+        fi
+    done
     # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
     # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
     # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts
@@ -9038,30 +9031,23 @@ print(",".join(out))
     fi
     # Mesh bind fallback: the compose default (10.100.0.1) only exists when
     # the WireGuard mesh is up. If wg0 failed (no kernel module, VPS
-    # without wireguard), binding it kills the ENTIRE compose deployment
-    # with "cannot assign requested address". Only the untouched default
-    # is ever rewritten — an explicitly set mesh IP is the operator's
-    # intent and is left alone (fresh_deploy validates it fail-closed).
-    # 127.0.0.2 is loopback-range (always bindable) and distinct from the
-    # 127.0.0.1 first bind, so the triple-bind stays conflict-free while
-    # single-host pulls keep working via 127.0.0.1/registry:5000.
-    local _rt_mesh=""
-    _rt_mesh="$(env_get_value "$env_file" "REGISTRY_MESH_BIND_IP")"
-    if { [ -z "$_rt_mesh" ] || [ "$_rt_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
-        env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
-        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
-    fi
-    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
-    # The compose default (10.100.0.1) only exists when the WireGuard mesh
-    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
-    # single-host installs (nothing else listens on 127.0.0.2:53 —
-    # systemd-resolved uses 127.0.0.53 only).
-    local _cd_mesh=""
-    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
-    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
-        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
-        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
-    fi
+    # without wireguard, or worker node with a different mesh IP), binding
+    # 10.100.0.1 kills compose with "cannot assign requested address".
+    # Only the untouched default is ever rewritten — 127.0.0.2 keeps binds
+    # loopback-local and conflict-free while nothing else listens there.
+    local _mesh_entry="" _mesh_var="" _mesh_msg="" _mesh_cur=""
+    for _mesh_entry in \
+        "REGISTRY_MESH_BIND_IP:registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)" \
+        "COREDNS_MESH_BIND_IP:coredns mesh bind parked on 127.0.0.2" \
+        "LOKI_MESH_BIND_IP:loki mesh bind parked on 127.0.0.2"; do
+        _mesh_var="${_mesh_entry%%:*}"
+        _mesh_msg="${_mesh_entry#*:}"
+        _mesh_cur="$(env_get_value "$env_file" "$_mesh_var")"
+        if { [ -z "$_mesh_cur" ] || [ "$_mesh_cur" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+            env_set_value "$env_file" "$_mesh_var" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — ${_mesh_msg}${NC}"
+        fi
+    done
     # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
     # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
     # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts
@@ -15036,7 +15022,7 @@ _docker_login_one() {
         _curl_args="--cacert $_cacert"
     fi
     local _code=""
-    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null)"
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null || true)"
     if [ -n "$_code" ] && [ "$_code" != "401" ]; then
         if [ "$_code" = "200" ]; then
             echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"
@@ -17319,30 +17305,23 @@ print(",".join(out))
     fi
     # Mesh bind fallback: the compose default (10.100.0.1) only exists when
     # the WireGuard mesh is up. If wg0 failed (no kernel module, VPS
-    # without wireguard), binding it kills the ENTIRE compose deployment
-    # with "cannot assign requested address". Only the untouched default
-    # is ever rewritten — an explicitly set mesh IP is the operator's
-    # intent and is left alone (fresh_deploy validates it fail-closed).
-    # 127.0.0.2 is loopback-range (always bindable) and distinct from the
-    # 127.0.0.1 first bind, so the triple-bind stays conflict-free while
-    # single-host pulls keep working via 127.0.0.1/registry:5000.
-    local _rt_mesh=""
-    _rt_mesh="$(env_get_value "$env_file" "REGISTRY_MESH_BIND_IP")"
-    if { [ -z "$_rt_mesh" ] || [ "$_rt_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
-        env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
-        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
-    fi
-    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
-    # The compose default (10.100.0.1) only exists when the WireGuard mesh
-    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
-    # single-host installs (nothing else listens on 127.0.0.2:53 —
-    # systemd-resolved uses 127.0.0.53 only).
-    local _cd_mesh=""
-    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
-    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
-        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
-        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
-    fi
+    # without wireguard, or worker node with a different mesh IP), binding
+    # 10.100.0.1 kills compose with "cannot assign requested address".
+    # Only the untouched default is ever rewritten — 127.0.0.2 keeps binds
+    # loopback-local and conflict-free while nothing else listens there.
+    local _mesh_entry="" _mesh_var="" _mesh_msg="" _mesh_cur=""
+    for _mesh_entry in \
+        "REGISTRY_MESH_BIND_IP:registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)" \
+        "COREDNS_MESH_BIND_IP:coredns mesh bind parked on 127.0.0.2" \
+        "LOKI_MESH_BIND_IP:loki mesh bind parked on 127.0.0.2"; do
+        _mesh_var="${_mesh_entry%%:*}"
+        _mesh_msg="${_mesh_entry#*:}"
+        _mesh_cur="$(env_get_value "$env_file" "$_mesh_var")"
+        if { [ -z "$_mesh_cur" ] || [ "$_mesh_cur" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+            env_set_value "$env_file" "$_mesh_var" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — ${_mesh_msg}${NC}"
+        fi
+    done
     # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
     # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
     # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts
@@ -18178,7 +18157,7 @@ _docker_login_one() {
         _curl_args="--cacert $_cacert"
     fi
     local _code=""
-    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null)"
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null || true)"
     if [ -n "$_code" ] && [ "$_code" != "401" ]; then
         if [ "$_code" = "200" ]; then
             echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"
@@ -20033,7 +20012,7 @@ _docker_login_one() {
         _curl_args="--cacert $_cacert"
     fi
     local _code=""
-    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null)"
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null || true)"
     if [ -n "$_code" ] && [ "$_code" != "401" ]; then
         if [ "$_code" = "200" ]; then
             echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"
@@ -26042,6 +26021,7 @@ _reg_bind_entries=(
     "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}"
     "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}"
     "COREDNS_MESH_BIND_IP:${COREDNS_MESH_BIND_IP:-10.100.0.1}"
+    "LOKI_MESH_BIND_IP:${LOKI_MESH_BIND_IP:-10.100.0.1}"
 )
 if [ "${MODE_NODE:-false}" = "true" ] && [ -n "${NODE_MESH_BIND_IP:-}" ]; then
     _reg_bind_entries+=("NODE_MESH_BIND_IP:${NODE_MESH_BIND_IP}")
@@ -26161,6 +26141,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     set -e
     kill $HEARTBEAT_PID  || true
     wait $HEARTBEAT_PID  || true
+    HEARTBEAT_PID=""
     if [ "$DEPLOY_RC" -ne 0 ]; then
         echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
         echo -e "${YELLOW}  ↳ Re-run with --resume to skip completed steps: sudo bash install.sh --resume${NC}"
@@ -27328,7 +27309,7 @@ _docker_login_one() {
         _curl_args="--cacert $_cacert"
     fi
     local _code=""
-    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null)"
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null || true)"
     if [ -n "$_code" ] && [ "$_code" != "401" ]; then
         if [ "$_code" = "200" ]; then
             echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"
@@ -29611,30 +29592,23 @@ print(",".join(out))
     fi
     # Mesh bind fallback: the compose default (10.100.0.1) only exists when
     # the WireGuard mesh is up. If wg0 failed (no kernel module, VPS
-    # without wireguard), binding it kills the ENTIRE compose deployment
-    # with "cannot assign requested address". Only the untouched default
-    # is ever rewritten — an explicitly set mesh IP is the operator's
-    # intent and is left alone (fresh_deploy validates it fail-closed).
-    # 127.0.0.2 is loopback-range (always bindable) and distinct from the
-    # 127.0.0.1 first bind, so the triple-bind stays conflict-free while
-    # single-host pulls keep working via 127.0.0.1/registry:5000.
-    local _rt_mesh=""
-    _rt_mesh="$(env_get_value "$env_file" "REGISTRY_MESH_BIND_IP")"
-    if { [ -z "$_rt_mesh" ] || [ "$_rt_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
-        env_set_value "$env_file" "REGISTRY_MESH_BIND_IP" "127.0.0.2"
-        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)${NC}"
-    fi
-    # CoreDNS mesh bind: identical guard to the registry mesh bind above.
-    # The compose default (10.100.0.1) only exists when the WireGuard mesh
-    # is up; parking on 127.0.0.2 keeps the compose deployment alive on
-    # single-host installs (nothing else listens on 127.0.0.2:53 —
-    # systemd-resolved uses 127.0.0.53 only).
-    local _cd_mesh=""
-    _cd_mesh="$(env_get_value "$env_file" "COREDNS_MESH_BIND_IP")"
-    if { [ -z "$_cd_mesh" ] || [ "$_cd_mesh" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
-        env_set_value "$env_file" "COREDNS_MESH_BIND_IP" "127.0.0.2"
-        echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — coredns mesh bind parked on 127.0.0.2${NC}"
-    fi
+    # without wireguard, or worker node with a different mesh IP), binding
+    # 10.100.0.1 kills compose with "cannot assign requested address".
+    # Only the untouched default is ever rewritten — 127.0.0.2 keeps binds
+    # loopback-local and conflict-free while nothing else listens there.
+    local _mesh_entry="" _mesh_var="" _mesh_msg="" _mesh_cur=""
+    for _mesh_entry in \
+        "REGISTRY_MESH_BIND_IP:registry mesh bind parked on 127.0.0.2 (single-host OK, no mesh pulls)" \
+        "COREDNS_MESH_BIND_IP:coredns mesh bind parked on 127.0.0.2" \
+        "LOKI_MESH_BIND_IP:loki mesh bind parked on 127.0.0.2"; do
+        _mesh_var="${_mesh_entry%%:*}"
+        _mesh_msg="${_mesh_entry#*:}"
+        _mesh_cur="$(env_get_value "$env_file" "$_mesh_var")"
+        if { [ -z "$_mesh_cur" ] || [ "$_mesh_cur" = "10.100.0.1" ]; } && ! _registry_bind_ip_is_local "10.100.0.1"; then
+            env_set_value "$env_file" "$_mesh_var" "127.0.0.2"
+            echo -e "${YELLOW}  ⚠ WireGuard mesh (10.100.0.1) not present — ${_mesh_msg}${NC}"
+        fi
+    done
     # Node CoreDNS/backend mesh bind: docker-compose.node.yml binds
     # NODE_MESH_BIND_IP (not COREDNS_MESH_BIND_IP). If wg0 failed to bind the
     # node's mesh address, leaving NODE_MESH_BIND_IP on an unassigned IP aborts

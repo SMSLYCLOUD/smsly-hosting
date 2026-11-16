@@ -157,7 +157,7 @@ _docker_login_one() {
         _curl_args="--cacert $_cacert"
     fi
     local _code=""
-    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null)"
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null || true)"
     if [ -n "$_code" ] && [ "$_code" != "401" ]; then
         if [ "$_code" = "200" ]; then
             echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"

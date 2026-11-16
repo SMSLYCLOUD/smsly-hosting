@@ -205,6 +205,7 @@ _reg_bind_entries=(
     "REGISTRY_MESH_BIND_IP:${REGISTRY_MESH_BIND_IP:-10.100.0.1}"
     "REGISTRY_PUBLIC_BIND_IP:${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}"
     "COREDNS_MESH_BIND_IP:${COREDNS_MESH_BIND_IP:-10.100.0.1}"
+    "LOKI_MESH_BIND_IP:${LOKI_MESH_BIND_IP:-10.100.0.1}"
 )
 if [ "${MODE_NODE:-false}" = "true" ] && [ -n "${NODE_MESH_BIND_IP:-}" ]; then
     _reg_bind_entries+=("NODE_MESH_BIND_IP:${NODE_MESH_BIND_IP}")
@@ -324,6 +325,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     set -e
     kill $HEARTBEAT_PID  || true
     wait $HEARTBEAT_PID  || true
+    HEARTBEAT_PID=""
     if [ "$DEPLOY_RC" -ne 0 ]; then
         echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
         echo -e "${YELLOW}  ↳ Re-run with --resume to skip completed steps: sudo bash install.sh --resume${NC}"
