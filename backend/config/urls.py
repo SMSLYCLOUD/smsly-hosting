@@ -173,7 +173,11 @@ def bootstrap_view(request, token):
     if install_mode == "node" and wg_address:
         # Node CoreDNS replica binds the mesh IP only (never public):
         # compose fails fast with a clear message when this is unset.
+        # NODE_MESH_IP must match: the installer configures wg0 with it,
+        # and a placeholder/default (.2) here while coredns binds the real
+        # address fails with "cannot assign requested address".
         env_lines.append(_env_line("NODE_MESH_BIND_IP", wg_address))
+        env_lines.append(_env_line("NODE_MESH_IP", wg_address))
     if wg_private_key:
         env_lines.append(_env_line("WG_PRIVATE_KEY", wg_private_key))
     if master_wg_pubkey:

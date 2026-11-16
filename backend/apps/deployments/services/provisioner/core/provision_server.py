@@ -436,9 +436,37 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     "without mesh bind; coredns may fail to start.",
                 )
             _wg_addr = str(getattr(server, "wg_address", "") or "").strip()
+            _wg_privkey = ""
             if _wg_addr:
+                # The node's wg0 address (NODE_MESH_IP) AND the provisioned
+                # private key must travel together: the installer converges
+                # the node's keypair on WG_PRIVATE_KEY (a fresh local key
+                # would fail the handshake — master only trusts the
+                # provisioned one), and binds the interface to NODE_MESH_IP.
+                # Without NODE_MESH_IP the node keeps the 10.100.0.2
+                # placeholder while coredns binds the real address →
+                # "cannot assign requested address" and the whole stack
+                # fails behind it (every service gates on healthy deps).
+                try:
+                    from apps.deployments.models.mesh import WireGuardPeer as _WGP2
+                    _wg_peer_row = _WGP2.objects.filter(
+                        server=server, wg_address=_wg_addr,
+                        is_local=False, is_active=True,
+                    ).only("private_key").first()
+                    _wg_privkey = str(getattr(_wg_peer_row, "private_key", "") or "").strip()
+                except Exception:
+                    _wg_privkey = ""
                 install_env["WG_ADDRESS"] = _wg_addr
                 install_env["NODE_MESH_BIND_IP"] = _wg_addr
+                install_env["NODE_MESH_IP"] = _wg_addr
+                if _wg_privkey:
+                    install_env["WG_PRIVATE_KEY"] = _wg_privkey
+                else:
+                    logger.warning(
+                        "Node WG pre-provision for %s has no private key; "
+                        "node will generate its own and mesh handshake may fail.",
+                        server.name,
+                    )
 
         stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'", timeout=30)
         remote_mode = stdout.read().decode().strip()
