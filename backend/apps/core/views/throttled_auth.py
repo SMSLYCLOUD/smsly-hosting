@@ -21,8 +21,8 @@ The login view also stamps the auth token as an HttpOnly+SameSite=Strict
 cookie on the response so the frontend can drop the legacy
 ``Authorization: Token <key>`` header and rely on
 ``withCredentials: true`` to have the browser attach the cookie
-automatically. The token is still returned in the JSON body, so
-existing API clients that read the body keep working unchanged.
+automatically. The body token is omitted unless
+``SMSLY_TOKEN_IN_BODY=true`` (legacy API clients that read the body).
 
 The wire-up in ``config/urls.py``:
 
@@ -34,6 +34,7 @@ The wire-up in ``config/urls.py``:
 replaces the corresponding ``dj_rest_auth`` URLs.
 """
 from apps.core.auth_2fa import (
+    admin_2fa_enrollment_required,
     clear_pending_2fa,
     stash_pending_2fa,
     user_requires_2fa,
@@ -44,6 +45,7 @@ from apps.core.rate_limiting import (
     PasswordResetRateThrottle,
     RegistrationRateThrottle,
 )
+from django.conf import settings
 from dj_rest_auth.registration.views import (
     RegisterView as _BaseRegistrationView,
 )
@@ -68,8 +70,8 @@ class ThrottledLoginView(_BaseLoginView):
 
     Also sets the auth token as an HttpOnly+SameSite=Strict cookie
     on a successful response. The cookie carries the same token that
-    is returned in the JSON body (``{"key": "..."}``), so existing
-    API clients that read the body keep working unchanged.
+    used to be returned in the JSON body — the body copy is omitted
+    unless ``SMSLY_TOKEN_IN_BODY=true`` (legacy clients).
 
     2FA ENFORCEMENT: when the authenticated user has a confirmed TOTP
     device, this view issues NOTHING — no DRF token, no session login,
@@ -86,23 +88,55 @@ class ThrottledLoginView(_BaseLoginView):
             self.user = self.serializer.validated_data['user']
             self.token = None
             stash_pending_2fa(self.request, user)
+            # Enrollment flow (SMSLY_ENFORCE_ADMIN_2FA): an enforced admin
+            # with no confirmed device is routed into pending-setup +
+            # verify instead of a TOTP challenge they cannot pass.
+            self._2fa_enrollment_required = admin_2fa_enrollment_required(user)
             return
+        # SECURITY (token rotation): dj_rest_auth reuses the existing DRF
+        # token on every login (Token.objects.get_or_create). Delete first
+        # so each login mints a FRESH token — a previously stolen token
+        # dies at the next successful login. Trade-off: logging in on a
+        # second device revokes the first device's token.
+        from rest_framework.authtoken.models import Token
+
+        Token.objects.filter(user=user).delete()
         super().login()
 
     def get_response(self):
         if getattr(self, 'user', None) is not None and getattr(self, 'token', None) is None:
             # 2FA-gated branch from login() above: authenticated
-            # credentials, but the token is withheld until TOTP.
+            # credentials, but the token is withheld until TOTP —
+            # or, for enforced admins, until enrollment completes.
+            enrollment_required = bool(getattr(self, '_2fa_enrollment_required', False))
             return Response(
                 {
                     'requires_2fa': True,
-                    'detail': 'Two-factor authentication required. '
-                              'Submit your authenticator code to '
-                              '/api/v1/auth/2fa/login/.',
+                    'enrollment_required': enrollment_required,
+                    'detail': (
+                        'Two-factor enrollment required. Fetch your '
+                        'authenticator secret from '
+                        'POST /api/v1/auth/2fa/pending-setup/, add it to '
+                        'your authenticator app, then submit the code to '
+                        '/api/v1/auth/2fa/login/.'
+                        if enrollment_required
+                        else 'Two-factor authentication required. '
+                             'Submit your authenticator code to '
+                             '/api/v1/auth/2fa/login/.'
+                    ),
                 },
                 status=200,
             )
         response = super().get_response()
+        # SECURITY: the token rides the HttpOnly cookie. Keeping it in the
+        # JSON body lets XSS persist it — only returned when the operator
+        # explicitly opts in via SMSLY_TOKEN_IN_BODY=true.
+        if (
+            response.status_code == 200
+            and not getattr(settings, 'SMSLY_TOKEN_IN_BODY', False)
+            and isinstance(getattr(response, 'data', None), dict)
+        ):
+            response.data.pop('key', None)
         # ``self.token`` is populated by ``dj_rest_auth``'s ``login()``
         # and is the canonical DRF Token instance. We only stamp the
         # cookie on a successful login (status 200) — failure responses

@@ -27,9 +27,22 @@ MAX_2FA_ATTEMPTS_PER_SESSION = 10
 
 
 def user_requires_2fa(user) -> bool:
-    """True when the user has at least one CONFIRMED TOTP device."""
+    """True when this user must pass the TOTP step before a token is minted.
+
+    Two sources:
+      1. The user has at least one CONFIRMED TOTP device.
+      2. SMSLY_ENFORCE_ADMIN_2FA is enabled and the user is staff or a
+         superuser — enforced even when no device exists yet; the pending
+         handshake routes them into enrollment (pending-setup + verify).
+    """
     if user is None or not getattr(user, "is_authenticated", False):
         return False
+    from django.conf import settings
+
+    if getattr(settings, "SMSLY_ENFORCE_ADMIN_2FA", False) and (
+        getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)
+    ):
+        return True
     try:
         from django_otp import user_has_device
 
@@ -40,6 +53,28 @@ def user_requires_2fa(user) -> bool:
         # so login keeps working; the missing-device error will show
         # up in monitoring instead of silently disabling 2FA gating.
         logger.error("2FA device check failed for %s: %s", user, exc)
+        return False
+
+
+def admin_2fa_enrollment_required(user) -> bool:
+    """True when SMSLY_ENFORCE_ADMIN_2FA is on and this staff/superuser
+    has no CONFIRMED TOTP device yet — login is withheld until they
+    complete enrollment via the pending-session setup flow."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    from django.conf import settings
+
+    if not getattr(settings, "SMSLY_ENFORCE_ADMIN_2FA", False):
+        return False
+    if not (getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)):
+        return False
+    try:
+        from django_otp import user_has_device
+
+        return not user_has_device(user, confirmed=True)
+    except Exception:
+        # Mirror user_requires_2fa's bias: an infra error must not
+        # silently convert "must enroll" into "locked out".
         return False
 
 

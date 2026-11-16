@@ -117,6 +117,63 @@ def two_factor_disable(request):
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 @throttle_classes([TwoFactorLoginRateThrottle])
+def two_factor_pending_setup(request):
+    """Enrollment for enforced admins (SMSLY_ENFORCE_ADMIN_2FA).
+
+    Bridges the gap between password login (step 1, token withheld) and
+    2FA verify: the admin has no confirmed TOTP device yet, so the
+    normal challenge cannot pass. Reachable ONLY with a live pending-2FA
+    session (password already verified at step 1), only while
+    enforcement is enabled, and only for staff/superusers with no
+    confirmed device. Returns the provisioning URI/secret for manual
+    authenticator entry; the next code goes to /2fa/login/, which
+    confirms the device and mints the token.
+    """
+    from django.contrib.auth import get_user_model
+
+    from apps.core.auth_2fa import consume_pending_2fa
+
+    if not getattr(settings, 'SMSLY_ENFORCE_ADMIN_2FA', False):
+        return Response(
+            {'error': '2FA enforcement is not enabled.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    user_id, _attempts = consume_pending_2fa(request)
+    if not user_id:
+        return Response(
+            {'error': 'No pending login. Sign in with your password first.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    User = get_user_model()
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': 'Session expired. Please log in again.'},
+                        status=status.HTTP_401_UNAUTHORIZED)
+    if not user.is_active or not (user.is_superuser or user.is_staff):
+        return Response({'error': 'Not eligible for pending enrollment.'},
+                        status=status.HTTP_403_FORBIDDEN)
+    if user_has_device(user, confirmed=True):
+        return Response(
+            {'error': 'Already enrolled. Submit your code to /api/v1/auth/2fa/login/.'},
+            status=status.HTTP_409_CONFLICT,
+        )
+    for device in devices_for_user(user, confirmed=False):
+        device.delete()
+    device = TOTPDevice.objects.create(
+        user=user, name='default', confirmed=False, tolerance=1, ttl=30,
+    )
+    issuer = getattr(settings, 'TOTP_ISSUER', 'Grid PaaS') or 'Grid PaaS'
+    return Response({
+        'provisioning_uri': device.config_url(issuer=issuer),
+        'device_id': str(device.id),
+        'secret': device.key,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([TwoFactorLoginRateThrottle])
 def two_factor_login(request):
     """
     Verify a 2FA token during login (step 2 of the 2FA handshake).
@@ -172,6 +229,26 @@ def two_factor_login(request):
         return Response({'error': 'Account is disabled.'},
                         status=status.HTTP_401_UNAUTHORIZED)
 
+    def _mint_token():
+        # SECURITY (token rotation): always mint a FRESH token — never
+        # reuse a DRF token that predates this 2FA verification.
+        from rest_framework.authtoken.models import Token
+
+        Token.objects.filter(user=user).delete()
+        drf_token = Token.objects.create(user=user)
+        response = Response({
+            'success': True,
+            'message': '2FA verified',
+            'key': drf_token.key,
+        })
+        if not getattr(settings, 'SMSLY_TOKEN_IN_BODY', False):
+            response.data.pop('key', None)
+        try:
+            set_auth_cookie(response, drf_token.key)
+        except Exception:
+            pass
+        return response
+
     # Verify token against any confirmed TOTP device
     for device in devices_for_user(user, confirmed=True):
         if device.verify_token(token):
@@ -180,18 +257,34 @@ def two_factor_login(request):
             # AttributeError -> 500 on the success path.
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
             clear_pending_2fa(request)
-            from rest_framework.authtoken.models import Token
-            drf_token, _ = Token.objects.get_or_create(user=user)
-            response = Response({
-                'success': True,
-                'message': '2FA verified',
-                'key': drf_token.key,
-            })
-            try:
-                set_auth_cookie(response, drf_token.key)
-            except Exception:
-                pass
-            return response
+            return _mint_token()
+
+    # ENFORCEMENT enrollment (SMSLY_ENFORCE_ADMIN_2FA): an enforced admin
+    # with no confirmed device completes enrollment right here — the
+    # first code that verifies against their PENDING (unconfirmed)
+    # device confirms it and mints the token in one step. Without this
+    # branch an enforced admin could never pass step 2.
+    if getattr(settings, 'SMSLY_ENFORCE_ADMIN_2FA', False) and (
+        user.is_superuser or user.is_staff
+    ):
+        if not TOTPDevice.objects.filter(user=user).exists():
+            return Response(
+                {
+                    'error': '2FA enrollment required. Call '
+                             'POST /api/v1/auth/2fa/pending-setup/ to fetch '
+                             'your authenticator secret, then resubmit the code.',
+                    'code': '2fa_enrollment_required',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for device in devices_for_user(user, confirmed=False):
+            if device.verify_token(token):
+                device.confirmed = True
+                device.save()
+                login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+                clear_pending_2fa(request)
+                logger.info("2FA enrollment completed for enforced admin %s", user_id)
+                return _mint_token()
 
     left = MAX_2FA_ATTEMPTS_PER_SESSION - bump_pending_2fa_attempts(request)
     logger.warning("Invalid 2FA code for user %s (%d attempts left)", user_id, max(left, 0))

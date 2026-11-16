@@ -22,6 +22,11 @@ export default function LoginPage() {
   const [needs2fa, setNeeds2fa] = useState(false);
   const [totpCode, setTotpCode] = useState("");
   const [verifying2fa, setVerifying2fa] = useState(false);
+  // Enrollment (SMSLY_ENFORCE_ADMIN_2FA): when the server withholds the
+  // token because this admin has no TOTP device yet, pending-setup hands
+  // us the secret to add to an authenticator before the first code.
+  const [enrollmentSecret, setEnrollmentSecret] = useState("");
+  const [enrollmentUri, setEnrollmentUri] = useState("");
 
   const BACKEND_URL = typeof window !== 'undefined'
     ? window.location.origin
@@ -85,17 +90,34 @@ export default function LoginPage() {
       if (response.ok) {
         const data = await response.json();
         if (data?.requires_2fa) {
-          // Password accepted; the account has 2FA enrolled so the token
-          // is withheld until the TOTP challenge below completes.
+          // Password accepted; the token is withheld until the TOTP
+          // challenge below completes. Enforced admins without a device
+          // first need the enrollment secret from pending-setup.
           setNeeds2fa(true);
           setTotpCode("");
           setError("");
+          if (data?.enrollment_required) {
+            try {
+              const setupRes = await fetch(`${BACKEND_URL}/api/v1/auth/2fa/pending-setup/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+              });
+              const setupData = await setupRes.json().catch(() => ({}));
+              if (setupRes.ok && setupData?.secret) {
+                setEnrollmentSecret(setupData.secret);
+                setEnrollmentUri(setupData.provisioning_uri || "");
+              } else {
+                setError(setupData?.error || "Could not start 2FA enrollment. Please log in again.");
+              }
+            } catch {
+              setError("Could not start 2FA enrollment. Please try again.");
+            }
+          }
           return;
         }
-        if (!data?.key && !data?.token) {
-          setError("Login succeeded but no auth token was returned. Please try again.");
-          return;
-        }
+        // The HttpOnly auth cookie was set server-side on success; the
+        // body token is omitted unless SMSLY_TOKEN_IN_BODY=true.
         finishLogin();
       } else {
         const errorData = await response.json().catch(() => ({}));
@@ -150,6 +172,28 @@ export default function LoginPage() {
         setNeeds2fa(false);
         setTotpCode("");
         setError("Too many invalid codes. Please sign in again.");
+        return;
+      }
+      if (data?.code === "2fa_enrollment_required") {
+        // Enforced admin with no device yet (e.g. OAuth ?2fa=1 path):
+        // fetch the enrollment secret and surface it before the retry.
+        try {
+          const setupRes = await fetch(`${BACKEND_URL}/api/v1/auth/2fa/pending-setup/`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+          });
+          const setupData = await setupRes.json().catch(() => ({}));
+          if (setupRes.ok && setupData?.secret) {
+            setEnrollmentSecret(setupData.secret);
+            setEnrollmentUri(setupData.provisioning_uri || "");
+            setError("Enrollment required: add the secret below to your authenticator, then enter the code.");
+          } else {
+            setError(setupData?.error || data?.error || "Could not start 2FA enrollment.");
+          }
+        } catch {
+          setError("Could not start 2FA enrollment. Please try again.");
+        }
         return;
       }
       setError(data?.error || "Invalid verification code. Try again.");
@@ -226,6 +270,8 @@ export default function LoginPage() {
                   setShowEmailForm(false);
                   setNeeds2fa(false);
                   setTotpCode("");
+                  setEnrollmentSecret("");
+                  setEnrollmentUri("");
                   setError("");
                 }}
                 className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition mb-4"
@@ -236,6 +282,21 @@ export default function LoginPage() {
 
               {needs2fa ? (
                 <form onSubmit={handle2faVerify} className="space-y-4">
+                  {enrollmentSecret && (
+                    <div className="space-y-2">
+                      <Label>2FA enrollment required</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Add this secret to your authenticator app (TOTP), then enter the
+                        6-digit code below to finish enrollment and sign in.
+                      </p>
+                      <div className="break-all rounded border border-border bg-muted/50 p-3 font-mono text-xs select-all">
+                        {enrollmentSecret}
+                      </div>
+                      {enrollmentUri && (
+                        <p className="break-all text-[10px] text-muted-foreground">{enrollmentUri}</p>
+                      )}
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <Label htmlFor="totp">Authenticator code</Label>
                     <Input
