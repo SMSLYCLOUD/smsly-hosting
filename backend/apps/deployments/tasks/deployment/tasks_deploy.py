@@ -386,7 +386,6 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         if "Fleet build concurrency" in str(e) and self.request.retries < self.max_retries:
             try:
                 if deployment is not None:
-                    from apps.deployments.utils import append_log
                     append_log(
                         deployment,
                         "\n[fleet] Build slots busy — re-queued automatically in 60s "
