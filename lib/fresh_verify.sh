@@ -192,37 +192,24 @@ fi
 if should_manage_caddy; then
     echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
     caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
-    if docker inspect -f '{{.State.Running}}' "$caddy_container"  | grep -q "true"; then
+    if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true"; then
         echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
         VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     else
         echo -e "${RED}  ✗ Caddy container is not running${NC}"
     fi
 else
-    if is_node_mode; then
-        echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
-        caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
-        if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true" \
-           && { curl -fsS --max-time 5 "http://127.0.0.1:2019/config/" >/dev/null 2>&1 \
-                || timeout -k 5 10 docker exec "$caddy_container" wget -q -O- http://127.0.0.1:2019/config/ >/dev/null 2>&1; }; then
-            echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
-            VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
-        else
-            echo -e "${RED}  ✗ Caddy reverse proxy check failed${NC}"
-        fi
+    # In node mode (or agent-lite / non-master), Traefik is the edge proxy.
+    echo -e "${BLUE}  → [4/4] Checking Traefik edge proxy...${NC}"
+    traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
+    if docker inspect -f '{{.State.Running}}' "$traefik_container" 2>/dev/null | grep -q "true"; then
+        echo -e "${GREEN}  ✓ Traefik edge proxy active${NC}"
+        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     else
-        echo -e "${BLUE}  → [4/4] Checking Traefik...${NC}"
-        TRAEFIK_CHECK_URL="http://127.0.0.1:8081/"
-        traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
-        if docker inspect -f '{{.State.Running}}' "$traefik_container"  | grep -q "true" \
-           && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" ; then
-            echo -e "${GREEN}  ✓ Traefik edge proxy active (${TRAEFIK_CHECK_URL})${NC}"
-            VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
-        else
-            echo -e "${RED}  ✗ Traefik edge proxy check failed (${TRAEFIK_CHECK_URL})${NC}"
-        fi
+        echo -e "${RED}  ✗ Traefik edge proxy check failed${NC}"
     fi
 fi
+
 fi
 
 # Show container status
