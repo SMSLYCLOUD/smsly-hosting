@@ -58,3 +58,44 @@ class GarageKeyResolveTests(SimpleTestCase):
         err = RuntimeError("garage key info failed: Bad request: 10 matching keys")
         with self.assertRaisesRegex(RuntimeError, "dedupe"):
             self._resolve(err)
+
+
+class RemoteGarageProvisionTests(SimpleTestCase):
+    def test_wait_for_remote_tcp_includes_container_ip_lookup(self):
+        from unittest import mock
+
+        ssh = mock.MagicMock()
+        ssh.exec_command.return_value = ("", "", 0)
+        addon_provisioner._wait_for_remote_tcp(
+            ssh, 9000, timeout=15, container_name="smsly-addon-minio-test",
+        )
+        cmd = ssh.exec_command.call_args[0][0]
+        self.assertIn('"smsly-addon-minio-test"', cmd)
+        self.assertIn("{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", cmd)
+
+    def test_provision_remote_minio_attaches_scoped_network(self):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        addon = SimpleNamespace(
+            id="11111111-1111-1111-1111-111111111111",
+            addon_type="MINIO",
+            name="minio-test",
+            connection_url="",
+            provider_metadata={},
+            service=SimpleNamespace(name="svc", project=SimpleNamespace(id="proj1")),
+            save=mock.MagicMock(),
+        )
+        server = SimpleNamespace(
+            name="aws-full-2", host="10.0.0.2", ssh_key="", ssh_password="",
+            ssh_user="root", ssh_port=22, wg_address="10.100.0.3",
+        )
+        ssh_inst = mock.MagicMock()
+        with mock.patch("apps.deployments.services.ssh_client.SSHClient", return_value=ssh_inst), \
+                mock.patch.object(addon_provisioner, "_ensure_network"), \
+                mock.patch.object(addon_provisioner, "_provision_remote_minio", return_value=("cid123", "s3://k:s@minio-test:9000/default-bucket")), \
+                mock.patch.object(addon_provisioner, "_attach_remote_scoped_network") as mock_attach:
+            cid, url = addon_provisioner.provision_remote(addon, server)
+        self.assertEqual(cid, "cid123")
+        self.assertIn("minio-test:9000", url)
+        mock_attach.assert_called_once()

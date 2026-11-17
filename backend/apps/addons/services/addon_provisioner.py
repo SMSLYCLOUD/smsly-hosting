@@ -12,6 +12,7 @@ Uses the same Docker network as deployed services for internal connectivity.
 """
 import base64
 import contextlib
+import json
 import logging
 import os
 import secrets
@@ -1468,6 +1469,9 @@ class AddonProvisioner:
                 ssh, server, container_name, alias_name, port,
                 existing_url=existing_url,
             )
+            self._attach_remote_scoped_network(
+                ssh, server, addon, container_name, alias_name,
+            )
             ssh.close()
             return container_id, connection_url
 
@@ -1560,16 +1564,35 @@ class AddonProvisioner:
         # node before returning; best-effort, never fails provisioning.
         if port:
             try:
-                self._wait_for_remote_tcp(ssh, int(port), timeout=90)
+                self._wait_for_remote_tcp(
+                    ssh, int(port), timeout=90, container_name=container_name,
+                )
             except Exception as exc:
                 logger.debug("Remote addon %s ready-wait skipped: %s", container_name, exc)
 
-        # Join the service's scoped network: the addon lands on the
-        # default bridge (self.network_name) but the app lives on its
-        # project-scoped net — without this the alias never resolves
-        # from the app (2026-10-09: node redis/steel unreachable until
-        # manually attached). Fail-closed: an unreachable backend must
-        # not become the row.
+        self._attach_remote_scoped_network(
+            ssh, server, addon, container_name, alias_name,
+        )
+
+        # Remove remote secrets (env files / redis.conf) now that the
+        # container is running.
+        for remote_path in remote_temp_files:
+            with contextlib.suppress(Exception):
+                ssh.exec_command(
+                    f"rm -f {shlex.quote(remote_path)}",
+                    timeout=10,
+                    raise_on_error=False,
+                )
+
+        # Create data volume if not using auto-created one
+        # (the -v flag in docker run auto-creates named volumes)
+
+        ssh.close()
+        return container_id, connection_url
+
+    def _attach_remote_scoped_network(self, ssh, server, addon,
+                                      container_name: str, alias_name: str) -> None:
+        """Attach a remote addon container to the service's project-scoped bridge."""
         try:
             _project = getattr(getattr(addon, 'service', None), 'project', None)
             _scoped = None
@@ -1593,22 +1616,6 @@ class AddonProvisioner:
                 )
             logger.info("Remote addon %s joined %s as %s", container_name, _scoped, alias_name)
 
-        # Remove remote secrets (env files / redis.conf) now that the
-        # container is running.
-        for remote_path in remote_temp_files:
-            with contextlib.suppress(Exception):
-                ssh.exec_command(
-                    f"rm -f {shlex.quote(remote_path)}",
-                    timeout=10,
-                    raise_on_error=False,
-                )
-
-        # Create data volume if not using auto-created one
-        # (the -v flag in docker run auto-creates named volumes)
-
-        ssh.close()
-        return container_id, connection_url
-
     def _remote_garage_exec(self, ssh, container_name: str, *args: str, timeout: int = 90) -> str:
         """Run a garage CLI command in the remote addon container; return stdout."""
         cmd = "docker exec {} /garage {}".format(
@@ -1621,21 +1628,37 @@ class AddonProvisioner:
             raise RuntimeError(f"garage {' '.join(args)} failed: {clean[-300:]}")
         return self._strip_ansi(out or "")
 
-    def _wait_for_remote_tcp(self, ssh, port: int, timeout: int = 90) -> None:
-        """Wait until something accepts TCP on the remote loopback:port."""
+    def _wait_for_remote_tcp(self, ssh, port: int, timeout: int = 90,
+                             container_name: str | None = None) -> None:
+        """Wait until the remote container (bridge IP or loopback) accepts TCP."""
+        cname_lit = json.dumps(str(container_name or "").replace("'", ""))
         probe = (
-            "python3 -c 'import socket,time\n"
+            "python3 -c 'import socket,subprocess,time\n"
+            "cname=%s\n"
             "deadline=time.time()+%d\n"
             "ok=False\n"
             "while time.time()<deadline:\n"
-            "    try:\n"
-            "        s=socket.create_connection((\"127.0.0.1\",%d),timeout=2)\n"
-            "        s.close()\n"
-            "        ok=True\n"
+            "    hosts=[]\n"
+            "    if cname:\n"
+            "        try:\n"
+            "            ip_out=subprocess.check_output([\"docker\",\"inspect\",\"-f\",\"{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}\",cname],text=True,timeout=5)\n"
+            "            hosts.extend(h for h in ip_out.split() if h)\n"
+            "        except Exception:\n"
+            "            pass\n"
+            "    if \"127.0.0.1\" not in hosts:\n"
+            "        hosts.append(\"127.0.0.1\")\n"
+            "    for h in hosts:\n"
+            "        try:\n"
+            "            s=socket.create_connection((h,%d),timeout=2)\n"
+            "            s.close()\n"
+            "            ok=True\n"
+            "            break\n"
+            "        except Exception:\n"
+            "            pass\n"
+            "    if ok:\n"
             "        break\n"
-            "    except Exception:\n"
-            "        time.sleep(2)\n"
-            "raise SystemExit(0 if ok else 1)'" % (timeout, port)
+            "    time.sleep(2)\n"
+            "raise SystemExit(0 if ok else 1)'" % (cname_lit, timeout, port)
         )
         _, _, code = ssh.exec_command(probe, timeout=timeout + 30, raise_on_error=False)
         if code != 0:
@@ -1705,7 +1728,7 @@ class AddonProvisioner:
             with contextlib.suppress(Exception):
                 ssh.exec_command(f"rm -f {shlex.quote(remote_toml)}", timeout=15, raise_on_error=False)
 
-        self._wait_for_remote_tcp(ssh, port)
+        self._wait_for_remote_tcp(ssh, port, container_name=container_name)
 
         node_out = self._remote_garage_exec(ssh, container_name, "node", "id")
         node_match = _re_mod.search(r"\b([0-9a-f]{64})\b", node_out)
@@ -1755,7 +1778,7 @@ class AddonProvisioner:
         )
         container_id = (out or "").strip()[:12] or container_name
         if key_secret is None:
-            return container_id, ""
+            return container_id, existing_url
         return container_id, f"s3://{key_id}:{key_secret}@{hostname}:{port}/{bucket_name}"
 
     def _provision_rabbitmq(self, container_name: str,
