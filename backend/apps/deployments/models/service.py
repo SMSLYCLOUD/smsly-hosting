@@ -765,13 +765,15 @@ class Service(TimeStampedModel):
     def clean_fields(self, exclude=None):
         """Allow local file:// archive URIs when deploy_type is UPLOAD."""
         url = (self.repository_url or "").strip()
-        if self.deploy_type == "UPLOAD" and url.startswith("file://"):
+        if self.deploy_type == "UPLOAD" and url.lower().startswith("file://"):
             from urllib.parse import urlparse
             parsed = urlparse(url)
+            max_len = self._meta.get_field("repository_url").max_length or 200
             if (
-                parsed.scheme != "file"
+                parsed.scheme.lower() != "file"
                 or (parsed.netloc and parsed.netloc not in ("localhost", "127.0.0.1"))
                 or not parsed.path
+                or len(url) > max_len
             ):
                 raise ValidationError(
                     {"repository_url": ["Enter a valid local file:// archive URL."]}

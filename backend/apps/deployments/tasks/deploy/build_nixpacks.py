@@ -103,23 +103,9 @@ def _build_function(deployment, service) -> str:
                 append_log(deployment, f"{output[-8000:]}\n")
             raise
 
-        registry = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+        update_stage(deployment, 'Build', 'success')
         is_local = is_deployment_local(deployment)
-        if not is_local and not registry:
-            raise RuntimeError(
-                "CONTAINER_REGISTRY_URL is not configured. "
-                "A registry is required to push/pull images for remote node deployments."
-            )
-        if registry:
-            remote_tag, _push_error = NixpacksBuilder.push_image(tag, registry)
-            pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry))
-            if not pushed_to_registry and not is_local:
-                raise RuntimeError(
-                    f"Image push failed: Local fallback is not allowed for remote deployments. "
-                    f"Target node requires a working registry to pull {remote_tag}."
-                )
-            return remote_tag
-        return tag
+        return _push_built_image(deployment, service, tag, is_local=is_local)
 
     finally:
         if build_dir:
@@ -133,8 +119,8 @@ def _safe_extract_archive(archive_path: str, destination: str):
         with tarfile.open(archive_path, "r:gz") as tf:
             members = tf.getmembers()
             for member in members:
-                if member.issym() or member.islnk():
-                    raise ValueError(f"Archive contains unsafe link entry: {member.name}")
+                if not (member.isreg() or member.isdir()):
+                    raise ValueError(f"Archive contains unsafe non-file entry: {member.name}")
                 target_path = os.path.abspath(os.path.join(dest_root, member.name))
                 if target_path != dest_root and not target_path.startswith(dest_root + os.sep):
                     raise ValueError(f"Archive contains unsafe file paths: {member.name}")
@@ -168,8 +154,27 @@ def _push_built_image(deployment, service, image_name: str, is_local: bool) -> s
         return image_name
 
     append_log(deployment, f"Pushing uploaded image to {registry}...\n")
+    # Retag master-mesh-qualified refs (e.g. 10.100.0.1:5000/ns/app:tag) down
+    # to bare ns/app:tag before pushing to a different registry host like
+    # registry:5000; otherwise push_image stacks both hosts into an invalid ref.
+    push_ref = image_name
+    try:
+        from apps.deployments.services.registry_routing import (
+            _split_ref,
+            is_master_registry_ref,
+        )
+        _phost, _prest = _split_ref(image_name or "")
+        if _phost and _prest and is_master_registry_ref(image_name or ""):
+            _norm_target = (registry or "").split("://")[-1].rstrip("/")
+            if _norm_target and _phost != _norm_target:
+                from apps.cloud.docker_client import get_docker_client
+                get_docker_client().images.get(image_name).tag(_prest)
+                push_ref = _prest
+    except Exception as exc:
+        logger.warning("Registry prefix strip failed for %s: %s", image_name, exc)
+
     remote_tag, push_error = NixpacksBuilder.push_image(
-        image_name,
+        push_ref,
         registry,
         username=username,
         password=password,

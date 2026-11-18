@@ -177,6 +177,16 @@ class RemoteUploadDeployTests(TestCase):
 
             with self.assertRaises(ValueError):
                 _safe_extract_archive(bad_tgz, out_dir)
+
+            symlink_tgz = os.path.join(tmpdir, "sym.tar.gz")
+            with tarfile.open(symlink_tgz, "w:gz") as tf:
+                info = tarfile.TarInfo("escape")
+                info.type = tarfile.SYMTYPE
+                info.linkname = "/etc/passwd"
+                tf.addfile(info)
+
+            with self.assertRaises(ValueError):
+                _safe_extract_archive(symlink_tgz, out_dir)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -209,6 +219,16 @@ class RemoteUploadDeployTests(TestCase):
         )
         with self.assertRaises(ValidationError):
             git_svc.full_clean()
+
+        too_long = Service(
+            name="upload-long-uri",
+            deploy_type="UPLOAD",
+            repository_url="file:///app/" + ("a" * 210) + ".zip",
+            owner=self.user,
+            provider=self.provider,
+        )
+        with self.assertRaises(ValidationError):
+            too_long.full_clean()
 
     def test_upload_deploy_api_saves_file_uri_and_queues_smart_deploy(self):
         import zipfile
@@ -287,3 +307,52 @@ class RemoteUploadDeployTests(TestCase):
         cmds = [c.args[0] for c in ssh.exec_command.call_args_list]
         self.assertTrue(any("docker network create --driver bridge" in c for c in cmds))
         self.assertTrue(any("docker network connect --alias" in c for c in cmds))
+
+    def test_push_built_image_strips_mismatched_master_registry_prefix(self):
+        from unittest.mock import MagicMock
+        from apps.deployments.tasks.deploy.build_nixpacks import _push_built_image
+
+        service = Service.objects.create(
+            name="upload-push-strip",
+            deploy_type="UPLOAD",
+            repository_url="file:///app/media/uploads/app.zip",
+            owner=self.user,
+            provider=self.provider,
+            server=self.remote_server,
+        )
+        deployment = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.BUILDING,
+            commit_hash="upload-push123",
+        )
+        mock_img = MagicMock()
+        mock_docker = MagicMock()
+        mock_docker.images.get.return_value = mock_img
+
+        with self.settings(CONTAINER_REGISTRY_URL="registry:5000"), patch.dict(
+            os.environ, {"WIREGUARD_MASTER_MESH_IP": "10.100.0.1"}
+        ), patch(
+            "apps.deployments.models.registry_scope.ScopedRegistry.resolve_registry_credentials",
+            return_value={"url": "registry:5000", "username": "u", "password": "p"},
+        ), patch(
+            "apps.cloud.docker_client.get_docker_client",
+            return_value=mock_docker,
+        ), patch(
+            "apps.deployments.tasks.deploy.build_nixpacks.NixpacksBuilder.push_image",
+            return_value=("registry:5000/default/upload-push-strip:tag1", None),
+        ) as mock_push:
+            out = _push_built_image(
+                deployment,
+                service,
+                "10.100.0.1:5000/default/upload-push-strip:tag1",
+                is_local=False,
+            )
+
+        self.assertEqual(out, "registry:5000/default/upload-push-strip:tag1")
+        mock_img.tag.assert_called_once_with("default/upload-push-strip:tag1")
+        mock_push.assert_called_once_with(
+            "default/upload-push-strip:tag1",
+            "registry:5000",
+            username="u",
+            password="p",
+        )
