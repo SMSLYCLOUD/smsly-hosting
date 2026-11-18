@@ -6,8 +6,12 @@ local DB before enqueueing the pipeline. Update-only, capped, validated,
 fail-open individually — a bad entry never blocks the deploy.
 """
 import logging
+import re
+import uuid
 
 logger = logging.getLogger(__name__)
+
+_CONTAINER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def apply_mesh_env(service, mesh_env) -> int:
@@ -64,6 +68,20 @@ def apply_mesh_addons(service, items) -> int:
             if not isinstance(url, str) or not url.strip():
                 continue
             _local = bool(item.get("local"))
+            master_uuid = None
+            raw_id = item.get("id")
+            if raw_id:
+                try:
+                    master_uuid = uuid.UUID(str(raw_id).strip())
+                except (ValueError, TypeError, AttributeError):
+                    master_uuid = None
+            synced_cname = ""
+            if _local:
+                raw_cname = str(item.get("container_name") or "").strip()[:128]
+                if raw_cname and _CONTAINER_NAME_RE.match(raw_cname):
+                    synced_cname = raw_cname
+                elif master_uuid is not None:
+                    synced_cname = f"smsly-addon-{atype.lower()}-{master_uuid}"
             existing = Addon.objects.filter(
                 service=service, name=name,
             ).exclude(status="DELETED").first()
@@ -72,7 +90,7 @@ def apply_mesh_addons(service, items) -> int:
                     meta = dict(getattr(existing, "provider_metadata", None) or {})
                 except Exception:
                     meta = {}
-                if not meta.get("mesh_backed") and not _local:
+                if not (meta.get("mesh_backed") or meta.get("master_synced")) and not _local:
                     continue
                 existing.addon_type = atype
                 existing.connection_url = url[:512]
@@ -80,7 +98,12 @@ def apply_mesh_addons(service, items) -> int:
                 if _local:
                     meta.pop("mesh_backed", None)
                     meta.pop("mesh_forward_port", None)
+                    meta["master_synced"] = True
+                    if synced_cname:
+                        meta["container_name"] = synced_cname
                 else:
+                    meta.pop("container_name", None)
+                    meta.pop("master_synced", None)
                     meta["mesh_backed"] = True
                     fport = item.get("mesh_forward_port")
                     if fport:
@@ -95,18 +118,24 @@ def apply_mesh_addons(service, items) -> int:
                 ])
                 applied += 1
                 continue
-            _meta = {"mesh_backed": True, "mesh_forward_port": item.get("mesh_forward_port")}
             if _local:
-                _meta = {}
-            Addon.objects.create(
-                service=service,
-                project=getattr(service, "project", None),
-                name=name,
-                addon_type=atype,
-                connection_url=url[:512],
-                status="ACTIVE",
-                provider_metadata=_meta,
-            )
+                _meta = {"master_synced": True}
+                if synced_cname:
+                    _meta["container_name"] = synced_cname
+            else:
+                _meta = {"mesh_backed": True, "mesh_forward_port": item.get("mesh_forward_port")}
+            create_kwargs = {
+                "service": service,
+                "project": getattr(service, "project", None),
+                "name": name,
+                "addon_type": atype,
+                "connection_url": url[:512],
+                "status": "ACTIVE",
+                "provider_metadata": _meta,
+            }
+            if _local and master_uuid is not None and not Addon.objects.filter(id=master_uuid).exists():
+                create_kwargs["id"] = master_uuid
+            Addon.objects.create(**create_kwargs)
             applied += 1
     except Exception as exc:
         logger.debug("mesh addon apply skipped: %s", exc)

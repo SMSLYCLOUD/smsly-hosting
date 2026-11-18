@@ -104,3 +104,53 @@ class NodeApplyTests(TestCase):
         self.assertEqual(apply_volumes(self.service, rows), 0)
         vol.refresh_from_db()
         self.assertEqual(vol.mount_path, "/srv/custom")
+
+    def test_local_addon_preserves_master_id_and_container_name(self):
+        import uuid
+        from apps.addons.services.addon_provisioner import addon_container_name
+
+        master_id = str(uuid.uuid4())
+        rows = [
+            {
+                "id": master_id,
+                "container_name": f"smsly-addon-postgres-{master_id}",
+                "name": "postgres-smsly-helper",
+                "addon_type": "POSTGRES",
+                "connection_url": "postgresql://u:p@postgres-smsly-helper:5432/db",
+                "mesh_forward_port": None,
+                "local": True,
+            },
+        ]
+        self.assertEqual(apply_mesh_addons(self.service, rows), 1)
+        row = Addon.objects.get(service=self.service, name="postgres-smsly-helper")
+        self.assertEqual(str(row.id), master_id)
+        self.assertEqual(addon_container_name(row), f"smsly-addon-postgres-{master_id}")
+
+    def test_local_addon_updates_existing_mismatched_row_container_name(self):
+        import uuid
+        from apps.addons.services.addon_provisioner import addon_container_name
+
+        stale = Addon.objects.create(
+            service=self.service,
+            name="postgres-smsly-helper",
+            addon_type="POSTGRES",
+            connection_url="postgresql://u:p@old:5432/db",
+            status="ACTIVE",
+            provider_metadata={},
+        )
+        master_id = str(uuid.uuid4())
+        expected_cname = f"smsly-addon-postgres-{master_id}"
+        rows = [
+            {
+                "id": master_id,
+                "container_name": expected_cname,
+                "name": "postgres-smsly-helper",
+                "addon_type": "POSTGRES",
+                "connection_url": "postgresql://u:p@postgres-smsly-helper:5432/db",
+                "mesh_forward_port": None,
+                "local": True,
+            },
+        ]
+        self.assertEqual(apply_mesh_addons(self.service, rows), 1)
+        stale.refresh_from_db()
+        self.assertEqual(addon_container_name(stale), expected_cname)

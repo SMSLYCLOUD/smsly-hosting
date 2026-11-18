@@ -32,7 +32,9 @@ def addon_container_name(addon) -> str:
     """Canonical backing container for an addon row.
 
     CLI addon types share one container per service (see cli_addons);
-    everything else keeps the per-addon name.
+    node-local rows synced from master may carry an explicit
+    ``provider_metadata['container_name']`` pointing at the live container
+    created by master; everything else keeps the per-addon name.
     """
     try:
         from apps.addons.services import cli_addons as _cli
@@ -40,6 +42,11 @@ def addon_container_name(addon) -> str:
             return _cli.resolve_container_name(addon)
     except Exception:
         pass
+    meta = getattr(addon, "provider_metadata", None) or {}
+    if isinstance(meta, dict):
+        explicit = str(meta.get("container_name") or "").strip()
+        if explicit:
+            return explicit
     return (f"smsly-addon-{str(getattr(addon, 'addon_type', '')).lower()}-"
             f"{getattr(addon, 'id', '')}")
 

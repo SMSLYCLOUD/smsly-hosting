@@ -140,7 +140,10 @@ class DeploymentMixin:
                         _local_url = str(getattr(_addon, "connection_url", "") or "")
                         if not _local_url:
                             continue
+                        from apps.addons.services.addon_provisioner import addon_container_name
                         _addon_rows.append({
+                            "id": str(_addon.id),
+                            "container_name": addon_container_name(_addon),
                             "name": str(getattr(_addon, "name", "") or "")[:255],
                             "addon_type": str(getattr(_addon, "addon_type", "") or "")[:20],
                             "connection_url": _local_url[:512],
