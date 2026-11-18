@@ -220,6 +220,11 @@ wg_ensure_listening() {
 
     # Ensure primary port config (tolerate indented Endpoint lines from legacy templates)
     sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    if [ -n "${MASTER_IP:-}" ]; then
+        local _m_re
+        _m_re="$(printf '%s' "${MASTER_IP}" | sed 's/[.[\*^$]/\\&/g')"
+        sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=[[:space:]]*${_m_re}\):[0-9]*[[:space:]]*$|\1:${primary}|" "$conf"
+    fi
     sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
