@@ -18,9 +18,23 @@ logger = logging.getLogger(__name__)
 
 # File-based known_hosts for TOFU (Trust-On-First-Use) SSH host key verification.
 # Stores {hostname: {keytype: fingerprint, ...}} so we can detect key changes.
+def _default_known_hosts_path() -> str:
+    # Prefer the persistent writable media volume in container deployments
+    # because /app is owned/locked after drop to uid 1000 and ephemeral across rebuilds.
+    media_dir = "/app/media"
+    if os.path.isdir(media_dir) and os.access(media_dir, os.W_OK):
+        return os.path.join(media_dir, "known_hosts.json")
+    repo_candidate = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "known_hosts.json")
+    )
+    if os.access(os.path.dirname(repo_candidate), os.W_OK):
+        return repo_candidate
+    return os.path.join("/tmp", "smsly-known-hosts.json")
+
+
 _KNOWN_HOSTS_PATH = os.environ.get(
     "SMSLY_KNOWN_HOSTS_PATH",
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "known_hosts.json"),
+    _default_known_hosts_path(),
 )
 
 

@@ -138,5 +138,26 @@ def test_fanout_abandons_walled_base_within_round(monkeypatch):
     assert resolver._current == "https://10.100.0.1"
 
 
+def test_sign_sets_custom_user_agent(monkeypatch):
+    """Avoid Python-urllib User-Agent which Cloudflare blocks with 403/1010."""
+    mod = _load(monkeypatch)
+    headers = mod.sign("POST", "/api/v1/servers/srv-1/agent-ready/", b"{}")
+    assert headers.get("User-Agent") == "smsly-agent-registrar/1.0"
+
+
+def test_post_with_backoff_touches_heartbeat_marker(monkeypatch, tmp_path):
+    """Liveness marker must update during backoff so Docker stays healthy."""
+    mod = _load(monkeypatch)
+    marker = tmp_path / "registrar.last_heartbeat"
+    monkeypatch.setattr(mod, "_last_heartbeat_marker_path", str(marker))
+    with mock.patch.object(mod, "_post_json", return_value=(200, "{}")):
+        resolver = mod.BaseUrlResolver(["https://trulay.site"])
+        status = mod.post_with_backoff(
+            resolver, "/api/v1/servers/srv-1/agent-ready/", {}
+        )
+    assert status == 200
+    assert marker.exists()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

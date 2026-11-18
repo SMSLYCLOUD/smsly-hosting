@@ -776,15 +776,24 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
+    # Remote nodes and lite-agents do not run a local platform registry
+    # (their credentials are synced from master by _docker_login_all);
+    # probing loopback/registry:5000 on them always fails with HTTP 000.
+    if (is_node_mode || is_agent_lite_mode) \
+       && [ "$registry" = "127.0.0.1:5000" -o "$registry" = "registry:5000" ]; then
+        return 0
+    fi
     # The daemon matches credentials per registry hostname: a login for
     # 127.0.0.1:5000 does NOT authenticate pulls of registry:5000/*,
     # which 401 with "no basic auth credentials" (2026-09-12 sidecar
-    # incident). Log in to every local hostname form.
+    # incident). Log in to every local hostname form on master.
     local _targets="$registry"
-    case " $_targets " in
-        *" registry:5000 "*) ;;
-        *) _targets="$_targets registry:5000" ;;
-    esac
+    if is_master_mode; then
+        case " $_targets " in
+            *" registry:5000 "*) ;;
+            *) _targets="$_targets registry:5000" ;;
+        esac
+    fi
     local _target
     for _target in $_targets; do
         _docker_login_one "$_target" "$user" "$pass"
@@ -1739,6 +1748,11 @@ compose_stack_drift() {
         container_state="$(docker inspect -f '{{.State.Status}}' "$container_id"  || true)"
         if [ "$container_state" != "running" ]; then
             echo "$service:${container_state:-unknown}"
+            continue
+        fi
+        container_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_health" = "unhealthy" ]; then
+            echo "$service:unhealthy"
         fi
     done
 }
@@ -2565,15 +2579,24 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
+    # Remote nodes and lite-agents do not run a local platform registry
+    # (their credentials are synced from master by _docker_login_all);
+    # probing loopback/registry:5000 on them always fails with HTTP 000.
+    if (is_node_mode || is_agent_lite_mode) \
+       && [ "$registry" = "127.0.0.1:5000" -o "$registry" = "registry:5000" ]; then
+        return 0
+    fi
     # The daemon matches credentials per registry hostname: a login for
     # 127.0.0.1:5000 does NOT authenticate pulls of registry:5000/*,
     # which 401 with "no basic auth credentials" (2026-09-12 sidecar
-    # incident). Log in to every local hostname form.
+    # incident). Log in to every local hostname form on master.
     local _targets="$registry"
-    case " $_targets " in
-        *" registry:5000 "*) ;;
-        *) _targets="$_targets registry:5000" ;;
-    esac
+    if is_master_mode; then
+        case " $_targets " in
+            *" registry:5000 "*) ;;
+            *) _targets="$_targets registry:5000" ;;
+        esac
+    fi
     local _target
     for _target in $_targets; do
         _docker_login_one "$_target" "$user" "$pass"
@@ -4025,10 +4048,11 @@ _harden_crowdsec_compose_file() {
 }
 
 _harden_crowdsec_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
@@ -4265,6 +4289,7 @@ _harden_crowdsec_cloudflare_bouncer() {
 }
 
 _harden_crowdsec_verify() {
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -4479,6 +4504,7 @@ _harden_openappsec_verify() {
 #!/bin/bash
 
 _harden_falco_bootstrap() {
+    [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -4512,6 +4538,7 @@ _harden_falco_bootstrap() {
 }
 
 _harden_falco_verify() {
+    [ "${NODE_FALCO:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
@@ -4769,7 +4796,9 @@ _harden_envoy_registry_login() {
     # way no `||` guard can catch (2026-09-12: this exact pattern silently
     # aborted a fresh install with zero output).
     local auth="" user="" pass=""
-    auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || auth=""
+    if [ -f /root/.docker/config.json ]; then
+        auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])' 2>/dev/null) || auth=""
+    fi
     if [ -n "$auth" ]; then
         user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || user=""
         pass=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f2-) || pass=""
@@ -4795,6 +4824,9 @@ _harden_envoy_image_bootstrap() {
     # Ensure the Envoy sidecar image exists in the platform registry.
     # Fresh hosts never built it, so every sidecar injection died with
     # 404 (2026-09-11). Idempotent: skips when the tag already resolves.
+    if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
+        return 0
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local envoy_dir="$INSTALL_DIR/infrastructure/envoy"
     [ -f "$envoy_dir/Dockerfile" ] || { _harden_log err "envoy Dockerfile missing at $envoy_dir — sidecar injection will fail until it exists"; return 1; }
@@ -9909,6 +9941,11 @@ compose_stack_drift() {
         container_state="$(docker inspect -f '{{.State.Status}}' "$container_id"  || true)"
         if [ "$container_state" != "running" ]; then
             echo "$service:${container_state:-unknown}"
+            continue
+        fi
+        container_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_health" = "unhealthy" ]; then
+            echo "$service:unhealthy"
         fi
     done
 }
@@ -10744,10 +10781,11 @@ _harden_crowdsec_compose_file() {
 }
 
 _harden_crowdsec_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
@@ -10984,6 +11022,7 @@ _harden_crowdsec_cloudflare_bouncer() {
 }
 
 _harden_crowdsec_verify() {
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -11198,6 +11237,7 @@ _harden_openappsec_verify() {
 #!/bin/bash
 
 _harden_falco_bootstrap() {
+    [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -11231,6 +11271,7 @@ _harden_falco_bootstrap() {
 }
 
 _harden_falco_verify() {
+    [ "${NODE_FALCO:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
@@ -11488,7 +11529,9 @@ _harden_envoy_registry_login() {
     # way no `||` guard can catch (2026-09-12: this exact pattern silently
     # aborted a fresh install with zero output).
     local auth="" user="" pass=""
-    auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || auth=""
+    if [ -f /root/.docker/config.json ]; then
+        auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])' 2>/dev/null) || auth=""
+    fi
     if [ -n "$auth" ]; then
         user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || user=""
         pass=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f2-) || pass=""
@@ -11514,6 +11557,9 @@ _harden_envoy_image_bootstrap() {
     # Ensure the Envoy sidecar image exists in the platform registry.
     # Fresh hosts never built it, so every sidecar injection died with
     # 404 (2026-09-11). Idempotent: skips when the tag already resolves.
+    if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
+        return 0
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local envoy_dir="$INSTALL_DIR/infrastructure/envoy"
     [ -f "$envoy_dir/Dockerfile" ] || { _harden_log err "envoy Dockerfile missing at $envoy_dir — sidecar injection will fail until it exists"; return 1; }
@@ -12408,10 +12454,11 @@ _harden_crowdsec_compose_file() {
 }
 
 _harden_crowdsec_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
@@ -12648,6 +12695,7 @@ _harden_crowdsec_cloudflare_bouncer() {
 }
 
 _harden_crowdsec_verify() {
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -12862,6 +12910,7 @@ _harden_openappsec_verify() {
 #!/bin/bash
 
 _harden_falco_bootstrap() {
+    [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -12895,6 +12944,7 @@ _harden_falco_bootstrap() {
 }
 
 _harden_falco_verify() {
+    [ "${NODE_FALCO:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
@@ -13152,7 +13202,9 @@ _harden_envoy_registry_login() {
     # way no `||` guard can catch (2026-09-12: this exact pattern silently
     # aborted a fresh install with zero output).
     local auth="" user="" pass=""
-    auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || auth=""
+    if [ -f /root/.docker/config.json ]; then
+        auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])' 2>/dev/null) || auth=""
+    fi
     if [ -n "$auth" ]; then
         user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || user=""
         pass=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f2-) || pass=""
@@ -13178,6 +13230,9 @@ _harden_envoy_image_bootstrap() {
     # Ensure the Envoy sidecar image exists in the platform registry.
     # Fresh hosts never built it, so every sidecar injection died with
     # 404 (2026-09-11). Idempotent: skips when the tag already resolves.
+    if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
+        return 0
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local envoy_dir="$INSTALL_DIR/infrastructure/envoy"
     [ -f "$envoy_dir/Dockerfile" ] || { _harden_log err "envoy Dockerfile missing at $envoy_dir — sidecar injection will fail until it exists"; return 1; }
@@ -15051,15 +15106,24 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
+    # Remote nodes and lite-agents do not run a local platform registry
+    # (their credentials are synced from master by _docker_login_all);
+    # probing loopback/registry:5000 on them always fails with HTTP 000.
+    if (is_node_mode || is_agent_lite_mode) \
+       && [ "$registry" = "127.0.0.1:5000" -o "$registry" = "registry:5000" ]; then
+        return 0
+    fi
     # The daemon matches credentials per registry hostname: a login for
     # 127.0.0.1:5000 does NOT authenticate pulls of registry:5000/*,
     # which 401 with "no basic auth credentials" (2026-09-12 sidecar
-    # incident). Log in to every local hostname form.
+    # incident). Log in to every local hostname form on master.
     local _targets="$registry"
-    case " $_targets " in
-        *" registry:5000 "*) ;;
-        *) _targets="$_targets registry:5000" ;;
-    esac
+    if is_master_mode; then
+        case " $_targets " in
+            *" registry:5000 "*) ;;
+            *) _targets="$_targets registry:5000" ;;
+        esac
+    fi
     local _target
     for _target in $_targets; do
         _docker_login_one "$_target" "$user" "$pass"
@@ -16014,6 +16078,11 @@ compose_stack_drift() {
         container_state="$(docker inspect -f '{{.State.Status}}' "$container_id"  || true)"
         if [ "$container_state" != "running" ]; then
             echo "$service:${container_state:-unknown}"
+            continue
+        fi
+        container_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_health" = "unhealthy" ]; then
+            echo "$service:unhealthy"
         fi
     done
 }
@@ -18196,15 +18265,24 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
+    # Remote nodes and lite-agents do not run a local platform registry
+    # (their credentials are synced from master by _docker_login_all);
+    # probing loopback/registry:5000 on them always fails with HTTP 000.
+    if (is_node_mode || is_agent_lite_mode) \
+       && [ "$registry" = "127.0.0.1:5000" -o "$registry" = "registry:5000" ]; then
+        return 0
+    fi
     # The daemon matches credentials per registry hostname: a login for
     # 127.0.0.1:5000 does NOT authenticate pulls of registry:5000/*,
     # which 401 with "no basic auth credentials" (2026-09-12 sidecar
-    # incident). Log in to every local hostname form.
+    # incident). Log in to every local hostname form on master.
     local _targets="$registry"
-    case " $_targets " in
-        *" registry:5000 "*) ;;
-        *) _targets="$_targets registry:5000" ;;
-    esac
+    if is_master_mode; then
+        case " $_targets " in
+            *" registry:5000 "*) ;;
+            *) _targets="$_targets registry:5000" ;;
+        esac
+    fi
     local _target
     for _target in $_targets; do
         _docker_login_one "$_target" "$user" "$pass"
@@ -19159,6 +19237,11 @@ compose_stack_drift() {
         container_state="$(docker inspect -f '{{.State.Status}}' "$container_id"  || true)"
         if [ "$container_state" != "running" ]; then
             echo "$service:${container_state:-unknown}"
+            continue
+        fi
+        container_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_health" = "unhealthy" ]; then
+            echo "$service:unhealthy"
         fi
     done
 }
@@ -20061,15 +20144,24 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
+    # Remote nodes and lite-agents do not run a local platform registry
+    # (their credentials are synced from master by _docker_login_all);
+    # probing loopback/registry:5000 on them always fails with HTTP 000.
+    if (is_node_mode || is_agent_lite_mode) \
+       && [ "$registry" = "127.0.0.1:5000" -o "$registry" = "registry:5000" ]; then
+        return 0
+    fi
     # The daemon matches credentials per registry hostname: a login for
     # 127.0.0.1:5000 does NOT authenticate pulls of registry:5000/*,
     # which 401 with "no basic auth credentials" (2026-09-12 sidecar
-    # incident). Log in to every local hostname form.
+    # incident). Log in to every local hostname form on master.
     local _targets="$registry"
-    case " $_targets " in
-        *" registry:5000 "*) ;;
-        *) _targets="$_targets registry:5000" ;;
-    esac
+    if is_master_mode; then
+        case " $_targets " in
+            *" registry:5000 "*) ;;
+            *) _targets="$_targets registry:5000" ;;
+        esac
+    fi
     local _target
     for _target in $_targets; do
         _docker_login_one "$_target" "$user" "$pass"
@@ -21024,6 +21116,11 @@ compose_stack_drift() {
         container_state="$(docker inspect -f '{{.State.Status}}' "$container_id"  || true)"
         if [ "$container_state" != "running" ]; then
             echo "$service:${container_state:-unknown}"
+            continue
+        fi
+        container_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_health" = "unhealthy" ]; then
+            echo "$service:unhealthy"
         fi
     done
 }
@@ -23456,10 +23553,11 @@ _harden_crowdsec_compose_file() {
 }
 
 _harden_crowdsec_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
@@ -23696,6 +23794,7 @@ _harden_crowdsec_cloudflare_bouncer() {
 }
 
 _harden_crowdsec_verify() {
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -23910,6 +24009,7 @@ _harden_openappsec_verify() {
 #!/bin/bash
 
 _harden_falco_bootstrap() {
+    [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -23943,6 +24043,7 @@ _harden_falco_bootstrap() {
 }
 
 _harden_falco_verify() {
+    [ "${NODE_FALCO:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
@@ -24200,7 +24301,9 @@ _harden_envoy_registry_login() {
     # way no `||` guard can catch (2026-09-12: this exact pattern silently
     # aborted a fresh install with zero output).
     local auth="" user="" pass=""
-    auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || auth=""
+    if [ -f /root/.docker/config.json ]; then
+        auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])' 2>/dev/null) || auth=""
+    fi
     if [ -n "$auth" ]; then
         user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || user=""
         pass=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f2-) || pass=""
@@ -24226,6 +24329,9 @@ _harden_envoy_image_bootstrap() {
     # Ensure the Envoy sidecar image exists in the platform registry.
     # Fresh hosts never built it, so every sidecar injection died with
     # 404 (2026-09-11). Idempotent: skips when the tag already resolves.
+    if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
+        return 0
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local envoy_dir="$INSTALL_DIR/infrastructure/envoy"
     [ -f "$envoy_dir/Dockerfile" ] || { _harden_log err "envoy Dockerfile missing at $envoy_dir — sidecar injection will fail until it exists"; return 1; }
@@ -24468,10 +24574,12 @@ EOF
     systemctl reload-or-restart fail2ban  &
     echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
 fi
+    echo -e "${GREEN}  ✓ Dependencies installed${NC}"
+    set_checkpoint "dependencies_installed"
+fi
 
-
-# Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get
-# a placeholder that will be updated by WireGuardService after provisioning).
+# Always converge WireGuard mesh after deps (runs on resume too so retried node
+# provisions pick up freshly rotated WG_PRIVATE_KEY, NODE_MESH_IP, or fallback port).
 _ensure_mesh_masquerade() {
     # SNAT container→mesh traffic to the mesh address. The far side only
     # routes 10.100.0.0/24 back through the tunnel — a bridge source IP
@@ -24639,10 +24747,6 @@ WGCONF
     _ensure_mesh_masquerade
 }
 ensure_wireguard_mesh
-
-echo -e "${GREEN}  ✓ Dependencies installed${NC}"
-    set_checkpoint "dependencies_installed"
-fi
 # --- end lib/fresh_deps.sh ---
 # --- lib/fresh_config.sh ---
 # -----------------------------------------------------------------------------
@@ -24807,10 +24911,11 @@ _harden_crowdsec_compose_file() {
 }
 
 _harden_crowdsec_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
@@ -25047,6 +25152,7 @@ _harden_crowdsec_cloudflare_bouncer() {
 }
 
 _harden_crowdsec_verify() {
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -25668,10 +25774,11 @@ _harden_crowdsec_compose_file() {
 }
 
 _harden_crowdsec_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
@@ -25908,6 +26015,7 @@ _harden_crowdsec_cloudflare_bouncer() {
 }
 
 _harden_crowdsec_verify() {
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -25949,6 +26057,18 @@ fi
     set_checkpoint "config_generated"
 fi
 if [ -f "$INSTALL_DIR/.env" ]; then
+    # On node/agent-lite resume, converge explicit provisioner overrides into
+    # existing .env before sourcing so rotated secrets/mesh IPs/component flags
+    # from a retry overwrite stale values from an earlier failed attempt.
+    if is_node_mode || is_agent_lite_mode; then
+        for _rk in MASTER_URL MASTER_IP NODE_NUMBER NODE_DOMAIN NODE_HOST SMSLY_NODE_HOST WG_ADDRESS NODE_MESH_BIND_IP NODE_MESH_IP WG_PRIVATE_KEY WG_PUBLIC_KEY MASTER_WG_PUBKEY MASTER_WG_ENDPOINT MASTER_MESH_IP GATEWAY_SECRET NODE_NAME SERVER_ID SMSLY_NODE_ID SMSLY_NODE_QUEUE NODE_OBSERVABILITY NODE_SECURITY NODE_CROWDSEC NODE_FALCO NODE_SPIRE NODE_LOG_SHIPPING; do
+            _rv="${!_rk:-}"
+            if [ -n "$_rv" ]; then
+                env_set_value "$INSTALL_DIR/.env" "$_rk" "$_rv"
+            fi
+        done
+        unset _rk _rv
+    fi
     ensure_env_runtime_defaults "$INSTALL_DIR/.env"
     apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
     # Ensure .env symlink exists for Docker Compose v2+ .env resolution
@@ -26733,16 +26853,19 @@ ensure_egress_mirror() {
     # Docker login now that the registry is actually running
     docker_login
     # Retry the Envoy sidecar image build+push now that registry auth and
-    # the registry itself exist. The harden-phase attempt runs before
-    # fresh_config writes REGISTRY_PASSWORD, so it always 401s on a true
-    # fresh host (2026-09-12); without this retry the image stays local-only
-    # and the catalog stays empty. Non-fatal: deploy-time self-heal covers it.
-    if command -v _harden_envoy_image_bootstrap >/dev/null 2>&1; then
+    # the registry itself exist (master only; nodes do not run a local registry).
+    if is_master_mode && command -v _harden_envoy_image_bootstrap >/dev/null 2>&1; then
         _harden_envoy_image_bootstrap || true
     fi
 fi
 if [ "$STACK_DEPLOYED_FROM_CHECKPOINT" = "true" ]; then
     reconcile_compose_stack_after_resume
+    # On node/agent-lite resume, recreate agent-registrar so it reloads updated
+    # .env credentials (GATEWAY_SECRET/MASTER_URL) and synced agent_registrar.py.
+    if (is_node_mode || is_agent_lite_mode) \
+       && docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "agent-registrar"; then
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps agent-registrar >/dev/null 2>&1 || true
+    fi
 fi
 # --- end lib/fresh_deploy.sh ---
 # --- lib/fresh_database.sh ---
@@ -27450,15 +27573,24 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
+    # Remote nodes and lite-agents do not run a local platform registry
+    # (their credentials are synced from master by _docker_login_all);
+    # probing loopback/registry:5000 on them always fails with HTTP 000.
+    if (is_node_mode || is_agent_lite_mode) \
+       && [ "$registry" = "127.0.0.1:5000" -o "$registry" = "registry:5000" ]; then
+        return 0
+    fi
     # The daemon matches credentials per registry hostname: a login for
     # 127.0.0.1:5000 does NOT authenticate pulls of registry:5000/*,
     # which 401 with "no basic auth credentials" (2026-09-12 sidecar
-    # incident). Log in to every local hostname form.
+    # incident). Log in to every local hostname form on master.
     local _targets="$registry"
-    case " $_targets " in
-        *" registry:5000 "*) ;;
-        *) _targets="$_targets registry:5000" ;;
-    esac
+    if is_master_mode; then
+        case " $_targets " in
+            *" registry:5000 "*) ;;
+            *) _targets="$_targets registry:5000" ;;
+        esac
+    fi
     local _target
     for _target in $_targets; do
         _docker_login_one "$_target" "$user" "$pass"
@@ -28413,6 +28545,11 @@ compose_stack_drift() {
         container_state="$(docker inspect -f '{{.State.Status}}' "$container_id"  || true)"
         if [ "$container_state" != "running" ]; then
             echo "$service:${container_state:-unknown}"
+            continue
+        fi
+        container_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_health" = "unhealthy" ]; then
+            echo "$service:unhealthy"
         fi
     done
 }

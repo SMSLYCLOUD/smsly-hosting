@@ -643,6 +643,13 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                                 _node_peer.endpoint = _new_ep
                                 _node_peer.save(update_fields=["endpoint", "updated_at"])
                                 with contextlib.suppress(Exception):
+                                    from apps.deployments.services.wireguard_service import WireGuardService as _WGSvcSync
+                                    _local = _WGP3.objects.filter(
+                                        mesh=_node_peer.mesh, is_local=True, is_active=True,
+                                    ).first()
+                                    if _local is not None:
+                                        _WGSvcSync.deploy_config(_local)
+                                with contextlib.suppress(Exception):
                                     from apps.deployments.tasks.infra.tasks_mesh import deploy_mesh_task
                                     deploy_mesh_task.delay(str(_node_peer.mesh_id))
                         _append_log(server, f"ℹ️ WireGuard node using fallback port {_node_wg_port}/udp")
@@ -1021,6 +1028,19 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 logger.debug("WireGuard address recovery failed: %s", exc)
 
         agent_db_ok = _verify_agent_db_connectivity(ssh, server, start_time=provision_start_time)
+
+        if install_mode == "node":
+            with contextlib.suppress(Exception):
+                from apps.deployments.models.core import PlatformConfig as _PC
+                if not getattr(_PC.load(), "trivy_enabled", True):
+                    _ti, _to, _te = ssh.exec_command(
+                        "docker exec -i smsly-hosting-backend-1 python manage.py shell -c "
+                        "\"from apps.deployments.models.core import PlatformConfig; "
+                        "c = PlatformConfig.load(); c.trivy_enabled = False; "
+                        "c.save(update_fields=['trivy_enabled'])\"",
+                        timeout=30,
+                    )
+                    _to.channel.recv_exit_status()
 
         if getattr(server, "wg_address", None) and "wg_address" not in update_fields:
             update_fields.append("wg_address")

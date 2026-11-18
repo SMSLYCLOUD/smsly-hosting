@@ -1,7 +1,9 @@
 import contextlib
+import hashlib
 import io
 import logging
 import os
+import re
 import shlex
 import time
 
@@ -135,18 +137,56 @@ def _generate_ed25519_keypair() -> tuple[str, str]:
     return priv_key_pem, pub_key_line
 
 
+def _load_private_key(pem: str, passphrase: str | None = None):
+    """Parse an OpenSSH/PEM private key across supported key types."""
+    if not pem:
+        return None
+    key_file = io.StringIO(pem)
+    for _loader in (
+        paramiko.Ed25519Key.from_private_key,
+        paramiko.RSAKey.from_private_key,
+        paramiko.ECDSAKey.from_private_key,
+    ):
+        try:
+            key_file.seek(0)
+            return _loader(key_file, password=passphrase)
+        except Exception:
+            continue
+    return None
+
+
 def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> bool:
     master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
     mesh_ip = _get_master_mesh_ip()
     allowed_ips = f"{master_ip},{mesh_ip}" if mesh_ip else master_ip
 
     priv_key_pem, pub_key_line = _generate_ed25519_keypair()
+    key_tag = hashlib.sha256(pub_key_line.encode("utf-8")).hexdigest()[:12]
+    marker = f"smsly-self-heal:{key_tag}"
+    restricted_line = f'from="{allowed_ips}" {pub_key_line} {marker}'
 
-    restricted_line = f'from="{allowed_ips}" {pub_key_line} smsly-self-heal\n'
+    # Preserve any line matching the operator's original/current public key
+    # even if it carries an `smsly-self-heal` comment, and only prune stale
+    # run-scoped `smsly-self-heal:<12hex>` keys.
+    orig_pkey = _load_private_key(
+        getattr(server, "ssh_key", "") or "",
+        getattr(server, "ssh_key_passphrase", "") or None,
+    )
+    orig_b64 = orig_pkey.get_base64() if orig_pkey is not None else ""
+    if orig_b64 and not re.fullmatch(r"[A-Za-z0-9+/=]+", orig_b64):
+        orig_b64 = ""
+
+    prune_cmd = (
+        f'awk -v keep={shlex.quote(orig_b64)} '
+        '\'BEGIN{re="^.*smsly-self-heal:[0-9a-f]+[[:space:]]*$"} '
+        '!($0 ~ re && (keep == "" || index($0, keep) == 0))\' '
+        '~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp 2>/dev/null '
+        '&& mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys || true; '
+    )
     cmd = (
         f'mkdir -p ~/.ssh && chmod 700 ~/.ssh && '
-        f'sed -i "/smsly-self-heal/d" ~/.ssh/authorized_keys 2>/dev/null; '
-        f'echo {shlex.quote(restricted_line)} >> ~/.ssh/authorized_keys && '
+        f'{prune_cmd}'
+        f'printf "%s\\n" {shlex.quote(restricted_line)} >> ~/.ssh/authorized_keys && '
         f'chmod 600 ~/.ssh/authorized_keys'
     )
     try:
@@ -199,20 +239,8 @@ def _harden_node_ssh(ssh, server: ManagedServer) -> None:
         test_ssh = _paramiko.SSHClient()
         from apps.deployments.services.ssh_client import _get_tofu_policy
         test_ssh.set_missing_host_key_policy(_get_tofu_policy(server.host, server.ssh_port))
-        pkey = None
-        _key_file = io.StringIO(server.ssh_key)
         _passphrase = getattr(server, "ssh_key_passphrase", "") or None
-        for _loader in (
-            _paramiko.Ed25519Key.from_private_key,
-            _paramiko.RSAKey.from_private_key,
-            _paramiko.ECDSAKey.from_private_key,
-        ):
-            try:
-                _key_file.seek(0)
-                pkey = _loader(_key_file, password=_passphrase)
-                break
-            except Exception:
-                continue
+        pkey = _load_private_key(server.ssh_key, _passphrase)
         if pkey is None:
             _append_log(server, "⚠ SSH cleanup skipped: restricted key has unknown format")
             return

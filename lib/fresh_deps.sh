@@ -160,10 +160,12 @@ EOF
     systemctl reload-or-restart fail2ban  &
     echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
 fi
+    echo -e "${GREEN}  ✓ Dependencies installed${NC}"
+    set_checkpoint "dependencies_installed"
+fi
 
-
-# Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get
-# a placeholder that will be updated by WireGuardService after provisioning).
+# Always converge WireGuard mesh after deps (runs on resume too so retried node
+# provisions pick up freshly rotated WG_PRIVATE_KEY, NODE_MESH_IP, or fallback port).
 _ensure_mesh_masquerade() {
     # SNAT container→mesh traffic to the mesh address. The far side only
     # routes 10.100.0.0/24 back through the tunnel — a bridge source IP
@@ -331,7 +333,3 @@ WGCONF
     _ensure_mesh_masquerade
 }
 ensure_wireguard_mesh
-
-echo -e "${GREEN}  ✓ Dependencies installed${NC}"
-    set_checkpoint "dependencies_installed"
-fi

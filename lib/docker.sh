@@ -133,15 +133,24 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
+    # Remote nodes and lite-agents do not run a local platform registry
+    # (their credentials are synced from master by _docker_login_all);
+    # probing loopback/registry:5000 on them always fails with HTTP 000.
+    if (is_node_mode || is_agent_lite_mode) \
+       && [ "$registry" = "127.0.0.1:5000" -o "$registry" = "registry:5000" ]; then
+        return 0
+    fi
     # The daemon matches credentials per registry hostname: a login for
     # 127.0.0.1:5000 does NOT authenticate pulls of registry:5000/*,
     # which 401 with "no basic auth credentials" (2026-09-12 sidecar
-    # incident). Log in to every local hostname form.
+    # incident). Log in to every local hostname form on master.
     local _targets="$registry"
-    case " $_targets " in
-        *" registry:5000 "*) ;;
-        *) _targets="$_targets registry:5000" ;;
-    esac
+    if is_master_mode; then
+        case " $_targets " in
+            *" registry:5000 "*) ;;
+            *) _targets="$_targets registry:5000" ;;
+        esac
+    fi
     local _target
     for _target in $_targets; do
         _docker_login_one "$_target" "$user" "$pass"

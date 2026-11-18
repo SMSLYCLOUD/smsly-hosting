@@ -36,7 +36,9 @@ _harden_envoy_registry_login() {
     # way no `||` guard can catch (2026-09-12: this exact pattern silently
     # aborted a fresh install with zero output).
     local auth="" user="" pass=""
-    auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])') 2>/dev/null || auth=""
+    if [ -f /root/.docker/config.json ]; then
+        auth=$(python3 -c 'import json;print(json.load(open("/root/.docker/config.json"))["auths"]["127.0.0.1:5000"]["auth"])' 2>/dev/null) || auth=""
+    fi
     if [ -n "$auth" ]; then
         user=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f1) || user=""
         pass=$(echo "$auth" | base64 -d 2>/dev/null | cut -d: -f2-) || pass=""
@@ -62,6 +64,9 @@ _harden_envoy_image_bootstrap() {
     # Ensure the Envoy sidecar image exists in the platform registry.
     # Fresh hosts never built it, so every sidecar injection died with
     # 404 (2026-09-11). Idempotent: skips when the tag already resolves.
+    if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
+        return 0
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local envoy_dir="$INSTALL_DIR/infrastructure/envoy"
     [ -f "$envoy_dir/Dockerfile" ] || { _harden_log err "envoy Dockerfile missing at $envoy_dir — sidecar injection will fail until it exists"; return 1; }

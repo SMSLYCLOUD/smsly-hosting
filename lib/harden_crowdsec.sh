@@ -16,10 +16,11 @@ _harden_crowdsec_compose_file() {
 }
 
 _harden_crowdsec_bootstrap() {
-    command -v docker >/dev/null 2>&1 || return 0
     # Traefik plugin gate first: decides enforcement before anything
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
@@ -256,6 +257,7 @@ _harden_crowdsec_cloudflare_bouncer() {
 }
 
 _harden_crowdsec_verify() {
+    [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"

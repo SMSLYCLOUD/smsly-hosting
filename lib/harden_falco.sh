@@ -1,6 +1,7 @@
 #!/bin/bash
 
 _harden_falco_bootstrap() {
+    [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -34,6 +35,7 @@ _harden_falco_bootstrap() {
 }
 
 _harden_falco_verify() {
+    [ "${NODE_FALCO:-1}" = "1" ] || return 0
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step

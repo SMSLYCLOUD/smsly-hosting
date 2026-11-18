@@ -742,6 +742,18 @@ fi
     set_checkpoint "config_generated"
 fi
 if [ -f "$INSTALL_DIR/.env" ]; then
+    # On node/agent-lite resume, converge explicit provisioner overrides into
+    # existing .env before sourcing so rotated secrets/mesh IPs/component flags
+    # from a retry overwrite stale values from an earlier failed attempt.
+    if is_node_mode || is_agent_lite_mode; then
+        for _rk in MASTER_URL MASTER_IP NODE_NUMBER NODE_DOMAIN NODE_HOST SMSLY_NODE_HOST WG_ADDRESS NODE_MESH_BIND_IP NODE_MESH_IP WG_PRIVATE_KEY WG_PUBLIC_KEY MASTER_WG_PUBKEY MASTER_WG_ENDPOINT MASTER_MESH_IP GATEWAY_SECRET NODE_NAME SERVER_ID SMSLY_NODE_ID SMSLY_NODE_QUEUE NODE_OBSERVABILITY NODE_SECURITY NODE_CROWDSEC NODE_FALCO NODE_SPIRE NODE_LOG_SHIPPING; do
+            _rv="${!_rk:-}"
+            if [ -n "$_rv" ]; then
+                env_set_value "$INSTALL_DIR/.env" "$_rk" "$_rv"
+            fi
+        done
+        unset _rk _rv
+    fi
     ensure_env_runtime_defaults "$INSTALL_DIR/.env"
     apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
     # Ensure .env symlink exists for Docker Compose v2+ .env resolution

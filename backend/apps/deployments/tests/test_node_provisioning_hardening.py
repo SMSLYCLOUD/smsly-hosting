@@ -145,6 +145,57 @@ class RollbackKeyTests(TestCase):
         self.assertTrue(dports)
         self.assertTrue(all(p == "5432" for p in dports))
 
+    def test_remove_ssh_key_targets_only_generated_pubkey(self):
+        from apps.deployments.services.provisioner.helpers.ssh import (
+            _generate_ed25519_keypair,
+        )
+        from apps.deployments.services.provisioner.provisioning_resources import (
+            _ProvisioningResources,
+        )
+        priv_pem, pub_line = _generate_ed25519_keypair()
+        pub_b64 = pub_line.split()[1]
+        server = self._server(ssh_key=priv_pem)
+        resources = _ProvisioningResources(server)
+        client = MagicMock()
+        stdout = MagicMock()
+        stdout.channel.recv_exit_status.return_value = 0
+        client.exec_command.return_value = (MagicMock(), stdout, MagicMock())
+        with patch(
+            "apps.deployments.services.provisioner.provisioning_resources.paramiko.SSHClient",
+            return_value=client,
+        ), patch(
+            "apps.deployments.services.ssh_client._get_tofu_policy",
+            return_value=MagicMock(),
+        ):
+            resources._remove_ssh_key()
+        client.exec_command.assert_called_once()
+        cmd = client.exec_command.call_args.args[0]
+        self.assertIn(pub_b64, cmd)
+        self.assertNotIn("/smsly-self-heal/d", cmd)
+
+    def test_restrict_ssh_key_uses_scoped_marker_and_keeps_operator_key(self):
+        from apps.deployments.services.provisioner.helpers.ssh import (
+            _generate_ed25519_keypair,
+            _restrict_ssh_key_to_master_ip,
+        )
+        orig_priv, orig_pub = _generate_ed25519_keypair()
+        orig_b64 = orig_pub.split()[1]
+        server = self._server(ssh_key=orig_priv)
+        ssh = MagicMock()
+        stdout = MagicMock()
+        stdout.channel.recv_exit_status.return_value = 0
+        ssh.exec_command.return_value = (MagicMock(), stdout, MagicMock())
+        with patch(
+            "apps.deployments.services.provisioner.helpers.ssh._get_master_mesh_ip",
+            return_value="10.100.0.1",
+        ):
+            ok = _restrict_ssh_key_to_master_ip(ssh, server)
+        self.assertTrue(ok)
+        cmd = ssh.exec_command.call_args.args[0]
+        self.assertIn(orig_b64, cmd)
+        self.assertRegex(cmd, r"smsly-self-heal:[0-9a-f]{12}")
+        self.assertNotIn("/smsly-self-heal/d", cmd)
+
 
 class ServerStatusTests(TestCase):
     def test_degraded_status_is_valid_choice(self):

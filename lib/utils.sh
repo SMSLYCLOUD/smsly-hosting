@@ -120,6 +120,11 @@ compose_stack_drift() {
         container_state="$(docker inspect -f '{{.State.Status}}' "$container_id"  || true)"
         if [ "$container_state" != "running" ]; then
             echo "$service:${container_state:-unknown}"
+            continue
+        fi
+        container_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_health" = "unhealthy" ]; then
+            echo "$service:unhealthy"
         fi
     done
 }

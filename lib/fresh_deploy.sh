@@ -572,14 +572,17 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     # Docker login now that the registry is actually running
     docker_login
     # Retry the Envoy sidecar image build+push now that registry auth and
-    # the registry itself exist. The harden-phase attempt runs before
-    # fresh_config writes REGISTRY_PASSWORD, so it always 401s on a true
-    # fresh host (2026-09-12); without this retry the image stays local-only
-    # and the catalog stays empty. Non-fatal: deploy-time self-heal covers it.
-    if command -v _harden_envoy_image_bootstrap >/dev/null 2>&1; then
+    # the registry itself exist (master only; nodes do not run a local registry).
+    if is_master_mode && command -v _harden_envoy_image_bootstrap >/dev/null 2>&1; then
         _harden_envoy_image_bootstrap || true
     fi
 fi
 if [ "$STACK_DEPLOYED_FROM_CHECKPOINT" = "true" ]; then
     reconcile_compose_stack_after_resume
+    # On node/agent-lite resume, recreate agent-registrar so it reloads updated
+    # .env credentials (GATEWAY_SECRET/MASTER_URL) and synced agent_registrar.py.
+    if (is_node_mode || is_agent_lite_mode) \
+       && docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "agent-registrar"; then
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps agent-registrar >/dev/null 2>&1 || true
+    fi
 fi
