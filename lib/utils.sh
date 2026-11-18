@@ -214,13 +214,13 @@ wg_ensure_listening() {
 
     # Without a configured peer endpoint, no handshake can ever succeed
     # during install — keep the primary port until peers are deployed.
-    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+    if [ ! -f "$conf" ] || ! grep -q '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
         return 0
     fi
 
-    # Ensure primary port config
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    # Ensure primary port config (tolerate indented Endpoint lines from legacy templates)
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
@@ -238,11 +238,16 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
+    if [ "$primary" = "$fallback" ]; then
+        echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on port ${primary} (peer/firewall may still be converging)${NC}"
+        return 0
+    fi
+
     # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
     # (filtering cloud firewalls check destination port as well as source).
     echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
     sleep 4

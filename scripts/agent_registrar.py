@@ -126,6 +126,7 @@ def sign(method: str, full_path: str, body: bytes) -> dict[str, str]:
         "X-Request-Timestamp": ts,
         "X-Request-Nonce": nonce,
         "Content-Type": "application/json",
+        "User-Agent": "smsly-agent-registrar/1.0",
     }
 
 
@@ -408,6 +409,7 @@ def post_with_backoff(resolver: BaseUrlResolver, path: str, body: dict) -> int:
     last_status = 0
     last_error = ""
     for attempt in range(8):  # up to ~127s total
+        _touch_heartbeat_marker()
         bases = resolver.ordered_bases()
         if not bases:
             last_error = "no reachable master"
@@ -485,6 +487,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, _on_signal)
 
     resolver = BaseUrlResolver(ALL_BASE_URLS)
+    _touch_heartbeat_marker()
 
     if REGISTER_ON_START:
         body = {

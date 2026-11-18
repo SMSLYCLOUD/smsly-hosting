@@ -444,7 +444,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 )
             _wg_addr = str(getattr(server, "wg_address", "") or "").strip()
             _wg_privkey = ""
-            _wg_port = 51820
+            _wg_port = int(getattr(server, "provider_metadata", {}).get("wg_port") or 51820)
             if _wg_addr:
                 # The node's wg0 address (NODE_MESH_IP) AND the provisioned
                 # private key must travel together: the installer converges
@@ -463,12 +463,17 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     ).select_related("mesh").only("private_key", "mesh__listen_port").first()
                     _wg_privkey = str(getattr(_wg_peer_row, "private_key", "") or "").strip()
                     if _wg_peer_row and getattr(_wg_peer_row, "mesh", None):
-                        _wg_port = int(getattr(_wg_peer_row.mesh, "listen_port", 51820) or 51820)
+                        _wg_port = int(
+                            getattr(server, "provider_metadata", {}).get("wg_port")
+                            or getattr(_wg_peer_row.mesh, "listen_port", 51820)
+                            or 51820
+                        )
                 except Exception:
                     _wg_privkey = ""
                 install_env["WG_ADDRESS"] = _wg_addr
                 install_env["NODE_MESH_BIND_IP"] = _wg_addr
                 install_env["NODE_MESH_IP"] = _wg_addr
+                install_env["WG_PRIMARY_PORT"] = str(_wg_port)
                 if _wg_privkey:
                     install_env["WG_PRIVATE_KEY"] = _wg_privkey
                 else:
@@ -633,8 +638,13 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                         _ep = str(_node_peer.endpoint or "").strip()
                         if ":" in _ep:
                             _ep_host, _ = _ep.rsplit(":", 1)
-                            _node_peer.endpoint = f"{_ep_host}:{_node_wg_port}"
-                            _node_peer.save(update_fields=["endpoint", "updated_at"])
+                            _new_ep = f"{_ep_host}:{_node_wg_port}"
+                            if _node_peer.endpoint != _new_ep:
+                                _node_peer.endpoint = _new_ep
+                                _node_peer.save(update_fields=["endpoint", "updated_at"])
+                                with contextlib.suppress(Exception):
+                                    from apps.deployments.tasks.infra.tasks_mesh import deploy_mesh_task
+                                    deploy_mesh_task.delay(str(_node_peer.mesh_id))
                         _append_log(server, f"ℹ️ WireGuard node using fallback port {_node_wg_port}/udp")
 
         # Registry logins: passwords travel over the encrypted SSH channel

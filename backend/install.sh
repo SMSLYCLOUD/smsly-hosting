@@ -699,9 +699,9 @@ configure_docker_mirror() {
         if [ -n "${MASTER_MESH_IP:-}" ]; then
             trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
         fi
-        daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}]}"
+        daemon_json="{\"insecure-registries\":[${trust_list}]}"
         if [ "$use_dns_fallback" = "true" ]; then
-            daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
+            daemon_json="{\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
         fi
         changed=true
     else
@@ -1833,13 +1833,13 @@ wg_ensure_listening() {
 
     # Without a configured peer endpoint, no handshake can ever succeed
     # during install — keep the primary port until peers are deployed.
-    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+    if [ ! -f "$conf" ] || ! grep -q '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
         return 0
     fi
 
-    # Ensure primary port config
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    # Ensure primary port config (tolerate indented Endpoint lines from legacy templates)
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
@@ -1857,11 +1857,16 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
+    if [ "$primary" = "$fallback" ]; then
+        echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on port ${primary} (peer/firewall may still be converging)${NC}"
+        return 0
+    fi
+
     # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
     # (filtering cloud firewalls check destination port as well as source).
     echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
     sleep 4
@@ -2478,9 +2483,9 @@ configure_docker_mirror() {
         if [ -n "${MASTER_MESH_IP:-}" ]; then
             trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
         fi
-        daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}]}"
+        daemon_json="{\"insecure-registries\":[${trust_list}]}"
         if [ "$use_dns_fallback" = "true" ]; then
-            daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
+            daemon_json="{\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
         fi
         changed=true
     else
@@ -9993,13 +9998,13 @@ wg_ensure_listening() {
 
     # Without a configured peer endpoint, no handshake can ever succeed
     # during install — keep the primary port until peers are deployed.
-    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+    if [ ! -f "$conf" ] || ! grep -q '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
         return 0
     fi
 
-    # Ensure primary port config
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    # Ensure primary port config (tolerate indented Endpoint lines from legacy templates)
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
@@ -10017,11 +10022,16 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
+    if [ "$primary" = "$fallback" ]; then
+        echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on port ${primary} (peer/firewall may still be converging)${NC}"
+        return 0
+    fi
+
     # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
     # (filtering cloud firewalls check destination port as well as source).
     echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
     sleep 4
@@ -14954,9 +14964,9 @@ configure_docker_mirror() {
         if [ -n "${MASTER_MESH_IP:-}" ]; then
             trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
         fi
-        daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}]}"
+        daemon_json="{\"insecure-registries\":[${trust_list}]}"
         if [ "$use_dns_fallback" = "true" ]; then
-            daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
+            daemon_json="{\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
         fi
         changed=true
     else
@@ -16088,13 +16098,13 @@ wg_ensure_listening() {
 
     # Without a configured peer endpoint, no handshake can ever succeed
     # during install — keep the primary port until peers are deployed.
-    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+    if [ ! -f "$conf" ] || ! grep -q '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
         return 0
     fi
 
-    # Ensure primary port config
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    # Ensure primary port config (tolerate indented Endpoint lines from legacy templates)
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
@@ -16112,11 +16122,16 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
+    if [ "$primary" = "$fallback" ]; then
+        echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on port ${primary} (peer/firewall may still be converging)${NC}"
+        return 0
+    fi
+
     # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
     # (filtering cloud firewalls check destination port as well as source).
     echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
     sleep 4
@@ -18089,9 +18104,9 @@ configure_docker_mirror() {
         if [ -n "${MASTER_MESH_IP:-}" ]; then
             trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
         fi
-        daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}]}"
+        daemon_json="{\"insecure-registries\":[${trust_list}]}"
         if [ "$use_dns_fallback" = "true" ]; then
-            daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
+            daemon_json="{\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
         fi
         changed=true
     else
@@ -19223,13 +19238,13 @@ wg_ensure_listening() {
 
     # Without a configured peer endpoint, no handshake can ever succeed
     # during install — keep the primary port until peers are deployed.
-    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+    if [ ! -f "$conf" ] || ! grep -q '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
         return 0
     fi
 
-    # Ensure primary port config
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    # Ensure primary port config (tolerate indented Endpoint lines from legacy templates)
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
@@ -19247,11 +19262,16 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
+    if [ "$primary" = "$fallback" ]; then
+        echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on port ${primary} (peer/firewall may still be converging)${NC}"
+        return 0
+    fi
+
     # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
     # (filtering cloud firewalls check destination port as well as source).
     echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
     sleep 4
@@ -19944,9 +19964,9 @@ configure_docker_mirror() {
         if [ -n "${MASTER_MESH_IP:-}" ]; then
             trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
         fi
-        daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}]}"
+        daemon_json="{\"insecure-registries\":[${trust_list}]}"
         if [ "$use_dns_fallback" = "true" ]; then
-            daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
+            daemon_json="{\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
         fi
         changed=true
     else
@@ -21078,13 +21098,13 @@ wg_ensure_listening() {
 
     # Without a configured peer endpoint, no handshake can ever succeed
     # during install — keep the primary port until peers are deployed.
-    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+    if [ ! -f "$conf" ] || ! grep -q '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
         return 0
     fi
 
-    # Ensure primary port config
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    # Ensure primary port config (tolerate indented Endpoint lines from legacy templates)
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
@@ -21102,11 +21122,16 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
+    if [ "$primary" = "$fallback" ]; then
+        echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on port ${primary} (peer/firewall may still be converging)${NC}"
+        return 0
+    fi
+
     # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
     # (filtering cloud firewalls check destination port as well as source).
     echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
     sleep 4
@@ -27323,9 +27348,9 @@ configure_docker_mirror() {
         if [ -n "${MASTER_MESH_IP:-}" ]; then
             trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
         fi
-        daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}]}"
+        daemon_json="{\"insecure-registries\":[${trust_list}]}"
         if [ "$use_dns_fallback" = "true" ]; then
-            daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
+            daemon_json="{\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
         fi
         changed=true
     else
@@ -28457,13 +28482,13 @@ wg_ensure_listening() {
 
     # Without a configured peer endpoint, no handshake can ever succeed
     # during install — keep the primary port until peers are deployed.
-    if [ ! -f "$conf" ] || ! grep -q '^Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
+    if [ ! -f "$conf" ] || ! grep -q '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" 2>/dev/null; then
         return 0
     fi
 
-    # Ensure primary port config
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
+    # Ensure primary port config (tolerate indented Endpoint lines from legacy templates)
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${primary}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${fallback}[[:space:]]*$|\1:${primary}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
 
@@ -28481,11 +28506,16 @@ wg_ensure_listening() {
     done
     echo -e " ${YELLOW}timeout${NC}"
 
+    if [ "$primary" = "$fallback" ]; then
+        echo -e "${YELLOW}  ⚠ WireGuard handshake still pending on port ${primary} (peer/firewall may still be converging)${NC}"
+        return 0
+    fi
+
     # Primary port blocked — fall back on BOTH ListenPort and peer Endpoint
     # (filtering cloud firewalls check destination port as well as source).
     echo -e "${YELLOW}  ⚠ Port ${primary} blocked or unreachable, falling back to ${fallback}...${NC}"
-    sed -i "s|^ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
-    sed -i "s|^\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*ListenPort[[:space:]]*=.*|ListenPort = ${fallback}|" "$conf"
+    sed -i "s|^[[:space:]]*\(Endpoint[[:space:]]*=.*\):${primary}[[:space:]]*$|\1:${fallback}|" "$conf"
     systemctl restart "wg-quick@${wg_iface}" 2>/dev/null \
         || { wg-quick down "$wg_iface" 2>/dev/null || true; wg-quick up "$wg_iface" 2>/dev/null || true; }
     sleep 4
@@ -31264,37 +31294,24 @@ fi
 if should_manage_caddy; then
     echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
     caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
-    if docker inspect -f '{{.State.Running}}' "$caddy_container"  | grep -q "true"; then
+    if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true"; then
         echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
         VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     else
         echo -e "${RED}  ✗ Caddy container is not running${NC}"
     fi
 else
-    if is_node_mode; then
-        echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
-        caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
-        if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true" \
-           && { curl -fsS --max-time 5 "http://127.0.0.1:2019/config/" >/dev/null 2>&1 \
-                || timeout -k 5 10 docker exec "$caddy_container" wget -q -O- http://127.0.0.1:2019/config/ >/dev/null 2>&1; }; then
-            echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
-            VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
-        else
-            echo -e "${RED}  ✗ Caddy reverse proxy check failed${NC}"
-        fi
+    # In node mode (or agent-lite / non-master), Traefik is the edge proxy.
+    echo -e "${BLUE}  → [4/4] Checking Traefik edge proxy...${NC}"
+    traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
+    if docker inspect -f '{{.State.Running}}' "$traefik_container" 2>/dev/null | grep -q "true"; then
+        echo -e "${GREEN}  ✓ Traefik edge proxy active${NC}"
+        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     else
-        echo -e "${BLUE}  → [4/4] Checking Traefik...${NC}"
-        TRAEFIK_CHECK_URL="http://127.0.0.1:8081/"
-        traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
-        if docker inspect -f '{{.State.Running}}' "$traefik_container"  | grep -q "true" \
-           && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" ; then
-            echo -e "${GREEN}  ✓ Traefik edge proxy active (${TRAEFIK_CHECK_URL})${NC}"
-            VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
-        else
-            echo -e "${RED}  ✗ Traefik edge proxy check failed (${TRAEFIK_CHECK_URL})${NC}"
-        fi
+        echo -e "${RED}  ✗ Traefik edge proxy check failed${NC}"
     fi
 fi
+
 fi
 
 # Show container status

@@ -66,15 +66,16 @@ class PeersMixin:
                 or metadata.get("wireguard_endpoint")
                 or ""
             ).lower() == "private" or bool(metadata.get("prefer_private_mesh"))
+            peer_port = int(metadata.get("wg_port") or mesh.listen_port)
             if server.private_ip and prefer_private:
-                endpoint = f"{server.private_ip}:{mesh.listen_port}"
+                endpoint = f"{server.private_ip}:{peer_port}"
                 log_event(
                     action="MESH_ENDPOINT_SELECTION",
                     target=f"Server: {server.name}",
                     metadata={"selected": "private", "ip": server.private_ip, "reason": "Explicit private mesh preference"}
                 )
             else:
-                endpoint = f"{server.host}:{mesh.listen_port}"
+                endpoint = f"{server.host}:{peer_port}"
                 log_event(
                     action="MESH_ENDPOINT_SELECTION",
                     target=f"Server: {server.name}",

@@ -81,8 +81,8 @@ class ConfigMixin:
                 if other.is_local and not peer.is_local and peer_port != mesh.listen_port:
                     ep_host, _ = ep.rsplit(":", 1)
                     ep = f"{ep_host}:{peer_port}"
-                peer_section += f"    Endpoint = {ep}\n"
-            peer_section += "    PersistentKeepalive = 25\n"
+                peer_section += f"Endpoint = {ep}\n"
+            peer_section += "PersistentKeepalive = 25\n"
             config += peer_section
 
         return config.strip() + "\n"
