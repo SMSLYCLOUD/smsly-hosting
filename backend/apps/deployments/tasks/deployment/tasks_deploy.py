@@ -331,15 +331,28 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 )
                 return
 
+            # UPLOAD-type remote deploys: master holds the uploaded source
+            # archive (file:// URI), so build and push on master before
+            # delegating the prebuilt registry reference to the target node.
+            if service.deploy_type == 'UPLOAD':
+                with fleet_build_lock(deployment):
+                    built_image = _build_uploaded_source(deployment, service)
+                _handle_remote_deployment(
+                    deployment, effective_server,
+                    skip_review=skip_review, image_name=built_image,
+                    fast_deploy=fast_deploy,
+                )
+                return
+
             _handle_remote_deployment(deployment, effective_server, skip_review=skip_review,
                                       fast_deploy=fast_deploy)
             return
 
-        if service.deploy_type == 'GIT':
-            prebuilt = str(service.docker_image or "").strip()
-            if prebuilt and deployment.source_node:
-                image_name = prebuilt
-            elif deployment.is_rollback or skip_review:
+        prebuilt = str(service.docker_image or "").strip()
+        if prebuilt and deployment.source_node and service.deploy_type != 'DOCKER':
+            image_name = prebuilt
+        elif service.deploy_type == 'GIT':
+            if deployment.is_rollback or skip_review:
                 with fleet_build_lock(deployment):
                     manager = PipelineManager(
                         deployment,
@@ -481,6 +494,9 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
                 with fleet_build_lock(deployment):
                     manager = PipelineManager(deployment)
                     built_image = manager.run_build_only()
+            elif service.deploy_type == 'UPLOAD':
+                with fleet_build_lock(deployment):
+                    built_image = _build_uploaded_source(deployment, service)
             else:
                 with fleet_build_lock(deployment):
                     manager = PipelineManager(deployment)
@@ -494,6 +510,9 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         prebuilt = str(service.docker_image or "").strip()
         if prebuilt and deployment.source_node:
             image_name = prebuilt
+        elif service.deploy_type == 'UPLOAD':
+            with fleet_build_lock(deployment):
+                image_name = _build_uploaded_source(deployment, service)
         else:
             with fleet_build_lock(deployment):
                 manager = PipelineManager(deployment)

@@ -1593,19 +1593,37 @@ class AddonProvisioner:
     def _attach_remote_scoped_network(self, ssh, server, addon,
                                       container_name: str, alias_name: str) -> None:
         """Attach a remote addon container to the service's project-scoped bridge."""
+        _scoped = None
+        _egress = ["0.0.0.0/0"]
         try:
             _project = getattr(getattr(addon, 'service', None), 'project', None)
-            _scoped = None
             if _project is not None:
                 from apps.deployments.models.network_scope import ScopedNetwork as _SN
-                _scoped = _SN.resolve_network_name(_project)
+                _cfg = _SN.resolve_network_config(_project)
+                _scoped = str(_cfg.get("name") or "").strip() or None
+                _egress = list(_cfg.get("allowed_egress_networks") or ["0.0.0.0/0"])
         except Exception as exc:
             logger.debug("Scoped net resolve skipped for %s: %s", container_name, exc)
             _scoped = None
-        if _scoped and alias_name:
+        if _scoped and _scoped != self.network_name and alias_name:
+            # Ensure the project bridge exists on the remote node before attaching
+            # addons (a fresh node has no project bridges until first deploy).
+            try:
+                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                RemoteOrchestrator(server).ensure_remote_network(
+                    {"network_name": _scoped, "egress": _egress}
+                )
+            except Exception as exc:
+                logger.debug("Remote network API ensure skipped for %s: %s", _scoped, exc)
+            q_scoped = shlex.quote(_scoped)
+            _ensure_cmd = (
+                f"docker network inspect {q_scoped} >/dev/null 2>&1 "
+                f"|| docker network create --driver bridge {q_scoped}"
+            )
+            ssh.exec_command(_ensure_cmd, timeout=30, raise_on_error=False)
             _attach = (
                 f"docker network connect --alias {shlex.quote(alias_name)} "
-                f"{shlex.quote(_scoped)} {shlex.quote(container_name)} 2>&1"
+                f"{q_scoped} {shlex.quote(container_name)} 2>&1"
             )
             _aout, _aerr, _acode = ssh.exec_command(_attach, timeout=60, raise_on_error=False)
             if _acode != 0 and 'already exists' not in ((_aout or '') + (_aerr or '')):

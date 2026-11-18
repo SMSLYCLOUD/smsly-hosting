@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import zipfile
 from urllib.parse import unquote, urlparse
@@ -12,9 +13,9 @@ from django.conf import settings
 
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.constants import DOCKER_BUILD_TIMEOUT, OLLAMA_PULL_TIMEOUT
+from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
 from apps.deployments.models import Deployment, Service
-from apps.deployments.utils import append_log, broadcast_status, is_deployment_local
+from apps.deployments.utils import append_log, broadcast_status, is_deployment_local, update_stage
 
 from .build_docker import _docker_safe_segment
 
@@ -124,20 +125,85 @@ def _build_function(deployment, service) -> str:
         if build_dir:
             shutil.rmtree(build_dir, ignore_errors=True)
 
+def _safe_extract_archive(archive_path: str, destination: str):
+    """Extract a .zip or .tar.gz/.tgz source archive while blocking traversal."""
+    lower = archive_path.lower()
+    if lower.endswith('.tar.gz') or lower.endswith('.tgz'):
+        dest_root = os.path.abspath(destination)
+        with tarfile.open(archive_path, "r:gz") as tf:
+            members = tf.getmembers()
+            for member in members:
+                if member.issym() or member.islnk():
+                    raise ValueError(f"Archive contains unsafe link entry: {member.name}")
+                target_path = os.path.abspath(os.path.join(dest_root, member.name))
+                if target_path != dest_root and not target_path.startswith(dest_root + os.sep):
+                    raise ValueError(f"Archive contains unsafe file paths: {member.name}")
+            tf.extractall(dest_root, members=members)
+        return
+    _safe_extract_zip(archive_path, destination)
+
+
+def _push_built_image(deployment, service, image_name: str, is_local: bool) -> str:
+    """Resolve registry credentials and push *image_name* when configured."""
+    registry = getattr(settings, "CONTAINER_REGISTRY_URL", None)
+    username = None
+    password = None
+    try:
+        from apps.deployments.models.registry_scope import ScopedRegistry
+        creds = ScopedRegistry.resolve_registry_credentials(getattr(service, "project", None))
+        scoped_url = (creds.get("url") or "").strip()
+        if scoped_url:
+            registry = scoped_url
+        username = creds.get("username") or None
+        password = creds.get("password") or None
+    except Exception:
+        pass
+
+    if not is_local and not registry:
+        raise RuntimeError(
+            "CONTAINER_REGISTRY_URL is not configured. "
+            "A registry is required to push/pull images for remote node deployments."
+        )
+    if not registry:
+        return image_name
+
+    append_log(deployment, f"Pushing uploaded image to {registry}...\n")
+    remote_tag, push_error = NixpacksBuilder.push_image(
+        image_name,
+        registry,
+        username=username,
+        password=password,
+    )
+    registry_host = registry.split("://", 1)[-1].rstrip("/")
+    pushed_to_registry = bool(
+        not push_error
+        and remote_tag
+        and (remote_tag.startswith(registry) or remote_tag.startswith(registry_host))
+    )
+    if not pushed_to_registry and not is_local:
+        detail = f" ({push_error})" if push_error else ""
+        raise RuntimeError(
+            f"Image push failed{detail}: Local fallback is not allowed for remote deployments. "
+            f"Target node requires a working registry to pull {remote_tag}."
+        )
+    return remote_tag
+
+
 def _build_uploaded_source(deployment, service) -> str:
     build_dir = None
     try:
         deployment.status = Deployment.Status.BUILDING
         deployment.save(update_fields=["status"])
         broadcast_status(deployment)
+        update_stage(deployment, 'Build', 'running')
 
-        zip_path = _resolve_upload_zip_path(service.repository_url)
+        archive_path = _resolve_upload_zip_path(service.repository_url)
         build_dir = tempfile.mkdtemp(prefix=f"upload_{deployment.id}_")
         source_dir = os.path.join(build_dir, "source")
         os.makedirs(source_dir, exist_ok=True)
 
-        append_log(deployment, f"Extracting uploaded source from {zip_path}...\n")
-        _safe_extract_zip(zip_path, source_dir)
+        append_log(deployment, f"Extracting uploaded source from {archive_path}...\n")
+        _safe_extract_archive(archive_path, source_dir)
 
         entries = [
             os.path.join(source_dir, item)
@@ -174,13 +240,18 @@ def _build_uploaded_source(deployment, service) -> str:
                 raise ValueError("Build strategy is docker but no Dockerfile was found.")
             append_log(deployment, "Building uploaded source with Dockerfile...\n")
             try:
-                subprocess.run(
+                result = subprocess.run(
                     ["docker", "build", "-t", image_name, "--load", "-f", dockerfile_path, source_dir],
                     check=True,
                     capture_output=True,
                     text=True,
-                timeout=OLLAMA_PULL_TIMEOUT,
+                    timeout=DOCKER_BUILD_TIMEOUT,
                 )
+                build_output = "\n".join(
+                    part for part in [result.stdout, result.stderr] if part
+                ).strip()
+                if build_output:
+                    append_log(deployment, f"{build_output[-4000:]}\n")
             except subprocess.CalledProcessError as exc:
                 append_log(deployment, f"{exc.stdout or ''}\n{exc.stderr or ''}\n")
                 raise
@@ -198,24 +269,9 @@ def _build_uploaded_source(deployment, service) -> str:
                 env_vars=env_map,
             )
 
-        registry = getattr(settings, "CONTAINER_REGISTRY_URL", None)
+        update_stage(deployment, 'Build', 'success')
         is_local = is_deployment_local(deployment)
-        if not is_local and not registry:
-            raise RuntimeError(
-                "CONTAINER_REGISTRY_URL is not configured. "
-                "A registry is required to push/pull images for remote node deployments."
-            )
-        if registry:
-            append_log(deployment, f"Pushing uploaded image to {registry}...\n")
-            remote_tag, _push_error = NixpacksBuilder.push_image(image_name, registry)
-            pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry))
-            if not pushed_to_registry and not is_local:
-                raise RuntimeError(
-                    f"Image push failed: Local fallback is not allowed for remote deployments. "
-                    f"Target node requires a working registry to pull {remote_tag}."
-                )
-            image_name = remote_tag
-        return image_name
+        return _push_built_image(deployment, service, image_name, is_local=is_local)
 
     finally:
         if build_dir:

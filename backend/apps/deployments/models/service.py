@@ -762,6 +762,27 @@ class Service(TimeStampedModel):
             models.Index(fields=["server", "status"], name="svc_server_status_idx"),
         ]
 
+    def clean_fields(self, exclude=None):
+        """Allow local file:// archive URIs when deploy_type is UPLOAD."""
+        url = (self.repository_url or "").strip()
+        if self.deploy_type == "UPLOAD" and url.startswith("file://"):
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            if (
+                parsed.scheme != "file"
+                or (parsed.netloc and parsed.netloc not in ("localhost", "127.0.0.1"))
+                or not parsed.path
+            ):
+                raise ValidationError(
+                    {"repository_url": ["Enter a valid local file:// archive URL."]}
+                )
+            ext_exclude = list(exclude or [])
+            if "repository_url" not in ext_exclude:
+                ext_exclude.append("repository_url")
+            super().clean_fields(exclude=ext_exclude)
+            return
+        super().clean_fields(exclude=exclude)
+
     def save(self, *args, **kwargs):
         # ISOLATION INVARIANT: every service belongs to a project. Project
         # membership is what drives the per-project scoped docker network,

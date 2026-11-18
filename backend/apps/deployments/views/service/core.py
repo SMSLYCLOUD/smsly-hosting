@@ -33,9 +33,10 @@ from .ai_router import AIRouterActionsMixin
 from .previews import PreviewActionsMixin
 from .incident import IncidentMixin
 from .meta import MetaActionsMixin
+from ..files import ServiceFileActionsMixin
 
 
-class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, DomainActionsMixin, EnvVarActionsMixin, FileBrowserActionsMixin, AIRouterActionsMixin, PreviewActionsMixin, IncidentMixin, MetaActionsMixin, viewsets.ModelViewSet):
+class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, DomainActionsMixin, EnvVarActionsMixin, FileBrowserActionsMixin, AIRouterActionsMixin, PreviewActionsMixin, IncidentMixin, MetaActionsMixin, ServiceFileActionsMixin, viewsets.ModelViewSet):
     """Service viewset composed from domain-specific mixins."""
     """
     Service Management and Nested Resources.
