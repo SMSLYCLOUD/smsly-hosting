@@ -685,3 +685,45 @@ class NodeExecViewSet(viewsets.ViewSet):
         except Exception as exc:
             logger.debug("Node storage test failed: %s", _scrub_error(exc, 120))
             return Response({"error": _scrub_error(exc, 200)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=["post"], url_path="registry/sync")
+    def registry_sync(self, request):
+        """Receive and store encrypted registry pull credentials from master.
+
+        SECURITY: privileged-only (HMAC / internal token / staff) over TLS;
+        never logs credentials and only returns the synced count.
+        """
+        ok, err = _verify_node_caller(request, require_privileged=True)
+        if not ok:
+            return err
+        data = request.data if isinstance(request.data, dict) else {}
+        creds = data.get("credentials")
+        if not isinstance(creds, list):
+            return Response(
+                {"error": "credentials list is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(creds) > 100:
+            return Response(
+                {"error": "Too many credentials (max 100)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            from apps.deployments.services.registry_credentials import (
+                upsert_synced_pull_credentials,
+            )
+
+            owner = request.user if getattr(request.user, "is_authenticated", False) else None
+            stored = upsert_synced_pull_credentials(creds, owner=owner)
+            return Response({"ok": True, "synced": stored})
+        except ValueError as exc:
+            return Response(
+                {"error": _scrub_error(exc, 200)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as exc:
+            logger.debug("Node registry sync failed: %s", _scrub_error(exc, 120))
+            return Response(
+                {"error": _scrub_error(exc, 200)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

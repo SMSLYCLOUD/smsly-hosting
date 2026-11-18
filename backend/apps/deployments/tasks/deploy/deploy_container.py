@@ -255,6 +255,8 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             _pull_candidates = [pull_ref] if pull_ref else [image_name]
         append_log(deployment, f"Pulling image {pull_ref}...\n")
         _pulled_ref = None
+        if hasattr(getattr(compute, 'adapter', None), 'set_pull_scope'):
+            compute.adapter.set_pull_scope(service)
         if pull_ref and compute.pull_image(pull_ref):
             _pulled_ref = pull_ref
         else:

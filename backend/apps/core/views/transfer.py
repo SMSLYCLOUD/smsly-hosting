@@ -688,26 +688,9 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            from django.conf import settings as dj_settings
-            from apps.cloud.docker_client import get_docker_client
+            from apps.cloud.docker_client import get_docker_client, pull_image_with_auth
             client = get_docker_client()
-            # Log in first: daemon credentials are matched per registry
-            # hostname, and this node holds none for mesh refs by default —
-            # without this the pull dies with "no basic auth credentials"
-            # (2026-10-02: every transfer stalled here).
-            _reg_user = str(getattr(dj_settings, 'REGISTRY_USER', '') or '').strip()
-            _reg_pass = str(getattr(dj_settings, 'REGISTRY_PASSWORD', '') or '').strip()
-            if _reg_user and _reg_pass and '/' in image:
-                _img_host = image.split('/')[0]
-                if '.' in _img_host or ':' in _img_host or _img_host == 'localhost':
-                    try:
-                        client.login(
-                            username=_reg_user, password=_reg_pass,
-                            registry=_img_host,
-                        )
-                    except Exception as login_exc:
-                        logger.warning("Incoming pull login failed (%s); trying pull anyway", login_exc)
-            client.images.pull(image)
+            pull_image_with_auth(client, image)
             return Response({'status': 'pulled', 'image': image})
         except Exception:
             logger.exception("Image pull failed")

@@ -74,10 +74,11 @@ def _scoped_project_tuples(project, node_url: str = "") -> list[tuple]:
                 resolved_node = (master_registry_node_url() or "").strip()
             except Exception:
                 resolved_node = ""
-        tuples = [(url, user, pwd)]
-        if url in internal_hosts and resolved_node and resolved_node != url:
-            tuples.append((resolved_node, user, pwd))
-        return tuples
+        if url in internal_hosts:
+            if resolved_node and resolved_node != url:
+                return [(resolved_node, user, pwd)]
+            return []
+        return [(url, user, pwd)]
     except Exception:
         return []
 
@@ -110,13 +111,24 @@ def _registry_credential_list(server: ManagedServer, project=None) -> list:
     except Exception:
         pass
     try:
+        try:
+            from apps.deployments.services.registry_routing import (
+                internal_registry_hosts as _internal_registry_hosts,
+            )
+            _internal_hosts = set(_internal_registry_hosts())
+        except Exception:
+            _internal_hosts = set()
         for reg in server.registry_access.filter(is_active=True).select_related("content_type"):
             reg_url = (getattr(reg, "registry_url", "") or "").strip()
             user = (reg.username or "").strip()
             pwd = (reg.password or "").strip()
             if user and pwd:
                 if reg_url:
-                    creds.append((reg_url, user, pwd))
+                    if reg_url in _internal_hosts:
+                        if node_url and node_url != reg_url:
+                            creds.append((node_url, user, pwd))
+                    else:
+                        creds.append((reg_url, user, pwd))
                 elif getattr(reg, "is_internal", False) and node_url:
                     # Per-project internal row (registry_url=""): same
                     # registry as master, project-scoped htpasswd user.
@@ -192,6 +204,55 @@ def _master_registry_ca_pem() -> str:
         return ""
 
 
+def sync_node_pull_credentials(server: ManagedServer, project=None) -> bool:
+    """Sync master & project registry pull credentials to *server* over HMAC API.
+
+    Worker nodes run their own local ``.env`` REGISTRY_PASSWORD and DB
+    PlatformConfig, which differ from master's and cannot pull images from
+    master (10.100.0.1:5000) unless synced via the privileged node API.
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    try:
+        from apps.deployments.services.registry_routing import (
+            internal_registry_hosts,
+            master_registry_node_url,
+        )
+        node_url = (master_registry_node_url() or "").strip()
+        internal_hosts = set(internal_registry_hosts()) | ({node_url} if node_url else set())
+    except Exception:
+        node_url = ""
+        internal_hosts = set()
+
+    payload: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for url, user, pwd in _registry_credential_list(server, project=project):
+        host = str(url or "").split("://")[-1].split("/")[0].strip().rstrip("/")
+        if not host or not user or not pwd:
+            continue
+        namespace = user if (user.startswith("proj-") and host in internal_hosts) else ""
+        key = (host, namespace)
+        if key in seen:
+            continue
+        seen.add(key)
+        payload.append({
+            "registry": host,
+            "namespace": namespace,
+            "username": user,
+            "password": pwd,
+        })
+
+    if not payload:
+        return True
+    try:
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+        return bool(RemoteOrchestrator(server).sync_registry_credentials(payload))
+    except Exception as exc:
+        _logger.debug("Node registry API sync failed for %s: %s",
+                      getattr(server, "name", "?"), exc)
+        return False
+
+
 def ensure_node_registry(server: ManagedServer, project=None) -> dict:
     """Self-heal a node's trust + login for the master registry.
 
@@ -210,6 +271,16 @@ def ensure_node_registry(server: ManagedServer, project=None) -> dict:
     import logging as _logging
     _logger = _logging.getLogger(__name__)
     result: dict = {"ok": False, "repaired": [], "error": ""}
+    # Sync pull credentials over HMAC API independently of SSH so worker
+    # containers (celery-worker / backend) have the exact master/project
+    # pull secret even if host .env differs or SSH is unavailable.
+    if isinstance(server, ManagedServer):
+        try:
+            if sync_node_pull_credentials(server, project=project):
+                result["repaired"].append("registry-api-sync")
+        except Exception as exc:
+            _logger.debug("ensure_node_registry API sync skipped for %s: %s",
+                          getattr(server, "name", "?"), exc)
     try:
         from apps.deployments.services.registry_routing import master_registry_node_url
         node_url = master_registry_node_url()

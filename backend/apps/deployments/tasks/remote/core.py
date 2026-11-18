@@ -199,7 +199,9 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
         from apps.deployments.services.provisioner.helpers.registry import (
             ensure_node_registry,
         )
-        _reg_heal = ensure_node_registry(server)
+        _reg_heal = ensure_node_registry(
+            server, project=getattr(service, "project", None),
+        )
         if _reg_heal.get("repaired"):
             append_log(
                 deployment,

@@ -99,34 +99,41 @@ def from_env(**kwargs) -> docker.DockerClient:
     return get_docker_client(**kwargs)
 
 
-def login_for_image(client: docker.DockerClient, image) -> bool:
+def login_for_image(client: docker.DockerClient, image, scope_obj=None) -> dict | None:
     """docker login for an image's registry host (best-effort).
 
-    Daemon credentials are matched per registry hostname: pulling a
-    mesh-qualified ref (10.100.0.1:5000/...) with only a
-    registry:5000 login in place dies with "no basic auth
-    credentials" (2026-10-02: every node pull failed this way).
-    Failures only log — callers proceed to pull anyway (public
-    images, pre-seeded daemons).
+    Resolves pull credentials via the shared registry_credentials helper
+    so worker nodes use master-synced credentials rather than their own
+    local ``REGISTRY_PASSWORD``. Returns an ``auth_config`` dict when
+    credentials were resolved and login succeeded (so callers can also pass
+    ``X-Registry-Auth`` directly on pull), or ``None`` otherwise.
     """
-    try:
-        from django.conf import settings as dj_settings
-    except Exception:
-        return False
-    user = str(getattr(dj_settings, 'REGISTRY_USER', '') or '').strip()
-    password = str(getattr(dj_settings, 'REGISTRY_PASSWORD', '') or '').strip()
     ref = str(image or '')
-    if not user or not password or '/' not in ref:
-        return False
-    host = ref.split('/')[0]
-    if '.' not in host and ':' not in host and host != 'localhost':
-        return False
+    if not ref:
+        return None
+    try:
+        from apps.deployments.services.registry_credentials import (
+            resolve_pull_credentials,
+        )
+        host, user, password = resolve_pull_credentials(ref, scope_obj=scope_obj)
+    except Exception:
+        return None
+    if not host or not user or not password:
+        return None
     try:
         client.login(username=user, password=password, registry=host)
-        return True
+        return {'username': user, 'password': password}
     except Exception as exc:
-        logger.debug("Docker login for pull failed (%s); trying pull anyway", exc)
-        return False
+        logger.warning("Docker login for pull failed (%s); trying pull anyway", exc)
+        return None
+
+
+def pull_image_with_auth(client: docker.DockerClient, image: str, scope_obj=None):
+    """Authenticate best-effort for *image* and pull via *client*."""
+    auth_config = login_for_image(client, image, scope_obj=scope_obj)
+    if auth_config:
+        return client.images.pull(image, auth_config=auth_config)
+    return client.images.pull(image)
 
 
 # Patch docker.from_env so any direct call across the codebase inherits resilience

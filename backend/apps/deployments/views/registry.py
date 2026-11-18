@@ -15,7 +15,9 @@ class RegistryCredentialViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return RegistryCredential.objects.filter(owner=self.request.user)
+        return RegistryCredential.objects.filter(owner=self.request.user).exclude(
+            name__startswith="__node_sync__:"
+        )
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)

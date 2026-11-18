@@ -86,6 +86,18 @@ class ExecMixin:
         resp = self._request("POST", "/api/v1/node/network/ensure/", payload=payload, timeout=60)
         return resp is not None and resp.status_code < 400
 
+    def sync_registry_credentials(self, credentials: list[dict]) -> bool:
+        """Push encrypted-in-transit registry pull credentials to a node over HMAC API."""
+        if not credentials:
+            return True
+        resp = self._request(
+            "POST",
+            "/api/v1/node/registry/sync/",
+            payload={"credentials": credentials},
+            timeout=30,
+        )
+        return resp is not None and resp.status_code < 400
+
     def attach_remote_container_network(self, container: str, network: str, alias: str = "") -> dict | None:
         """Live-attach a node container to a scoped bridge (no recreate)."""
         resp = self._request(
