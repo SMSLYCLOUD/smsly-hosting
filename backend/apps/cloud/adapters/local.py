@@ -1388,75 +1388,37 @@ class LocalAdapter(BaseCloudAdapter):
 
         # When running under gVisor (runsc), the container's userspace TCP/IP
         # stack cannot reach Docker's embedded DNS proxy at 127.0.0.11, so
-        # hostname-based addon connections fail.  Work around this by
-        # resolving addon hostnames to container IPs and injecting them into
-        # /etc/hosts via Docker's "extra_hosts" mechanism.
+        # hostname-based addon connections fail. Work around this via the
+        # shared _resolve_gvisor_extra_hosts resolver (honors shared Postgres,
+        # synced node container_name metadata, and dual-homed bridges).
         if container_runtime == "runsc":
             try:
-                from apps.deployments.models.addons import Addon as _Addon
-                from urllib.parse import urlparse as _urlparse
-                extra_hosts = []
-                # Resolve the service_id for addon lookup. Only addons the
-                # service can actually reach count: its OWN addons plus
-                # project-level SHARED addons (name ends with '-shared').
-                # SECURITY (addon-theft): never inject other services'
-                # personal addon hostnames into this container's
-                # /etc/hosts — a manual service in the same project
-                # would otherwise have its private DB hostname wired in.
-                svc_id = getattr(self, '_service_id', None) or getattr(self, 'service_id', None)
-                addon_qs = _Addon.objects.filter(status='ACTIVE')
+                from apps.deployments.models import Service as _AddonSvc
+                from apps.deployments.services.container_refresh import (
+                    _resolve_gvisor_extra_hosts,
+                )
+
+                svc_id = getattr(self, "_service_id", None) or getattr(self, "service_id", None)
+                _addsvc = None
                 if svc_id:
-                    from apps.deployments.models import Service as _AddonSvc
-                    from django.db.models import Q
-                    _addsvc = _AddonSvc.objects.filter(id=svc_id).select_related('project').first()
-                    if _addsvc and _addsvc.project:
-                        addon_qs = addon_qs.filter(
-                            Q(service=_addsvc)
-                            | Q(service__project=_addsvc.project, name__endswith='-shared'),
-                        )
-                for _addon in addon_qs:
-                    if not _addon.connection_url:
-                        continue
-                    _parsed = _urlparse(_addon.connection_url)
-                    _host = _parsed.hostname or ''
-                    _addon_container = f"smsly-addon-{_addon.addon_type.lower()}-{_addon.id}"
-                    if (str(getattr(_addon, 'addon_type', '') or '') == 'POSTGRES'
-                            and str(getattr(_addon, 'provision_mode', '') or '') == 'shared'):
-                        # Logical database — no per-addon container. Resolve
-                        # the shared server (or tenant pooler), mirroring
-                        # container_refresh (kept local to avoid imports).
-                        _addon_container = "smsly-shared-postgres"
-                        try:
-                            from apps.addons.services.shared_postgres import (
-                                SHARED_CONTAINER as _SHARED,
-                            )
-                            _addon_container = _SHARED
-                        except Exception:
-                            pass
-                        if getattr(_addon, 'pooler_routed', False):
-                            try:
-                                from apps.addons.services import tenant_pooler as _pooler
-                                _pname = _pooler.tenants_container_name()
-                                if _pname:
-                                    _addon_container = _pname
-                            except Exception:
-                                pass
-                    try:
-                        _container = self.docker_client.containers.get(_addon_container)
-                        _container.reload()
-                        _net_info = (_container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
-                        _net_data = _net_info.get(network_name) or {}
-                        _ip = _net_data.get('IPAddress', '')
-                        if _ip and _host and _host != _ip:
-                            extra_hosts.append(f"{_host}:{_ip}")
-                    except Exception:
-                        pass
-                if extra_hosts:
-                    create_kwargs["extra_hosts"] = extra_hosts
-                    logger.info(
-                        "gVisor detected: injecting %d addon hostname->IP mappings into /etc/hosts: %s",
-                        len(extra_hosts), extra_hosts,
+                    _addsvc = (
+                        _AddonSvc.objects.filter(id=svc_id)
+                        .select_related("project")
+                        .first()
                     )
+                if _addsvc is not None or not svc_id:
+                    extra_hosts = _resolve_gvisor_extra_hosts(
+                        _addsvc,
+                        list(networks_dict.keys()),
+                        self.docker_client,
+                    )
+                    if extra_hosts:
+                        create_kwargs["extra_hosts"] = extra_hosts
+                        logger.info(
+                            "gVisor detected: injecting %d addon hostname->IP mappings into /etc/hosts: %s",
+                            len(extra_hosts),
+                            extra_hosts,
+                        )
             except Exception as exc:
                 logger.warning("Failed to resolve addon IPs for gVisor extra_hosts: %s", exc)
 

@@ -164,6 +164,7 @@ def push_caddy_to_node(server_id: str) -> dict:
         ssh.connect()
 
         caddy_path = "/opt/smsly-hosting/infrastructure/docker/Caddyfile.node"
+        staging_path = f"{caddy_path}.tmp"
 
         import os
         import tempfile
@@ -174,15 +175,35 @@ def push_caddy_to_node(server_id: str) -> dict:
             tmp_path = tmp.name
 
         try:
-            ssh.upload_file(tmp_path, caddy_path)
+            ssh.upload_file(tmp_path, staging_path)
         finally:
             os.unlink(tmp_path)
 
-        ssh.exec_command(f"chmod 644 {caddy_path}", timeout=10)
+        # Write in-place so the single-file bind mount inside the running
+        # Caddy container keeps the same inode instead of staying pinned to
+        # an unlinked copy. If the container already holds a drifted inode,
+        # recreate Caddy so the current file takes effect.
+        ssh.exec_command(
+            f"cat {staging_path} > {caddy_path} && rm -f {staging_path} && chmod 644 {caddy_path}",
+            timeout=10,
+        )
 
+        reload_cmd = (
+            "cd /opt/smsly-hosting && "
+            "_hs=$(sha256sum infrastructure/docker/Caddyfile.node 2>/dev/null | awk '{print $1}') ; "
+            "_cs=$(timeout 20 docker compose -f infrastructure/docker/docker-compose.node.yml "
+            "exec -T caddy sha256sum /etc/caddy/Caddyfile 2>/dev/null | awk '{print $1}' || true) ; "
+            "if [ -n \"$_hs\" ] && [ \"$_hs\" != \"$_cs\" ]; then "
+            "timeout 60 docker compose -f infrastructure/docker/docker-compose.node.yml "
+            "up -d --no-deps --force-recreate caddy; "
+            "else "
+            "timeout 30 docker compose -f infrastructure/docker/docker-compose.node.yml "
+            "exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force; "
+            "fi"
+        )
         reload_out, reload_err, reload_code = ssh.exec_command(
-            "cd /opt/smsly-hosting && docker compose -f infrastructure/docker/docker-compose.node.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force",
-            timeout=30,
+            reload_cmd,
+            timeout=75,
             raise_on_error=False,
         )
         if reload_code != 0:
@@ -232,9 +253,16 @@ def _node_live_caddy_matches(node, want_hash: str) -> bool:
         )
         ssh.connect()
         try:
+            check_cmd = (
+                "_hh=$(sha256sum /opt/smsly-hosting/infrastructure/docker/Caddyfile.node "
+                "2>/dev/null | awk '{print $1}') ; "
+                "_ch=$(cd /opt/smsly-hosting && timeout 20 docker compose -f "
+                "infrastructure/docker/docker-compose.node.yml exec -T caddy "
+                "sha256sum /etc/caddy/Caddyfile 2>/dev/null | awk '{print $1}' || true) ; "
+                "if [ -n \"$_hh\" ] && [ \"$_hh\" = \"$_ch\" ]; then echo \"$_hh\"; fi"
+            )
             out, _, _ = ssh.exec_command(
-                "sha256sum /opt/smsly-hosting/infrastructure/docker/Caddyfile.node "
-                "2>/dev/null | awk '{print $1}'",
+                check_cmd,
                 timeout=30,
                 raise_on_error=False,
             )

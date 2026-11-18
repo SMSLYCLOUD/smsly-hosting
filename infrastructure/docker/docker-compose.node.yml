@@ -279,6 +279,7 @@ services:
       - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
       - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
       - backups_data:/app/backups
+      - traefik_dynamic:/traefik-dynamic
     healthcheck:
       test:
         - CMD-SHELL

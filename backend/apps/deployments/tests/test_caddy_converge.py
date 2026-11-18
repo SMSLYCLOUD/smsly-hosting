@@ -43,6 +43,27 @@ class PushCaddyHashTests(TestCase):
         want = hashlib.sha256(b"line1\n").hexdigest()
         self.assertEqual(server.provider_metadata.get("caddy_config_sha256"), want)
 
+    def test_upload_writes_in_place_and_verifies_container_hash(self):
+        from apps.deployments.tasks.deploy import caddy as caddy_tasks
+        server = _node(self.user, name="caddy-node-inplace")
+        with patch(
+            "apps.deployments.services.caddy_manager.config_generation.generate_node_caddyfile",
+            return_value="site {\n}\n",
+        ), patch(
+            "apps.deployments.services.ssh_client.SSHClient",
+        ) as mock_ssh_cls:
+            ssh = MagicMock()
+            ssh.exec_command.side_effect = [("", "", 0), ("", "", 0)]
+            mock_ssh_cls.return_value = ssh
+            result = caddy_tasks.push_caddy_to_node(str(server.id))
+        self.assertTrue(result["ok"])
+        upload_target = ssh.upload_file.call_args[0][1]
+        self.assertTrue(upload_target.endswith("Caddyfile.node.tmp"))
+        cmds = [c[0][0] for c in ssh.exec_command.call_args_list]
+        self.assertIn("> /opt/smsly-hosting/infrastructure/docker/Caddyfile.node", cmds[0])
+        self.assertIn("sha256sum /etc/caddy/Caddyfile", cmds[1])
+        self.assertIn("--force-recreate caddy", cmds[1])
+
     def test_failure_stamps_nothing(self):
         result, server = self._push(reload_code=1)
         self.assertFalse(result["ok"])
@@ -159,3 +180,50 @@ class ReconcileCaddyTaskTests(TestCase):
         ):
             self.assertTrue(
                 caddy_tasks._node_live_caddy_matches(node, "abc"))
+
+    def test_live_check_detects_container_inode_drift(self):
+        import apps.deployments.tasks.deploy.caddy as caddy_tasks
+        node = _node(self.user, name="caddy-node-inode-drift")
+        with patch("apps.deployments.services.ssh_client.SSHClient") as mock_ssh_cls:
+            ssh = MagicMock()
+            # Host and container differ -> remote shell echoes empty string
+            ssh.exec_command.return_value = ("", "", 0)
+            mock_ssh_cls.return_value = ssh
+            self.assertFalse(caddy_tasks._node_live_caddy_matches(node, "abc"))
+
+            ssh.exec_command.return_value = ("abc\n", "", 0)
+            self.assertTrue(caddy_tasks._node_live_caddy_matches(node, "abc"))
+
+
+class SyncRemoteEdgeCaddyTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="caddy-edge-user", password="x")
+
+    def test_sync_remote_edge_caddy_regenerates_master_and_pushes_full_node(self):
+        from apps.deployments.tasks.remote import core as remote_core
+
+        node = _node(self.user, name="caddy-edge-full")
+        with patch.object(remote_core, "_regenerate_caddyfile") as mock_regen, patch(
+            "apps.deployments.tasks.deploy.caddy.push_caddy_to_node",
+            return_value={"ok": True},
+        ) as mock_push:
+            remote_core._sync_remote_edge_caddy(node, regenerate_master=True)
+        mock_regen.assert_called_once_with()
+        mock_push.assert_called_once_with(str(node.id))
+
+    def test_sync_remote_edge_caddy_skips_lite_agent_push(self):
+        from apps.deployments.tasks.remote import core as remote_core
+
+        lite = ManagedServer.objects.create(
+            name="caddy-edge-lite",
+            host="10.9.9.10",
+            is_primary=False,
+            is_lite_agent=True,
+            owner=self.user,
+        )
+        with patch.object(remote_core, "_regenerate_caddyfile") as mock_regen, patch(
+            "apps.deployments.tasks.deploy.caddy.push_caddy_to_node",
+        ) as mock_push:
+            remote_core._sync_remote_edge_caddy(lite, regenerate_master=True)
+        mock_regen.assert_called_once_with()
+        mock_push.assert_not_called()

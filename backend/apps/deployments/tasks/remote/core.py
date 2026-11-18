@@ -138,6 +138,22 @@ def _stop_local_service_container(service_name: str):
 def _remote_deploy_failed(deployment, orchestrator, fallback_msg, stage):
     _handle_failure(None, deployment, _remote_failure_message(orchestrator, fallback_msg), stage)
 
+def _sync_remote_edge_caddy(server, regenerate_master: bool = True) -> None:
+    """Best-effort convergence of master and node Caddy configs for remote deploys."""
+    if regenerate_master:
+        try:
+            _regenerate_caddyfile()
+        except Exception as exc:
+            logger.debug("Failed to regenerate master Caddyfile: %s", exc)
+    if server is not None and not getattr(server, "is_lite_agent", False):
+        try:
+            from ..deploy.caddy import push_caddy_to_node
+
+            push_caddy_to_node(str(server.id))
+        except Exception as push_exc:
+            logger.debug("Failed to push Caddyfile to node: %s", push_exc)
+
+
 def _handle_remote_deployment(deployment, server, skip_review: bool = False, image_name: str | None = None,
                               fast_deploy: bool = False, node_build: bool = False):
     """Delegate deployment to a remote server and poll for status.
@@ -237,6 +253,11 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
         _enforce_remote_runtime_policy(service, orchestrator)
     except Exception as policy_exc:
         append_log(deployment, f"[Remote] Runtime policy ensure skipped: {policy_exc}\n")
+
+    # Push edge routes BEFORE triggering so the node's [ROUTE-CHECK] can
+    # verify the domain immediately instead of timing out for 180s waiting
+    # on a post-deploy push.
+    _sync_remote_edge_caddy(server, regenerate_master=True)
 
     remote_dep_id = orchestrator.trigger_deploy(
         deployment, remote_svc_id, skip_review=skip_review, image_name=image_name,
@@ -581,14 +602,7 @@ def _poll_remote_deployment(
                         service.active_runtime_id = remote_container_id
                         service.save(update_fields=['server', 'active_target_type', 'active_host_ip', 'active_runtime_id'])
 
-                        _regenerate_caddyfile()
-
-                        if not getattr(orchestrator.server, 'is_lite_agent', False):
-                            try:
-                                from ..deploy.caddy import push_caddy_to_node
-                                push_caddy_to_node(str(orchestrator.server.id))
-                            except Exception as push_exc:
-                                logger.debug("Failed to push Caddyfile to node: %s", push_exc)
+                        _sync_remote_edge_caddy(orchestrator.server, regenerate_master=True)
 
                         update_stage(deployment, 'Remote Deploy', 'success')
                         broadcast_status(deployment)

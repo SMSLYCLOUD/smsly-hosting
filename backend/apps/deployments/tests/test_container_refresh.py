@@ -324,6 +324,44 @@ class TestGvisorExtraHosts(TestCase):
             )
         self.assertEqual(hosts, ["myapp-postgres:172.30.224.5"])
 
+    def test_synced_node_addon_uses_metadata_container_name(self):
+        """Regression: worker-node synced addons have local UUID != master UUID;
+        container lookup must honor provider_metadata['container_name']."""
+        svc = _service()
+        svc.project_id = "proj-1"
+        addon = _addon_row(
+            addon_id="local-node-uuid",
+            url="postgresql://u:p@postgres-smsly-helper:5432/db",
+        )
+        addon.addon_type = "POSTGRES"
+        addon.provision_mode = "container"
+        addon.provider_metadata = {
+            "master_synced": True,
+            "container_name": "smsly-addon-postgres-master-uuid",
+        }
+        with patch("apps.deployments.models.addons.Addon") as mock_addon_cls:
+            mock_addon_cls.objects.filter.return_value.filter.return_value = [
+                addon
+            ]
+            old = _runsc_container()
+            master_c = MagicMock()
+            master_c.attrs = {"NetworkSettings": {"Networks": {
+                "smsly-net-96e85eee": {"IPAddress": "172.23.0.4"},
+            }}}
+            client, _ = _client(old)
+
+            def _get(name):
+                if str(name) == "smsly-addon-postgres-master-uuid":
+                    return master_c
+                raise Exception(f"unexpected lookup: {name}")
+
+            client.containers.get.side_effect = _get
+            hosts = _resolve_gvisor_extra_hosts(
+                svc, {"smsly-net-96e85eee", "smsly-platform-net"},
+                client, live=[],
+            )
+        self.assertEqual(hosts, ["postgres-smsly-helper:172.23.0.4"])
+
     @patch("apps.deployments.services.mtls_integration.get_mtls_env_vars", return_value={})
     @patch("docker.from_env")
     def test_runsc_recreate_injects_extra_hosts(self, mock_from_env, _mock_mtls):

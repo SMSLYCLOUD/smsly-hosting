@@ -190,25 +190,9 @@ def _hosts_drift(live: list[str], expected: dict[str, str]) -> dict[str, str]:
 
 def _backing_container_name(addon) -> str:
     """Dedicated container name, or the shared server / tenant pooler."""
-    atype = str(getattr(addon, "addon_type", "") or "").lower()
-    if (atype == "postgres"
-            and str(getattr(addon, "provision_mode", "") or "") == "shared"):
-        if getattr(addon, "pooler_routed", False):
-            try:
-                from apps.addons.services import tenant_pooler as _pooler
-                name = _pooler.tenants_container_name()
-                if name:
-                    return name
-            except Exception:
-                pass
-        try:
-            from apps.addons.services.shared_postgres import (
-                SHARED_CONTAINER as _SHARED,
-            )
-            return _SHARED
-        except Exception:
-            return "smsly-shared-postgres"
-    return f"smsly-addon-{atype}-{getattr(addon, 'id', '')}"
+    from apps.addons.services.addon_provisioner import backing_addon_container_name
+
+    return backing_addon_container_name(addon)
 
 
 @shared_task(

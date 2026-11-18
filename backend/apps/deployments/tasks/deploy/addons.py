@@ -190,7 +190,9 @@ def _resolve_addon_ip(addon, client) -> str:
     Returns the IP string or empty string if resolution fails.
     This allows probes to work under gVisor where Docker DNS is unavailable.
     """
-    container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+    from apps.addons.services.addon_provisioner import backing_addon_container_name
+
+    container_name = backing_addon_container_name(addon)
     try:
         container = client.containers.get(container_name)
         container.reload()

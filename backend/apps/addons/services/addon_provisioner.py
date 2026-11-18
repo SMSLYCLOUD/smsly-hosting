@@ -51,6 +51,37 @@ def addon_container_name(addon) -> str:
             f"{getattr(addon, 'id', '')}")
 
 
+def backing_addon_container_name(addon) -> str:
+    """Resolve the Docker container backing ``addon``.
+
+    Handles logical shared Postgres addons (which live in ``smsly-shared-postgres``
+    or the tenant pooler rather than per-addon containers), CLI addons, and
+    node-local rows whose ``provider_metadata['container_name']`` overrides the
+    row's own UUID.
+    """
+    atype = str(getattr(addon, "addon_type", "") or "").lower()
+    if (
+        atype == "postgres"
+        and str(getattr(addon, "provision_mode", "") or "") == "shared"
+    ):
+        if getattr(addon, "pooler_routed", False):
+            try:
+                from apps.addons.services import tenant_pooler as _pooler
+                name = _pooler.tenants_container_name()
+                if name:
+                    return name
+            except Exception:
+                pass
+        try:
+            from apps.addons.services.shared_postgres import (
+                SHARED_CONTAINER as _SHARED,
+            )
+            return _SHARED
+        except Exception:
+            return "smsly-shared-postgres"
+    return addon_container_name(addon)
+
+
 class AddonProvisioner:
     """
     Provisions database addons as Docker containers.

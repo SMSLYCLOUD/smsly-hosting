@@ -139,6 +139,8 @@ def _gvisor_remote_extra_hosts(ssh, service, final_env, net) -> str:
                 clauses |= Q(service__project_id=project.id,
                              name__endswith='-shared')
             qs = qs.filter(clauses)
+        from apps.addons.services.addon_provisioner import backing_addon_container_name
+
         flags = []
         seen = set()
         for addon in qs:
@@ -148,12 +150,7 @@ def _gvisor_remote_extra_hosts(ssh, service, final_env, net) -> str:
                 continue
             if host not in values:
                 continue
-            atype = str(getattr(addon, 'addon_type', '') or '').lower()
-            cname = f"smsly-addon-{atype}-{getattr(addon, 'id', '')}"
-            if (atype == 'postgres'
-                    and str(getattr(addon, 'provision_mode', '') or '') == 'shared'):
-                # Logical database — no per-addon container on any node.
-                cname = "smsly-shared-postgres"
+            cname = backing_addon_container_name(addon)
             try:
                 out, _, _ = ssh.exec_command(
                     "docker inspect " + cname

@@ -69,6 +69,18 @@ class BackingContainerTests(TestCase):
         self.assertEqual(
             _backing_container_name(addon), "smsly-addon-postgres-abc")
 
+    def test_synced_node_addon_prefers_metadata_container_name(self):
+        addon = self._addon(provision_mode="container")
+        addon.id = "node-uuid-1"
+        addon.provider_metadata = {
+            "master_synced": True,
+            "container_name": "smsly-addon-postgres-master-uuid-9",
+        }
+        self.assertEqual(
+            _backing_container_name(addon),
+            "smsly-addon-postgres-master-uuid-9",
+        )
+
 
 class ReconcileTaskTests(TestCase):
     def setUp(self):
