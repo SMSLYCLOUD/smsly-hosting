@@ -51,37 +51,41 @@ if [ "$ADD_SWAP_MB" -le 0 ]; then
     exit 0
 fi
 
+# Skip if root filesystem has less than 2GB headroom beyond the new swapfile.
+AVAIL_DISK_MB=$(df -Pm / | awk 'NR==2{print $4}')
+if [ "${AVAIL_DISK_MB:-0}" -lt $((ADD_SWAP_MB + 2048)) ]; then
+    log "Insufficient disk space (${AVAIL_DISK_MB}MB free). Skipping swap adjustment."
+    exit 0
+fi
+
+# Guard against kernel MAX_SWAPFILES exhaustion (unactivated files would leak disk).
+ACTIVE_SWAPS=$(swapon --noheadings 2>/dev/null | wc -l || echo 0)
+if [ "${ACTIVE_SWAPS:-0}" -ge 24 ]; then
+    log "Active swap area count ($ACTIVE_SWAPS) at safety cap. Skipping swap adjustment."
+    exit 0
+fi
+
 NEW_SWAPFILE="${SWAPFILE_PREFIX}-$(date '+%s')"
 log "Increasing swap by ${ADD_SWAP_MB}MB. Creating ${NEW_SWAPFILE}..."
 
-# Create the new swap file
-if fallocate -l ${ADD_SWAP_MB}M "$NEW_SWAPFILE" ; then
-    chmod 600 "$NEW_SWAPFILE"
-    mkswap "$NEW_SWAPFILE" 
-    swapon "$NEW_SWAPFILE"  || true
-
-    # Make it permanent
-    if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
-        echo "$NEW_SWAPFILE none swap sw 0 0" >> /etc/fstab
-    fi
-
-    log "Successfully added ${ADD_SWAP_MB}MB of swap. Total swap is now approx ${NEW_TOTAL_MB}MB."
-else
-    # Fallback to dd if fallocate fails (e.g. some filesystems don't support it)
+if ! fallocate -l "${ADD_SWAP_MB}M" "$NEW_SWAPFILE" 2>/dev/null; then
     log "fallocate failed, trying dd..."
-    if dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count=$ADD_SWAP_MB status=none; then
-        chmod 600 "$NEW_SWAPFILE"
-        mkswap "$NEW_SWAPFILE" 
-        swapon "$NEW_SWAPFILE"  || true
-
-        if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
-            echo "$NEW_SWAPFILE none swap sw 0 0" >> /etc/fstab
-        fi
-
-        log "Successfully added ${ADD_SWAP_MB}MB of swap via dd. Total swap is now approx ${NEW_TOTAL_MB}MB."
-    else
+    if ! dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count="$ADD_SWAP_MB" status=none; then
         log "Failed to create swap file."
         rm -f "$NEW_SWAPFILE"
         exit 1
     fi
 fi
+
+chmod 600 "$NEW_SWAPFILE"
+if ! mkswap "$NEW_SWAPFILE" >/dev/null 2>&1 || ! (swapon -p 10 "$NEW_SWAPFILE" 2>/dev/null || swapon "$NEW_SWAPFILE" 2>/dev/null); then
+    log "Failed to activate swap file ${NEW_SWAPFILE}; removing it to prevent disk leak."
+    rm -f "$NEW_SWAPFILE"
+    exit 1
+fi
+
+if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
+    echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
+fi
+
+log "Successfully added ${ADD_SWAP_MB}MB of swap. Total swap is now approx ${NEW_TOTAL_MB}MB."
