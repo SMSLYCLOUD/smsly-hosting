@@ -57,13 +57,36 @@ ensure_traefik_dynamic_dir() {
     local dir="/opt/smsly-hosting/traefik-dynamic"
     if [ -d "$dir" ]; then
         log "traefik-dynamic dir OK"
-        return 0
-    fi
-    log "ALERT: $dir missing — creating (canary splits need it)"
-    if mkdir -p "$dir" 2>/dev/null; then
-        log "traefik-dynamic dir created"
     else
-        log "ALERT: traefik-dynamic dir creation FAILED — canary splits will fail"
+        log "ALERT: $dir missing — creating (canary splits need it)"
+        if mkdir -p "$dir" 2>/dev/null; then
+            log "traefik-dynamic dir created"
+        else
+            log "ALERT: traefik-dynamic dir creation FAILED — canary splits will fail"
+        fi
+    fi
+    # Both master bind-dir and worker-node named volume must be writable by
+    # appuser (uid 1000) so backend/celery can write edge-shared.yml
+    # (defining secure-headers-strict@file).
+    local vol="smsly-hosting_traefik_dynamic"
+    if command -v docker >/dev/null 2>&1 && docker volume inspect "$vol" >/dev/null 2>&1; then
+        local mnt=""
+        local owner=""
+        mnt=$(docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null || echo "")
+        if [ -n "$mnt" ] && [ -d "$mnt" ]; then
+            owner=$(stat -c '%u' "$mnt" 2>/dev/null || echo "")
+            if [ -n "$owner" ] && [ "$owner" != "1000" ]; then
+                log "ALERT: $vol owned by uid $owner (expected 1000) — chowning"
+                if timeout -k 5 30 docker run --rm -v "$vol:/dyn" alpine chown 1000:1000 /dyn >/dev/null 2>&1; then
+                    log "$vol ownership repaired to 1000:1000"
+                else
+                    log "ALERT: $vol ownership repair FAILED — edge-shared.yml writes will fail"
+                fi
+            fi
+        fi
+        if docker inspect smsly-hosting-backend-1 >/dev/null 2>&1 && ! timeout -k 5 10 docker exec smsly-hosting-backend-1 test -s /traefik-dynamic/edge-shared.yml 2>/dev/null; then
+            timeout -k 5 20 docker exec smsly-hosting-backend-1 python -c "from apps.deployments.services.traefik_manager.edge_shared_file import ensure_edge_shared_file; ensure_edge_shared_file()" >/dev/null 2>&1 || true
+        fi
     fi
 }
 
@@ -276,7 +299,7 @@ ensure_edge_plugins() {
     for caddy in smsly-hosting-caddy-1 caddy; do
         if docker inspect "$caddy" >/dev/null 2>&1; then
             local mods
-            mods=$(timeout -k 5 15 docker exec "$caddy" caddy list-modules 2>/dev/null | grep -E 'coraza' | head -n 5) || true
+            mods=$(timeout -k 5 15 docker exec "$caddy" caddy list-modules 2>/dev/null | grep -E 'coraza|http\.handlers\.waf' | head -n 5) || true
             if [ -n "$mods" ]; then
                 log "caddy modules OK ($caddy): $(echo "$mods" | tr '\n' ' ')"
             else
@@ -519,16 +542,16 @@ ensure_memory_tuning() {
     else
         log "KSM not applicable (absent kernel support or disabled) — skipping"
     fi
-    # zram: unit enabled but no zram swap active (and not disabled)?
+    # zram: unit enabled, kernel supports zram, and not disabled?
     if [ "${SMSLY_DISABLE_ZRAM:-0}" != "1" ] && systemctl is-enabled smsly-memory-tuning.service >/dev/null 2>&1; then
-        if ! grep -q '^/dev/zram' /proc/swaps 2>/dev/null; then
-            if [ -x "$setup" ] && bash "$setup" >/dev/null 2>&1 && grep -q '^/dev/zram' /proc/swaps 2>/dev/null; then
-                log "zram swap was missing — re-applied via setup-memory-tuning.sh"
-            else
-                log "ALERT: memory-tuning unit enabled but no zram swap active"
-            fi
-        else
+        if grep -q '^/dev/zram' /proc/swaps 2>/dev/null; then
             log "zram swap active"
+        elif [ ! -b /dev/zram0 ] && [ ! -e /sys/block/zram0/disksize ] && ! modprobe -n zram >/dev/null 2>&1; then
+            log "zram not applicable (absent kernel support) — skipping"
+        elif [ -x "$setup" ] && bash "$setup" >/dev/null 2>&1 && grep -q '^/dev/zram' /proc/swaps 2>/dev/null; then
+            log "zram swap was missing — re-applied via setup-memory-tuning.sh"
+        else
+            log "ALERT: memory-tuning unit enabled but no zram swap active"
         fi
     fi
 }
@@ -904,6 +927,14 @@ ensure_postgres_archiving() {
     local c="smsly-postgres-primary"
     timeout -k 5 10 docker inspect "$c" >/dev/null 2>&1 \
         || { log "$c absent — skipping WAL archive check"; return 0; }
+    if ! timeout -k 5 10 docker exec "$c" test -d /var/lib/postgresql/archive 2>/dev/null; then
+        local archive_mode=""
+        archive_mode=$(timeout -k 5 10 docker exec "$c" psql -U postgres -tAc "SHOW archive_mode;" 2>/dev/null | tr -d '[:space:]') || true
+        if [ "$archive_mode" != "on" ] && [ "$archive_mode" != "always" ]; then
+            log "$c has no archive mount (archive_mode=${archive_mode:-off}) — skipping WAL archive check"
+            return 0
+        fi
+    fi
     local owner=""
     owner=$(timeout -k 5 15 docker exec "$c" stat -c '%U' /var/lib/postgresql/archive 2>/dev/null || echo unknown)
     if [ "$owner" != "postgres" ]; then

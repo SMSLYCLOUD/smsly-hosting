@@ -35,10 +35,10 @@ _harden_openappsec_desired_mode() {
 
 _harden_openappsec_apply_mode() {
     # Converge local_policy.yaml with the desired enforcement mode.
-    # Fail-safe by construction: only a line that is EXACTLY a top-level
-    # `mode:` assignment is rewritten; any unknown schema is left
-    # untouched with a warning (never corrupt the policy). Operator and
-    # SaaS tuning (override-mode, practices) is never modified.
+    # Rewrites both top-level `mode:` and practice `override-mode:` lines
+    # (`detect-learn` <-> `prevent`) so webapp-default-practice sub-rules
+    # (web-attacks, snort-signatures, openapi-schema-validation, anti-bot)
+    # do not shadow `policies.default.mode: prevent` with `detect-learn`.
     # Restarts the agent only when the file actually changed (with
     # timeout wrappers per AGENTS.md #6).
     command -v docker >/dev/null 2>&1 || return 0
@@ -47,17 +47,19 @@ _harden_openappsec_apply_mode() {
     [ -f "$policy" ] || return 0
     local desired=""
     desired="$(_harden_openappsec_desired_mode)"
+    local opposite="detect-learn"
+    [ "$desired" = "detect-learn" ] && opposite="prevent"
     local current=""
     current=$(grep -E '^[[:space:]]*mode:[[:space:]]*(detect-learn|prevent)[[:space:]]*$' "$policy" 2>/dev/null | head -1 | grep -oE '(detect-learn|prevent)' || true)
     if [ -z "$current" ]; then
         echo -e "${YELLOW}    ⚠ open-appsec policy has no plain mode line — leaving as-is (wanted: $desired)${NC}"
         return 0
     fi
-    if [ "$current" = "$desired" ]; then
+    if ! grep -qE "^[[:space:]]*(override-)?mode:[[:space:]]*${opposite}[[:space:]]*$" "$policy" 2>/dev/null; then
         return 0
     fi
     local tmp_policy="$conf_dir/.local_policy.tmp"
-    if ! sed -E "s/^([[:space:]]*mode:[[:space:]]*)(detect-learn|prevent)([[:space:]]*)$/\1$desired\3/" "$policy" > "$tmp_policy" 2>/dev/null; then
+    if ! sed -E "s/^([[:space:]]*(override-)?mode:[[:space:]]*)(detect-learn|prevent)([[:space:]]*)$/\1$desired\4/" "$policy" > "$tmp_policy" 2>/dev/null; then
         echo -e "${YELLOW}    ⚠ open-appsec mode rewrite failed — leaving as-is${NC}"
         rm -f "$tmp_policy"
         return 0
@@ -68,7 +70,7 @@ _harden_openappsec_apply_mode() {
         return 0
     fi
     mv "$tmp_policy" "$policy"
-    echo -e "${BLUE}  → [harden] open-appsec mode $current → $desired — restarting agent...${NC}"
+    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent...${NC}"
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
     return 0

@@ -192,10 +192,19 @@ def _ensure_spire_entry_best_effort(service, mtls_config=None) -> None:
         )
         trust_domain = ""
         try:
+            resolved_cfg = mtls_config
+            if resolved_cfg is None and getattr(service, "pk", None) is not None:
+                from apps.mtls.models import MtlsConfig
+
+                resolved_cfg = (
+                    MtlsConfig.objects.filter(service_id=service.pk)
+                    .only("trust_domain")
+                    .first()
+                )
+            if resolved_cfg is None:
+                resolved_cfg = getattr(service, "mtls_config", None)
             trust_domain = str(
-                getattr(mtls_config, "trust_domain", "")
-                or getattr(getattr(service, "mtls_config", None), "trust_domain", "")
-                or ""
+                getattr(resolved_cfg, "trust_domain", "") or ""
             ).strip()
         except Exception:
             pass

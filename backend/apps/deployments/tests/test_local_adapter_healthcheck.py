@@ -40,7 +40,7 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         )
         self.assertEqual(
             labels["traefik.http.routers.myapp.middlewares"],
-            "crowdsec-bouncer@docker",
+            "crowdsec-bouncer@docker,secure-headers-strict@file",
         )
 
     def test_crowdsec_middleware_kill_switch(self):
@@ -49,7 +49,10 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
             labels = adapter._get_traefik_labels(
                 "myapp", "Host(`myapp.example.com`)", "8000",
             )
-        self.assertNotIn("traefik.http.routers.myapp.middlewares", labels)
+        self.assertEqual(
+            labels["traefik.http.routers.myapp.middlewares"],
+            "secure-headers-strict@file",
+        )
 
     def _build_adapter_with_mock_docker(self, has_old: bool = False):
         docker_client = MagicMock()
@@ -94,10 +97,10 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         self.assertEqual(labels["traefik.enable"], "true")
         self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "web")
         self.assertNotIn("traefik.http.routers.buyforfront.tls", labels)
-        # CrowdSec enforcement attaches to every user-service router.
+        # CrowdSec enforcement + strict security headers attach to every user-service router.
         self.assertEqual(
             labels["traefik.http.routers.buyforfront.middlewares"],
-            "crowdsec-bouncer@docker",
+            "crowdsec-bouncer@docker,secure-headers-strict@file",
         )
 
     @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)

@@ -65,7 +65,17 @@ class Login2FAGateTests(TestCase):
     def test_plain_login_issues_token_without_2fa(self):
         resp = self._login()
         self.assertEqual(resp.status_code, 200, resp.content[:200])
-        self.assertIn("key", resp.json())
+        self.assertNotIn("key", resp.json())
+        self.assertTrue(Token.objects.filter(user=self.user).exists())
+        cookie_names = list(resp.cookies.keys())
+        self.assertTrue(
+            any("auth_token" in name for name in cookie_names),
+            f"auth cookie missing, got: {cookie_names}",
+        )
+        with override_settings(SMSLY_TOKEN_IN_BODY=True):
+            resp_body = self._login()
+            self.assertEqual(resp_body.status_code, 200)
+            self.assertIn("key", resp_body.json())
 
     def test_login_gated_when_2fa_enrolled(self):
         TOTPDevice.objects.create(user=self.user, name="default", confirmed=True)
@@ -98,8 +108,9 @@ class Login2FAGateTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(good.status_code, 200, good.content[:300])
-        self.assertIn("key", good.json())
+        self.assertNotIn("key", good.json())
         self.assertTrue(Token.objects.filter(user=self.user).exists())
+        issued_key = Token.objects.get(user=self.user).key
 
         cookie_names = list(good.cookies.keys())
         self.assertTrue(
@@ -109,7 +120,7 @@ class Login2FAGateTests(TestCase):
 
         # The issued token authenticates API calls
         api = _AuthClient(
-            HTTP_AUTHORIZATION=f"Token {good.json()['key']}"
+            HTTP_AUTHORIZATION=f"Token {issued_key}"
         )
         me = api.get("/api/v1/auth/user/")
         self.assertEqual(me.status_code, 200)

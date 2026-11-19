@@ -234,7 +234,7 @@ class ToggleBucketPublicIDORTests(TestCase):
         self.client.force_authenticate(user=self.attacker)
 
     def test_attacker_cannot_toggle_victim_bucket(self):
-        with patch("apps.deployments.views.addons.get_docker_client") as mock_dc:
+        with patch("apps.cloud.docker_client.get_docker_client") as mock_dc:
             mock_dc.return_value = MagicMock()
             resp = self.client.post(
                 f"/api/v1/services/{self.victim_service.id}/addons/{self.victim_addon.id}/toggle-bucket-public-api/",
@@ -499,7 +499,7 @@ class AttestationInfoLeakTests(TestCase):
         # the WireGuardPeer query. Patch the peer lookup to raise.
         from unittest.mock import patch
         cache.set("attest_challenge_dbtest", "10.0.0.1", timeout=120)
-        with patch("apps.deployments.models_mesh.WireGuardPeer.objects") as mock_qs:
+        with patch("apps.deployments.models.mesh.WireGuardPeer.objects") as mock_qs:
             mock_qs.select_related.return_value.filter.return_value.first.side_effect = Exception("db down")
             resp = self.client.post(
                 "/api/v1/internal/attest/verify/",
