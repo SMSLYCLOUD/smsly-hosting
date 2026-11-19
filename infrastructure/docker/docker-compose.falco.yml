@@ -58,6 +58,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 150s
+    deploy:
+      resources:
+        limits:
+          memory: ${FALCO_MEMORY_LIMIT:-1024M}
 
 networks:
   smsly-net:

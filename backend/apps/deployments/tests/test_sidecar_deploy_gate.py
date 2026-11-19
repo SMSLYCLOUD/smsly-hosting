@@ -68,16 +68,20 @@ class SidecarDeployGateTests(TestCase):
             dc._deploy_container(deployment, self.provider, 'img:1')
         return mock_inject, mock_wait, mock_sweep, compute
 
-    def test_user_service_continues_when_sidecar_not_ready(self):
+    def test_user_service_with_mtls_enabled_fails_closed_when_sidecar_not_ready(self):
         _, deployment = self._service('gate-user-svc', mesh=True)
-        mock_inject, mock_wait, mock_sweep, compute = self._deploy(
-            deployment, wait_ready=False)
-        mock_inject.assert_called_once()
-        mock_wait.assert_called_once()
-        compute.deploy_container.assert_called_once()
-        deployment.refresh_from_db()
-        self.assertEqual(deployment.status, Deployment.Status.ACTIVE)
-        self.assertIn('MTLS-WARN', deployment.build_logs)
+        with self.assertRaises(RuntimeError):
+            self._deploy(deployment, wait_ready=False)
+
+    def test_sidecar_image_not_found_fails_closed_when_mtls_enabled(self):
+        import docker.errors
+        _, deployment = self._service('gate-img-svc', mesh=True)
+        with patch(
+            "apps.mtls.services.envoy_sidecar.EnvoySidecar.remount_if_stale",
+            side_effect=docker.errors.ImageNotFound("403 Forbidden"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self._deploy(deployment, wait_ready=True)
 
     def test_ecosystem_service_fails_when_sidecar_not_ready(self):
         _, deployment = self._service('gate-eco-svc', managed_by="ECOSYSTEM", mesh=True)

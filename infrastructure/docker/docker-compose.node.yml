@@ -5,6 +5,11 @@ services:
   # Docker Socket Proxy (Secure Docker access)
   # ============================================================
   socket-proxy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: tecnativa/docker-socket-proxy:0.1.2
     restart: unless-stopped
     environment:
@@ -27,18 +32,21 @@ services:
       VERSION: 1
       INFO: 1
       SYSTEM: 1
-      SESSION: 1
-      GRPC: 1
-      DISTRIBUTION: 1
+      EVENTS: 1
+      SESSION: 0
+      GRPC: 0
+      DISTRIBUTION: 0
+      SECRETS: 0
+      SWARM: 0
+      PLUGINS: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - socket-proxy
-      # Traefik (docker provider) lives on traefik-proxy-net — without
-      # this attachment its tcp://socket-proxy:2375 endpoint never
-      # resolves and ZERO routers are discovered (2026-10-04: node
-      # canary 502 with no plugin errors at all).
-      - traefik-proxy-net
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
       interval: 5s
@@ -49,6 +57,47 @@ services:
       resources:
         limits:
           memory: ${SOCKET_PROXY_MEMORY_LIMIT:-64M}
+
+  traefik-socket-proxy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    image: tecnativa/docker-socket-proxy:0.1.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      INFO: 1
+      VERSION: 1
+      AUTH: 1
+      EVENTS: 1
+      POST: 0
+      PUT: 0
+      DELETE: 0
+      EXEC: 0
+      BUILD: 0
+      VOLUMES: 0
+      IMAGES: 0
+      COMMIT: 0
+      SECRETS: 0
+      SWARM: 0
+      PLUGINS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-proxy-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: ${TRAEFIK_SOCKET_PROXY_MEMORY_LIMIT:-128M}
 
   # ============================================================
   # PostgreSQL (Local — single instance, no replica, no PgCat)
@@ -198,6 +247,7 @@ services:
       DOCKER_NETWORK: smsly-net
       SMSLY_ENABLE_STARTUP_CADDY_SYNC: "false"
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+      ENVOY_SIDECAR_IMAGE: ${ENVOY_SIDECAR_IMAGE:-registry:5000/smsly/envoy-spire-sidecar:latest}
     depends_on:
       db:
         condition: service_healthy
@@ -217,6 +267,7 @@ services:
       - ../../auth:/auth:rw,z
       - ../../.env:/app/.env:ro,z
       - traefik_dynamic:/traefik-dynamic
+      - ../../infrastructure/envoy:/opt/envoy-build:ro,z
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/health/live || exit 1"]
       interval: 30s
@@ -262,6 +313,7 @@ services:
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+      ENVOY_SIDECAR_IMAGE: ${ENVOY_SIDECAR_IMAGE:-registry:5000/smsly/envoy-spire-sidecar:latest}
     depends_on:
       db:
         condition: service_healthy
@@ -280,6 +332,7 @@ services:
       - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
       - backups_data:/app/backups
       - traefik_dynamic:/traefik-dynamic
+      - ../../infrastructure/envoy:/opt/envoy-build:ro,z
     healthcheck:
       test:
         - CMD-SHELL
@@ -543,7 +596,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${FALCO_MEMORY_LIMIT:-256M}
+          memory: ${FALCO_MEMORY_LIMIT:-1024M}
 
   # ============================================================
   # OPTIONAL: SPIRE Agent (Workload Identity — NODE_SPIRE=1)
@@ -559,10 +612,11 @@ services:
       - ../spire/agent.conf:/etc/spire/agent.conf:ro,z
     environment:
       SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
-      DOCKER_HOST: tcp://socket-proxy:2375
+      DOCKER_HOST: tcp://traefik-socket-proxy:2375
     command: ["-config", "/etc/spire/agent.conf"]
     networks:
       - smsly-net
+      - traefik-proxy-net
     healthcheck:
       test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/opt/spire/run/agent.sock"]
       interval: 30s
@@ -718,7 +772,7 @@ services:
     command:
     - --providers.docker=true
     - --providers.docker.exposedbydefault=false
-    - --providers.docker.endpoint=tcp://socket-proxy:2375
+    - --providers.docker.endpoint=tcp://traefik-socket-proxy:2375
     - --providers.file.directory=/etc/traefik/dynamic
     - --providers.file.watch=true
     - --entrypoints.web.address=:80
@@ -741,7 +795,7 @@ services:
     volumes:
     - traefik_dynamic:/etc/traefik/dynamic:ro
     depends_on:
-      socket-proxy:
+      traefik-socket-proxy:
         condition: service_healthy
       crowdsec:
         condition: service_healthy
@@ -843,6 +897,8 @@ volumes:
   spire-agent-data:
   spire-agent-socket:
   spire-agent-svids:
+  spire-ecosystem-agent-socket:
+  spire-ecosystem-agent-svids:
   caddy_data:
   caddy_config:
   caddy_logs:

@@ -537,17 +537,24 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             try:
                 from apps.mtls.models import MtlsConfig
                 from apps.mtls.services.envoy_sidecar import EnvoySidecar
+                _is_eco = str(getattr(service, "managed_by", "") or "").upper() == "ECOSYSTEM"
                 mtls_config = MtlsConfig.objects.filter(
                     service=service, enabled=True, sidecar_enabled=True,
                 ).first()
+                if _is_eco and mtls_config is None:
+                    mtls_config, _ = MtlsConfig.objects.get_or_create(
+                        service=service,
+                        defaults={"enabled": True, "sidecar_enabled": True},
+                    )
+                    if not (mtls_config.enabled and mtls_config.sidecar_enabled):
+                        mtls_config = None
                 if mtls_config:
                     # Ensure the SPIRE registration entry exists BEFORE the
                     # sidecar requests an SVID: with no matching entry the
                     # agent denies the workload ("not authorized for the
                     # requested identities [default]") and the readiness
                     # gate below fails an otherwise healthy deployment
-                    # (2026-09-09 backend incident). Best-effort — the gate
-                    # still reports clearly if the entry cannot be created.
+                    # (2026-09-09 backend incident).
                     # Entries live on the trust domain's OWN server:
                     # platform.local -> platform server, anything else ->
                     # ecosystem server.
@@ -595,63 +602,18 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                             "SPIRE entry ensure failed for %s: %s",
                             service.name, entry_exc,
                         )
-                    # remount_if_stale recreates a sidecar left over from
-                    # before the 2026-09-15 resolver fix (empty decoy
-                    # mount, never any SVID) — a bare inject would report
-                    # already_running and keep it SVID-less forever.
-                    # Remount itself must never fail a healthy app deploy
-                    # over mesh plumbing (409 races, daemon hiccups): the
-                    # readiness gate below already degrades non-ecosystem
-                    # services to a warning.
-                    _is_eco = str(getattr(service, "managed_by", "") or "").upper() == "ECOSYSTEM"
-                    try:
-                        EnvoySidecar.remount_if_stale(service)
-                    except (docker.errors.ImageNotFound, docker.errors.NotFound):
-                        raise
-                    except Exception as remount_exc:
-                        if _is_eco:
-                            raise
-                        logger.error(
-                            "Envoy sidecar remount failed for %s — continuing WITHOUT "
-                            "mesh sidecar (non-ecosystem service): %s",
-                            service.name, remount_exc,
+                    # Fail-closed mTLS contract: when mTLS sidecar is enabled
+                    # for a service (or the service is managed by ECOSYSTEM),
+                    # sidecar remount, image resolution/pull, and SVID readiness
+                    # MUST succeed. Never downgrade silently to plaintext with
+                    # [MTLS-WARN].
+                    EnvoySidecar.remount_if_stale(service)
+                    _wait_timeout = 120 if _is_eco else 60
+                    if not EnvoySidecar.wait_sidecar_ready(service, timeout_seconds=_wait_timeout):
+                        raise RuntimeError(
+                            f"Envoy sidecar for {service.name} did not become "
+                            f"ready with an issued SVID before go-live"
                         )
-                        append_log(
-                            deployment,
-                            f"[MTLS-WARN] Envoy sidecar remount failed ({remount_exc}).\n"
-                            f"Deployment continues without the mesh sidecar — run "
-                            f"the mTLS repair action to attach it later.\n",
-                        )
-                        mtls_config = None
-                    if mtls_config:
-                        # Non-ecosystem services must not block the pipeline
-                        # for a full 120s under host pressure (slow-build
-                        # complaint): 30s is enough to catch a healthy SDS
-                        # delivery, the 15m beat heals the rest.
-                        _wait_timeout = 120 if _is_eco else 30
-                        if not EnvoySidecar.wait_sidecar_ready(service, timeout_seconds=_wait_timeout):
-                            # Mesh is mandatory ONLY for ecosystem services.
-                            # For everything else a failed sidecar must degrade
-                            # to a warning — failing a healthy app deploy over
-                            # broken mesh plumbing stranded prod deploys
-                            # (operator had to disable mTLS to ship).
-                            if _is_eco:
-                                raise RuntimeError(
-                                    f"Envoy sidecar for {service.name} did not become "
-                                    f"ready with an issued SVID before go-live"
-                                )
-                            logger.error(
-                                "Envoy sidecar for %s not ready — continuing WITHOUT "
-                                "mesh sidecar (non-ecosystem service)",
-                                service.name,
-                            )
-                            append_log(
-                                deployment,
-                                f"[MTLS-WARN] Envoy sidecar for {service.name} did not "
-                                f"become ready. Deployment continues without the mesh "
-                                f"sidecar — re-enable mTLS or run the mTLS repair "
-                                f"action to attach it later.\n",
-                            )
                 else:
                     # Mesh disabled for this service: sweep any non-running
                     # sidecar corpse (Created/Exited from a failed inject)
@@ -664,24 +626,6 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                             "Orphan sidecar sweep skipped for %s: %s",
                             service.name, exc,
                         )
-            except (docker.errors.ImageNotFound, docker.errors.NotFound) as exc:
-                # The sidecar IMAGE itself is unavailable (never built on
-                # this host). Failing a healthy app deploy over missing
-                # mesh plumbing is wrong — continue without the sidecar,
-                # record it loudly, and let the installer/repair button
-                # inject it later (2026-09-11 incident: every deploy died
-                # with 404 on registry:5000/smsly/envoy-spire-sidecar).
-                logger.error(
-                    "Envoy sidecar image unavailable for %s: %s — "
-                    "continuing WITHOUT mTLS sidecar",
-                    service.name, exc,
-                )
-                append_log(
-                    deployment,
-                    f"[MTLS-WARN] Envoy sidecar image unavailable ({exc}).\n"
-                    f"Deployment continues without the mesh sidecar — run "
-                    f"the mTLS repair action to attach it later.\n",
-                )
             except Exception as exc:
                 raise RuntimeError(
                     f"mTLS sidecar injection failed for {service.name}: {exc}"

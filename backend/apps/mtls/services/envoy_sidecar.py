@@ -285,17 +285,51 @@ class EnvoySidecar:
             ) from exc
 
     @staticmethod
+    def resolve_sidecar_image(image: str | None = None) -> str:
+        """Resolve a node-routable Envoy sidecar image reference.
+
+        On worker nodes (where ``MASTER_MESH_IP`` / ``WIREGUARD_MASTER_MESH_IP``
+        or ``CONTAINER_REGISTRY_URL`` is configured), ``registry:5000`` is not
+        resolvable via local Docker DNS and ``ghcr.io/smsly/envoy-spire-sidecar``
+        is private (403). Rewrites internal/default references to the
+        node-routable master registry address via ``image_ref_for_node``.
+        """
+        raw = (image or os.getenv("ENVOY_SIDECAR_IMAGE") or ENVOY_IMAGE).strip()
+        is_worker_env = bool(
+            (os.environ.get("MASTER_MESH_IP") or "").strip()
+            or (os.environ.get("WIREGUARD_MASTER_MESH_IP") or "").strip()
+            or (os.environ.get("MASTER_REGISTRY_PUBLIC_URL") or "").strip()
+        )
+        reg_url = (os.environ.get("CONTAINER_REGISTRY_URL") or "").strip().split("://")[-1].rstrip("/")
+        if raw.startswith("ghcr.io/smsly/envoy-spire-sidecar") and (is_worker_env or reg_url):
+            _, _, suffix = raw.partition("ghcr.io/")
+            target_host = reg_url if (reg_url and reg_url not in ("registry:5000", "127.0.0.1:5000", "localhost:5000")) else "registry:5000"
+            raw = f"{target_host}/{suffix}"
+        if is_worker_env:
+            try:
+                from apps.deployments.services.registry_routing import image_ref_for_node
+                rewritten = image_ref_for_node(raw)
+                if rewritten:
+                    return rewritten
+            except Exception as exc:
+                logger.debug("Sidecar image node rewrite skipped: %s", exc)
+        if reg_url and reg_url not in ("registry:5000", "127.0.0.1:5000", "localhost:5000"):
+            for internal_prefix in ("registry:5000/", "127.0.0.1:5000/", "localhost:5000/"):
+                if raw.startswith(internal_prefix):
+                    return f"{reg_url}/{raw[len(internal_prefix):]}"
+        return raw
+
+    @staticmethod
     def ensure_sidecar_image(client, image: str | None = None) -> str:
         """Ensure the sidecar image exists locally, building it if needed.
 
         Pull (authenticated) -> build+push fallback -> verify. Returns
-        the image ref. Raises ``docker.errors.ImageNotFound`` only when
-        all avenues fail, preserving the tolerate-and-warn contract of
-        ``inject_sidecar`` callers.
+        the resolved image ref. Raises ``docker.errors.ImageNotFound`` when
+        all avenues fail.
         """
         import docker
 
-        image = image or ENVOY_IMAGE
+        image = EnvoySidecar.resolve_sidecar_image(image)
         try:
             EnvoySidecar._pull_sidecar_image(client, image)
             return image
@@ -385,7 +419,7 @@ class EnvoySidecar:
         # can decide (deploy continues with a warning; the repair
         # endpoint reports it). Previously this pulled anonymously, which
         # always 401'd, and the 2026-09-11 404s killed whole deploys.
-        EnvoySidecar.ensure_sidecar_image(client, ENVOY_IMAGE)
+        resolved_image = EnvoySidecar.ensure_sidecar_image(client, ENVOY_IMAGE)
 
         mtls_config = service.mtls_config
 
@@ -452,7 +486,7 @@ class EnvoySidecar:
             socket_volume = resolve_spire_volume_name(socket_base)
             svids_volume = resolve_spire_volume_name(svids_base)
             run_kwargs = dict(
-                image=ENVOY_IMAGE,
+                image=resolved_image,
                 name=sidecar_name,
                 detach=True,
                 restart_policy={"Name": "unless-stopped"},
@@ -1125,7 +1159,7 @@ class EnvoySidecar:
             compose_data["services"] = {}
 
         compose_data["services"][sidecar_name] = {
-            "image": ENVOY_IMAGE,
+            "image": EnvoySidecar.resolve_sidecar_image(ENVOY_IMAGE),
             "restart": "unless-stopped",
             "network_mode": f"service:{service.name}",
             "environment": {

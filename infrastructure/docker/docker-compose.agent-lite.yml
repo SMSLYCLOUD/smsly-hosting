@@ -5,6 +5,11 @@ services:
   # Docker Socket Proxy (Secure Docker access for the agent)
   # ============================================================
   socket-proxy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: tecnativa/docker-socket-proxy:0.2 # TODO: pin to digest via dependabot/renovate
     restart: unless-stopped
     environment:
@@ -23,10 +28,58 @@ services:
       DELETE: 1
       PING: 1
       VERSION: 1
+      SECRETS: 0
+      SWARM: 0
+      PLUGINS: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - socket-proxy
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 2375"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  traefik-socket-proxy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    image: tecnativa/docker-socket-proxy:0.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      INFO: 1
+      VERSION: 1
+      AUTH: 1
+      EVENTS: 1
+      POST: 0
+      PUT: 0
+      DELETE: 0
+      EXEC: 0
+      BUILD: 0
+      VOLUMES: 0
+      IMAGES: 0
+      COMMIT: 0
+      SECRETS: 0
+      SWARM: 0
+      PLUGINS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-proxy-net
     read_only: true
     tmpfs:
       - /run
@@ -244,7 +297,7 @@ services:
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
-      - --providers.docker.endpoint=tcp://socket-proxy:2375
+      - --providers.docker.endpoint=tcp://traefik-socket-proxy:2375
       - --providers.docker.network=smsly-net
       - --entrypoints.web.address=:80
       - --ping=true
@@ -260,11 +313,11 @@ services:
     volumes:
       - traefik_logs:/var/log/traefik
     depends_on:
-      socket-proxy:
+      traefik-socket-proxy:
         condition: service_healthy
     networks:
       - smsly-net
-      - socket-proxy
+      - traefik-proxy-net
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 10s
@@ -318,5 +371,8 @@ networks:
     external: true
     name: smsly-net
   socket-proxy:
+    driver: bridge
+    internal: true
+  traefik-proxy-net:
     driver: bridge
     internal: true

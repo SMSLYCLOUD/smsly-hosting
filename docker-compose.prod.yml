@@ -948,6 +948,7 @@ services:
       start_period: 30s
     networks:
     - smsly-net
+    - socket-proxy
     deploy:
       update_config:
         order: start-first
@@ -1394,6 +1395,13 @@ services:
       AUTH: 1
       PUT: 1
       DELETE: 1
+      SECRETS: 0
+      SWARM: 0
+      PLUGINS: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
     volumes:
     - /var/run/docker.sock:/var/run/docker.sock:ro,z
     healthcheck:
@@ -1407,7 +1415,6 @@ services:
     labels:
     - managed_by=smsly-hosting
     networks:
-    - smsly-net
     - socket-proxy
     deploy:
       resources:
@@ -2153,7 +2160,7 @@ services:
       # 30d uncapped held 2.6GB + 96k head series / 460MB RSS from node
       # cadvisor cardinality); small hosts can still override via
       # PROMETHEUS_RETENTION / PROMETHEUS_RETENTION_SIZE.
-      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}'
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}'
       - '--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-8GB}'
     networks:
       - smsly-net
@@ -2390,7 +2397,7 @@ services:
         # steady state; a cap never reduces idle usage, it only bounds
         # the worst case.
         limits:
-          memory: ${FALCO_MEMORY_LIMIT:-512M}
+          memory: ${FALCO_MEMORY_LIMIT:-1024M}
 
   # ── SPIRE mTLS Infrastructure ───────────────────────────────────────
   # Platform trust domain: platform.local
@@ -2490,6 +2497,7 @@ services:
     command: ["-config", "/etc/spire/agent.conf"]
     networks:
       - smsly-net
+      - traefik-proxy-net
     healthcheck:
       test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/opt/spire/run/agent.sock"]
       interval: 30s
@@ -2524,6 +2532,7 @@ services:
     command: ["-config", "/etc/spire/agent.conf"]
     networks:
       - smsly-net
+      - traefik-proxy-net
     healthcheck:
       test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/opt/spire/run/agent.sock"]
       interval: 30s

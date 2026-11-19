@@ -623,7 +623,7 @@ CELERY_AUTOSCALE_ENABLED=${CELERY_AUTOSCALE_ENABLED:-true}
 # .env the single record and lets small hosts pin 7d without compose edits).
 PROMETHEUS_RETENTION=${PROMETHEUS_RETENTION:-30d}
 LOKI_RETENTION=${LOKI_RETENTION:-30d}
-FALCO_MEMORY_LIMIT=${FALCO_MEMORY_LIMIT:-512M}
+FALCO_MEMORY_LIMIT=${FALCO_MEMORY_LIMIT:-1024M}
 
 # The installer runs first-boot Django setup explicitly after the stack starts.
 # Keep the web container from doing the same work while Compose is waiting on health.

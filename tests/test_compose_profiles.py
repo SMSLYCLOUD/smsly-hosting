@@ -136,7 +136,7 @@ class TestComposeProfiles(unittest.TestCase):
         # scripts/regen-bundle.sh --check (CI gate) covers exact sync.
         bundle = read("backend/install.sh")
         floors = {
-            'token="$(timeout 30 docker exec "$server"': 4,
+            'token="$(timeout -k 5 30 docker exec "$server"': 4,
             "Aborting: continuing would leave registry": 1,
             "reload-or-restart fail2ban": 1,
             "systemctl start smsly-memory-tuning.service": 1,

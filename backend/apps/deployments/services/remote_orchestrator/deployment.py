@@ -209,6 +209,56 @@ class DeploymentMixin:
                     payload["mesh_env"] = dict(list(_mesh.items())[:200])
         except Exception as exc:
             logger.debug("Remote trigger mesh env skipped: %s", exc)
+        # Ship mTLS config & pre-register SPIRE entry on Master's trust root
+        # before triggering a remote worker deploy so worker sidecars are
+        # pre-authorized and never fail-open.
+        try:
+            from apps.mtls.models import MtlsConfig
+            from apps.mtls.services.envoy_sidecar import EnvoySidecar
+            _svc_m = getattr(deployment, "service", None)
+            if _svc_m is not None:
+                _is_eco_m = str(getattr(_svc_m, "managed_by", "") or "").upper() == "ECOSYSTEM"
+                _mcfg = MtlsConfig.objects.filter(
+                    service=_svc_m, enabled=True, sidecar_enabled=True,
+                ).first()
+                if _mcfg or _is_eco_m:
+                    _td = str(getattr(_mcfg, "trust_domain", "") or "ecosystem.local").strip()
+                    _spiffe = str(
+                        getattr(_mcfg, "spiffe_id", "") or f"spiffe://{_td}/service/{_svc_m.name}"
+                    ).strip()
+                    payload["mtls"] = {
+                        "enabled": True,
+                        "sidecar_enabled": True,
+                        "trust_domain": _td,
+                        "spiffe_id": _spiffe,
+                        "sidecar_image": EnvoySidecar.resolve_sidecar_image(),
+                    }
+                    try:
+                        from apps.deployments.tasks_spiffe import (
+                            _create_spire_entry,
+                            _live_ecosystem_agent_id,
+                            _live_platform_agent_id,
+                            PLATFORM_SPIFFE_TRUST_DOMAIN,
+                            PLATFORM_SPIRE_SERVER_CONTAINER,
+                            PLATFORM_SPIRE_SERVER_SOCKET,
+                        )
+                        if _td == PLATFORM_SPIFFE_TRUST_DOMAIN:
+                            _create_spire_entry(
+                                _svc_m.name,
+                                parent_id=_live_platform_agent_id(),
+                                trust_domain=PLATFORM_SPIFFE_TRUST_DOMAIN,
+                                server_container=PLATFORM_SPIRE_SERVER_CONTAINER,
+                                server_socket=PLATFORM_SPIRE_SERVER_SOCKET,
+                            )
+                        else:
+                            _create_spire_entry(
+                                _svc_m.name,
+                                parent_id=_live_ecosystem_agent_id(),
+                            )
+                    except Exception as spire_exc:
+                        logger.debug("Master SPIRE pre-registration for remote deploy skipped: %s", spire_exc)
+        except Exception as exc:
+            logger.debug("Remote trigger mTLS sync skipped: %s", exc)
         if image_name:
             # Rewrite master-INTERNAL registry refs (registry:5000 /
             # loopback) to the node-routable address. Centralised in

@@ -253,7 +253,7 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
     fi
-    env_ensure_var "$env_file" "OPENAPPSEC_MODE" "detect-learn" "WAF enforcement mode (detect-learn shadow vs prevent enforce); set from Settings → Security Scanning"
+    env_ensure_var "$env_file" "OPENAPPSEC_MODE" "prevent" "WAF enforcement mode (prevent enforce vs detect-learn shadow); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
@@ -366,7 +366,7 @@ print(",".join(out))
     env_ensure_var "$env_file" "CELERY_AUTOSCALE_ENABLED" "true" "Idle-stop burst workers on empty queues"
     env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "30d" "Prometheus TSDB retention (main driver of metrics disk+RAM growth; 7d on small hosts)"
     env_ensure_var "$env_file" "LOKI_RETENTION" "30d" "Loki log retention (set together with PROMETHEUS_RETENTION)"
-    env_ensure_var "$env_file" "FALCO_MEMORY_LIMIT" "512M" "Falco runtime-security memory cap (node stack defaults to 256M)"
+    env_ensure_var "$env_file" "FALCO_MEMORY_LIMIT" "1024M" "Falco runtime-security memory cap (1024M prevents modern_ebpf OOM)"
     # Registry public bind: without an explicit override the compose
     # fallback is a hardcoded IP from another host and the registry port
     # bind kills the whole install (2026-09-10 fresh-install incident).
