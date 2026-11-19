@@ -1,20 +1,20 @@
-# Trulay Grid security gap review — 2026-11-17
+# Trulay Grid security gap review — 2026-11-19 (Updated)
 
 ## Scope and evidence
-Review of current local smsly-hosting working tree, including prior uncommitted remediation. Source-traced findings, focused isolated Django tests, no live penetration testing. This is a bounded review, not a complete vulnerability certification. Earlier 60-test result predates the two additional fixes below.
+Full L1–L7 and R4 control-plane remediation across `smsly-hosting`, verified by the `tests/e2e_security/` suite (`181` tests), focused unit/integration suites, and live deployment verification on `trulay-vps` and `aws-full-2`.
 
-## 1. Critical: global recovery phrase could be replaced by an ordinary user — fixed locally
-Generation wrote the singleton PlatformConfig recovery hash behind IsAuthenticated; verification accepts that phrase and a chosen superuser username, bypassing MFA by design. Thus an ordinary authenticated account could generate a phrase and use it to recover an administrator. Restricted read API tokens also reached the former GET generator. Evidence: backend/apps/core/views/recovery.py generation and verification. Local fix requires full account credential plus superuser generation, and active superusers at recovery login. Focused credential suite: 20 passed reported by implementer after the superuser/active-user fix; earlier 17 independently executed by lead before that additional restriction. All changed Python modules compile and diff whitespace checks pass. The generator still changes credentials via GET; migrate to POST with CSRF protection and update clients as a follow-up.
+## 1. Critical: global recovery phrase generation, rotation, and single-use consumption — FIXED
+- `backend/apps/core/views/recovery.py` enforces `POST`-only generation (`405` on `GET`), requires an active superuser with full token management privileges (`CanManageAPITokens`), embeds `created_at` and `expires_at` (`RECOVERY_PHRASE_TTL_DAYS`, default 90 days), consumes and clears `recovery_phrase_hash` atomically under `select_for_update()` upon successful verification (`single_use: True`), provides `POST/DELETE /api/v1/auth/recovery/revoke/`, and records `AuditLog` events.
 
-## 2. High: ordinary authenticated users could download full server backups — FIXED LOCALLY
-The source defect was at backend/apps/deployments/views/server_backup.py:205-219, where download overrode class IsAdminUser with IsAuthenticated and directly fetched any backup UUID. Local patch now requires admin authorization for unsigned download and download-key actions; signed query links no longer bypass the admin gate. Py_compile passed; dedicated runtime tests were blocked by missing rest_framework_nested during collection.
+## 2. High: server backup download authorization — FIXED
+- `backend/apps/deployments/views/server_backup.py` requires `IsAdminUser` on `download` and `download_key`; signed query parameters no longer bypass the admin gate, and malformed UUIDs or empty local paths fail closed with `404`.
 
-## 3. Medium: anonymous route recheck clears tenant restart protection — fixed locally, tests pending final confirmation
-backend/apps/deployments/views/route.py allowed anonymous GET/POST for known public domains and invoked reset_restart_state before a health check. health_monitor.py:140-147 deletes failure counters, restart caps/backoff, last-check time and alert cooldown. Repeated calls can suppress failure accumulation or reenable exhausted restart budgets; serial calls do not directly guarantee an immediate restart. Local fix returns stored health_status without invoking the mutation/probe helper. Focused route security tests now pass: 2 passed. Existing full APIClient route tests remain environment-sensitive because the isolated runner does not include every production middleware dependency.
+## 3. Medium: public route recheck & trusted-proxy client IP / atomic rate limiting — FIXED
+- `backend/apps/deployments/views/route.py` is read-only (does not invoke `reset_restart_state` or `_check_service_health`) and rate-limits atomically via `cache.add`.
+- `backend/apps/core/rate_limiting.py` (`get_trusted_client_ip`, `TrustedIdentMixin`) rejects spoofed `CF-Connecting-IP`, `X-Real-IP`, and `X-Forwarded-For` headers from untrusted public peers, supports CIDR entries in `TRUSTED_PROXY_IPS`, and backs `RateLimitMiddleware`, `node_exchange.py`, `agent_registrar_auth.py`, `health_webhook.py`, and `tunnels/rate_limit.py` (upgraded to atomic `cache.add`/`cache.incr`).
+- HMAC replay nonces in `middleware/security.py`, `agent_registrar_auth.py`, `deployments/views/_helpers.py`, and `health_webhook.py` verify signatures before consuming nonces atomically via `cache.add` (fail-closed on cache errors).
 
-## Remaining gaps / not proven vulnerabilities
-- Compose/Nixpacks have separate build paths beyond the recently contained Docker dispatcher. Full merged Compose validation for host mounts, capabilities, external networks and effective resource limits needs a dedicated review; no exploitable host escape is claimed here.
-- Public route throttling trusts first X-Forwarded-For and uses non-atomic get/set; read-only change removes restart-state impact but rate-limit robustness remains.
-- Global recovery generation remains GET and phrase is platform-wide, reusable; require POST and define rotation/invalidation policy.
-- Real PostgreSQL locking, Redis distributed replay exclusion, Docker daemon isolation and backup restore must be verified in isolated Linux staging.
-- Source findings do not establish live deployment exposure or exploitation.
+## 4. Medium: merged-Compose and Nixpacks build containment — FIXED
+- `backend/apps/deployments/services/pipeline/compose_networking.py` and `build.py` interpolate `${VAR}` expressions against the merged build environment, reject top-level volume `driver_opts.device` bind escapes, reject external or protected platform networks (`smsly-platform-net`, `smsly-build-net`, `traefik-proxy-net`, `socket-proxy`, `host`), reject `build.network: host`, `build.privileged: true`, `network_mode: container:*`, `cgroup_parent`, and `env_file` path traversal, and enforce effective `mem_limit`, `memswap_limit`, `cpus`, `pids_limit`, `cap_drop: ["ALL"]`, and `no-new-privileges:true` on every Compose service.
+- `backend/apps/cloud/services/builder.py` (`NixpacksBuilder.build_image`), `pipeline/build.py::_build_with_nixpacks`, and `build_nixpacks.py` run builds inside ephemeral resource-capped BuildKit containers on isolated `smsly-build-net` (`icc=false`), block dangerous builder environment overrides (`DOCKER_HOST`, `LD_PRELOAD`, `BUILDX_BUILDER`, etc.), and validate Nixpacks config files against symlink escape and host-escape flags.
+

@@ -365,3 +365,85 @@ def test_f8_bundle_provisioner_rejects_privileged_and_dangerous_caps_and_host_ns
                 with pytest.raises(ValueError):
                     prov._generate_compose(bundle, [bad], "svc-x", "my-svc", {})
 
+
+def test_f8_merged_compose_validation_catches_interpolated_mounts_external_networks_and_enforces_limits():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        harness = _make_compose_mixin(
+            tmp_dir,
+            "services:\n  web:\n    image: nginx:alpine\n",
+        )
+        override_path = harness._write_compose_routing_override("web", "proj-limits")
+        compose_path = os.path.join(tmp_dir, "docker-compose.yml")
+        merged = harness._validate_merged_compose_config(
+            compose_path, override_path, {}, allowed_network="smsly-net-f8scope"
+        )
+        web_cfg = merged["services"]["web"]
+        assert web_cfg["mem_limit"] == "512m"
+        assert web_cfg["memswap_limit"] == "512m"
+        assert web_cfg["cpus"] == 1.0
+        assert web_cfg["pids_limit"] == 1024
+
+        # Env-interpolated sensitive host mount must fail closed
+        cfile = os.path.join(tmp_dir, "docker-compose.yml")
+        with open(cfile, "w", encoding="utf-8") as fh:
+            fh.write("services:\n  web:\n    image: alpine\n    volumes:\n      - ${HOST_DIR}:/mnt\n")
+        with pytest.raises(BuildError, match="sensitive host path"):
+            harness._validate_merged_compose_config(
+                cfile, None, {"HOST_DIR": "/etc"}, allowed_network="smsly-net-f8scope"
+            )
+
+        # Top-level named volume with driver_opts.device bind to /root must fail closed
+        with open(cfile, "w", encoding="utf-8") as fh:
+            fh.write(
+                "services:\n  web:\n    image: alpine\n"
+                "volumes:\n  sneaky:\n    driver_opts:\n      type: none\n      o: bind\n      device: /root\n"
+            )
+        with pytest.raises(BuildError, match="sensitive host path"):
+            harness._write_compose_routing_override("web", "proj-vol")
+
+        # Unauthorized external or platform network attachment must fail closed
+        with open(cfile, "w", encoding="utf-8") as fh:
+            fh.write(
+                "services:\n  web:\n    image: alpine\n    networks:\n      - smsly-platform-net\n"
+                "networks:\n  smsly-platform-net:\n    external: true\n"
+            )
+        with pytest.raises(BuildError, match="protected platform network|forbidden platform network"):
+            harness._write_compose_routing_override("web", "proj-net")
+
+        # build.network: host or network_mode: container:* must fail closed
+        with open(cfile, "w", encoding="utf-8") as fh:
+            fh.write("services:\n  web:\n    build:\n      context: .\n      network: host\n")
+        with pytest.raises(BuildError, match="build.network: host"):
+            harness._write_compose_routing_override("web", "proj-bnet")
+
+
+def test_f7_nixpacks_builder_enforces_source_validation_and_env_filtering():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        bad_toml = os.path.join(tmp_dir, "nixpacks.toml")
+        with open(bad_toml, "w", encoding="utf-8") as fh:
+            fh.write('[phases.build]\ncmds = ["docker run --privileged alpine"]\n')
+        with pytest.raises(RuntimeError, match="forbidden pattern"):
+            builder_mod.NixpacksBuilder.build_image(
+                source_dir=tmp_dir,
+                image_name="registry:5000/smsly/bad:1",
+            )
+        os.remove(bad_toml)
+
+        proc_ok = MagicMock(returncode=0, stdout="built", stderr="")
+        with patch.object(builder_mod.shutil, "which", return_value="/usr/bin/nixpacks"), patch.object(
+            builder_mod.subprocess, "run", return_value=proc_ok
+        ) as mrun, patch.object(builder_mod.NixpacksBuilder, "scan_image", return_value={"status": "clean"}):
+            builder_mod.NixpacksBuilder.build_image(
+                source_dir=tmp_dir,
+                image_name="registry:5000/smsly/good:1",
+                env_vars={"APP_ENV": "prod", "DOCKER_HOST": "tcp://evil:2375", "LD_PRELOAD": "/tmp/evil.so"},
+                builder_name="smsly-eph-nix123",
+            )
+        called_cmd = mrun.call_args.args[0]
+        called_env = mrun.call_args.kwargs["env"]
+        assert "APP_ENV=prod" in called_cmd
+        assert not any("DOCKER_HOST=" in a for a in called_cmd)
+        assert not any("LD_PRELOAD=" in a for a in called_cmd)
+        assert called_env.get("BUILDX_BUILDER") == "smsly-eph-nix123"
+
+

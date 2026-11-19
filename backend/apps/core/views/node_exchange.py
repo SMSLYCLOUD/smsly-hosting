@@ -35,8 +35,9 @@ logger = logging.getLogger(__name__)
 
 
 def _client_ip(request):
-    forwarded = str(request.META.get("HTTP_X_FORWARDED_FOR", "") or "").split(",")[0].strip()
-    return forwarded or str(request.META.get("REMOTE_ADDR", "unknown") or "unknown").strip() or "unknown"
+    from apps.core.rate_limiting import get_trusted_client_ip
+
+    return get_trusted_client_ip(request, default="unknown")
 
 
 def _audit_node_token_attempt(username, client_ip, *, success, reason):

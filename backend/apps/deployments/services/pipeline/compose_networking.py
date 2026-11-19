@@ -271,30 +271,186 @@ class ComposeNetworkingMixin:
     })
     _FORBIDDEN_HOST_BIND_PREFIXES = (
         "/etc", "/proc", "/sys", "/dev", "/var/run", "/run",
-        "/var/lib/docker", "/root", "/boot", "/opt/smsly-hosting",
+        "/var/lib/docker", "/var/lib/containerd", "/var/lib/smsly",
+        "/root", "/boot", "/opt/smsly-hosting",
     )
+    _FORBIDDEN_COMPOSE_NETWORKS = frozenset({
+        "smsly-platform-net",
+        "smsly-build-net",
+        "traefik-proxy-net",
+        "socket-proxy",
+        "smsly-hosting_socket-proxy",
+        "smsly-hosting_traefik-proxy-net",
+        "smsly-internal-net",
+        "host",
+        "bridge",
+    })
+    _COMPOSE_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?+])([^}]*))?\}")
+
+    @classmethod
+    def _interpolate_compose_text(cls, raw_text: str, env_map: dict[str, str] | None = None) -> str:
+        """Resolve ${VAR}, ${VAR:-default}, ${VAR-default} for pre-deploy security validation."""
+        env = env_map or {}
+
+        def _repl(match: re.Match) -> str:
+            var_name = match.group(1)
+            op = match.group(2) or ""
+            fallback = match.group(3) or ""
+            in_env = var_name in env
+            val = str(env.get(var_name, "") or "")
+            if op == ":-":
+                return val if (in_env and val != "") else fallback
+            if op == "-":
+                return val if in_env else fallback
+            if op in (":+", "+"):
+                return fallback if (in_env and val != "") else ""
+            return val
+
+        return cls._COMPOSE_VAR_RE.sub(_repl, raw_text or "")
+
+    @classmethod
+    def _check_host_path_forbidden(cls, svc_name: str, raw_path: str, context_label: str = "volume") -> None:
+        src_clean = str(raw_path or "").strip().replace("\\", "/")
+        if not src_clean:
+            return
+        if "docker.sock" in src_clean.lower() or "containerd.sock" in src_clean.lower():
+            raise BuildError(
+                f"Compose service '{svc_name}' mounts docker.sock/containerd.sock "
+                "which is not allowed for security reasons."
+            )
+        if ".." in src_clean.split("/"):
+            raise BuildError(
+                f"Compose service '{svc_name}' uses parent path traversal in {context_label} "
+                f"'{raw_path}' which is not allowed."
+            )
+        if src_clean.startswith("/"):
+            norm = os.path.normpath(src_clean).replace("\\", "/")
+            if norm in ("/", "/var") or any(
+                norm == p or norm.startswith(p + "/")
+                for p in cls._FORBIDDEN_HOST_BIND_PREFIXES
+            ):
+                raise BuildError(
+                    f"Compose service '{svc_name}' bind-mounts sensitive host path "
+                    f"'{raw_path}' in {context_label} which is not allowed for security reasons."
+                )
+
+    @classmethod
+    def _validate_compose_top_level_volumes(cls, compose_doc: dict) -> None:
+        """Reject top-level named volumes that use driver_opts bind mounts to sensitive host paths."""
+        if not isinstance(compose_doc, dict):
+            return
+        volumes = compose_doc.get("volumes")
+        if not isinstance(volumes, dict):
+            return
+        for vol_name, vol_cfg in volumes.items():
+            if not isinstance(vol_cfg, dict):
+                continue
+            if vol_cfg.get("external") is True or isinstance(vol_cfg.get("external"), dict):
+                ext_name = (
+                    vol_cfg["external"].get("name", vol_name)
+                    if isinstance(vol_cfg.get("external"), dict)
+                    else str(vol_cfg.get("name") or vol_name)
+                )
+                raise BuildError(
+                    f"Compose volume '{vol_name}' declares external volume '{ext_name}' "
+                    "which is not allowed for tenant Compose deployments."
+                )
+            driver_opts = vol_cfg.get("driver_opts")
+            if isinstance(driver_opts, dict):
+                device = str(driver_opts.get("device") or "").strip()
+                if device:
+                    cls._check_host_path_forbidden(f"volumes.{vol_name}", device, "driver_opts.device")
+
+    @classmethod
+    def _validate_compose_networks_security(
+        cls,
+        compose_doc: dict,
+        allowed_network: str | None = None,
+    ) -> None:
+        """Reject external or infrastructure networks in top-level and service network declarations."""
+        if not isinstance(compose_doc, dict):
+            return
+        networks = compose_doc.get("networks")
+        if isinstance(networks, dict):
+            for net_key, net_cfg in networks.items():
+                cfg = net_cfg if isinstance(net_cfg, dict) else {}
+                ext = cfg.get("external")
+                resolved_name = str(cfg.get("name") or net_key).strip()
+                if isinstance(ext, dict) and ext.get("name"):
+                    resolved_name = str(ext.get("name")).strip()
+                driver = str(cfg.get("driver") or "").strip().lower()
+                if driver in ("host", "macvlan", "ipvlan"):
+                    raise BuildError(
+                        f"Compose network '{net_key}' uses forbidden driver '{driver}'."
+                    )
+                if resolved_name in cls._FORBIDDEN_COMPOSE_NETWORKS or net_key in cls._FORBIDDEN_COMPOSE_NETWORKS:
+                    raise BuildError(
+                        f"Compose network '{resolved_name}' is a protected platform network "
+                        "and cannot be joined by tenant Compose services."
+                    )
+                if (
+                    allowed_network
+                    and allowed_network != "smsly-net"
+                    and (resolved_name == "smsly-net" or net_key == "smsly-net")
+                ):
+                    raise BuildError(
+                        "Compose file cannot attach directly to 'smsly-net' outside its scoped network."
+                    )
+                if bool(ext) and resolved_name != (allowed_network or ""):
+                    raise BuildError(
+                        f"Compose network '{net_key}' declares unauthorized external network "
+                        f"'{resolved_name}'."
+                    )
+
+        services = compose_doc.get("services")
+        if isinstance(services, dict):
+            for svc_name, svc_cfg in services.items():
+                if not isinstance(svc_cfg, dict):
+                    continue
+                svc_nets = svc_cfg.get("networks")
+                net_names: list[str] = []
+                if isinstance(svc_nets, list):
+                    net_names = [str(n).strip() for n in svc_nets if n]
+                elif isinstance(svc_nets, dict):
+                    net_names = [str(n).strip() for n in svc_nets.keys() if n]
+                for nname in net_names:
+                    if nname in cls._FORBIDDEN_COMPOSE_NETWORKS:
+                        raise BuildError(
+                            f"Compose service '{svc_name}' joins forbidden platform network '{nname}'."
+                        )
+                    if allowed_network and allowed_network != "smsly-net" and nname == "smsly-net":
+                        raise BuildError(
+                            f"Compose service '{svc_name}' cannot join infrastructure network 'smsly-net'."
+                        )
 
     @classmethod
     def _validate_compose_service_security(cls, svc_name: str, svc_config: dict) -> None:
-        """Reject dangerous Docker Compose directives before compose up."""
+        """Reject dangerous Docker Compose directives before compose build/up."""
         if not isinstance(svc_config, dict):
             return
-        if svc_config.get("privileged") is True:
+        if svc_config.get("privileged") is True or str(svc_config.get("privileged") or "").strip().lower() == "true":
             raise BuildError(
                 f"Compose service '{svc_name}' has privileged: true "
                 "which is not allowed for security reasons."
             )
-        if str(svc_config.get("network_mode") or "").strip().lower() == "host":
+        net_mode = str(svc_config.get("network_mode") or "").strip().lower()
+        if net_mode == "host" or net_mode.startswith("container:"):
             raise BuildError(
-                f"Compose service '{svc_name}' has network_mode: host "
+                f"Compose service '{svc_name}' has network_mode: {svc_config.get('network_mode')} "
                 "which is not allowed for security reasons."
             )
         for ns_key in ("pid", "ipc", "uts", "userns_mode", "cgroup"):
-            if str(svc_config.get(ns_key) or "").strip().lower() == "host":
+            ns_val = str(svc_config.get(ns_key) or "").strip().lower()
+            if ns_val == "host" or ns_val.startswith("container:"):
                 raise BuildError(
-                    f"Compose service '{svc_name}' has {ns_key}: host "
+                    f"Compose service '{svc_name}' has {ns_key}: {svc_config.get(ns_key)} "
                     "which is not allowed for security reasons."
                 )
+        if svc_config.get("cgroup_parent"):
+            raise BuildError(
+                f"Compose service '{svc_name}' sets cgroup_parent "
+                "which is not allowed for security reasons."
+            )
         if svc_config.get("devices"):
             raise BuildError(
                 f"Compose service '{svc_name}' declares host devices "
@@ -316,6 +472,40 @@ class ComposeNetworkingMixin:
                     f"Compose service '{svc_name}' requests forbidden capability "
                     f"'{cap}' which is not allowed for security reasons."
                 )
+        build_cfg = svc_config.get("build")
+        if isinstance(build_cfg, str):
+            cls._check_host_path_forbidden(svc_name, build_cfg, "build.context")
+        elif isinstance(build_cfg, dict):
+            if str(build_cfg.get("network") or "").strip().lower() == "host":
+                raise BuildError(
+                    f"Compose service '{svc_name}' sets build.network: host "
+                    "which is not allowed for security reasons."
+                )
+            if build_cfg.get("privileged") is True or str(build_cfg.get("privileged") or "").strip().lower() == "true":
+                raise BuildError(
+                    f"Compose service '{svc_name}' sets build.privileged: true "
+                    "which is not allowed for security reasons."
+                )
+            for bfield in ("context", "dockerfile"):
+                if build_cfg.get(bfield):
+                    cls._check_host_path_forbidden(svc_name, str(build_cfg[bfield]), f"build.{bfield}")
+            add_ctx = build_cfg.get("additional_contexts")
+            if isinstance(add_ctx, dict):
+                for ctx_val in add_ctx.values():
+                    cls._check_host_path_forbidden(svc_name, str(ctx_val), "build.additional_contexts")
+            elif isinstance(add_ctx, list):
+                for item in add_ctx:
+                    _, _, ctx_val = str(item).partition("=")
+                    cls._check_host_path_forbidden(svc_name, ctx_val or str(item), "build.additional_contexts")
+
+        env_files = svc_config.get("env_file")
+        if isinstance(env_files, str):
+            env_files = [env_files]
+        if isinstance(env_files, list):
+            for ef in env_files:
+                ef_path = ef.get("path", "") if isinstance(ef, dict) else str(ef or "")
+                cls._check_host_path_forbidden(svc_name, ef_path, "env_file")
+
         for vol in (svc_config.get("volumes") or []):
             src = ""
             if isinstance(vol, str):
@@ -326,27 +516,7 @@ class ComposeNetworkingMixin:
                 src = str(vol.get("source") or "").strip()
             if not src:
                 continue
-            src_clean = src.replace("\\", "/")
-            if "docker.sock" in src_clean.lower():
-                raise BuildError(
-                    f"Compose service '{svc_name}' mounts docker.sock "
-                    "which is not allowed for security reasons."
-                )
-            if ".." in src_clean.split("/"):
-                raise BuildError(
-                    f"Compose service '{svc_name}' uses parent path traversal in volume "
-                    f"'{src}' which is not allowed."
-                )
-            if src_clean.startswith("/"):
-                norm = os.path.normpath(src_clean).replace("\\", "/")
-                if norm in ("/", "/var") or any(
-                    norm == p or norm.startswith(p + "/")
-                    for p in cls._FORBIDDEN_HOST_BIND_PREFIXES
-                ):
-                    raise BuildError(
-                        f"Compose service '{svc_name}' bind-mounts sensitive host path "
-                        f"'{src}' which is not allowed for security reasons."
-                    )
+            cls._check_host_path_forbidden(svc_name, src, "volume")
 
     @staticmethod
     def _apply_compose_service_hardening(
@@ -355,8 +525,10 @@ class ComposeNetworkingMixin:
         sandbox_dns: list[str] | None,
         extra_hosts: dict[str, str] | list[str] | None,
         resolv_path: str | None,
+        mem_limit: str = "512m",
+        cpus: float = 1.0,
     ) -> None:
-        """Apply LocalAdapter-equivalent hardening defaults to a compose service override."""
+        """Apply LocalAdapter-equivalent hardening defaults & resource caps to a compose service override."""
         svc_override["init"] = True
         svc_override["security_opt"] = [
             "no-new-privileges:true",
@@ -365,6 +537,9 @@ class ComposeNetworkingMixin:
         svc_override["cap_drop"] = ["ALL"]
         svc_override["cap_add"] = ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"]
         svc_override["pids_limit"] = 1024
+        svc_override["mem_limit"] = str(mem_limit or "512m")
+        svc_override["memswap_limit"] = str(mem_limit or "512m")
+        svc_override["cpus"] = float(cpus if cpus and float(cpus) > 0 else 1.0)
         svc_override["ulimits"] = {
             "nofile": {"soft": 1024, "hard": 2048},
             "fsize": 512000000,
@@ -458,98 +633,116 @@ class ComposeNetworkingMixin:
             except Exception as exc:
                 logger.debug("Compose gVisor extra_hosts resolution skipped: %s", exc)
 
+        # Resolve effective resource limits from service quota (safe fallback 512m / 1.0 CPU).
+        svc_obj = getattr(self, "service", None)
+        try:
+            mem_mb_val = int(getattr(svc_obj, "memory_mb", 512) or 512)
+        except (TypeError, ValueError):
+            mem_mb_val = 512
+        mem_limit_str = f"{max(64, mem_mb_val)}m"
+        try:
+            cpus_val = float(getattr(svc_obj, "cpu_cores", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            cpus_val = 1.0
+        cpus_val = max(0.1, cpus_val)
+
         # Apply security_opt + shared network to ALL services in the compose file
         compose_path = _os.path.join(routing_dir, self.service.compose_file)
         if _os.path.isfile(compose_path):
             try:
                 with open(compose_path, "r", encoding="utf-8") as f:
-                    user_compose = yaml.safe_load(f) or {}
-                    if "services" in user_compose and isinstance(user_compose["services"], dict):
-                        # SECURITY: reject privileged modes, host namespaces, dangerous caps, and sensitive host mounts
-                        for svc_name, svc_config in user_compose["services"].items():
-                            self._validate_compose_service_security(svc_name, svc_config)
+                    raw_compose_text = f.read()
+                user_compose = yaml.safe_load(raw_compose_text) or {}
+                if "services" in user_compose and isinstance(user_compose["services"], dict):
+                    self._validate_compose_top_level_volumes(user_compose)
+                    self._validate_compose_networks_security(user_compose, allowed_network=network_name)
+                    # SECURITY: reject privileged modes, host namespaces, dangerous caps, and sensitive host mounts
+                    for svc_name, svc_config in user_compose["services"].items():
+                        self._validate_compose_service_security(svc_name, svc_config)
 
-                        # Collect networks already declared in the user's compose file
-                        # so we don't create duplicate entries.
-                        user_networks = set(
-                            (user_compose.get("networks") or {}).keys()
+                    # Collect networks already declared in the user's compose file
+                    # so we don't create duplicate entries.
+                    user_networks = set(
+                        (user_compose.get("networks") or {}).keys()
+                    )
+
+                    # --- mTLS: Prepare SPIRE volumes and env vars ---
+                    mtls_volumes = []
+                    mtls_env = {}
+                    try:
+                        if is_mtls_enabled(self.service):
+                            for host_vol, container_path, mode in get_mtls_volumes(self.service):
+                                mtls_volumes.append(f"{host_vol}:{container_path}:{mode}")
+                            mtls_env = get_mtls_env_vars(self.service)
+                    except Exception as e:
+                        logger.debug("mTLS compose injection skipped: %s", e)
+
+                    all_service_names = list(user_compose["services"].keys())
+                    if main_service not in all_service_names:
+                        all_service_names.append(main_service)
+
+                    for svc_name in all_service_names:
+                        if svc_name not in override_payload["services"]:
+                            override_payload["services"][svc_name] = {}
+                        self._apply_compose_service_hardening(
+                            override_payload["services"][svc_name],
+                            compose_runtime,
+                            sandbox_dns,
+                            gvisor_extra_hosts,
+                            resolv_path,
+                            mem_limit=mem_limit_str,
+                            cpus=cpus_val,
                         )
 
-                        # --- mTLS: Prepare SPIRE volumes and env vars ---
-                        mtls_volumes = []
-                        mtls_env = {}
+                        # Attach every service to the shared network so DNS
+                        # resolution for addon hostnames works.  If the user's
+                        # compose file already declares smsly-net for this
+                        # service, the merge is a harmless no-op.
+                        if network_name not in user_networks:
+                            svc_networks = override_payload["services"][svc_name].get("networks") or []
+                            if network_name not in svc_networks:
+                                svc_networks.append(network_name)
+                                override_payload["services"][svc_name]["networks"] = svc_networks
+
+                        # --- mTLS: Add SPIRE volumes to every service ---
+                        if mtls_volumes:
+                            existing_vols = override_payload["services"][svc_name].get("volumes") or []
+                            for vol in mtls_volumes:
+                                if vol not in existing_vols:
+                                    existing_vols.append(vol)
+                            override_payload["services"][svc_name]["volumes"] = existing_vols
+
+                        # --- mTLS: Add SPIFFE env vars to every service ---
+                        if mtls_env:
+                            existing_env = override_payload["services"][svc_name].get("environment") or {}
+                            if isinstance(existing_env, list):
+                                existing_env = dict(e.split("=", 1) for e in existing_env if "=" in e)
+                            existing_env.update(mtls_env)
+                            override_payload["services"][svc_name]["environment"] = existing_env
+
+                    # --- mTLS: Inject Envoy sidecar if enabled (fail-closed) ---
+                    mtls_required = False
+                    mtls_config_obj = None
+                    try:
+                        from apps.mtls.models import MtlsConfig
+                        is_eco = str(getattr(self.service, "managed_by", "") or "").upper() == "ECOSYSTEM"
+                        mtls_config_obj = MtlsConfig.objects.filter(
+                            service=self.service, enabled=True, sidecar_enabled=True
+                        ).first()
+                        mtls_required = bool(mtls_config_obj) or is_eco
+                    except Exception as e:
+                        logger.debug("mTLS config lookup skipped in compose override: %s", e)
+
+                    if mtls_required:
                         try:
-                            if is_mtls_enabled(self.service):
-                                for host_vol, container_path, mode in get_mtls_volumes(self.service):
-                                    mtls_volumes.append(f"{host_vol}:{container_path}:{mode}")
-                                mtls_env = get_mtls_env_vars(self.service)
-                        except Exception as e:
-                            logger.debug("mTLS compose injection skipped: %s", e)
-
-                        all_service_names = list(user_compose["services"].keys())
-                        if main_service not in all_service_names:
-                            all_service_names.append(main_service)
-
-                        for svc_name in all_service_names:
-                            if svc_name not in override_payload["services"]:
-                                override_payload["services"][svc_name] = {}
-                            self._apply_compose_service_hardening(
-                                override_payload["services"][svc_name],
-                                compose_runtime,
-                                sandbox_dns,
-                                gvisor_extra_hosts,
-                                resolv_path,
+                            from apps.mtls.services.envoy_sidecar import EnvoySidecar
+                            override_payload = EnvoySidecar.inject_sidecar_compose(
+                                self.service, override_payload
                             )
-
-                            # Attach every service to the shared network so DNS
-                            # resolution for addon hostnames works.  If the user's
-                            # compose file already declares smsly-net for this
-                            # service, the merge is a harmless no-op.
-                            if network_name not in user_networks:
-                                svc_networks = override_payload["services"][svc_name].get("networks") or []
-                                if network_name not in svc_networks:
-                                    svc_networks.append(network_name)
-                                    override_payload["services"][svc_name]["networks"] = svc_networks
-
-                            # --- mTLS: Add SPIRE volumes to every service ---
-                            if mtls_volumes:
-                                existing_vols = override_payload["services"][svc_name].get("volumes") or []
-                                for vol in mtls_volumes:
-                                    if vol not in existing_vols:
-                                        existing_vols.append(vol)
-                                override_payload["services"][svc_name]["volumes"] = existing_vols
-
-                            # --- mTLS: Add SPIFFE env vars to every service ---
-                            if mtls_env:
-                                existing_env = override_payload["services"][svc_name].get("environment") or {}
-                                if isinstance(existing_env, list):
-                                    existing_env = dict(e.split("=", 1) for e in existing_env if "=" in e)
-                                existing_env.update(mtls_env)
-                                override_payload["services"][svc_name]["environment"] = existing_env
-
-                        # --- mTLS: Inject Envoy sidecar if enabled (fail-closed) ---
-                        mtls_required = False
-                        mtls_config_obj = None
-                        try:
-                            from apps.mtls.models import MtlsConfig
-                            is_eco = str(getattr(self.service, "managed_by", "") or "").upper() == "ECOSYSTEM"
-                            mtls_config_obj = MtlsConfig.objects.filter(
-                                service=self.service, enabled=True, sidecar_enabled=True
-                            ).first()
-                            mtls_required = bool(mtls_config_obj) or is_eco
                         except Exception as e:
-                            logger.debug("mTLS config lookup skipped in compose override: %s", e)
-
-                        if mtls_required:
-                            try:
-                                from apps.mtls.services.envoy_sidecar import EnvoySidecar
-                                override_payload = EnvoySidecar.inject_sidecar_compose(
-                                    self.service, override_payload
-                                )
-                            except Exception as e:
-                                raise BuildError(
-                                    f"Envoy sidecar compose injection failed for {getattr(self.service, 'name', main_service)}: {e}"
-                                ) from e
+                            raise BuildError(
+                                f"Envoy sidecar compose injection failed for {getattr(self.service, 'name', main_service)}: {e}"
+                            ) from e
             except BuildError:
                 raise
             except Exception as exc:
@@ -571,12 +764,77 @@ class ComposeNetworkingMixin:
                 sandbox_dns,
                 gvisor_extra_hosts,
                 resolv_path,
+                mem_limit=mem_limit_str,
+                cpus=cpus_val,
             )
             override_payload["services"][main_service] = details
 
         with open(override_path, "w", encoding="utf-8") as handle:
             yaml.safe_dump(override_payload, handle, sort_keys=False)
         return override_path
+
+    def _validate_merged_compose_config(
+        self,
+        compose_path: str,
+        override_path: str | None,
+        env_map: dict[str, str] | None,
+        allowed_network: str | None = None,
+    ) -> dict:
+        """Validate the env-interpolated and override-merged Compose specification."""
+        if not compose_path or not os.path.isfile(compose_path):
+            raise BuildError(f"Compose file not found for merged validation: {compose_path}")
+        try:
+            with open(compose_path, "r", encoding="utf-8") as fh:
+                raw_user = fh.read()
+            interpolated = self._interpolate_compose_text(raw_user, env_map)
+            user_doc = yaml.safe_load(interpolated) or {}
+        except BuildError:
+            raise
+        except Exception as exc:
+            raise BuildError(f"Failed to parse interpolated compose file: {exc}") from exc
+
+        if not isinstance(user_doc, dict) or not isinstance(user_doc.get("services"), dict):
+            raise BuildError("Interpolated compose file must contain a 'services' mapping.")
+
+        if user_doc.get("include"):
+            raise BuildError("Compose top-level 'include' is not allowed for tenant deployments.")
+
+        self._validate_compose_top_level_volumes(user_doc)
+        self._validate_compose_networks_security(user_doc, allowed_network=allowed_network)
+        for svc_name, svc_cfg in user_doc["services"].items():
+            if isinstance(svc_cfg, dict) and svc_cfg.get("extends"):
+                ext = svc_cfg.get("extends")
+                if isinstance(ext, dict) and ext.get("file"):
+                    raise BuildError(
+                        f"Compose service '{svc_name}' uses external file in 'extends' which is not allowed."
+                    )
+            self._validate_compose_service_security(svc_name, svc_cfg)
+
+        override_doc: dict = {}
+        if override_path and os.path.isfile(override_path):
+            try:
+                with open(override_path, "r", encoding="utf-8") as ofh:
+                    override_doc = yaml.safe_load(ofh) or {}
+            except Exception as exc:
+                raise BuildError(f"Failed to parse compose override file: {exc}") from exc
+
+        merged_services: dict = {}
+        override_services = (override_doc.get("services") or {}) if isinstance(override_doc, dict) else {}
+        for svc_name, svc_cfg in user_doc["services"].items():
+            base_cfg = dict(svc_cfg) if isinstance(svc_cfg, dict) else {}
+            ov_cfg = override_services.get(svc_name)
+            if isinstance(ov_cfg, dict):
+                base_cfg.update(ov_cfg)
+                if override_path and os.path.isfile(override_path):
+                    for req_key in ("cap_drop", "security_opt", "pids_limit", "mem_limit", "cpus"):
+                        if req_key not in base_cfg:
+                            raise BuildError(
+                                f"Merged compose service '{svc_name}' is missing required hardening field '{req_key}'."
+                            )
+            self._validate_compose_service_security(svc_name, base_cfg)
+            merged_services[svc_name] = base_cfg
+
+        return {"services": merged_services}
 
 
 

@@ -72,7 +72,29 @@ def _build_function(deployment, service) -> str:
 
         append_log(deployment, f"Building function {tag}...\n")
 
-        cmd = ["docker", "build", "-t", tag, "--load", build_dir]
+        from apps.deployments.services.pipeline.build import (
+            _build_limits,
+            _create_ephemeral_builder,
+            _remove_ephemeral_builder,
+        )
+        import uuid
+        try:
+            mem_mb, cpu_pct, _ = _build_limits()
+        except Exception:
+            mem_mb, cpu_pct = 10240, 400
+        eph_builder = _create_ephemeral_builder(
+            f"smsly-eph-{uuid.uuid4().hex}", mem_mb, cpu_pct
+        )
+        if eph_builder:
+            cmd = [
+                "docker", "buildx", "build",
+                "--builder", eph_builder,
+                "--output", "type=docker",
+                "-t", tag,
+                build_dir,
+            ]
+        else:
+            cmd = ["docker", "build", "-t", tag, "--load", build_dir]
         try:
             result = subprocess.run(
                 cmd,
@@ -102,6 +124,9 @@ def _build_function(deployment, service) -> str:
             if output:
                 append_log(deployment, f"{output[-8000:]}\n")
             raise
+        finally:
+            if eph_builder:
+                _remove_ephemeral_builder(eph_builder)
 
         update_stage(deployment, 'Build', 'success')
         is_local = is_deployment_local(deployment)
@@ -244,9 +269,35 @@ def _build_uploaded_source(deployment, service) -> str:
             if not has_dockerfile:
                 raise ValueError("Build strategy is docker but no Dockerfile was found.")
             append_log(deployment, "Building uploaded source with Dockerfile...\n")
+            from apps.deployments.services.pipeline.build import (
+                _build_limits,
+                _create_ephemeral_builder,
+                _remove_ephemeral_builder,
+            )
+            import uuid
             try:
+                mem_mb, cpu_pct, _ = _build_limits()
+            except Exception:
+                mem_mb, cpu_pct = 10240, 400
+            eph_builder = _create_ephemeral_builder(
+                f"smsly-eph-{uuid.uuid4().hex}", mem_mb, cpu_pct
+            )
+            try:
+                if eph_builder:
+                    build_cmd = [
+                        "docker", "buildx", "build",
+                        "--builder", eph_builder,
+                        "--output", "type=docker",
+                        "-t", image_name,
+                        "-f", dockerfile_path,
+                        source_dir,
+                    ]
+                else:
+                    build_cmd = [
+                        "docker", "build", "-t", image_name, "--load", "-f", dockerfile_path, source_dir,
+                    ]
                 result = subprocess.run(
-                    ["docker", "build", "-t", image_name, "--load", "-f", dockerfile_path, source_dir],
+                    build_cmd,
                     check=True,
                     capture_output=True,
                     text=True,
@@ -260,6 +311,9 @@ def _build_uploaded_source(deployment, service) -> str:
             except subprocess.CalledProcessError as exc:
                 append_log(deployment, f"{exc.stdout or ''}\n{exc.stderr or ''}\n")
                 raise
+            finally:
+                if eph_builder:
+                    _remove_ephemeral_builder(eph_builder)
         else:
             if service.buildpack == 'STATIC':
                 append_log(deployment, "Building uploaded source for Static Site (via Nixpacks)...\n")
@@ -268,11 +322,29 @@ def _build_uploaded_source(deployment, service) -> str:
             else:
                 append_log(deployment, "Building uploaded source with Nixpacks fallback...\n")
 
-            NixpacksBuilder.build_image(
-                source_dir=source_dir,
-                image_name=image_name,
-                env_vars=env_map,
+            from apps.deployments.services.pipeline.build import (
+                _build_limits,
+                _create_ephemeral_builder,
+                _remove_ephemeral_builder,
             )
+            import uuid
+            try:
+                mem_mb, cpu_pct, _ = _build_limits()
+            except Exception:
+                mem_mb, cpu_pct = 10240, 400
+            eph_builder = _create_ephemeral_builder(
+                f"smsly-eph-{uuid.uuid4().hex}", mem_mb, cpu_pct
+            )
+            try:
+                NixpacksBuilder.build_image(
+                    source_dir=source_dir,
+                    image_name=image_name,
+                    env_vars=env_map,
+                    builder_name=eph_builder,
+                )
+            finally:
+                if eph_builder:
+                    _remove_ephemeral_builder(eph_builder)
 
         update_stage(deployment, 'Build', 'success')
         is_local = is_deployment_local(deployment)

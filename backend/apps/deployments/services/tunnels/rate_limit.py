@@ -36,16 +36,13 @@ class RateLimiter:  # pylint: disable=too-few-public-methods
         self.burst = burst_multiplier
 
     def _get_client_id(self, request) -> str:
-        """Get unique client identifier."""
+        """Get unique client identifier without trusting spoofed headers."""
         if request.user.is_authenticated:
             return f"user:{request.user.id}"
 
-        # Use IP for anonymous users
-        xff = request.META.get('HTTP_X_FORWARDED_FOR')
-        if xff:
-            ip = xff.split(',')[0].strip()
-        else:
-            ip = request.META.get('REMOTE_ADDR', 'unknown')
+        from apps.core.rate_limiting import get_trusted_client_ip
+
+        ip = get_trusted_client_ip(request, default="unknown")
         return f"ip:{ip}"
 
     def _get_limit(self, request) -> int:
@@ -56,42 +53,38 @@ class RateLimiter:  # pylint: disable=too-few-public-methods
 
     def is_allowed(self, request) -> tuple:
         """
-        Check if request is allowed under rate limit.
+        Check if request is allowed under an atomic fixed-window rate limit.
 
         Returns:
             (allowed: bool, info: dict with limit details)
         """
         client_id = self._get_client_id(request)
         limit = self._get_limit(request)
-        burst_limit = int(limit * self.burst)
+        burst_limit = max(1, int(limit * self.burst))
 
-        key = f"ratelimit:{client_id}"
-        now = time.time()
-        window_start = now - 60  # 1 minute window
+        bucket = int(time.time() // 60)
+        key = f"ratelimit:{client_id}:{bucket}"
+        reset_time = (bucket + 1) * 60
+        retry_after = max(1, int(reset_time - time.time()))
 
         try:
-            # Get current request timestamps
-            timestamps = cache.get(key, [])
+            if cache.add(key, 1, timeout=120):
+                current_count = 1
+            else:
+                try:
+                    current_count = int(cache.incr(key))
+                except ValueError:
+                    cache.set(key, 1, timeout=120)
+                    current_count = 1
 
-            # Remove old timestamps outside window
-            timestamps = [t for t in timestamps if t > window_start]
-
-            # Check if under limit
-            current_count = len(timestamps)
-            allowed = current_count < burst_limit
-
-            if allowed:
-                timestamps.append(now)
-                cache.set(key, timestamps, 120)  # 2 minute TTL
-
-            remaining = max(0, limit - current_count - 1) if allowed else 0
-            reset_time = int(window_start + 60)
+            allowed = current_count <= burst_limit
+            remaining = max(0, burst_limit - current_count) if allowed else 0
 
             return allowed, {
                 'limit': limit,
                 'remaining': remaining,
                 'reset': reset_time,
-                'retry_after': 60 - int(now - window_start) if not allowed else 0
+                'retry_after': retry_after if not allowed else 0,
             }
 
         except Exception as e: # pylint: disable=broad-exception-caught

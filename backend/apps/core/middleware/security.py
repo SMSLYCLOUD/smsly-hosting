@@ -267,16 +267,8 @@ class SecurityMiddleware:
         except ValueError:
             return False
 
-        # 2. Nonce replay protection. Each nonce is one-use within
-        # the freshness window.
-        from django.core.cache import cache
-        nonce_key = f"middleware_hmac_nonce:{nonce}"
-        if cache.get(nonce_key):
-            logger.warning(f"HMAC nonce already used: {nonce[:16]}...")
-            return False
-        cache.set(nonce_key, "1", timeout=600)
-
-        # 3. Compute Hash
+        # 2. Verify HMAC signature before consuming replay nonce so forged
+        # traffic cannot burn valid nonces.
         method = request.method
         path = request.path  # Use path without query string for deterministic signing
         body = request.body
@@ -298,6 +290,17 @@ class SecurityMiddleware:
                 f"Payload: {payload[:100]}... "
                 f"Secret-configured: {bool(getattr(settings, 'GATEWAY_SECRET', None))}"
             )
+            return False
+
+        # 3. Atomic nonce replay protection (fail-closed if cache unavailable).
+        from django.core.cache import cache
+        nonce_key = f"middleware_hmac_nonce:{nonce}"
+        try:
+            if not cache.add(nonce_key, "1", timeout=600):
+                logger.warning(f"HMAC nonce already used: {nonce[:16]}...")
+                return False
+        except Exception as exc:
+            logger.warning("HMAC replay cache unavailable (%s) — failing closed", exc)
             return False
 
         return True

@@ -48,8 +48,9 @@ AGENT_HMAC_NONCE_TTL_SECONDS = 120
 
 
 def _client_ip(request):
-    forwarded = str(request.META.get("HTTP_X_FORWARDED_FOR", "") or "").split(",")[0].strip()
-    return forwarded or str(request.META.get("REMOTE_ADDR", "unknown") or "unknown").strip() or "unknown"
+    from apps.core.rate_limiting import get_trusted_client_ip
+
+    return get_trusted_client_ip(request, default="unknown")
 
 
 def compute_agent_hmac(secret, method, full_path, timestamp, nonce, body):
@@ -109,18 +110,6 @@ def verify_agent_hmac(request, server) -> bool:
         logger.warning("agent_hmac: timestamp expired (delta=%d)", int(time.time()) - req_ts)
         return False
 
-    nonce_key = f"agent_hmac_nonce:{nonce}"
-    if cache.get(nonce_key):
-        logger.warning("agent_hmac: nonce replay attempt from %s", _client_ip(request))
-        return False
-    try:
-        cache.set(nonce_key, "1", timeout=AGENT_HMAC_NONCE_TTL_SECONDS)
-    except Exception as exc:
-        # If the cache backend is down, fail closed — better to reject
-        # a legitimate agent than accept a replayed request.
-        logger.warning("agent_hmac: nonce cache write failed, failing closed: %s", exc)
-        return False
-
     try:
         body = request.body
     except Exception:
@@ -138,5 +127,16 @@ def verify_agent_hmac(request, server) -> bool:
             "agent_hmac: signature mismatch for server %s from %s",
             getattr(server, "id", "?"), _client_ip(request),
         )
+        return False
+
+    nonce_key = f"agent_hmac_nonce:{nonce}"
+    try:
+        if not cache.add(nonce_key, "1", timeout=AGENT_HMAC_NONCE_TTL_SECONDS):
+            logger.warning("agent_hmac: nonce replay attempt from %s", _client_ip(request))
+            return False
+    except Exception as exc:
+        # If the cache backend is down, fail closed — better to reject
+        # a legitimate agent than accept a replayed request.
+        logger.warning("agent_hmac: nonce cache write failed, failing closed: %s", exc)
         return False
     return True

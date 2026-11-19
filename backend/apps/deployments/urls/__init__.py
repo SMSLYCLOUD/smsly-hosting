@@ -84,7 +84,7 @@ from ..views.network_scope import ScopedNetworkViewSet
 from ..views.node_exchange import node_token_exchange, node_token_exchange_via_gateway
 from ..views.oauth import oauth_credentials, oauth_providers_public, oauth_providers_status
 from ..views.project import ProjectViewSet
-from ..views.recovery import recovery_phrase_generate, recovery_phrase_verify
+from ..views.recovery import recovery_phrase_generate, recovery_phrase_revoke, recovery_phrase_verify
 from ..views.registry_auth import registry_token
 from ..views.registry_scope import ScopedRegistryViewSet
 from ..views.replication import ReplicationViewSet
@@ -313,5 +313,6 @@ urlpatterns = [
     path('devices/<int:device_id>/revoke/', revoke_device, name='device-revoke'),
     # Recovery phrase — 12-word BIP39 last-resort account recovery
     path('auth/recovery/generate/', recovery_phrase_generate, name='recovery-generate'),
+    path('auth/recovery/revoke/', recovery_phrase_revoke, name='recovery-revoke'),
     path('auth/recovery/verify/', recovery_phrase_verify, name='recovery-verify'),
 ]

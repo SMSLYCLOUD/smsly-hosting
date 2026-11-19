@@ -84,15 +84,7 @@ class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
         except ValueError:
             raise authentication.AuthenticationFailed("Invalid timestamp")
 
-        # SECURITY: nonce replay protection. Each nonce is one-use
-        # within the freshness window.
-        from django.core.cache import cache
-        nonce_key = f"hmac_nonce:{nonce}"
-        if cache.get(nonce_key):
-            raise authentication.AuthenticationFailed("Nonce already used")
-        cache.set(nonce_key, "1", timeout=120)
-
-        # Verify HMAC
+        # Verify HMAC first so forged requests cannot burn legitimate nonces.
         gw_secret = getattr(settings, "GATEWAY_SECRET", settings.SECRET_KEY)
         method = request.method
         path = request.get_full_path()
@@ -108,6 +100,17 @@ class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
 
         if not hmac.compare_digest(expected, signature):
             raise authentication.AuthenticationFailed("Invalid HMAC signature")
+
+        # SECURITY: atomic nonce replay protection (fail-closed on cache failure).
+        from django.core.cache import cache
+        nonce_key = f"hmac_nonce:{nonce}"
+        try:
+            if not cache.add(nonce_key, "1", timeout=120):
+                raise authentication.AuthenticationFailed("Nonce already used")
+        except authentication.AuthenticationFailed:
+            raise
+        except Exception as exc:
+            raise authentication.AuthenticationFailed("Replay protection store unavailable") from exc
 
         # Authentication success — use the first active superuser as the actor
         admin = User.objects.filter(is_superuser=True, is_active=True).first()

@@ -20,6 +20,107 @@ function) are unchanged.
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 
+def _is_ip_in_list(ip_str: str, candidates: list[str] | tuple[str, ...]) -> bool:
+    """Return True when *ip_str* matches any IP or CIDR in *candidates*."""
+    import ipaddress
+
+    clean_ip = (ip_str or "").strip()
+    if not clean_ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(clean_ip)
+    except ValueError:
+        return clean_ip in candidates
+
+    for entry in candidates:
+        raw = str(entry or "").strip()
+        if not raw:
+            continue
+        if raw == clean_ip:
+            return True
+        if "/" in raw:
+            try:
+                if addr in ipaddress.ip_network(raw, strict=False):
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
+_LOCAL_PROXY_NETWORKS = None
+
+
+def _is_local_reverse_proxy(ip_str: str) -> bool:
+    """True when *ip_str* is loopback or an RFC1918/ULA local reverse-proxy bridge IP."""
+    import ipaddress
+
+    global _LOCAL_PROXY_NETWORKS
+    if _LOCAL_PROXY_NETWORKS is None:
+        _LOCAL_PROXY_NETWORKS = (
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+            ipaddress.ip_network("fc00::/7"),
+        )
+    try:
+        addr = ipaddress.ip_address((ip_str or "").strip())
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return True
+    return any(addr in net for net in _LOCAL_PROXY_NETWORKS)
+
+
+def is_trusted_proxy_peer(request, *, allow_private_when_unset: bool = False) -> bool:
+    """Return True iff the direct peer REMOTE_ADDR is a trusted proxy."""
+    from django.conf import settings
+
+    remote_addr = (request.META.get("REMOTE_ADDR") or "").strip()
+    if not remote_addr:
+        return False
+    trusted_proxies = getattr(settings, "TRUSTED_PROXY_IPS", None) or []
+    if trusted_proxies:
+        return _is_ip_in_list(remote_addr, trusted_proxies)
+    if allow_private_when_unset:
+        return _is_local_reverse_proxy(remote_addr)
+    return False
+
+
+def get_trusted_client_ip(request, *, default: str = "0.0.0.0", use_xff: bool = True) -> str:
+    """Resolve client IP without trusting spoofed headers from untrusted peers.
+
+    Only direct peers listed in ``TRUSTED_PROXY_IPS`` (with CIDR support) may
+    assert ``CF-Connecting-IP``, ``X-Real-IP``, or right-to-left untrusted
+    ``X-Forwarded-For`` hops. When ``TRUSTED_PROXY_IPS`` is unset, only
+    loopback/private reverse-proxy bridge peers may forward ``CF-Connecting-IP``.
+    """
+    from django.conf import settings
+
+    remote_addr = (request.META.get("REMOTE_ADDR") or "").strip()
+    trusted_proxies = getattr(settings, "TRUSTED_PROXY_IPS", None) or []
+
+    if is_trusted_proxy_peer(request, allow_private_when_unset=True):
+        cf_ip = (request.META.get("HTTP_CF_CONNECTING_IP") or "").strip()
+        if cf_ip:
+            return cf_ip
+
+    if trusted_proxies and _is_ip_in_list(remote_addr, trusted_proxies):
+        real_ip = (request.META.get("HTTP_X_REAL_IP") or "").strip()
+        if real_ip:
+            return real_ip
+        if use_xff:
+            xff = str(request.META.get("HTTP_X_FORWARDED_FOR") or "").strip()
+            if xff:
+                hops = [h.strip() for h in xff.split(",") if h.strip()]
+                for hop in reversed(hops):
+                    if not _is_ip_in_list(hop, trusted_proxies):
+                        return hop
+                if hops:
+                    return hops[-1]
+
+    return remote_addr or default
+
+
 class DeploymentRateThrottle(UserRateThrottle):
     """Long-tail throttle on deployment write actions.
 
@@ -74,19 +175,7 @@ class TrustedIdentMixin:
     """
 
     def get_ident(self, request):
-        from django.conf import settings
-
-        cf_ip = (request.META.get("HTTP_CF_CONNECTING_IP") or "").strip()
-        if cf_ip:
-            return cf_ip
-
-        remote_addr = (request.META.get("REMOTE_ADDR") or "").strip()
-        trusted_proxies = getattr(settings, "TRUSTED_PROXY_IPS", None) or []
-        real_ip = (request.META.get("HTTP_X_REAL_IP") or "").strip()
-        if real_ip and remote_addr in trusted_proxies:
-            return real_ip
-
-        return remote_addr or "0.0.0.0"
+        return get_trusted_client_ip(request, default="0.0.0.0", use_xff=False)
 
 
 class NodeTokenExchangeThrottle(TrustedIdentMixin, AnonRateThrottle):

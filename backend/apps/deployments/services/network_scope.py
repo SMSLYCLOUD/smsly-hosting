@@ -222,6 +222,23 @@ def _sh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
                 capture_output=True, text=True, timeout=timeout, check=False)
         return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
     except FileNotFoundError:
+        if args and args[0] == "ip":
+            script = " ".join(args)
+            try:
+                proc = subprocess.run(
+                    ["docker", "run", "--rm", "--net=host",
+                     IPTABLES_SHIM_IMAGE, "sh", "-c", script],
+                    capture_output=True, text=True, timeout=timeout, check=False,
+                )
+                if proc.returncode == 0 or not _is_missing_image(proc):
+                    return proc
+                return subprocess.run(
+                    ["docker", "run", "--rm", "--net=host",
+                     IPTABLES_FALLBACK_IMAGE, "sh", "-c", script],
+                    capture_output=True, text=True, timeout=timeout, check=False,
+                )
+            except FileNotFoundError:
+                pass
         logger.error("docker/iptables unavailable; cannot manage egress restrictions")
         raise
 
@@ -468,8 +485,13 @@ def resolve_domain_egress(host: str) -> list[str]:
 
 
 def _bridge_exists(bridge_iface: str) -> bool:
-    res = _sh(["ip", "link", "show", bridge_iface])
-    return res.returncode == 0
+    try:
+        res = _sh(["ip", "link", "show", bridge_iface])
+        return res.returncode == 0
+    except FileNotFoundError:
+        # Fail-safe when neither host `ip` nor `docker` CLI is available:
+        # assume bridge exists so reconcile never purges rules blindly.
+        return True
 
 
 def clear_scoped_rules(network_name: str) -> int:

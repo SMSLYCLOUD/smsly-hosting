@@ -28,11 +28,10 @@ _ALLOWED_WEBHOOK_EVENTS = frozenset({'health_update', 'deploy_complete'})
 
 
 def _client_ip(request) -> str:
-    """Best-effort client IP extraction, X-Forwarded-For aware."""
-    xff = request.META.get('HTTP_X_FORWARDED_FOR', '')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR', '')
+    """Trusted client IP extraction without trusting unvetted X-Forwarded-For."""
+    from apps.core.rate_limiting import get_trusted_client_ip
+
+    return get_trusted_client_ip(request, default="")
 
 
 class ServiceHealthWebhookView(APIView):
@@ -102,12 +101,18 @@ class ServiceHealthWebhookView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         nonce_key = f"webhook_nonce:health:{service.id}:{nonce}"
-        if cache.get(nonce_key):
+        try:
+            if not cache.add(nonce_key, "1", timeout=600):
+                return Response(
+                    {"error": "Nonce already used"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+        except Exception as exc:
+            logger.warning("health webhook nonce store failed: %s", exc)
             return Response(
-                {"error": "Nonce already used"},
-                status=status.HTTP_401_UNAUTHORIZED,
+                {"error": "Replay store unavailable"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        cache.set(nonce_key, "1", timeout=600)
 
         # Event allowlist: reject unknown event types so a stolen
         # token can't be reused as a generic "do anything"

@@ -138,6 +138,50 @@ class NixpacksBuilder:
 
     # Default cache directory for Nixpacks builds
     CACHE_DIR = "/tmp/smsly/build-cache"
+    _FORBIDDEN_BUILD_ENV_KEYS = frozenset({
+        "DOCKER_HOST",
+        "DOCKER_CONFIG",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH",
+        "BUILDX_BUILDER",
+        "BUILDX_CONFIG",
+        "NIXPACKS_CACHE_DIR",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "PATH",
+    })
+    _FORBIDDEN_NIXPACKS_CONFIG_PATTERNS = (
+        "--privileged",
+        "--network=host",
+        "--net=host",
+        "docker.sock",
+        "containerd.sock",
+    )
+
+    @classmethod
+    def _validate_nixpacks_source_dir(cls, source_dir: str) -> None:
+        """Reject symlink escapes or host-escape flags in nixpacks config files."""
+        real_root = os.path.realpath(source_dir)
+        for fname in ("nixpacks.toml", "nixpacks.json", "Procfile"):
+            candidate = os.path.join(source_dir, fname)
+            if not os.path.lexists(candidate):
+                continue
+            resolved = os.path.realpath(candidate)
+            if resolved != real_root and not resolved.startswith(real_root + os.sep):
+                raise RuntimeError(
+                    f"Nixpacks build rejected: '{fname}' escapes source directory via symlink."
+                )
+            if fname in ("nixpacks.toml", "nixpacks.json") and os.path.isfile(resolved):
+                try:
+                    with open(resolved, "r", encoding="utf-8", errors="replace") as fh:
+                        content = fh.read(256_000).lower()
+                except OSError as exc:
+                    raise RuntimeError(f"Failed to read {fname}: {exc}") from exc
+                for pat in cls._FORBIDDEN_NIXPACKS_CONFIG_PATTERNS:
+                    if pat in content:
+                        raise RuntimeError(
+                            f"Nixpacks build rejected: '{fname}' contains forbidden pattern '{pat}'."
+                        )
 
     @staticmethod
     def build_image(
@@ -147,6 +191,7 @@ class NixpacksBuilder:
         cache_dir: str | None = None,
         start_cmd: str | None = None,
         allow_missing_start: bool = False,
+        builder_name: str | None = None,
     ) -> dict:
         """
         Builds a Docker image using Nixpacks.
@@ -156,11 +201,14 @@ class NixpacksBuilder:
             image_name: Docker image tag
             env_vars: Environment variables for build
             cache_dir: Optional cache directory (defaults to CACHE_DIR)
+            builder_name: Optional contained Buildx builder name
 
         Returns dict with 'image_name', 'stdout', 'stderr' upon success.
         """
         if not os.path.exists(source_dir):
             raise FileNotFoundError(f"Source directory {source_dir} not found")
+
+        NixpacksBuilder._validate_nixpacks_source_dir(source_dir)
 
         # Cooperative wake: builds consume apt-cacher/verdaccio over docker
         # DNS — if the buildcache tier sleeps, every apt-get/npm fetch
@@ -211,6 +259,10 @@ class NixpacksBuilder:
 
         if env_vars:
             for k, v in env_vars.items():
+                key_upper = str(k or "").strip().upper()
+                if key_upper in NixpacksBuilder._FORBIDDEN_BUILD_ENV_KEYS:
+                    logger.warning("Skipping forbidden builder control env for nixpacks build: %s", k)
+                    continue
                 if is_secret_env_var(k):
                     logger.info("Skipping secret env for nixpacks build: %s", k)
                     continue
@@ -218,6 +270,10 @@ class NixpacksBuilder:
 
         logger.info(
             f"Starting Nixpacks build for {image_name} (cache: {effective_cache_dir})...")
+
+        build_env = {**os.environ, "NIXPACKS_CACHE_DIR": effective_cache_dir}
+        if builder_name:
+            build_env["BUILDX_BUILDER"] = builder_name
 
         try:
             # Run the build process (bounded so a hung Docker build cannot
@@ -228,7 +284,7 @@ class NixpacksBuilder:
                 capture_output=True,
                 text=True,
                 timeout=_nixpacks_timeout(),
-                env={**os.environ, "NIXPACKS_CACHE_DIR": effective_cache_dir}
+                env=build_env,
             )
             # Log build output for debugging
             if process.stdout:

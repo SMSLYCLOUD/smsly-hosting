@@ -662,15 +662,18 @@ class BuildMixin:
         # Build env vars to inject (addons, runtime config)
         env = os.environ.copy()
         env['DOCKER_BUILDKIT'] = '1'
+        _forbidden_env = NixpacksBuilder._FORBIDDEN_BUILD_ENV_KEYS
         # Merge compose .env file if present (Coolify parity: supports ${VAR} interpolation)
         compose_env_file = os.path.join(self.source_dir, '.env')
         if os.path.isfile(compose_env_file):
             for line in _read_env_file(compose_env_file):
                 key, _, val = line.partition('=')
-                if key and not key.startswith('#'):
-                    env.setdefault(key.strip(), val.strip())
+                k_clean = key.strip()
+                if k_clean and not k_clean.startswith('#') and k_clean.upper() not in _forbidden_env:
+                    env.setdefault(k_clean, val.strip())
         for ev in self.service.env_vars.all():
-            env[ev.key] = ev.value
+            if str(ev.key or '').strip().upper() not in _forbidden_env:
+                env[ev.key] = ev.value
 
         # Inject addon connection URLs
         from apps.addons.services.addon_provisioner import AddonProvisioner
@@ -685,6 +688,10 @@ class BuildMixin:
 
         # Ensure scoped network exists
         network_name = self._resolve_service_network_name()
+        if hasattr(self, '_validate_merged_compose_config'):
+            self._validate_merged_compose_config(
+                compose_path, override_path, env, allowed_network=network_name
+            )
 
         # ─── Phase 1: Build images while old containers keep serving ───
         # Separating build from deploy eliminates the build time from the
@@ -1730,28 +1737,41 @@ class BuildMixin:
             )
 
         try:
-            result = NixpacksBuilder.build_image(
-                source_dir=context_dir,
-                image_name=self.image_name,
-                env_vars=env_map,
-                start_cmd=start_cmd or None,
-                allow_missing_start=allow_missing_start,
-            )
-        except RuntimeError as exc:
-            # Defensive retry path for environments where start command probing is unstable.
-            if "no start command could be found" not in str(exc).lower():
-                raise
-            append_log(
-                self.deployment,
-                "Retrying Nixpacks build with --no-error-without-start.\n",
-            )
-            result = NixpacksBuilder.build_image(
-                source_dir=context_dir,
-                image_name=self.image_name,
-                env_vars=env_map,
-                start_cmd=None,
-                allow_missing_start=True,
-            )
+            mem_mb, cpu_pct, _ = _build_limits()
+        except Exception:
+            mem_mb, cpu_pct = 10240, 400
+        eph_builder = _create_ephemeral_builder(
+            f"smsly-eph-{uuid.uuid4().hex}", mem_mb, cpu_pct
+        )
+        try:
+            try:
+                result = NixpacksBuilder.build_image(
+                    source_dir=context_dir,
+                    image_name=self.image_name,
+                    env_vars=env_map,
+                    start_cmd=start_cmd or None,
+                    allow_missing_start=allow_missing_start,
+                    builder_name=eph_builder,
+                )
+            except RuntimeError as exc:
+                # Defensive retry path for environments where start command probing is unstable.
+                if "no start command could be found" not in str(exc).lower():
+                    raise
+                append_log(
+                    self.deployment,
+                    "Retrying Nixpacks build with --no-error-without-start.\n",
+                )
+                result = NixpacksBuilder.build_image(
+                    source_dir=context_dir,
+                    image_name=self.image_name,
+                    env_vars=env_map,
+                    start_cmd=None,
+                    allow_missing_start=True,
+                    builder_name=eph_builder,
+                )
+        finally:
+            if eph_builder:
+                _remove_ephemeral_builder(eph_builder)
 
         # NixpacksBuilder returns dict with stdout/stderr
         if result.get("stderr"):

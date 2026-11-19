@@ -401,3 +401,59 @@ def test_f14_route_recheck_unknown_domain_returns_404_without_mutating(db):
     assert resp.status_code == 404
     mock_reset.assert_not_called()
 
+
+def test_f12_recovery_single_use_consumption_expiry_and_revoke(api_client, superuser):
+    api_client.force_authenticate(user=superuser)
+    gen = api_client.post("/api/v1/auth/recovery/generate/", {}, format="json")
+    assert gen.status_code == 200
+    assert gen.data["single_use"] is True
+    assert "created_at" in gen.data and "expires_at" in gen.data
+    phrase = gen.data["phrase"]
+
+    anon = APIClient()
+    first = anon.post(
+        "/api/v1/auth/recovery/verify/",
+        {"phrase": phrase, "username": superuser.username},
+        format="json",
+        REMOTE_ADDR="198.51.100.201",
+    )
+    assert first.status_code == 200
+    assert first.data["phrase_consumed"] is True
+
+    # Replay of the consumed recovery phrase must fail closed
+    replay = anon.post(
+        "/api/v1/auth/recovery/verify/",
+        {"phrase": phrase, "username": superuser.username},
+        format="json",
+        REMOTE_ADDR="198.51.100.202",
+    )
+    assert replay.status_code == 400
+
+    # Explicit revoke endpoint clears stored hash
+    gen2 = api_client.post("/api/v1/auth/recovery/generate/", {}, format="json")
+    assert gen2.status_code == 200
+    rev = api_client.post("/api/v1/auth/recovery/revoke/", {}, format="json")
+    assert rev.status_code == 200
+    assert rev.data["revoked"] is True
+    assert rev.data["had_phrase"] is True
+    PlatformConfig.clear_cache()
+    assert not (PlatformConfig.load().recovery_phrase_hash or "").strip()
+
+
+def test_f14_untrusted_public_peer_cannot_spoof_cf_connecting_ip():
+    from apps.core.rate_limiting import TrustedIdentMixin, get_trusted_client_ip
+    from types import SimpleNamespace
+
+    fake_req = SimpleNamespace(
+        META={
+            "REMOTE_ADDR": "198.51.100.55",
+            "HTTP_CF_CONNECTING_IP": "203.0.113.99",
+            "HTTP_X_FORWARDED_FOR": "203.0.113.99",
+            "HTTP_X_REAL_IP": "203.0.113.99",
+        },
+        user=None,
+    )
+    assert TrustedIdentMixin().get_ident(fake_req) == "198.51.100.55"
+    assert get_trusted_client_ip(fake_req) == "198.51.100.55"
+
+
