@@ -263,6 +263,128 @@ class ComposeNetworkingMixin:
 
 
 
+    _DANGEROUS_COMPOSE_CAPS = frozenset({
+        "ALL", "SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
+        "SYS_RAWIO", "SYS_BOOT", "MAC_ADMIN", "MAC_OVERRIDE",
+        "DAC_READ_SEARCH", "BPF", "PERFMON", "SYS_TIME",
+        "AUDIT_CONTROL", "SYSLOG",
+    })
+    _FORBIDDEN_HOST_BIND_PREFIXES = (
+        "/etc", "/proc", "/sys", "/dev", "/var/run", "/run",
+        "/var/lib/docker", "/root", "/boot", "/opt/smsly-hosting",
+    )
+
+    @classmethod
+    def _validate_compose_service_security(cls, svc_name: str, svc_config: dict) -> None:
+        """Reject dangerous Docker Compose directives before compose up."""
+        if not isinstance(svc_config, dict):
+            return
+        if svc_config.get("privileged") is True:
+            raise BuildError(
+                f"Compose service '{svc_name}' has privileged: true "
+                "which is not allowed for security reasons."
+            )
+        if str(svc_config.get("network_mode") or "").strip().lower() == "host":
+            raise BuildError(
+                f"Compose service '{svc_name}' has network_mode: host "
+                "which is not allowed for security reasons."
+            )
+        for ns_key in ("pid", "ipc", "uts", "userns_mode", "cgroup"):
+            if str(svc_config.get(ns_key) or "").strip().lower() == "host":
+                raise BuildError(
+                    f"Compose service '{svc_name}' has {ns_key}: host "
+                    "which is not allowed for security reasons."
+                )
+        if svc_config.get("devices"):
+            raise BuildError(
+                f"Compose service '{svc_name}' declares host devices "
+                "which is not allowed for security reasons."
+            )
+        for opt in (svc_config.get("security_opt") or []):
+            opt_lower = str(opt).strip().lower()
+            if "unconfined" in opt_lower or "disable" in opt_lower:
+                raise BuildError(
+                    f"Compose service '{svc_name}' disables mandatory security profile "
+                    f"({opt}) which is not allowed."
+                )
+        for cap in (svc_config.get("cap_add") or []):
+            cap_norm = str(cap).strip().upper()
+            if cap_norm.startswith("CAP_"):
+                cap_norm = cap_norm[4:]
+            if cap_norm in cls._DANGEROUS_COMPOSE_CAPS:
+                raise BuildError(
+                    f"Compose service '{svc_name}' requests forbidden capability "
+                    f"'{cap}' which is not allowed for security reasons."
+                )
+        for vol in (svc_config.get("volumes") or []):
+            src = ""
+            if isinstance(vol, str):
+                parts = vol.split(":")
+                if len(parts) >= 2:
+                    src = parts[0].strip()
+            elif isinstance(vol, dict):
+                src = str(vol.get("source") or "").strip()
+            if not src:
+                continue
+            src_clean = src.replace("\\", "/")
+            if "docker.sock" in src_clean.lower():
+                raise BuildError(
+                    f"Compose service '{svc_name}' mounts docker.sock "
+                    "which is not allowed for security reasons."
+                )
+            if ".." in src_clean.split("/"):
+                raise BuildError(
+                    f"Compose service '{svc_name}' uses parent path traversal in volume "
+                    f"'{src}' which is not allowed."
+                )
+            if src_clean.startswith("/"):
+                norm = os.path.normpath(src_clean).replace("\\", "/")
+                if norm in ("/", "/var") or any(
+                    norm == p or norm.startswith(p + "/")
+                    for p in cls._FORBIDDEN_HOST_BIND_PREFIXES
+                ):
+                    raise BuildError(
+                        f"Compose service '{svc_name}' bind-mounts sensitive host path "
+                        f"'{src}' which is not allowed for security reasons."
+                    )
+
+    @staticmethod
+    def _apply_compose_service_hardening(
+        svc_override: dict,
+        compose_runtime: str | None,
+        sandbox_dns: list[str] | None,
+        extra_hosts: dict[str, str] | list[str] | None,
+        resolv_path: str | None,
+    ) -> None:
+        """Apply LocalAdapter-equivalent hardening defaults to a compose service override."""
+        svc_override["init"] = True
+        svc_override["security_opt"] = [
+            "no-new-privileges:true",
+            "apparmor:docker-default",
+        ]
+        svc_override["cap_drop"] = ["ALL"]
+        svc_override["cap_add"] = ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"]
+        svc_override["pids_limit"] = 1024
+        svc_override["ulimits"] = {
+            "nofile": {"soft": 1024, "hard": 2048},
+            "fsize": 512000000,
+        }
+        if compose_runtime and compose_runtime != "runc":
+            svc_override["runtime"] = compose_runtime
+        if sandbox_dns:
+            svc_override["dns"] = list(sandbox_dns)
+        if extra_hosts:
+            if isinstance(extra_hosts, dict):
+                svc_override["extra_hosts"] = [f"{k}:{v}" for k, v in extra_hosts.items()]
+            else:
+                svc_override["extra_hosts"] = [str(entry) for entry in extra_hosts if entry]
+        if resolv_path and os.path.isfile(resolv_path):
+            vols = list(svc_override.get("volumes") or [])
+            bind_spec = f"{resolv_path}:/etc/resolv.conf:ro"
+            if not any(":/etc/resolv.conf" in str(v) for v in vols):
+                vols.append(bind_spec)
+                svc_override["volumes"] = vols
+
     def _write_compose_routing_override(self, main_service: str, project_name: str) -> str:
         """
         Write a compose override file with Traefik labels and scoped network.
@@ -303,6 +425,39 @@ class ComposeNetworkingMixin:
             "networks": [network_name],
         }
 
+        from apps.deployments.services.container_runtime import (
+            detect_best_runtime,
+            ensure_sandbox_resolv_conf,
+            is_sandboxed_runtime,
+            sandbox_dns_servers,
+        )
+        compose_runtime = detect_best_runtime()
+        sandbox_dns: list[str] | None = None
+        gvisor_extra_hosts: dict[str, str] | None = None
+        resolv_path: str | None = None
+        if compose_runtime and is_sandboxed_runtime(compose_runtime):
+            try:
+                sandbox_dns = sandbox_dns_servers()
+            except Exception:
+                sandbox_dns = ["8.8.8.8", "1.1.1.1"]
+            try:
+                resolv_path = ensure_sandbox_resolv_conf(sandbox_dns)
+            except Exception:
+                resolv_path = None
+        if compose_runtime == "runsc":
+            try:
+                from apps.cloud.docker_client import get_docker_client
+                from apps.deployments.services.container_refresh import (
+                    _resolve_gvisor_extra_hosts,
+                )
+                gvisor_extra_hosts = _resolve_gvisor_extra_hosts(
+                    getattr(self, "service", None),
+                    [network_name],
+                    get_docker_client(),
+                )
+            except Exception as exc:
+                logger.debug("Compose gVisor extra_hosts resolution skipped: %s", exc)
+
         # Apply security_opt + shared network to ALL services in the compose file
         compose_path = _os.path.join(routing_dir, self.service.compose_file)
         if _os.path.isfile(compose_path):
@@ -310,23 +465,9 @@ class ComposeNetworkingMixin:
                 with open(compose_path, "r", encoding="utf-8") as f:
                     user_compose = yaml.safe_load(f) or {}
                     if "services" in user_compose and isinstance(user_compose["services"], dict):
-                        # SECURITY: reject privileged modes and host network
+                        # SECURITY: reject privileged modes, host namespaces, dangerous caps, and sensitive host mounts
                         for svc_name, svc_config in user_compose["services"].items():
-                            if isinstance(svc_config, dict):
-                                if svc_config.get("privileged") is True:
-                                    raise BuildError(
-                                        f"Compose service '{svc_name}' has privileged: true "
-                                        f"which is not allowed for security reasons."
-                                    )
-                                if svc_config.get("network_mode") == "host":
-                                    raise BuildError(
-                                        f"Compose service '{svc_name}' has network_mode: host "
-                                        f"which is not allowed for security reasons."
-                                    )
-
-                        # Detect sandboxed container runtime
-                        from apps.deployments.services.container_runtime import detect_best_runtime
-                        compose_runtime = detect_best_runtime()
+                            self._validate_compose_service_security(svc_name, svc_config)
 
                         # Collect networks already declared in the user's compose file
                         # so we don't create duplicate entries.
@@ -345,15 +486,20 @@ class ComposeNetworkingMixin:
                         except Exception as e:
                             logger.debug("mTLS compose injection skipped: %s", e)
 
-                        for svc_name in user_compose["services"]:
+                        all_service_names = list(user_compose["services"].keys())
+                        if main_service not in all_service_names:
+                            all_service_names.append(main_service)
+
+                        for svc_name in all_service_names:
                             if svc_name not in override_payload["services"]:
                                 override_payload["services"][svc_name] = {}
-                            override_payload["services"][svc_name]["security_opt"] = [
-                                "no-new-privileges:true",
-                                "apparmor:docker-default"
-                            ]
-                            if compose_runtime and compose_runtime != "runc":
-                                override_payload["services"][svc_name]["runtime"] = compose_runtime
+                            self._apply_compose_service_hardening(
+                                override_payload["services"][svc_name],
+                                compose_runtime,
+                                sandbox_dns,
+                                gvisor_extra_hosts,
+                                resolv_path,
+                            )
 
                             # Attach every service to the shared network so DNS
                             # resolution for addon hostnames works.  If the user's
@@ -381,26 +527,31 @@ class ComposeNetworkingMixin:
                                 existing_env.update(mtls_env)
                                 override_payload["services"][svc_name]["environment"] = existing_env
 
-                        # --- mTLS: Inject Envoy sidecar if enabled ---
+                        # --- mTLS: Inject Envoy sidecar if enabled (fail-closed) ---
+                        mtls_required = False
+                        mtls_config_obj = None
                         try:
                             from apps.mtls.models import MtlsConfig
-                            from apps.mtls.services.envoy_sidecar import (
-                                EnvoySidecar,
-                                ENVOY_IMAGE,
-                                SPIRE_AGENT_SOCKET_VOLUME,
-                                SPIRE_SVIDS_VOLUME,
-                                SPIRE_AGENT_SOCKET_CONTAINER_PATH,
-                                SPIRE_SVIDS_CONTAINER_PATH,
-                            )
+                            is_eco = str(getattr(self.service, "managed_by", "") or "").upper() == "ECOSYSTEM"
                             mtls_config_obj = MtlsConfig.objects.filter(
                                 service=self.service, enabled=True, sidecar_enabled=True
                             ).first()
-                            if mtls_config_obj:
+                            mtls_required = bool(mtls_config_obj) or is_eco
+                        except Exception as e:
+                            logger.debug("mTLS config lookup skipped in compose override: %s", e)
+
+                        if mtls_required:
+                            try:
+                                from apps.mtls.services.envoy_sidecar import EnvoySidecar
                                 override_payload = EnvoySidecar.inject_sidecar_compose(
                                     self.service, override_payload
                                 )
-                        except Exception as e:
-                            logger.debug("Envoy sidecar compose injection skipped: %s", e)
+                            except Exception as e:
+                                raise BuildError(
+                                    f"Envoy sidecar compose injection failed for {getattr(self.service, 'name', main_service)}: {e}"
+                                ) from e
+            except BuildError:
+                raise
             except Exception as exc:
                 # Reject the deployment entirely if compose file cannot be
                 # parsed for security validation — proceeding with incomplete
@@ -411,16 +562,16 @@ class ComposeNetworkingMixin:
                 ) from exc
         else:
             details = {
-                "security_opt": [
-                    "no-new-privileges:true",
-                    "apparmor:docker-default"
-                ],
+                "labels": self._compose_traefik_labels(project_name),
                 "networks": [network_name],
             }
-            from apps.deployments.services.container_runtime import detect_best_runtime
-            compose_runtime = detect_best_runtime()
-            if compose_runtime and compose_runtime != "runc":
-                details["runtime"] = compose_runtime
+            self._apply_compose_service_hardening(
+                details,
+                compose_runtime,
+                sandbox_dns,
+                gvisor_extra_hosts,
+                resolv_path,
+            )
             override_payload["services"][main_service] = details
 
         with open(override_path, "w", encoding="utf-8") as handle:

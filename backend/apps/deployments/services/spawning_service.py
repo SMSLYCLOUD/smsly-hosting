@@ -831,6 +831,54 @@ class SpawningService:
         cpus = getattr(service, 'cpu_cores', 1.0) or 1.0
         runtime = get_runtime_for_container(service_name=service.name)
 
+        run_extra_kwargs = {
+            "init": True,
+            "read_only": True,
+            "tmpfs": {
+                "/tmp": "size=100m",
+                "/run": "size=20m",
+                "/app/.next/cache": "size=256m",
+                "/app/tmp": "size=100m",
+            },
+            "ulimits": [
+                {"Name": "nofile", "Soft": 1024, "Hard": 2048},
+                {"Name": "fsize", "Soft": 512000000, "Hard": 512000000},
+            ],
+        }
+        if runtime == "runsc":
+            try:
+                from apps.deployments.services.container_refresh import (
+                    _resolve_gvisor_extra_hosts,
+                )
+                extra_hosts = _resolve_gvisor_extra_hosts(service, [net], client)
+                if extra_hosts:
+                    run_extra_kwargs["extra_hosts"] = extra_hosts
+            except Exception as exc:
+                logger.debug("Replica gVisor extra_hosts skipped: %s", exc)
+        from apps.deployments.services.container_runtime import (
+            ensure_sandbox_resolv_conf,
+            is_sandboxed_runtime,
+            sandbox_dns_servers,
+        )
+        if runtime and is_sandboxed_runtime(runtime):
+            try:
+                _dns = sandbox_dns_servers()
+            except Exception:
+                _dns = ["8.8.8.8", "1.1.1.1"]
+            if _dns:
+                run_extra_kwargs["dns"] = _dns
+            try:
+                _resolv_path = ensure_sandbox_resolv_conf(_dns)
+                if _resolv_path and os.path.isfile(_resolv_path):
+                    mtls_volumes = dict(mtls_volumes or {})
+                    if not any(
+                        isinstance(v, dict) and v.get("bind") == "/etc/resolv.conf"
+                        for v in mtls_volumes.values()
+                    ):
+                        mtls_volumes[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
+            except Exception as exc:
+                logger.debug("Replica sandbox resolv.conf mount skipped: %s", exc)
+
         container = client.containers.run(
             image=image,
             name=name,
@@ -848,6 +896,7 @@ class SpawningService:
             nano_cpus=int(float(cpus) * 1e9),
             pids_limit=1024,
             runtime=runtime,
+            **run_extra_kwargs,
         )
         replica.container_id = container.id[:64]
         replica.container_name = name
@@ -855,11 +904,8 @@ class SpawningService:
         replica.save(update_fields=['container_id', 'container_name', 'status'])
         logger.info("Spawned replica %s locally", name)
 
-        # --- mTLS: Inject Envoy sidecar if enabled ---
-        try:
-            self._maybe_inject_sidecar(service, container, client)
-        except Exception as e:
-            logger.debug("Envoy sidecar injection skipped: %s", e)
+        # --- mTLS: Inject Envoy sidecar if enabled (fail-closed when enabled) ---
+        self._maybe_inject_sidecar(service, container, client)
 
         return replica
 
@@ -941,21 +987,31 @@ class SpawningService:
         Inject Envoy sidecar if mTLS sidecar_enabled is True.
 
         Uses Docker network_mode: service:{main_container} to share
-        the network namespace with the application container.
+        the network namespace with the application container. Fails closed
+        when mTLS sidecar is enabled or service is managed by ECOSYSTEM.
         """
-        try:
-            from apps.mtls.models import MtlsConfig
-            from apps.mtls.services.envoy_sidecar import EnvoySidecar
-            config = MtlsConfig.objects.filter(service=service, enabled=True, sidecar_enabled=True).first()
-            if config:
+        from apps.mtls.models import MtlsConfig
+        from apps.mtls.services.envoy_sidecar import EnvoySidecar
+
+        is_eco = str(getattr(service, "managed_by", "") or "").upper() == "ECOSYSTEM"
+        config = MtlsConfig.objects.filter(
+            service=service, enabled=True, sidecar_enabled=True
+        ).first()
+        if config or is_eco:
+            try:
                 EnvoySidecar.inject_sidecar(service)
-            else:
-                # Mesh disabled: sweep non-running sidecar corpses left by
-                # failed injects. Running sidecars are never touched.
-                try:
-                    EnvoySidecar.remove_orphan_sidecar(service)
-                except Exception as sweep_exc:
-                    logger.debug("Orphan sidecar sweep skipped for %s: %s",
-                                 service.name, sweep_exc)
-        except Exception as exc:
-            logger.warning("Envoy sidecar injection failed for %s: %s", service.name, exc)
+            except Exception as exc:
+                logger.error("Envoy sidecar injection failed for %s: %s", service.name, exc)
+                raise RuntimeError(
+                    f"Envoy sidecar injection failed for {service.name}: {exc}"
+                ) from exc
+        else:
+            # Mesh disabled: sweep non-running sidecar corpses left by
+            # failed injects. Running sidecars are never touched.
+            try:
+                EnvoySidecar.remove_orphan_sidecar(service)
+            except Exception as sweep_exc:
+                logger.debug(
+                    "Orphan sidecar sweep skipped for %s: %s",
+                    service.name, sweep_exc,
+                )

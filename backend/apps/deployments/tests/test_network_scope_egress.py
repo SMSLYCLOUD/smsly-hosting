@@ -88,8 +88,8 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         scripts = _scripts(mock_run)
         # Same shape as the explicit 0.0.0.0/0 call: 1 list + DROP +
         # cross DROP + same RETURN + 5 NIC RETURNs + ESTABLISHED RETURN
-        # + metadata DROP + DNS RETURN = 12.
-        self.assertEqual(len(scripts), 12)
+        # + MESH_CIDR RETURN + metadata DROP + DNS TCP/UDP RETURNs = 14.
+        self.assertEqual(len(scripts), 14)
         joined = "\n".join(scripts)
         self.assertIn("-o br-+", joined)
         self.assertIn("169.254.169.254/32", joined)
@@ -108,13 +108,17 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         apply_egress_restrictions("any-net", ["0.0.0.0/0"])
         scripts = _scripts(mock_run)
         # 1 list + DROP + cross DROP + same RETURN + 5 NIC RETURNs
-        # + ESTABLISHED RETURN + metadata DROP + DNS RETURN = 12.
-        self.assertEqual(len(scripts), 12)
+        # + ESTABLISHED RETURN + MESH_CIDR RETURN + metadata DROP + DNS TCP/UDP RETURNs = 14.
+        self.assertEqual(len(scripts), 14)
         self.assertTrue(scripts[0].startswith("iptables -S"))
-        self.assertIn("DROP", scripts[-2])
-        self.assertIn("169.254.169.254/32", scripts[-2])
+        self.assertIn("DROP", scripts[-3])
+        self.assertIn("169.254.169.254/32", scripts[-3])
+        self.assertIn("RETURN", scripts[-2])
+        self.assertIn("--dport", scripts[-2])
+        self.assertIn("tcp", scripts[-2])
         self.assertIn("RETURN", scripts[-1])
         self.assertIn("--dport", scripts[-1])
+        self.assertIn("udp", scripts[-1])
 
     @patch("apps.deployments.services.network_scope.subprocess.run")
     @patch("apps.deployments.services.network_scope.docker.from_env")
@@ -131,7 +135,7 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
             "any-net", ["10.0.0.0/8", "0.0.0.0/0", "192.168.0.0/16"],
         )
         scripts = _scripts(mock_run)
-        self.assertEqual(len(scripts), 12)
+        self.assertEqual(len(scripts), 14)
 
     # ── Bridge interface resolution ─────────────────────────────────────
 
@@ -200,9 +204,9 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         )
 
         scripts = _scripts(mock_run)
-        # 1 list + DROP + 2 CIDR RETURNs + metadata DROP + same-bridge
-        # RETURN + ESTABLISHED RETURN + DNS RETURN.
-        self.assertEqual(len(scripts), 8)
+        # 1 list + DROP + 2 CIDR RETURNs + same-bridge RETURN + ESTABLISHED RETURN
+        # + metadata DROP + DNS TCP RETURN + DNS UDP RETURN = 9.
+        self.assertEqual(len(scripts), 9)
 
         # 1. DROP first
         self.assertIn("DROP", scripts[1])
@@ -220,10 +224,15 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         # 6. DROP cloud metadata
         self.assertIn("DROP", scripts[6])
         self.assertIn("169.254.169.254/32", scripts[6])
-        # 7. DNS RETURN last
+        # 7 & 8. DNS (TCP + UDP) RETURN last
         self.assertIn("RETURN", scripts[7])
         self.assertIn("--dport", scripts[7])
         self.assertIn("53", scripts[7])
+        self.assertIn("tcp", scripts[7])
+        self.assertIn("RETURN", scripts[8])
+        self.assertIn("--dport", scripts[8])
+        self.assertIn("53", scripts[8])
+        self.assertIn("udp", scripts[8])
 
         # No DROP can appear AFTER a DNS RETURN (would shadow it).
         drop_index = next(i for i, s in enumerate(scripts) if "DROP" in s and "169.254" not in s)
@@ -247,10 +256,10 @@ class ApplyEgressRestrictionsTests(SimpleTestCase):
         )
 
         # Should issue list + DROP + RETURN 10.0.0.0/8 + DROP metadata
-        # + same-bridge RETURN + ESTABLISHED RETURN + RETURN DNS
-        # — seven shim calls.
+        # + same-bridge RETURN + ESTABLISHED RETURN + RETURN DNS (TCP + UDP)
+        # — eight shim calls.
         scripts = _scripts(mock_run)
-        self.assertEqual(len(scripts), 7)
+        self.assertEqual(len(scripts), 8)
         # No rule should target the invalid entries.
         for script in scripts:
             self.assertNotIn("not-a-cidr", script)

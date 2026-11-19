@@ -120,7 +120,7 @@ class SingleServiceRestoreMixin:
             'network': scoped_net,
         }
         # Request dual-homing if the service opted into the internal network
-        if getattr(self.transfer.service, 'use_internal_network', True):
+        if getattr(self.transfer.service, 'use_internal_network', False):
             deploy_body['dual_home'] = True
 
         self._node_api_request('incoming/deploy', body=deploy_body)

@@ -1166,22 +1166,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             _has_network = ScopedNetwork.objects.filter(
                 content_type=_ct, object_id=project.id,
             ).exists()
-            # The internal network is per-service now. If the plan
-            # includes ANY service with use_internal_network=True we
-            # provision the scoped bridge. If all services opt out
-            # we fall back to the shared 'smsly-net' bridge and the
-            # service-to-service traffic uses public DNS / Traefik.
-            # NOTE: services don't exist yet at this point — evaluate
-            # the plan dicts, not Service objects (a previous version
-            # referenced an undefined `target_services` here, which
-            # raised NameError and silently skipped network creation).
-            any_wants_internal = any(
-                (svc.get('use_internal_network', True)
-                 if isinstance(svc, dict)
-                 else getattr(svc, 'use_internal_network', True))
-                for svc in services_plan
-            )
-            if not _has_network and any_wants_internal:
+            # Always provision the per-project ScopedNetwork bridge
+            # (smsly-net-<scope8>) for ecosystem projects so intra-project
+            # services and addons stay isolated from unrelated tenants,
+            # even though Service.use_internal_network (which controls
+            # cross-project smsly-platform-net dual-homing) defaults to False.
+            if not _has_network and bool(services_plan):
                 # Network name is derived from the project UUID so it's
                 # unique per ecosystem deploy. Suffix mirrors the existing
                 # ``smsly-net`` convention so Traefik/Caddy discovery

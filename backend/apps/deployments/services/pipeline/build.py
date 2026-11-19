@@ -4,6 +4,8 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
+import uuid
 
 import yaml
 
@@ -34,14 +36,8 @@ logger = logging.getLogger(__name__)
 BUILD_FAIL_TAIL_LINES = 60
 BUILD_FAIL_TAIL_CHARS = 8000
 
-# ── Build engine selection ──────────────────────────────────────────
-# SMSLY_DOCKER_BUILDER=classic forces the legacy docker-py path.
-# Default (anything else) builds with daemon-embedded BuildKit via the
-# plain `docker` CLI (`DOCKER_BUILDKIT=1 docker build`) — deliberately
-# NOT `docker buildx build`: buildx builder selection is per-user client
-# state that rotted silently (2026-09-24), while the plain CLI has no
-# selection to rot. Falls back to classic only on infrastructure-class
-# failures (missing CLI, daemon unreachable, no builder).
+# Tenant Docker builds always use a verified resource-limited container builder.
+# Legacy engine classifiers remain available for diagnostic callers.
 _BUILDX_INFRA_RE = re.compile(
     r"no such file or directory.*\bdocker\b"
     r"|\bdocker\b.*command not found|command not found.*\bdocker\b"
@@ -61,51 +57,67 @@ def _use_buildx() -> bool:
 
 
 def _ephemeral_builder_enabled() -> bool:
-    """Ephemeral per-build docker-container builders (real containment).
-
-    Off by default; opt in with SMSLY_BUILDER_EPHEMERAL=1. When on, each
-    build gets a throwaway builder whose buildkitd container carries the
-    UI-tuned memory/CPU caps — unlike the systemd-run scope, which only
-    constrains the CLI wrapper on the docker driver. Registry cache
-    (--cache-from) keeps throwaway builders warm.
-    """
-    return os.environ.get("SMSLY_BUILDER_EPHEMERAL", "").strip().lower() in (
-        "1", "true", "yes")
+    """Containment is mandatory; legacy opt-out flags cannot disable it."""
+    return True
 
 
 def _create_ephemeral_builder(name: str, mem_mb: int, cpu_pct: int) -> str | None:
-    """Create a docker-container builder with resource caps. Name or None.
-
-    Scoped to smsly-net: the internal registry (registry:5000) only
-    resolves via Docker embedded DNS on user-defined networks. On the
-    default bridge it NXDOMAINs (2026-09-26 policy retry incident),
-    forcing every build cold.
-    """
+    """Bootstrap a dedicated builder and verify daemon-side caps before use."""
     try:
-        created = subprocess.run(
-            ["docker", "buildx", "create", "--driver", "docker-container",
-             "--driver-opt", "network=smsly-net",
-             "--name", name],
-            capture_output=True, text=True, timeout=60,
+        if mem_mb <= 0 or cpu_pct <= 0:
+            raise ValueError("Build resource limits must be positive")
+        build_net = "smsly-build-net"
+        try:
+            from apps.deployments.services.network_scope import ensure_build_network
+            build_net = ensure_build_network() or "smsly-build-net"
+        except Exception as net_exc:
+            logger.debug("ensure_build_network fallback to smsly-build-net: %s", net_exc)
+        # buildx copies the client-side config; this is not a host bind mount.
+        # Container builders do not inherit daemon-local registry trust.
+        with tempfile.TemporaryDirectory(prefix="smsly-buildkit-") as config_dir:
+            config_path = os.path.join(config_dir, "buildkitd.toml")
+            registry = _local_registry_host()
+            with open(config_path, "w", encoding="utf-8") as config:
+                if registry:
+                    config.write(f"[registry.{json.dumps(registry)}]\n  insecure = true\n")
+            created = subprocess.run(
+                ["docker", "buildx", "create", "--driver", "docker-container",
+                 "--driver-opt", f"network={build_net}",
+                 "--driver-opt", f"memory={mem_mb}m",
+                 "--driver-opt", f"memory-swap={mem_mb}m",
+                 "--driver-opt", "cpu-period=100000",
+                 "--driver-opt", f"cpu-quota={cpu_pct * 1000}",
+                 "--buildkitd-config", config_path, "--name", name],
+                capture_output=True, text=True, timeout=60,
+            )
+            if created.returncode != 0:
+                raise RuntimeError("Builder creation failed")
+            bootstrapped = subprocess.run(
+                ["docker", "buildx", "inspect", "--bootstrap", name],
+                capture_output=True, text=True, timeout=120,
+            )
+            if bootstrapped.returncode != 0:
+                raise RuntimeError("Builder bootstrap failed")
+        inspected = subprocess.run(
+            ["docker", "inspect", f"buildx_buildkit_{name}0"],
+            capture_output=True, text=True, timeout=30,
         )
-        if created.returncode != 0:
-            logger.warning("Ephemeral builder create failed: %s",
-                           (created.stderr or "").strip()[:200])
-            return None
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("Ephemeral builder create failed: %s", exc)
+        if inspected.returncode != 0:
+            raise RuntimeError("Builder resource inspection failed")
+        container = json.loads(inspected.stdout)[0]
+        caps = container["HostConfig"]
+        if (not container["State"]["Running"]
+                or caps.get("Memory") != mem_mb * 1024 * 1024
+                or caps.get("MemorySwap") != mem_mb * 1024 * 1024
+                or caps.get("CpuPeriod") != 100000
+                or caps.get("CpuQuota") != cpu_pct * 1000):
+            raise RuntimeError("Builder resource limits were not applied")
+        return name
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError,
+            IndexError, TypeError, RuntimeError) as exc:
+        logger.warning("Contained builder unavailable: %s", exc)
+        _remove_ephemeral_builder(name)
         return None
-    try:
-        subprocess.run(
-            ["docker", "update", "--memory", f"{mem_mb}m",
-             "--cpus", f"{cpu_pct / 100:g}",
-             f"buildx_buildkit_{name}0"],
-            capture_output=True, text=True, timeout=60,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
-        logger.debug("Ephemeral builder cap apply failed (build proceeds): %s", exc)
-    return name
-
 
 def _remove_ephemeral_builder(name: str) -> None:
     """Best-effort removal. Never raises."""
@@ -688,8 +700,19 @@ class BuildMixin:
             'build',
         ]
         try:
+            mem_mb, cpu_pct, _ = _build_limits()
+        except Exception:
+            mem_mb, cpu_pct = 10240, 400
+        compose_builder = _create_ephemeral_builder(
+            f"smsly-eph-{uuid.uuid4().hex}", mem_mb, cpu_pct
+        )
+        compose_build_env = dict(env)
+        compose_build_env["DOCKER_BUILDKIT"] = "1"
+        if compose_builder:
+            compose_build_env["BUILDX_BUILDER"] = compose_builder
+        try:
             process = subprocess.run(
-                build_cmd, check=True, cwd=self.source_dir, env=env,
+                build_cmd, check=True, cwd=self.source_dir, env=compose_build_env,
                 capture_output=True, text=True, timeout=3600,
             )
             output = redact_values(
@@ -704,6 +727,9 @@ class BuildMixin:
             )
             append_log(self.deployment, full_err)
             raise BuildError(f"Compose build failed: {full_err[:500]}") from e
+        finally:
+            if compose_builder:
+                _remove_ephemeral_builder(compose_builder)
 
         # ─── Phase 2: Deploy from cached images (fast restart) ───
         # Images are already built — docker compose up replaces only containers
@@ -845,15 +871,10 @@ class BuildMixin:
             return False
 
     def _build_with_docker(self, context_dir: str, dockerfile_path: str):
-        """Execute Docker build, BuildKit-first with classic fallback.
+        """Execute tenant Docker builds with mandatory container resource caps.
 
-        Prefers daemon-embedded BuildKit via the plain CLI (cache mounts,
-        --secret mounts, registry cache) via `_build_with_docker_engine`,
-        which falls back to the docker-py Engine-API path
-        (`_build_via_docker_py`) only on infrastructure-class failures.
-        Set SMSLY_DOCKER_BUILDER=classic to force the legacy path.
-        The CLI talks to the daemon over HTTP via DOCKER_HOST
-        (socket-proxy in compose mode), same transport as the SDK path.
+        The dedicated builder retains secret mounts, registry cache and daemon
+        image export. Infrastructure failures stop the build without downgrade.
         """
         # ── Runtime Hardening: patch outdated base images ──
         self._patch_dockerfile_for_runtime(dockerfile_path)
@@ -1026,49 +1047,17 @@ class BuildMixin:
         cache_from: list,
         build_secrets: dict,
     ):
-        """BuildKit dispatcher with classic fallback.
-
-        Tries daemon-embedded BuildKit via the plain CLI (cache mounts,
-        secret mounts, registry cache) unless SMSLY_DOCKER_BUILDER=classic.
-        The plain CLI carries no builder selection, so there is no client
-        state to rot (the 2026-09-24 outage: phantom docker-container
-        builder + refused create silently downgraded every build).
-        Falls back to the legacy Engine-API path only on
-        infrastructure-class failures (missing CLI, unreachable daemon).
-        Dockerfile errors and timeouts raise immediately — retrying those
-        on a second engine just burns another full build.
-        """
-        if _use_buildx():
-            try:
-                return self._build_with_buildkit(
-                    context_dir=context_dir,
-                    dockerfile_path=dockerfile_path,
-                    tag=image_name,
-                    buildargs=build_args_dict,
-                    cache_from=cache_from,
-                    secrets=build_secrets,
-                )
-            except BuildError:
-                raise
-            except Exception as exc:
-                if _is_buildx_infra_error(str(exc)):
-                    append_log(
-                        self.deployment,
-                        "BuildKit unavailable "
-                        f"({str(exc)[:120]}) — falling back to classic builder...\n",
-                    )
-                else:
-                    raise BuildError(
-                        f"Docker build failed: {str(exc)[-500:]}") from exc
-        self._build_via_docker_py(
-            context_dir=context_dir,
-            dockerfile_path=dockerfile_path,
-            tag=image_name,
-            buildargs=build_args_dict,
-            cache_from=cache_from,
-            secrets=build_secrets,
-        )
-
+        """Tenant builds require a contained builder; never downgrade engines."""
+        try:
+            return self._build_with_buildkit(
+                context_dir=context_dir, dockerfile_path=dockerfile_path,
+                tag=image_name, buildargs=build_args_dict,
+                cache_from=cache_from, secrets=build_secrets,
+            )
+        except BuildError:
+            raise
+        except Exception as exc:
+            raise BuildError(f"Contained Docker build failed: {str(exc)[-500:]}") from exc
 
 
     def _drain_build_log_tail(self, build_log) -> str:
@@ -1113,22 +1102,8 @@ class BuildMixin:
         cache_from: list,
         secrets: dict[str, str] | None = None,
     ):
-        """Build with daemon-embedded BuildKit (no buildx client state).
-
-        Uses plain ``DOCKER_BUILDKIT=1 docker build``: cache mounts,
-        genuine --secret mounts, and registry layer caching all work, but
-        NOTHING depends on buildx builder selection — the 2026-09-24
-        outage was a phantom docker-container `default` builder (plus a
-        refused `create --driver docker`) silently downgrading every
-        build to classic. Single attempt — the caller falls back to
-        classic on infrastructure-class errors only; Dockerfile errors
-        raise immediately (retrying them on another engine just burns a
-        second full build).
-        """
+        """Build with a dedicated, bootstrapped and verified capped builder."""
         from apps.deployments.constants import DOCKER_BUILD_TIMEOUT
-        from apps.deployments.services.builders import (
-            _platform_build_limits as _build_limits,
-        )
 
         dockerfile_rel = os.path.relpath(dockerfile_path, context_dir)
         if dockerfile_rel.startswith(".."):
@@ -1140,44 +1115,31 @@ class BuildMixin:
             _df_text = ""
         secret_aware = "mount=type=secret" in _df_text
 
+        for ref in [tag, *(cache_from or [])]:
+            host = str(ref).split("/", 1)[0]
+            if host.startswith(("localhost:", "127.0.0.1:", "[::1]:")):
+                raise BuildError(
+                    "Contained builds cannot reach a host loopback registry. "
+                    "Configure CONTAINER_REGISTRY_URL and image/cache references "
+                    "with a builder-reachable address such as registry:5000 on smsly-net.")
+
         secret_ids, secret_files = _stage_secret_files(secrets)
         try:
             mem_mb, cpu_pct, timeout_s = _build_limits()
         except Exception:
             mem_mb, cpu_pct, timeout_s = 10240, 400, DOCKER_BUILD_TIMEOUT
-        # Ephemeral builder (opt-in): real per-build containment, since
-        # the systemd scope below only constrains the CLI wrapper on
-        # the docker driver. Container driver loads via output type.
         builder_name = None
-        if _ephemeral_builder_enabled():
-            dep_id = str(getattr(getattr(self, 'deployment', None), 'id', '') or 'x')
-            builder_name = _create_ephemeral_builder(
-                f"smsly-eph-{dep_id[:8]}", mem_mb, cpu_pct)
-            if builder_name is None:
-                append_log(
-                    self.deployment,
-                    "Ephemeral builder unavailable — falling back to default driver.\n",
-                )
         try:
-            if builder_name:
-                # Ephemeral containment (opt-in): a dedicated
-                # docker-container builder needs the buildx CLI.
-                load_flag = ["--output", "type=docker"]
-                cmd = [
-                    "docker", "buildx", "build",
-                    *load_flag, "--progress=plain",
-                    "-t", tag, "-f", dockerfile_rel,
-                    "--builder", builder_name,
-                ]
-            else:
-                # Default path: BuildKit via buildx with explicit --load so
-                # both docker-container drivers and daemon drivers export to daemon.
-                cmd = [
-                    "docker", "buildx", "build",
-                    "--load",
-                    "--progress=plain",
-                    "-t", tag, "-f", dockerfile_rel,
-                ]
+            # A random suffix keeps concurrent retries from sharing/removing a builder.
+            builder_name = _create_ephemeral_builder(
+                f"smsly-eph-{uuid.uuid4().hex}", mem_mb, cpu_pct)
+            if builder_name is None:
+                raise BuildError("Build refused: resource-limited builder unavailable")
+            cmd = [
+                "docker", "buildx", "build", "--output", "type=docker",
+                "--progress=plain", "-t", tag, "-f", dockerfile_rel,
+                "--builder", builder_name,
+            ]
             for k, v in (buildargs or {}).items():
                 cmd += ["--build-arg", f"{k}={v}"]
             for sid, spath in zip(secret_ids, secret_files):
@@ -1197,20 +1159,6 @@ class BuildMixin:
             for c in cache_from or []:
                 cmd += ["--cache-from", f"type=registry,ref={c}"]
             cmd += ["--cache-to", "type=inline", context_dir]
-            try:
-                probe = subprocess.run(
-                    ["systemd-run", "--version"],
-                    capture_output=True, text=True, timeout=3,
-                )
-                if probe.returncode == 0:
-                    cmd = [
-                        "systemd-run", "--scope",
-                        "-p", f"MemoryMax={mem_mb}M",
-                        "-p", f"CPUQuota={cpu_pct}%",
-                        "--", *cmd,
-                    ]
-            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-                pass
             append_log(
                 self.deployment,
                 f"Building with BuildKit ({os.path.basename(dockerfile_path)})...\n",
@@ -1237,8 +1185,8 @@ class BuildMixin:
             # cache and never lands in the daemon store — every later
             # step (push 404, pull 404, "local cache unavailable") then
             # fails mysteriously. Verify the tag exists; salvage with an
-            # explicit --load rebuild (warm cache: seconds); else raise
-            # infra-class so the dispatcher falls back to the Engine API.
+            # explicit --load rebuild (warm cache: seconds); fail if it cannot
+            # recover the output.
             if not self._verify_built_tag(tag):
                 append_log(
                     self.deployment,
@@ -1255,7 +1203,7 @@ class BuildMixin:
                     raise RuntimeError(
                         "SMSLY_INFRA_NO_BUILD_OUTPUT: builder exit 0 but "
                         f"{tag} not found in daemon image store after "
-                        f"--load salvage; falling back to Engine API build"
+                        f"--load salvage; build refused"
                     )
         finally:
             _cleanup_secret_files(secret_files)
@@ -1285,8 +1233,8 @@ class BuildMixin:
         Same args (warm builder cache: usually seconds), `--output
         type=docker` semantics forced so a docker-container driver
         loads the result into the daemon store. Returns True when the
-        tag verifies afterwards. Never raises — failure falls through
-        to the Engine-API fallback.
+        tag verifies afterwards. Never raises; the caller rejects the build
+        when output remains unavailable.
         """
         try:
             import shutil as _shutil

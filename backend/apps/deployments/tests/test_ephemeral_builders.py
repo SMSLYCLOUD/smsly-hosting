@@ -35,7 +35,7 @@ class EphemeralBuilderTests(TestCase):
                 patch.object(build_mod, '_ephemeral_builder_enabled',
                              return_value=ephemeral), \
                 patch.object(build_mod, '_create_ephemeral_builder',
-                             return_value='smsly-eph-dep-1234' if ephemeral else None) as mk, \
+                             return_value='smsly-eph-dep-1234') as mk, \
                 patch.object(build_mod, '_remove_ephemeral_builder') as rm, \
                 patch.object(build_mod, '_build_limits',
                              return_value=(10240, 400, 1800)), \
@@ -53,20 +53,14 @@ class EphemeralBuilderTests(TestCase):
             )
         return mock_run, mixin
 
-    def test_default_path_unchanged(self):
+    def test_disabled_legacy_flag_still_uses_contained_builder(self):
         mock_run, _ = self._run(False)
-        # Only probe + build calls, no builder create/remove.
         cmds = [c.args[0] for c in mock_run.call_args_list]
-        self.assertTrue(any(c[:2] == ['systemd-run', '--version'] for c in cmds))
-        # Plain CLI carries no builder selection and no load/output flags.
-        build_cmds = [c for c in cmds if 'build' in c]
-        self.assertEqual(len(build_cmds), 1)
-        flat = ' '.join(a for a in build_cmds[0] if isinstance(a, str))
-        self.assertIn('docker', build_cmds[0])
-        self.assertNotIn('buildx', flat)
-        self.assertNotIn('--builder', flat)
-        self.assertNotIn('--load', flat)
-        self.assertNotIn('--output', flat)
+        build_cmd = next(c for c in cmds if 'build' in c)
+        self.assertEqual(build_cmd[:3], ['docker', 'buildx', 'build'])
+        self.assertIn('--builder', build_cmd)
+        self.assertIn('smsly-eph-dep-1234', build_cmd)
+        self.assertIn('type=docker', build_cmd)
 
     def test_ephemeral_path_uses_builder_and_output(self):
         mock_run, _ = self._run(True)
@@ -82,18 +76,13 @@ class EphemeralBuilderTests(TestCase):
         self.assertNotIn('--load', flat)
 
     def test_create_remove_helpers(self):
-        ok = MagicMock(returncode=0, stdout='', stderr='')
-        with patch('subprocess.run', return_value=ok):
-            name = build_mod._create_ephemeral_builder('smsly-eph-x', 10240, 400)
-        self.assertEqual(name, 'smsly-eph-x')
-        # Resource caps land on the buildkitd container.
-        with patch('subprocess.run', return_value=ok) as mock_run:
-            build_mod._create_ephemeral_builder('smsly-eph-x', 10240, 400)
-        update_cmds = [c.args[0] for c in mock_run.call_args_list
-                       if c.args[0][:2] == ['docker', 'update']]
-        self.assertEqual(len(update_cmds), 1)
-        self.assertIn('10240m', update_cmds[0])
-        self.assertIn('buildx_buildkit_smsly-eph-x0', update_cmds[0])
+        from .test_build_containment import BuilderContainmentTests
+        regression = BuilderContainmentTests()
+        commands, run = regression.lifecycle()
+        with patch.object(build_mod, '_local_registry_host', return_value='registry:5000'), patch('subprocess.run', side_effect=run):
+            self.assertEqual(build_mod._create_ephemeral_builder('limited', 512, 150), 'limited')
+            build_mod._remove_ephemeral_builder('limited')
+        self.assertIn(['docker', 'buildx', 'rm', '-f', 'limited'], commands)
 
     def test_create_failure_returns_none(self):
         bad = MagicMock(returncode=1, stdout='', stderr='nope')
@@ -106,4 +95,4 @@ class EphemeralBuilderTests(TestCase):
         with patch.dict('os.environ', {}, clear=False):
             import os as _os
             _os.environ.pop('SMSLY_BUILDER_EPHEMERAL', None)
-            self.assertFalse(build_mod._ephemeral_builder_enabled())
+            self.assertTrue(build_mod._ephemeral_builder_enabled())

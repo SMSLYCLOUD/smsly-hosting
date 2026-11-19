@@ -643,6 +643,10 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
         # ESTABLISHED,RELATED must come BEFORE the cross-bridge DROP so that
         # responses (e.g. from Traefik or internet) reach the container.
         _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "RETURN"])
+        _run([
+            "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+            "-d", MESH_CIDR, "-j", "RETURN",
+        ])
     else:
         for cidr in valid_cidrs:
             _run([
@@ -664,20 +668,12 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
     # 4. RETURN DNS last so it sits at the top of the chain â never shadowed.
     _run([
         "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+        "-p", "tcp", "--dport", "53", "-j", "RETURN",
+    ])
+    _run([
+        "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
         "-p", "udp", "--dport", "53", "-j", "RETURN",
     ])
-
-    # 5. Tenant mesh egress (unrestricted bridges only). Addon/DB traffic
-    # forwarded through the WireGuard mesh originates from tenant
-    # bridges; without this the terminal DROP eats container-initiated
-    # mesh connections while host probes succeed ("works from shell,
-    # timeouts from app", 2026-10-04 marketer DB). Narrowly scoped to
-    # the mesh CIDR; restricted bridges keep exact operator semantics.
-    if is_unrestricted:
-        _run([
-            "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
-            "-d", MESH_CIDR, "-j", "RETURN",
-        ])
 
 
 def ensure_mesh_reply_rule(bridge_iface: str) -> bool:
@@ -1030,7 +1026,8 @@ def reconcile_network_isolation() -> dict[str, int]:
         client = docker.from_env()
         paas_nets = client.networks.list(names=["paas-svc-*"])
         smsly_nets = client.networks.list(names=["smsly-net-*"])
-        nets = [n for n in paas_nets + smsly_nets
+        platform_nets = client.networks.list(names=["smsly-platform-net"])
+        nets = [n for n in paas_nets + smsly_nets + platform_nets
                 if n.name not in ("smsly-net", "traefik-proxy-net", "smsly-internal-net")]
         seen = set()
         unique_nets = []
@@ -1050,8 +1047,16 @@ def reconcile_network_isolation() -> dict[str, int]:
                 stats["reapplied"] += 1
             if br and ensure_mesh_reply_rule(br):
                 stats["mesh_reply"] += 1
-            if ensure_router_on_network(name):
+            if name != "smsly-platform-net" and ensure_router_on_network(name):
                 stats["router_attached"] += 1
+        build_nets = client.networks.list(names=[BUILD_NETWORK_NAME])
+        for bnet in build_nets:
+            if bnet.name == BUILD_NETWORK_NAME:
+                bbr = _get_bridge_interface_name(BUILD_NETWORK_NAME)
+                btag = _rule_tag(bbr) if bbr else None
+                if not (btag and any(btag in r for r in rules_snapshot)):
+                    if apply_build_network_isolation(BUILD_NETWORK_NAME):
+                        stats["reapplied"] += 1
     except Exception:
         logger.exception("scoped network reconcile failed")
 
@@ -1128,43 +1133,161 @@ def cross_node_internal_endpoints(service, base_domain: str = "") -> dict:
     }
 
 
+BUILD_NETWORK_NAME = "smsly-build-net"
+BUILD_BLOCKED_CIDRS: tuple[str, ...] = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
+    "169.254.0.0/16",
+    "169.254.169.254/32",
+)
+
+
+def apply_build_network_isolation(network_name: str = BUILD_NETWORK_NAME) -> bool:
+    """Enforce DOCKER-USER egress isolation on the dedicated BuildKit bridge.
+
+    Untrusted Dockerfile ``RUN`` steps execute inside the BuildKit container's
+    network namespace. This firewall permits outbound internet downloads
+    (via physical NICs) and public DNS (UDP/TCP 53), while dropping all
+    traffic to RFC1918 LANs, WireGuard mesh, CGNAT, link-local/cloud
+    metadata (169.254.0.0/16 & 169.254.169.254/32), and other Docker
+    bridges (``-o br-+``).
+    """
+    bridge_iface = _get_bridge_interface_name(network_name)
+    if not bridge_iface:
+        logger.warning(
+            "apply_build_network_isolation: could not resolve bridge for %s",
+            network_name,
+        )
+        return False
+
+    tag = _rule_tag(bridge_iface)
+    try:
+        existing = _list_docker_user_rules()
+    except Exception as exc:
+        logger.warning("apply_build_network_isolation list failed: %s", exc)
+        return False
+    if any(tag in r for r in existing):
+        return True
+
+    def _run(cmd: list[str]) -> None:
+        tagged = cmd + ["-m", "comment", "--comment", tag]
+        res = _sh(tagged)
+        if res.returncode != 0 and "already exists" not in (res.stderr or ""):
+            logger.error(
+                "Build network rule failed (%s): %s",
+                " ".join(tagged), (res.stderr or "").strip()[:160],
+            )
+
+    # 1. Terminal catch-all DROP at the bottom of the chain.
+    _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-j", "DROP"])
+
+    # 2. Outbound internet via physical NICs + ESTABLISHED replies + same-bridge.
+    for phys in ("wl+", "enp+", "ens+", "eth+", "eno+"):
+        _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", phys, "-j", "RETURN"])
+    _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", bridge_iface, "-j", "RETURN"])
+    _run([
+        "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+        "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "RETURN",
+    ])
+
+    # 3. Block cross-bridge, WireGuard mesh, and RFC1918/LAN/CGNAT/metadata CIDRs
+    # BEFORE physical NIC RETURNs can match routed private subnets.
+    _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", "br-+", "-j", "DROP"])
+    _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", MESH_IFACE_WILDCARD, "-j", "DROP"])
+    for cidr in BUILD_BLOCKED_CIDRS:
+        _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-d", cidr, "-j", "DROP"])
+
+    # 4. Permit DNS (TCP + UDP 53) to public resolvers (placed above internet
+    # RETURN but after private CIDR DROPs so builds cannot query internal DNS).
+    for proto in ("tcp", "udp"):
+        _run([
+            "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+            "-p", proto, "--dport", "53", "-j", "RETURN",
+        ])
+    for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"):
+        _run([
+            "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+            "-d", cidr, "-p", "udp", "--dport", "53", "-j", "DROP",
+        ])
+        _run([
+            "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+            "-d", cidr, "-p", "tcp", "--dport", "53", "-j", "DROP",
+        ])
+    return True
+
+
+def ensure_build_network() -> str:
+    """Ensure the isolated BuildKit Docker bridge exists with egress firewall rules."""
+    name = BUILD_NETWORK_NAME
+    try:
+        client = docker.from_env()
+    except Exception as exc:
+        logger.debug("ensure_build_network: docker unavailable (%s)", exc)
+        return name
+    try:
+        client.networks.get(name)
+    except docker.errors.NotFound:
+        try:
+            client.networks.create(
+                name=name,
+                driver="bridge",
+                internal=False,
+                enable_ipv6=False,
+                options={"com.docker.network.bridge.enable_icc": "false"},
+                labels={"smsly.scope": "build"},
+            )
+            logger.info("Created isolated BuildKit bridge: %s", name)
+        except Exception as exc:
+            logger.debug("Build bridge create race (%s); continuing", exc)
+    except Exception as exc:
+        logger.debug("ensure_build_network lookup skipped: %s", exc)
+        return name
+    try:
+        apply_build_network_isolation(name)
+    except Exception as exc:
+        logger.debug("apply_build_network_isolation skipped: %s", exc)
+    return name
+
+
 def ensure_platform_bridge() -> str:
-    """Ensure the platform-wide shared bridge exists.
+    """Ensure the platform-wide shared bridge exists with ICC disabled and egress rules.
 
-    The platform bridge is what every internal-network-enabled service
-    gets attached to, regardless of project. It provides
-    inter-service connectivity across the whole platform - a service
-    in project A can reach a service in project B through this
-    bridge, no public DNS, no TLS.
-
-    The subnet is a /24 in the 172.31.0.0/16 IETF CGNAT range so it
-    doesn't collide with the project's scoped bridges (172.30.x.x)
-    or the default 'smsly-net' (172.18.0.0/16). When services need to
-    talk across project boundaries, they use this bridge's DNS name
-    (e.g. 'smsly-backend.smsly-platform-net').
-
-    Idempotent: the network is created once on first use, then
-    returned by name on subsequent calls.
+    Only services that explicitly opt in (``use_internal_network=True``) are
+    attached to ``smsly-platform-net``. Intra-bridge ICC is disabled by default
+    (``com.docker.network.bridge.enable_icc=false``) and ``DOCKER-USER``
+    cross-bridge + metadata drop rules are applied so the bridge cannot be
+    used for unauthorized cross-tenant lateral movement.
     """
     client = docker.from_env()
     name = 'smsly-platform-net'
+    found = False
     try:
-        net = client.networks.get(name)
-        return name
+        client.networks.get(name)
+        found = True
     except docker.errors.NotFound:
         pass
-    create_kwargs = {
-        'name': name,
-        'driver': 'bridge',
-        'internal': False,
-        'enable_ipv6': False,
-    }
+    if not found:
+        create_kwargs = {
+            'name': name,
+            'driver': 'bridge',
+            'internal': False,
+            'enable_ipv6': False,
+            'options': {
+                'com.docker.network.bridge.enable_icc': 'false',
+            },
+        }
+        try:
+            client.networks.create(**create_kwargs)
+            logger.info("Created platform-wide bridge: %s", name)
+        except Exception as exc:
+            # Some other process may have raced us. Tolerate that.
+            logger.debug("Platform bridge create race (%s); continuing", exc)
     try:
-        client.networks.create(**create_kwargs)
-        logger.info("Created platform-wide bridge: %s", name)
+        apply_egress_restrictions(name, ["0.0.0.0/0"])
     except Exception as exc:
-        # Some other process may have raced us. Tolerate that.
-        logger.debug("Platform bridge create race (%s); continuing", exc)
+        logger.debug("Platform bridge egress restriction skipped: %s", exc)
     return name
 
 

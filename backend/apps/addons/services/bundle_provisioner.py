@@ -49,9 +49,22 @@ COMPOSE_FILE_NAME = "grid-addons-compose.yml"
 # Keys that the provisioner controls — extra must not overwrite them
 _CONTROLLED_COMPOSE_KEYS = frozenset({
     "image", "ports", "volumes", "environment", "healthcheck",
-    "cap_add", "command", "restart", "networks", "labels",
-    "depends_on",
+    "cap_add", "cap_drop", "security_opt", "pids_limit", "init",
+    "privileged", "network_mode", "pid", "ipc", "uts", "userns_mode",
+    "cgroup", "devices", "runtime", "dns", "extra_hosts",
+    "command", "restart", "networks", "labels", "depends_on",
 })
+
+_DANGEROUS_BUNDLE_CAPS = frozenset({
+    "ALL", "SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
+    "SYS_RAWIO", "SYS_BOOT", "MAC_ADMIN", "MAC_OVERRIDE",
+    "DAC_READ_SEARCH", "BPF", "PERFMON", "SYS_TIME",
+    "AUDIT_CONTROL", "SYSLOG",
+})
+_FORBIDDEN_BUNDLE_BIND_PREFIXES = (
+    "/etc", "/proc", "/sys", "/dev", "/var/run", "/run",
+    "/var/lib/docker", "/root", "/boot", "/opt/smsly-hosting",
+)
 
 
 class BundleProvisioner:
@@ -703,6 +716,25 @@ class BundleProvisioner:
             },
         }
 
+        from apps.deployments.services.container_runtime import (
+            detect_best_runtime,
+            ensure_sandbox_resolv_conf,
+            is_sandboxed_runtime,
+            sandbox_dns_servers,
+        )
+        bundle_runtime = detect_best_runtime()
+        bundle_dns: list[str] | None = None
+        bundle_resolv_path: str | None = None
+        if bundle_runtime and is_sandboxed_runtime(bundle_runtime):
+            try:
+                bundle_dns = sandbox_dns_servers()
+            except Exception:
+                bundle_dns = ["8.8.8.8", "1.1.1.1"]
+            try:
+                bundle_resolv_path = ensure_sandbox_resolv_conf(bundle_dns)
+            except Exception:
+                bundle_resolv_path = None
+
         for svc in services:
             # Merge managed labels with user-defined labels
             labels = {
@@ -723,7 +755,23 @@ class BundleProvisioner:
             svc_def: dict[str, Any] = {
                 "networks": [network_alias],
                 "labels": labels,
+                "init": True,
+                "security_opt": [
+                    "no-new-privileges:true",
+                    "apparmor:docker-default",
+                ],
+                "cap_drop": ["ALL"],
+                "cap_add": ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+                "pids_limit": 1024,
+                "ulimits": {
+                    "nofile": {"soft": 1024, "hard": 2048},
+                    "fsize": 512000000,
+                },
             }
+            if bundle_runtime and bundle_runtime != "runc":
+                svc_def["runtime"] = bundle_runtime
+            if bundle_dns:
+                svc_def["dns"] = list(bundle_dns)
 
             # Image source
             if svc.name in built_images:
@@ -738,9 +786,37 @@ class BundleProvisioner:
             if svc.ports:
                 svc_def["ports"] = list(svc.ports)
 
-            # Volumes
+            # Volumes (validate against sensitive host binds)
+            vols_list: list[str] = []
             if svc.volumes:
-                svc_def["volumes"] = list(svc.volumes)
+                for vol in svc.volumes:
+                    v_str = str(vol).strip()
+                    parts = v_str.split(":")
+                    src = parts[0].strip().replace("\\", "/") if len(parts) >= 2 else ""
+                    if "docker.sock" in src.lower():
+                        raise ValueError(
+                            f"Bundle service '{svc.name}' mounts docker.sock which is forbidden."
+                        )
+                    if ".." in src.split("/"):
+                        raise ValueError(
+                            f"Bundle service '{svc.name}' uses parent traversal in volume '{v_str}'."
+                        )
+                    if src.startswith("/"):
+                        norm = os.path.normpath(src).replace("\\", "/")
+                        if norm in ("/", "/var") or any(
+                            norm == p or norm.startswith(p + "/")
+                            for p in _FORBIDDEN_BUNDLE_BIND_PREFIXES
+                        ):
+                            raise ValueError(
+                                f"Bundle service '{svc.name}' mounts sensitive host path '{src}'."
+                            )
+                    vols_list.append(v_str)
+            if bundle_resolv_path and os.path.isfile(bundle_resolv_path):
+                bind_spec = f"{bundle_resolv_path}:/etc/resolv.conf:ro"
+                if not any(":/etc/resolv.conf" in v for v in vols_list):
+                    vols_list.append(bind_spec)
+            if vols_list:
+                svc_def["volumes"] = vols_list
 
             # Environment
             env = svc.env_vars
@@ -751,9 +827,19 @@ class BundleProvisioner:
             if svc.healthcheck:
                 svc_def["healthcheck"] = svc.healthcheck
 
-            # Capabilities
+            # Capabilities (validate against dangerous caps)
             if svc.cap_add:
-                svc_def["cap_add"] = list(svc.cap_add)
+                validated_caps = []
+                for cap in svc.cap_add:
+                    cap_norm = str(cap).strip().upper()
+                    if cap_norm.startswith("CAP_"):
+                        cap_norm = cap_norm[4:]
+                    if cap_norm in _DANGEROUS_BUNDLE_CAPS:
+                        raise ValueError(
+                            f"Bundle service '{svc.name}' requests forbidden capability '{cap}'."
+                        )
+                    validated_caps.append(str(cap).strip())
+                svc_def["cap_add"] = validated_caps
 
             # Command
             if svc.command:
@@ -771,6 +857,18 @@ class BundleProvisioner:
 
             # Extra keys (ulimits, sysctls, etc.) — guard against overwriting
             for k, v in svc.extra.items():
+                if k == "privileged" and v is True:
+                    raise ValueError(
+                        f"Bundle service '{svc.name}' sets privileged: true which is forbidden."
+                    )
+                if k in ("network_mode", "pid", "ipc", "uts", "userns_mode", "cgroup") and str(v).strip().lower() == "host":
+                    raise ValueError(
+                        f"Bundle service '{svc.name}' sets {k}: host which is forbidden."
+                    )
+                if k == "devices" and v:
+                    raise ValueError(
+                        f"Bundle service '{svc.name}' declares host devices which is forbidden."
+                    )
                 if k in _CONTROLLED_COMPOSE_KEYS:
                     logger.warning(
                         "Ignoring extra key '%s' for service '%s' "

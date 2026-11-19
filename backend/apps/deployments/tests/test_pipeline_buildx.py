@@ -33,7 +33,18 @@ def _ok_proc():
     return SimpleNamespace(returncode=0, stdout="Step 1/2 : FROM x\n", stderr="")
 
 
-class BuildxCommandTests(TestCase):
+class ContainedBuildTestCase(TestCase):
+    def setUp(self):
+        super().setUp()
+        builder = patch.object(build_mod, "_create_ephemeral_builder", return_value="limited-test")
+        removal = patch.object(build_mod, "_remove_ephemeral_builder")
+        builder.start()
+        removal.start()
+        self.addCleanup(builder.stop)
+        self.addCleanup(removal.stop)
+
+
+class BuildxCommandTests(ContainedBuildTestCase):
     def _run_buildx(self, dockerfile_text="FROM x\n", **kw):
         mixin = _mixin()
         with patch.object(
@@ -65,10 +76,10 @@ class BuildxCommandTests(TestCase):
         # A systemd-run resource scope may prefix the command; find docker.
         start = cmd.index('docker')
         cmd = cmd[start:]
-        # Plain CLI: no buildx, no builder selection, no --load flag.
-        self.assertEqual(cmd[:3], ["docker", "build", "--progress=plain"])
-        self.assertNotIn("buildx", cmd)
-        self.assertNotIn("--builder", cmd)
+        # Explicit contained builder; Docker exporter loads into the daemon.
+        self.assertEqual(cmd[:3], ["docker", "buildx", "build"])
+        self.assertIn("buildx", cmd)
+        self.assertIn("--builder", cmd)
         self.assertIn("--progress=plain", cmd)
         self.assertIn("registry:5000/smsly/a:aaa1111", cmd)
         secret_flags = [cmd[i + 1] for i, a in enumerate(cmd[:-1])
@@ -142,12 +153,12 @@ class BuildxFallbackTests(TestCase):
             except BuildError as exc:
                 return ("builderror", mock_bx, mock_classic, exc)
 
-    def test_infra_error_falls_back_to_classic(self):
+    def test_infra_error_refuses_uncapped_classic(self):
         status, mock_bx, mock_classic, _ = self._engine(
             OSError("cannot connect to the Docker daemon"))
-        self.assertEqual(status, "ok")
+        self.assertEqual(status, "builderror")
         self.assertTrue(mock_bx.called)
-        self.assertTrue(mock_classic.called)
+        self.assertFalse(mock_classic.called)
 
     def test_dockerfile_error_never_falls_back(self):
         from apps.deployments.services.pipeline.exceptions import BuildError
@@ -176,16 +187,10 @@ class BuildxFallbackTests(TestCase):
             self.assertFalse(_is_buildx_infra_error(text), text)
 
 
-class PlainCliBuildTests(TestCase):
-    """Daemon BuildKit via the plain CLI carries no builder selection.
+class PlainCliBuildTests(ContainedBuildTestCase):
+    """Always select the verified dedicated builder explicitly."""
 
-    Regression (2026-09-24): a phantom docker-container `default` builder
-    (plus a refused `create --driver docker`) silently downgraded every
-    build to classic. The plain `DOCKER_BUILDKIT=1 docker build` path has
-    no client state to rot: no buildx, no --builder, no --load flag.
-    """
-
-    def test_plain_cli_has_no_builder_state(self):
+    def test_cli_selects_contained_builder(self):
         mixin_calls = []
         mixin = _mixin()
         with patch.object(
@@ -212,15 +217,15 @@ class PlainCliBuildTests(TestCase):
         cmd = mock_run.call_args.args[0]
         start = cmd.index('docker')
         cmd = cmd[start:]
-        self.assertEqual(cmd[:3], ["docker", "build", "--progress=plain"])
-        self.assertNotIn("buildx", cmd)
-        self.assertNotIn("--builder", cmd)
+        self.assertEqual(cmd[:3], ["docker", "buildx", "build"])
+        self.assertIn("buildx", cmd)
+        self.assertIn("--builder", cmd)
         self.assertNotIn("--load", cmd)
         env = mock_run.call_args.kwargs.get("env", {})
         self.assertEqual(env.get("DOCKER_BUILDKIT"), "1")
 
 
-class MissingOutputTests(TestCase):
+class MissingOutputTests(ContainedBuildTestCase):
     """Exit-0 builds that leave no image in the daemon store (docker-container
     driver without --load) must salvage via --load, else raise infra-class
     so the dispatcher falls back to the Engine API (2026-09-25 outage:

@@ -26,6 +26,7 @@ Safety:
     recreate API (same image, DB env merged over live env).
 """
 import logging
+import os
 import time
 
 logger = logging.getLogger(__name__)
@@ -445,22 +446,53 @@ def recreate_with_fresh_env(service, container_id=None, dry_run=False,
         }
         if runtime:
             create_kwargs["runtime"] = runtime
+        if "ReadonlyRootfs" in host_config:
+            create_kwargs["read_only"] = bool(host_config.get("ReadonlyRootfs"))
+        if host_config.get("Tmpfs"):
+            create_kwargs["tmpfs"] = dict(host_config.get("Tmpfs"))
+        if host_config.get("Ulimits"):
+            create_kwargs["ulimits"] = list(host_config.get("Ulimits"))
         if force_default_runtime:
             # Escape hatch out of a broken sandboxed runtime: omit the key
             # so the daemon default (runc) applies, and drop extra_hosts —
             # stale hostname overrides would shadow the now-healthy DNS.
             create_kwargs.pop("runtime", None)
-        elif (create_kwargs.get("runtime") or "") == "runsc":
-            # gVisor cannot reach Docker embedded DNS: refresh the /etc/hosts
-            # compensation (live entries kept, fresh resolutions win).
-            # Recreate previously dropped this, stranding runsc containers
-            # with zero name resolution (2026-09-14 platform-api incident).
-            hosts = _resolve_gvisor_extra_hosts(
-                service, set(nets), client,
-                live=_live_extra_hosts(container),
+        else:
+            effective_rt = create_kwargs.get("runtime") or ""
+            if effective_rt == "runsc":
+                # gVisor cannot reach Docker embedded DNS: refresh the /etc/hosts
+                # compensation (live entries kept, fresh resolutions win).
+                # Recreate previously dropped this, stranding runsc containers
+                # with zero name resolution (2026-09-14 platform-api incident).
+                hosts = _resolve_gvisor_extra_hosts(
+                    service, set(nets), client,
+                    live=_live_extra_hosts(container),
+                )
+                if hosts:
+                    create_kwargs["extra_hosts"] = hosts
+            from apps.deployments.services.container_runtime import (
+                ensure_sandbox_resolv_conf,
+                is_sandboxed_runtime,
+                sandbox_dns_servers,
             )
-            if hosts:
-                create_kwargs["extra_hosts"] = hosts
+            live_dns = host_config.get("Dns")
+            if live_dns:
+                create_kwargs["dns"] = list(live_dns)
+            elif is_sandboxed_runtime(effective_rt):
+                create_kwargs["dns"] = sandbox_dns_servers()
+            if is_sandboxed_runtime(effective_rt):
+                try:
+                    _resolv_path = ensure_sandbox_resolv_conf(create_kwargs.get("dns"))
+                    if _resolv_path and os.path.isfile(_resolv_path):
+                        _vols = dict(create_kwargs.get("volumes") or {})
+                        if not any(
+                            isinstance(v, dict) and v.get("bind") == "/etc/resolv.conf"
+                            for v in _vols.values()
+                        ):
+                            _vols[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
+                            create_kwargs["volumes"] = _vols
+                except Exception as exc:
+                    logger.debug("Refresh sandbox resolv.conf mount skipped: %s", exc)
         create_kwargs.update(_resource_kwargs(service))
 
         container.stop(timeout=15)

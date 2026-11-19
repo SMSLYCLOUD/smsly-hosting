@@ -599,22 +599,27 @@ class ProjectViewSet(viewsets.ModelViewSet):
                     client, net, scoped.network_name
                 )
 
-                # Dual-network backfill: same option as the create path —
-                # bring services + addons onto the platform bridge too.
-                dual_platform = True
+                # Dual-network backfill: only attach services that explicitly
+                # opted into use_internal_network (or when dual_platform=true is
+                # explicitly requested in the POST body).
+                dual_platform = False
                 if isinstance(request.data, dict):
                     raw_dual = request.data.get('dual_platform')
                     if raw_dual is not None:
-                        dual_platform = str(raw_dual).strip().lower() not in ('false', '0', 'no', 'off')
-                if dual_platform:
-                    try:
-                        from apps.deployments.services.network_scope import (
-                            attach_container_to_platform_bridge,
-                            ensure_platform_bridge,
-                        )
+                        dual_platform = str(raw_dual).strip().lower() in ('true', '1', 'yes', 'on')
+                try:
+                    from apps.deployments.services.network_scope import (
+                        attach_container_to_platform_bridge,
+                        ensure_platform_bridge,
+                    )
+                    opt_in_svcs = [
+                        s for s in project.services.all()
+                        if dual_platform or bool(getattr(s, 'use_internal_network', False))
+                    ]
+                    if opt_in_svcs:
                         platform_bridge_name = ensure_platform_bridge()
                         platform_net = client.networks.get(platform_bridge_name)
-                        for svc in project.services.all():
+                        for svc in opt_in_svcs:
                             try:
                                 container = client.containers.get(svc.name)
                                 container.reload()
@@ -623,30 +628,31 @@ class ProjectViewSet(viewsets.ModelViewSet):
                                     platform_services += 1
                             except Exception:
                                 continue
-                        try:
-                            from django.db.models import Q as _Q
-                            from apps.deployments.models.addons import Addon as _Addon
-                            addon_qs = _Addon.objects.filter(status=_Addon.Status.ACTIVE).filter(
-                                _Q(service__project=project)
-                                | _Q(service__project=project, name__endswith='-shared')
-                            )
-                            for addon in addon_qs:
-                                try:
-                                    container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-                                    container = client.containers.get(container_name)
-                                    container.reload()
-                                    nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
-                                    if (container.attrs.get('State') or {}).get('Status') == 'running' \
-                                            and platform_bridge_name not in nets:
-                                        alias = addon.name or f"{addon.addon_type.lower()}-shared"
-                                        platform_net.connect(container, aliases=[alias])
-                                        platform_addons += 1
-                                except Exception:
-                                    continue
-                        except Exception as exc:
-                            logger.debug("Addon platform-bridge backfill skipped: %s", exc)
-                    except Exception as exc:
-                        logger.debug("Platform-bridge backfill skipped: %s", exc)
+                        if dual_platform:
+                            try:
+                                from django.db.models import Q as _Q
+                                from apps.deployments.models.addons import Addon as _Addon
+                                addon_qs = _Addon.objects.filter(status=_Addon.Status.ACTIVE).filter(
+                                    _Q(service__project=project)
+                                    | _Q(service__project=project, name__endswith='-shared')
+                                )
+                                for addon in addon_qs:
+                                    try:
+                                        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+                                        container = client.containers.get(container_name)
+                                        container.reload()
+                                        nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                                        if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                                                and platform_bridge_name not in nets:
+                                            alias = addon.name or f"{addon.addon_type.lower()}-shared"
+                                            platform_net.connect(container, aliases=[alias])
+                                            platform_addons += 1
+                                    except Exception:
+                                        continue
+                            except Exception as exc:
+                                logger.debug("Addon platform-bridge backfill skipped: %s", exc)
+                except Exception as exc:
+                    logger.debug("Platform-bridge backfill skipped: %s", exc)
             except Exception as exc:
                 return Response(
                     {'error': f'Failed to backfill bridge attachment: {exc}'},
@@ -728,30 +734,30 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 client, net, network_name
             )
 
-            # Dual-network option: attach services AND their addons to the
-            # platform-wide bridge (smsly-platform-net) so cross-project
-            # traffic stays host-internal too. Addons dual-home with the
-            # same alias so a connection URL resolved from either bridge
-            # works. Enabled by default (the whole point of the internal
-            # network is to keep traffic off public DNS); disable with
-            # {"dual_platform": false} in the POST body.
-            dual_platform = True
+            # Dual-network option: disabled by default so cross-tenant projects
+            # do not share L2 on smsly-platform-net unless a service explicitly
+            # sets use_internal_network=True or {"dual_platform": true} is passed.
+            dual_platform = False
             if isinstance(request.data, dict):
                 raw_dual = request.data.get('dual_platform')
                 if raw_dual is not None:
-                    dual_platform = str(raw_dual).strip().lower() not in ('false', '0', 'no', 'off')
+                    dual_platform = str(raw_dual).strip().lower() in ('true', '1', 'yes', 'on')
 
             platform_services = 0
             platform_addons = 0
-            if dual_platform:
-                try:
-                    from apps.deployments.services.network_scope import (
-                        attach_container_to_platform_bridge,
-                        ensure_platform_bridge,
-                    )
+            try:
+                from apps.deployments.services.network_scope import (
+                    attach_container_to_platform_bridge,
+                    ensure_platform_bridge,
+                )
+                opt_in_svcs = [
+                    s for s in project.services.all()
+                    if dual_platform or bool(getattr(s, 'use_internal_network', False))
+                ]
+                if opt_in_svcs:
                     platform_bridge_name = ensure_platform_bridge()
                     platform_net = client.networks.get(platform_bridge_name)
-                    for svc in project.services.all():
+                    for svc in opt_in_svcs:
                         try:
                             container = client.containers.get(svc.name)
                             container.reload()
@@ -760,34 +766,30 @@ class ProjectViewSet(viewsets.ModelViewSet):
                                 platform_services += 1
                         except Exception:
                             continue
-                    # Addons dual-home too — a cross-project service
-                    # reaching for this project's shared postgres should
-                    # resolve it on the platform bridge without any public
-                    # hop. Uses the same service-scoped addon lookup as
-                    # _attach_running_containers (own + '-shared').
-                    try:
-                        from django.db.models import Q as _Q
-                        from apps.deployments.models.addons import Addon as _Addon
-                        addon_qs = _Addon.objects.filter(status=_Addon.Status.ACTIVE).filter(
-                            _Q(service__project=project)
-                            | _Q(service__project=project, name__endswith='-shared')
-                        )
-                        for addon in addon_qs:
-                            try:
-                                container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-                                container = client.containers.get(container_name)
-                                container.reload()
-                                nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
-                                if (container.attrs.get('State') or {}).get('Status') == 'running' \
-                                        and platform_bridge_name not in nets:
-                                    alias = addon.name or f"{addon.addon_type.lower()}-shared"
-                                    platform_net.connect(container, aliases=[alias])
-                                    platform_addons += 1
-                            except Exception:
-                                continue
-                    except Exception as exc:
-                        logger.debug("Addon platform-bridge attach skipped: %s", exc)
-                except Exception as exc:
+                    if dual_platform:
+                        try:
+                            from django.db.models import Q as _Q
+                            from apps.deployments.models.addons import Addon as _Addon
+                            addon_qs = _Addon.objects.filter(status=_Addon.Status.ACTIVE).filter(
+                                _Q(service__project=project)
+                                | _Q(service__project=project, name__endswith='-shared')
+                            )
+                            for addon in addon_qs:
+                                try:
+                                    container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+                                    container = client.containers.get(container_name)
+                                    container.reload()
+                                    nets = (container.attrs.get('NetworkSettings') or {}).get('Networks') or {}
+                                    if (container.attrs.get('State') or {}).get('Status') == 'running' \
+                                            and platform_bridge_name not in nets:
+                                        alias = addon.name or f"{addon.addon_type.lower()}-shared"
+                                        platform_net.connect(container, aliases=[alias])
+                                        platform_addons += 1
+                                except Exception:
+                                    continue
+                        except Exception as exc:
+                            logger.debug("Addon platform-bridge attach skipped: %s", exc)
+            except Exception as exc:
                     logger.debug("Platform-bridge attach during provision skipped: %s", exc)
 
             logger.info(

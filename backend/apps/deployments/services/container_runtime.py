@@ -134,6 +134,74 @@ def sandbox_dns_servers() -> list[str]:
     return servers
 
 
+SANDBOX_RESOLV_CONF_FILENAME = "runsc-resolv.conf"
+
+
+def ensure_sandbox_resolv_conf(dns_servers: list[str] | None = None) -> str | None:
+    """Materialize a host-persisted resolv.conf for sandboxed (runsc/Kata) containers.
+
+    On user-defined Docker bridges, Docker Engine unconditionally writes
+    ``nameserver 127.0.0.11`` into ``/etc/resolv.conf`` even when ``dns=``
+    is passed in HostConfig (using ``dns=`` only as upstream forwarders for
+    its embedded resolver). Because gVisor's userspace netstack traps
+    127.0.0.0/8 inside the sandbox, 127.0.0.11 is unreachable and external
+    DNS lookups fail unless ``/etc/resolv.conf`` points directly at real
+    resolvers.
+
+    Obeys AGENTS.md #24:
+    - Writes into ``SMSLY_BUILDS_DIR`` (default ``/opt/smsly-hosting/builds``),
+      which is bind-mounted at the identical path on host, backend, and celery.
+    - Self-heals if the target path was accidentally poisoned as a directory.
+    - Never deletes the file once written (containers with ``unless-stopped``
+      reference it across daemon/host restarts).
+    - Returns the absolute file path ONLY when ``os.path.isfile(path)`` is
+      True; returns None when running without the shared builds directory.
+    """
+    raw_servers = dns_servers if dns_servers is not None else sandbox_dns_servers()
+    servers = [
+        str(s).strip()
+        for s in (raw_servers or [])
+        if s and str(s).strip() and str(s).strip() != "127.0.0.11"
+    ]
+    if not servers:
+        servers = ["8.8.8.8", "1.1.1.1"]
+
+    builds_dir = (os.environ.get("SMSLY_BUILDS_DIR") or "/opt/smsly-hosting/builds").strip()
+    if not builds_dir or not os.path.isdir(builds_dir):
+        return None
+
+    target_path = os.path.join(builds_dir, SANDBOX_RESOLV_CONF_FILENAME)
+    try:
+        if os.path.isdir(target_path) and not os.path.islink(target_path):
+            shutil.rmtree(target_path)
+        lines = [
+            "# Managed by smsly-hosting for sandboxed (runsc/Kata) containers",
+            *[f"nameserver {srv}" for srv in servers],
+            "options ndots:0 timeout:2 attempts:2",
+            "",
+        ]
+        desired = "\n".join(lines)
+        current = None
+        if os.path.isfile(target_path):
+            try:
+                with open(target_path, "r", encoding="utf-8") as fh:
+                    current = fh.read()
+            except OSError:
+                current = None
+        if current != desired:
+            tmp_path = f"{target_path}.tmp.{os.getpid()}"
+            with open(tmp_path, "w", encoding="utf-8") as fh:
+                fh.write(desired)
+            os.chmod(tmp_path, 0o644)
+            os.replace(tmp_path, target_path)
+        if os.path.isfile(target_path):
+            return target_path
+    except OSError as exc:
+        logger.warning("Failed to materialize sandbox resolv.conf at %s: %s", target_path, exc)
+    return None
+
+
+
 def get_runtime_for_container(
     service_name: str = "",
     runtime_preference: str | None = None,

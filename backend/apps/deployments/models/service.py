@@ -595,11 +595,11 @@ class Service(TimeStampedModel):
     # IP on the host (no public DNS, no Cloudflare round-trip). The
     # project-level Project.internal_subnet determines the CIDR.
     use_internal_network = models.BooleanField(  # type: ignore[var-annotated]
-        default=True,
+        default=False,
         help_text=(
-            "Attach this service to the project's scoped Docker bridge "
-            "for low-latency internal service-to-service traffic. Disable "
-            "to keep the service on the shared 'smsly-net' bridge only."
+            "Opt in to dual-homing on the platform-wide 'smsly-platform-net' "
+            "bridge for cross-project internal traffic. Disabled by default so "
+            "services stay isolated to their project's scoped bridge."
         ),
     )
     # Auto-populated at spawn time: the service's IP on the
