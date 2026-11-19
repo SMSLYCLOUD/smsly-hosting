@@ -196,6 +196,7 @@ class DomainConfigView(GenericAPIView):
         # raises, the transaction rolls back the DB writes
         # (caddy_status, updated_at) and the caller sees a 5xx
         # with no partial DB state.
+        PlatformConfig.load()
         with transaction.atomic():
             config = PlatformConfig.objects.select_for_update().get(pk=1)
             data = request.data

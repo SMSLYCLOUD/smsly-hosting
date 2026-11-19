@@ -15,7 +15,8 @@ from django.contrib.auth import get_user_model
 from django.db import models
 from django.utils import timezone
 from rest_framework.authentication import BaseAuthentication
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 # ---------------------------------------------------------------------------
 # Token scopes
@@ -197,6 +198,20 @@ class APIToken(models.Model):
 # DRF Authentication Backend
 # ---------------------------------------------------------------------------
 
+class CanManageAPITokens(BasePermission):
+    """Credential management requires a full account credential.
+
+    Explicit scopes (even read + write) delegate resource operations, not the
+    ability to create, inspect, or revoke other account credentials.
+    """
+
+    message = "Restricted API tokens cannot manage credentials."
+
+    def has_permission(self, request, view):
+        token = request.auth
+        return not isinstance(token, APIToken) or not (token.scopes or token.projects)
+
+
 class APITokenAuthentication(BaseAuthentication):
     """
     Authenticate via ``Authorization: Bearer smsly_...`` header.
@@ -217,6 +232,25 @@ class APITokenAuthentication(BaseAuthentication):
         if not user.is_active:
             raise AuthenticationFailed("User account is disabled.")
 
+        # MCP calls use POST for reads too. Only these exact views implement
+        # per-tool scope and project enforcement; never exempt a path prefix.
+        from apps.mcp.views import McpToolCallView, McpToolListView
+        view = (getattr(request, "parser_context", None) or {}).get("view")
+        if type(view) is McpToolCallView and request.method == "POST":
+            return (user, token)
+        if type(view) is McpToolListView and request.method in SAFE_METHODS:
+            if not token.has_scope("read"):
+                raise PermissionDenied("Token lacks required read scope.")
+            return (user, token)
+
+        # Ordinary REST views have no common object-aware project policy.
+        # Denying bound credentials is safer than silently widening them to all
+        # of the account's projects. Use MCP for project-scoped access.
+        if token.projects:
+            raise PermissionDenied("Project-bound tokens require an MCP tool with project enforcement.")
+        required = "read" if request.method in SAFE_METHODS else "write"
+        if not token.has_scope(required):
+            raise PermissionDenied(f"Token lacks required {required} scope.")
         return (user, token)
 
     def authenticate_header(self, request):

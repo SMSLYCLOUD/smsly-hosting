@@ -46,11 +46,11 @@ CORAZA_SNIPPET = """(coraza_waf) {
             # Django. CRS method-enforcement (e.g. PATCH) and anomaly
             # scoring otherwise 403 every node sync with an empty body,
             # breaking all remote deploys (2026-10-13: 949110 on PATCH
-            # /api/v1/services/<uuid>/). WAF is not an auth boundary —
-            # the header alone grants nothing without the gateway secret
-            # (verified per-request in RemoteSyncHMACAuthentication), and
-            # the direct mesh :8000 path never traverses WAF anyway.
-            SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync "@streq 1" "id:1000001,phase:1,pass,nolog,ctl:ruleEngine=Off"
+            # /api/v1/services/<uuid>/). Scoped strictly to /api/v1/ URIs;
+            # tenant blocks also strip X-SMSLY-Remote-Sync inside a route
+            # block before Coraza runs.
+            SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync "@streq 1" "id:1000001,phase:1,pass,nolog,t:none,chain"
+                SecRule REQUEST_URI "@beginsWith /api/v1/" "t:none,t:urlDecodeUni,t:normalizePath,ctl:ruleEngine=Off"
         `
     }
 }"""
@@ -545,7 +545,14 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         "    import secure_headers",
     ])
     if not waf_opt_out:
-        lines.append("    import coraza_waf")
+        lines.extend([
+            "    route {",
+            "        request_header -X-SMSLY-Remote-Sync",
+            "        import coraza_waf",
+            "    }",
+        ])
+    else:
+        lines.append("    request_header -X-SMSLY-Remote-Sync")
     # Aliases proxy DIRECTLY to the upstream (bypassing Traefik), so the
     # edge gate must be emitted here too — otherwise a gated service's
     # alias hosts serve the whole app unauthenticated.
@@ -594,7 +601,14 @@ def _build_service_domain_block(
     lines.extend(_path_redirect_site_lines(path_redirect_rules or [], site_domain=domain))
     lines.append("    import secure_headers")
     if not waf_opt_out:
-        lines.append("    import coraza_waf")
+        lines.extend([
+            "    route {",
+            "        request_header -X-SMSLY-Remote-Sync",
+            "        import coraza_waf",
+            "    }",
+        ])
+    else:
+        lines.append("    request_header -X-SMSLY-Remote-Sync")
     if edge_jwt_required:
         lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
 
@@ -753,7 +767,14 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     ))
                     lines.append("    import secure_headers")
                     if not bool(getattr(service, "waf_opt_out", False)):
-                        lines.append("    import coraza_waf")
+                        lines.extend([
+                            "    route {",
+                            "        request_header -X-SMSLY-Remote-Sync",
+                            "        import coraza_waf",
+                            "    }",
+                        ])
+                    else:
+                        lines.append("    request_header -X-SMSLY-Remote-Sync")
                     if bool(getattr(service, "edge_jwt_required", False)):
                         lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
                     lines.append("    tls {")
@@ -831,7 +852,12 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                             lines.append("        on_demand")
                             lines.append("    }")
                             lines.append("    import secure_headers")
-                            lines.append("    import coraza_waf")
+                            lines.extend([
+                                "    route {",
+                                "        request_header -X-SMSLY-Remote-Sync",
+                                "        import coraza_waf",
+                                "    }",
+                            ])
                             lines.append("    reverse_proxy traefik:80")
                             lines.append("    encode gzip")
                             lines.append("}")
@@ -856,7 +882,10 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     blocks.append(
                         f"""{public_domain} {{
     import secure_headers
-    import coraza_waf
+    route {{
+        request_header -X-SMSLY-Remote-Sync
+        import coraza_waf
+    }}
     reverse_proxy {_service_proxy_upstream()}
 }}"""
                     )
@@ -1759,6 +1788,7 @@ def generate_node_caddyfile(node) -> str:
         for http_host in http_hosts:
             flat_block = [
                 f"{http_host}:80 {{",
+                "    request_header -X-SMSLY-Remote-Sync",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
@@ -1776,7 +1806,15 @@ def generate_node_caddyfile(node) -> str:
         # Deep names stay DNS-only on free plans; orange only with paid
         # Advanced Certificates (edge_proxy_wildcards).
         # Per-service WAF (direct grey access bypasses master inspection).
-        _waf_lines = [] if bool(getattr(service, "waf_opt_out", False)) else ["    import coraza_waf"]
+        if bool(getattr(service, "waf_opt_out", False)):
+            _waf_lines = ["    request_header -X-SMSLY-Remote-Sync"]
+        else:
+            _waf_lines = [
+                "    route {",
+                "        request_header -X-SMSLY-Remote-Sync",
+                "        import coraza_waf",
+                "    }",
+            ]
         for _nested in dict.fromkeys([nested_domain, legacy_nested]):
             nested_block = [
                 f"{_nested} {{",
@@ -2101,6 +2139,7 @@ def generate_caddyfile(config) -> str:
             wildcard_lines.append("        output file /var/log/caddy/access.log")
             wildcard_lines.append("    }")
             wildcard_lines.append("    import secure_headers")
+            wildcard_lines.append("    request_header -X-SMSLY-Remote-Sync")
 
             local_previews = []
             preview_auth_on = True
@@ -2320,6 +2359,7 @@ def generate_caddyfile(config) -> str:
                         [
                             f"    @waf_optout host {' '.join(_waf_optouts)}",
                             "    handle @waf_optout {",
+                            "        request_header -X-SMSLY-Remote-Sync",
                             f"        reverse_proxy {_service_proxy_upstream()}",
                             "    }",
                         ]
@@ -2328,8 +2368,11 @@ def generate_caddyfile(config) -> str:
                     [
                         f"    @known_hosts host {' '.join(wildcard_known_hosts)}",
                         "    handle @known_hosts {",
-                        "        import coraza_waf",
-                        f"        reverse_proxy {_service_proxy_upstream()}",
+                        "        route {",
+                        "            request_header -X-SMSLY-Remote-Sync",
+                        "            import coraza_waf",
+                        f"            reverse_proxy {_service_proxy_upstream()}",
+                        "        }",
                         "    }",
                     ]
                 )

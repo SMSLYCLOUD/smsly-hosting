@@ -34,8 +34,8 @@ class RouteRecheckApiTests(APITestCase):
         )
         self.url = "/api/v1/system/route-recheck/"
 
-    @patch("apps.deployments.views.RouteRecheckView._trigger_recheck", return_value=(True, "healthy"))
-    def test_public_domain_recheck(self, trigger_mock):
+    @patch("apps.deployments.views.RouteRecheckView._trigger_recheck")
+    def test_public_domain_recheck_is_read_only(self, trigger_mock):
         response = self.client.get(
             self.url,
             {"host": self.service.public_domain},
@@ -43,11 +43,11 @@ class RouteRecheckApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data.get("health_status"), "healthy")
-        trigger_mock.assert_called_once()
+        self.assertEqual(response.data.get("health_status"), self.service.health_status)
+        trigger_mock.assert_not_called()
 
-    @patch("apps.deployments.views.RouteRecheckView._trigger_recheck", return_value=(True, "starting"))
-    def test_custom_domain_recheck(self, trigger_mock):
+    @patch("apps.deployments.views.RouteRecheckView._trigger_recheck")
+    def test_custom_domain_post_is_read_only(self, trigger_mock):
         response = self.client.post(
             self.url,
             {"host": "recheck.example.com"},
@@ -55,8 +55,8 @@ class RouteRecheckApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data.get("health_status"), "starting")
-        trigger_mock.assert_called_once()
+        self.assertEqual(response.data.get("health_status"), self.service.health_status)
+        trigger_mock.assert_not_called()
 
     def test_unknown_domain_returns_404(self):
         response = self.client.get(

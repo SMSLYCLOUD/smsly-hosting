@@ -251,9 +251,10 @@ api.interceptors.response.use(
 
       // If remote returned an error status, reject as an Axios error
       if (proxyStatusCode >= 400) {
-        const error = new Error(`Remote server returned ${proxyStatusCode}`) as Error & { response?: ApiResponse; config?: unknown };
+        const error = new Error(`Remote server returned ${proxyStatusCode}`) as Error & { response?: ApiResponse; config?: unknown; isRemoteResponse?: boolean };
         error.response = { ...response, status: proxyStatusCode, data: proxyData } as ApiResponse;
         error.config = response.config;
+        error.isRemoteResponse = true;
         return Promise.reject(error);
       }
 
@@ -308,7 +309,7 @@ api.interceptors.response.use(
       return Promise.resolve(error.response);
     }
 
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
+    if (error.response?.status === 401 && !error.isRemoteResponse && typeof window !== 'undefined') {
       // Call backend logout to clear the HttpOnly __Host-auth_token cookie
       // via Set-Cookie: Max-Age=0.  Without this the cookie survives in the
       // browser, the middleware sees it on /login and redirects back to

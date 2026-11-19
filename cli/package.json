@@ -7,7 +7,7 @@
   },
   "type": "module",
   "scripts": {
-    "test": "echo 'CLI tests placeholder'"
+    "test": "node --experimental-vm-modules --test test-client-readiness.mjs"
   },
   "dependencies": {
     "commander": "^12.0.0",

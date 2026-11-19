@@ -9,6 +9,7 @@ from django.core.cache import cache
 from rest_framework import permissions, status
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
+from apps.core.rate_limiting import TrustedIdentMixin
 from ..models import Deployment
 from ._helpers import EmptySerializer, _normalize_request_domain, _service_for_domain
 class RouteRecheckView(GenericAPIView):
@@ -72,31 +73,19 @@ class RouteRecheckView(GenericAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        client_ip = (
-            str(request.META.get("HTTP_X_FORWARDED_FOR", "")).split(",")[0].strip()
-            or str(request.META.get("REMOTE_ADDR", "unknown")).strip()
-            or "unknown"
-        )
+        client_ip = TrustedIdentMixin().get_ident(request)
         throttle_key = f"route-recheck:{service.id}:{client_ip}"
-        if cache.get(throttle_key):
+        if not cache.add(throttle_key, True, timeout=20):
             return Response(
                 {"error": "Recheck already requested. Try again in a few seconds."},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
-        cache.set(throttle_key, True, timeout=20)
-
-        ok, health_status = self._trigger_recheck(service)
-        if not ok:
-            return Response(
-                {"error": "Failed to run health recheck"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
 
         return Response(
             {
-                "message": "Health recheck triggered",
+                "message": "Health status retrieved",
                 "service_id": str(service.id),
-                "health_status": health_status,
+                "health_status": service.health_status,
             }
         )
 

@@ -7,21 +7,14 @@ import re
 from apps.deployments.models import Deployment, Service
 from apps.core.models.audit import WebhookDelivery
 from apps.deployments.tasks.deployment.tasks_deploy import smart_deploy_task
-from django.conf import settings
+from .secrets import resolve_webhook_secret
 
 logger = logging.getLogger(__name__)
 
 
 class BitbucketWebhookHandler:
     def verify_signature(self, request) -> bool:
-        secret = getattr(settings, 'BITBUCKET_WEBHOOK_SECRET', '')
-        try:
-            from apps.deployments.models.core import PlatformConfig
-            db_secret = PlatformConfig.load().get_webhook_secret('bitbucket')
-            if db_secret:
-                secret = db_secret
-        except Exception as exc:
-            logger.debug("Failed to load Bitbucket webhook secret from PlatformConfig: %s", exc)
+        secret = resolve_webhook_secret('bitbucket')
         if not secret:
             logger.warning("BITBUCKET_WEBHOOK_SECRET not set, rejecting webhook")
             return False
@@ -30,7 +23,7 @@ class BitbucketWebhookHandler:
             return False
         body = request.body
         expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(f'sha256={expected}', signature)
+        return hmac.compare_digest(f'sha256={expected}'.encode(), signature.encode())
 
     def handle_event(self, event_type, data, delivery_id=None):
         if event_type.startswith('repo:push'):

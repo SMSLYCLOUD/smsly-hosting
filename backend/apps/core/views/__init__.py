@@ -14,6 +14,7 @@ from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
 from ..models import APIKey
+from ..models.api_token import CanManageAPITokens
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,7 @@ class APIKeyViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanManageAPITokens]
     queryset = APIKey.objects.all().order_by('-created_at')
     serializer_class = APIKeySerializer
 

@@ -853,6 +853,32 @@ def repair_double_encrypted_env_vars(service_id: str | None = None) -> dict:
     return {"fixed": fixed, "skipped": skipped}
 
 
+def purge_service_backups(service_id) -> dict:
+    """Erase service archives, retaining failed records so deletion can retry.
+
+    Server-wide archives can contain other services and are managed separately.
+    """
+    from apps.cloud.models.backup import ServiceBackup
+    from .cloud import _delete_backup_cloud_object
+
+    deleted = 0
+    for backup in ServiceBackup.objects.select_related('service').filter(service_id=service_id):
+        # Cloud deletion is idempotent. Keep the row and local file if it fails.
+        if not _delete_backup_cloud_object(backup):
+            raise RuntimeError(f"Cloud backup cleanup failed for {backup.pk}")
+        if backup.file_path:
+            # Metadata sidecars contain snapshot data too. Keep the record if
+            # either removal fails so a later attempt can finish erasure.
+            for path in (backup.file_path, backup.file_path + '.meta'):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass  # A previous attempt already removed it.
+        backup.delete()
+        deleted += 1
+    return {'service_backups_deleted': deleted}
+
+
 def purge_user_backups(user_id) -> dict:
     """
     GDPR right-to-erasure helper.
@@ -880,6 +906,11 @@ def purge_user_backups(user_id) -> dict:
     user_service_ids = list(
         Service.objects.filter(owner_id=user_id).values_list('id', flat=True)
     )
+
+    # An empty Q() matches every server archive. No services means nothing
+    # belongs to this user; return before constructing that query.
+    if not user_service_ids:
+        return counters
 
     service_backups = list(
         ServiceBackup.objects.select_related('service').filter(

@@ -128,7 +128,8 @@ def api_request(method, path, data=None, files=None, stream=False):
 
     try:
         resp = requests.request(
-            method, url, headers=headers, json=data, files=files, stream=stream, timeout=60
+            method, url, headers=headers, files=files, stream=stream, timeout=60,
+            **({"data": data} if files else {"json": data})
         )
         return resp
     except requests.ConnectionError:
@@ -317,9 +318,9 @@ def cmd_env(args):
             k, v = item.split("=", 1)
             # Create/Update each var
             # Ideal API would accept batch, but we'll loop for now
-            payload = {"key": k, "value": v, "is_secret": False}
+            payload = {"key": k, "value": v}
             resp = api_request("POST", f"/api/v1/services/{service_id}/env_vars/", data=payload)
-            if resp.status_code == 201:
+            if resp.status_code in (200, 201):
                 print(f"✓ Set {k}")
             else:
                 print(f"✗ Failed to set {k}: {resp.text}")

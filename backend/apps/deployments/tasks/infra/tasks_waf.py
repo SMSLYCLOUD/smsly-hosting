@@ -36,8 +36,8 @@ _MODE_RE = re.compile(
 
 
 def normalize_desired_mode(raw) -> str:
-    """Anything that is not exactly 'prevent' means shadow."""
-    return "prevent" if str(raw or "").strip() == "prevent" else "detect-learn"
+    """Anything that is not explicitly 'detect-learn' enforces ('prevent')."""
+    return "detect-learn" if str(raw or "").strip() == "detect-learn" else "prevent"
 
 
 def extract_plain_mode(policy_text) -> str | None:
@@ -102,7 +102,7 @@ def sync_waf_policy_task():
         pc = PlatformConfig.load()
         if not bool(getattr(pc, "openappsec_enabled", True)):
             return {"ok": True, "skipped": True, "message": "open-appsec disabled"}
-        desired = normalize_desired_mode(getattr(pc, "openappsec_mode", "detect-learn"))
+        desired = normalize_desired_mode(getattr(pc, "openappsec_mode", "prevent"))
 
         try:
             import docker

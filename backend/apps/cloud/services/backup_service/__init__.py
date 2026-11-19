@@ -54,6 +54,7 @@ from .operations import (
     _remap_domain_on_restore,
     _stop_service_for_restore,
     backup_addon,
+    purge_service_backups,
     purge_user_backups,
     repair_double_encrypted_env_vars,
 )
@@ -149,6 +150,7 @@ __all__ = [
     "list_s3_objects",
     "lookup_key_by_id",
     "normalize_s3_key",
+    "purge_service_backups",
     "purge_user_backups",
     "read_v2_header",
     "repair_double_encrypted_env_vars",

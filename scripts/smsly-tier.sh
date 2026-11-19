@@ -127,7 +127,7 @@ tier_resleep() {
 }
 
 tier_list() {
-  local f tier state
+  local f="" tier="" state=""
   shopt -s nullglob
   printf '%-18s %-9s %s\n' TIER STATE SERVICES
   for f in "$TIER_DIR"/*.conf; do

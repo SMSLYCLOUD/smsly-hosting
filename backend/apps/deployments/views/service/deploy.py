@@ -473,24 +473,20 @@ class DeployActionsMixin:
         serializer.is_valid(raise_exception=True)
         reason = serializer.validated_data.get('message', '')
 
-        # Find the most recent ACTIVE deployment
+        # The newest attempt is the rollback source, even if it failed.
+        current = Deployment.objects.filter(service=service).order_by('-created_at').first()
+
+        # Activation retires prior successful releases to INACTIVE. Unfinished
+        # INACTIVE rows can also be superseded builds that never ran.
         last_good = (
             Deployment.objects
-            .filter(service=service, status=Deployment.Status.ACTIVE)
-            .order_by('-finished_at')
-            .first()
-        )
-
-        if not last_good:
-            return Response(
-                {'error': 'No previous successful deployment to rollback to'},
-                status=status.HTTP_404_NOT_FOUND)
-
-        # Find the current (latest) deployment to mark as source
-        current = (
-            Deployment.objects
-            .filter(service=service)
-            .order_by('-created_at')
+            .filter(
+                service=service,
+                status__in=[Deployment.Status.ACTIVE, Deployment.Status.INACTIVE],
+                finished_at__isnull=False,
+            )
+            .exclude(pk=current.pk if current else None)
+            .order_by('-finished_at', '-created_at')
             .first()
         )
 
@@ -498,7 +494,7 @@ class DeployActionsMixin:
         # same one we'd roll back to, there is no PRIOR good release to
         # revert to — surface a clear error instead of silently redeploying
         # the same commit/image.
-        if current and current.id == last_good.id:
+        if not last_good and current and current.status == Deployment.Status.ACTIVE:
             return Response(
                 {
                     'error': (
@@ -512,6 +508,11 @@ class DeployActionsMixin:
                 },
                 status=status.HTTP_409_CONFLICT,
             )
+
+        if not last_good:
+            return Response(
+                {'error': 'No previous successful deployment to rollback to'},
+                status=status.HTTP_404_NOT_FOUND)
 
         # Create rollback deployment
         rollback_msg = f"INSTANT ROLLBACK to {last_good.commit_hash[:7]}"

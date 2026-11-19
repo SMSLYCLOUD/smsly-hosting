@@ -2,6 +2,8 @@
 import logging
 
 from django.conf import settings
+
+from apps.cloud.webhooks.secrets import resolve_webhook_secret
 from rest_framework import permissions, serializers, status
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
@@ -66,7 +68,7 @@ class GitLabWebhookView(GenericAPIView):
     permission_classes: list = []
 
     def post(self, request):
-        webhook_secret = getattr(settings, 'GITLAB_WEBHOOK_SECRET', '')
+        webhook_secret = resolve_webhook_secret('gitlab')
         if not webhook_secret:
             logger.error("GITLAB_WEBHOOK_SECRET not configured — rejecting webhook")
             return Response({'error': 'Webhook processing unavailable'},
@@ -83,7 +85,7 @@ class GitLabWebhookView(GenericAPIView):
                             status=status.HTTP_400_BAD_REQUEST)
 
         delivery_id = request.headers.get('X-Gitlab-Delivery', '')
-        from ..webhooks.gitlab import _check_duplicate_delivery as _check_gitlab
+        from apps.cloud.webhooks.gitlab import _check_duplicate_delivery as _check_gitlab
         _, should_process = _check_gitlab(delivery_id, event_type)
         if not should_process:
             return Response({'status': 'duplicate', 'delivery_id': delivery_id})
@@ -103,7 +105,7 @@ class BitbucketWebhookView(GenericAPIView):
     permission_classes: list = []
 
     def post(self, request):
-        webhook_secret = getattr(settings, 'BITBUCKET_WEBHOOK_SECRET', '')
+        webhook_secret = resolve_webhook_secret('bitbucket')
         if not webhook_secret:
             logger.error("BITBUCKET_WEBHOOK_SECRET not configured — rejecting webhook")
             return Response({'error': 'Webhook processing unavailable'},
@@ -120,7 +122,7 @@ class BitbucketWebhookView(GenericAPIView):
                             status=status.HTTP_400_BAD_REQUEST)
 
         delivery_id = request.headers.get('X-Request-UUID', '')
-        from ..webhooks.bitbucket import _check_duplicate_delivery as _check_bitbucket
+        from apps.cloud.webhooks.bitbucket import _check_duplicate_delivery as _check_bitbucket
         _, should_process = _check_bitbucket(delivery_id, event_type)
         if not should_process:
             return Response({'status': 'duplicate', 'delivery_id': delivery_id})

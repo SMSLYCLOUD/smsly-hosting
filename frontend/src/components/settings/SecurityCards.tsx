@@ -238,7 +238,7 @@ export function SecurityScanningCard({ config, onChange }: SecurityCardProps) {
           <div className="flex items-center justify-between rounded-lg border p-4">
             <div className="space-y-0.5">
               <Label className="text-base">open-appsec WAF</Label>
-              <p className="text-sm text-muted-foreground">Shadow WAF on a loopback port in detect-learn mode — proves every filter verdict against direct traffic before any edge cutover. Live status shows under Insights → Security.</p>
+              <p className="text-sm text-muted-foreground">ML WAF on a loopback port (prevent mode by default) — blocks malicious payloads inline on the shadow listener before any edge cutover. Live status shows under Insights → Security.</p>
             </div>
             <Switch
               checked={config.openappsec_enabled ?? true}
@@ -249,11 +249,11 @@ export function SecurityScanningCard({ config, onChange }: SecurityCardProps) {
             <div className="space-y-2 mt-3 ml-1">
               <Label>Enforcement mode</Label>
               <Select
-                value={config.openappsec_mode ?? "detect-learn"}
+                value={config.openappsec_mode ?? "prevent"}
                 onValueChange={(v) => onChange("openappsec_mode", v)}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="detect-learn" />
+                  <SelectValue placeholder="prevent" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="detect-learn">Shadow — detect and learn (observe only)</SelectItem>

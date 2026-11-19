@@ -94,12 +94,19 @@ def _ensure_buildx_fallback(fallback_name: str = 'smsly-fallback') -> tuple[bool
     if fallback_name in (ls.stdout or ''):
         return True, f'fallback {fallback_name!r} already exists'
 
+    build_net = 'smsly-build-net'
+    try:
+        from apps.deployments.services.network_scope import ensure_build_network
+        build_net = ensure_build_network() or 'smsly-build-net'
+    except Exception:
+        pass
+
     create = subprocess.run(
         [
             'docker', 'buildx', 'create',
             '--name', fallback_name,
             '--driver', 'docker-container',
-            '--driver-opt', 'network=smsly-net',
+            '--driver-opt', f'network={build_net}',
             '--use',
         ],
         capture_output=True, text=True, timeout=60,

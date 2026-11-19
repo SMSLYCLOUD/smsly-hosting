@@ -1250,7 +1250,7 @@ class LocalAdapter(BaseCloudAdapter):
                 _svc_obj = _SvcBridge.objects.filter(
                     id=self._service_id
                 ).only('use_internal_network').first()
-                if _svc_obj and getattr(_svc_obj, 'use_internal_network', True):
+                if _svc_obj and getattr(_svc_obj, 'use_internal_network', False):
                     from apps.deployments.services.network_scope import ensure_platform_bridge
                     platform_bridge = ensure_platform_bridge()
                     if platform_bridge != network_name:
@@ -1423,6 +1423,7 @@ class LocalAdapter(BaseCloudAdapter):
                 logger.warning("Failed to resolve addon IPs for gVisor extra_hosts: %s", exc)
 
         from apps.deployments.services.container_runtime import (
+            ensure_sandbox_resolv_conf,
             is_sandboxed_runtime,
             sandbox_dns_servers,
         )
@@ -1443,6 +1444,18 @@ class LocalAdapter(BaseCloudAdapter):
                     "Sandboxed runtime %s: explicit DNS resolvers %s",
                     container_runtime, _dns_servers,
                 )
+            try:
+                _resolv_path = ensure_sandbox_resolv_conf(_dns_servers)
+                if _resolv_path and os.path.isfile(_resolv_path):
+                    _vols = dict(create_kwargs.get("volumes") or {})
+                    if not any(
+                        isinstance(v, dict) and v.get("bind") == "/etc/resolv.conf"
+                        for v in _vols.values()
+                    ):
+                        _vols[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
+                        create_kwargs["volumes"] = _vols
+            except Exception as exc:
+                logger.debug("Sandbox resolv.conf mount skipped: %s", exc)
 
         new_container = self.docker_client.containers.create(**create_kwargs)
         new_container.start()
@@ -2121,11 +2134,14 @@ class LocalAdapter(BaseCloudAdapter):
                 )
             }
             use_platform_bridge = False
+            _promote_svc = None
             try:
                 _promote_svc = Service.objects.filter(
                     id=getattr(self, '_service_id', None)
-                ).only('use_internal_network').first() if getattr(self, '_service_id', None) else None
-                if _promote_svc and getattr(_promote_svc, 'use_internal_network', True):
+                ).select_related('project').first() if getattr(self, '_service_id', None) else None
+                if _promote_svc is None:
+                    _promote_svc = Service.objects.filter(name=name).select_related('project').first()
+                if _promote_svc and getattr(_promote_svc, 'use_internal_network', False):
                     platform_bridge = ensure_platform_bridge()
                     use_platform_bridge = platform_bridge != network_name
                     if use_platform_bridge:
@@ -2136,6 +2152,105 @@ class LocalAdapter(BaseCloudAdapter):
                         )
             except Exception as exc:
                 logger.debug("Promote dual-homing skipped: %s", exc)
+
+            green_runtime = green_host_config.get('Runtime')
+            if green_runtime and green_runtime != 'runc':
+                run_kwargs['runtime'] = green_runtime
+
+            if 'ReadonlyRootfs' in green_host_config:
+                run_kwargs['read_only'] = bool(green_host_config.get('ReadonlyRootfs'))
+            else:
+                run_kwargs['read_only'] = True
+
+            green_tmpfs = green_host_config.get('Tmpfs')
+            if green_tmpfs:
+                run_kwargs['tmpfs'] = dict(green_tmpfs)
+            elif run_kwargs.get('read_only'):
+                run_kwargs['tmpfs'] = {
+                    "/tmp": "size=100m",
+                    "/run": "size=20m",
+                    "/app/.next/cache": "size=256m",
+                    "/app/tmp": "size=100m",
+                }
+
+            green_ulimits = green_host_config.get('Ulimits')
+            if green_ulimits:
+                run_kwargs['ulimits'] = list(green_ulimits)
+            else:
+                run_kwargs['ulimits'] = [
+                    {"Name": "nofile", "Soft": 1024, "Hard": 2048},
+                    {"Name": "fsize", "Soft": 512000000, "Hard": 512000000},
+                ]
+
+            green_extra_hosts = green_host_config.get('ExtraHosts')
+            if green_runtime == 'runsc':
+                try:
+                    from apps.deployments.services.container_refresh import (
+                        _resolve_gvisor_extra_hosts,
+                    )
+                    _live_hosts = {}
+                    if isinstance(green_extra_hosts, dict):
+                        _live_hosts = dict(green_extra_hosts)
+                    elif isinstance(green_extra_hosts, list):
+                        for item in green_extra_hosts:
+                            if isinstance(item, str) and ":" in item:
+                                h_k, h_v = item.split(":", 1)
+                                _live_hosts[h_k] = h_v
+                    refreshed_hosts = _resolve_gvisor_extra_hosts(
+                        _promote_svc,
+                        list(promote_networks_dict.keys()),
+                        self.docker_client,
+                        live=_live_hosts or None,
+                    )
+                    if refreshed_hosts:
+                        run_kwargs['extra_hosts'] = refreshed_hosts
+                except Exception as exc:
+                    logger.debug("Promote gVisor extra_hosts refresh skipped: %s", exc)
+            if 'extra_hosts' not in run_kwargs and green_extra_hosts:
+                if isinstance(green_extra_hosts, dict):
+                    run_kwargs['extra_hosts'] = dict(green_extra_hosts)
+                elif isinstance(green_extra_hosts, list):
+                    _eh_dict = {}
+                    for item in green_extra_hosts:
+                        if isinstance(item, str) and ":" in item:
+                            h_k, h_v = item.split(":", 1)
+                            _eh_dict[h_k] = h_v
+                    if _eh_dict:
+                        run_kwargs['extra_hosts'] = _eh_dict
+
+            from apps.deployments.services.container_runtime import (
+                ensure_sandbox_resolv_conf,
+                is_sandboxed_runtime,
+                sandbox_dns_servers,
+            )
+            green_dns = green_host_config.get('Dns')
+            if green_dns:
+                run_kwargs['dns'] = list(green_dns)
+            elif green_runtime and is_sandboxed_runtime(green_runtime):
+                try:
+                    run_kwargs['dns'] = sandbox_dns_servers()
+                except Exception:
+                    run_kwargs['dns'] = ["8.8.8.8", "1.1.1.1"]
+
+            if green_runtime and is_sandboxed_runtime(green_runtime):
+                try:
+                    _resolv_path = ensure_sandbox_resolv_conf(run_kwargs.get('dns'))
+                    if _resolv_path and os.path.isfile(_resolv_path):
+                        _bind_spec = f"{_resolv_path}:/etc/resolv.conf:ro"
+                        if green_volumes is None:
+                            green_volumes = [_bind_spec]
+                        elif isinstance(green_volumes, list):
+                            if not any(":/etc/resolv.conf" in str(b) for b in green_volumes):
+                                green_volumes = list(green_volumes) + [_bind_spec]
+                        elif isinstance(green_volumes, dict):
+                            if not any(
+                                isinstance(v, dict) and v.get("bind") == "/etc/resolv.conf"
+                                for v in green_volumes.values()
+                            ):
+                                green_volumes = dict(green_volumes)
+                                green_volumes[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
+                except Exception as exc:
+                    logger.debug("Promote sandbox resolv.conf mount skipped: %s", exc)
 
             create_kwargs = {
                 "image": image_ref,
@@ -2257,8 +2372,9 @@ class LocalAdapter(BaseCloudAdapter):
                     )
                     expected = {network_name}
                     try:
-                        _bridge_check = ensure_platform_bridge()
-                        expected.add(_bridge_check)
+                        if use_platform_bridge:
+                            _bridge_check = ensure_platform_bridge()
+                            expected.add(_bridge_check)
                     except Exception:
                         pass
                     for needed_net in sorted(expected):

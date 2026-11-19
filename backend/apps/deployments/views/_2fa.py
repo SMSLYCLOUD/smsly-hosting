@@ -11,6 +11,7 @@ from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from apps.core.rate_limiting import TwoFactorLoginRateThrottle
+from apps.core.models.api_token import CanManageAPITokens
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ def two_factor_status(request):
 
 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
+@permission_classes([permissions.IsAuthenticated, CanManageAPITokens])
 def two_factor_enable(request):
     """
     Enable TOTP 2FA for the current user.
@@ -63,7 +64,7 @@ def two_factor_enable(request):
 
 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
+@permission_classes([permissions.IsAuthenticated, CanManageAPITokens])
 def two_factor_confirm(request):
     """
     Confirm TOTP device by verifying a valid token.
@@ -92,7 +93,7 @@ def two_factor_confirm(request):
 
 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
+@permission_classes([permissions.IsAuthenticated, CanManageAPITokens])
 def two_factor_disable(request):
     """
     Disable 2FA by verifying the current password.
@@ -293,7 +294,7 @@ def two_factor_login(request):
 
 
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
+@permission_classes([permissions.IsAuthenticated, CanManageAPITokens])
 def two_factor_backup_codes(request):
     """Generate new backup codes for the user (invalidates old ones)."""
     from django_otp.plugins.otp_static.models import StaticDevice, StaticToken

@@ -43,7 +43,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
             # Written best-effort like every other entry here: skipped
             # when the file is absent or read-only.
             'OPENAPPSEC_ENABLED=': '1' if getattr(instance, 'openappsec_enabled', True) else '0',
-            'OPENAPPSEC_MODE=': str(getattr(instance, 'openappsec_mode', 'detect-learn') or 'detect-learn'),
+            'OPENAPPSEC_MODE=': str(getattr(instance, 'openappsec_mode', 'prevent') or 'prevent'),
         }
 
         for _env_path in ("/app/.env", "/caddy-config/.env"):

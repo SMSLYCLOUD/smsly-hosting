@@ -13,12 +13,18 @@ import hmac as hmac_mod
 import json
 import logging
 import time
+import uuid
 
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _election_body(payload: dict) -> bytes:
+    """Serialize the exact bytes signed and transmitted by peers."""
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
 
 
 def _build_election_hmac_headers(
@@ -29,20 +35,23 @@ def _build_election_hmac_headers(
     """
     Build HMAC V2 headers for election protocol messages.
 
-    The signature covers (sender_wg|timestamp|sha256(body)).
+    The signature covers (sender_wg|timestamp|nonce|sha256(body)).
     """
     timestamp = str(int(time.time()))
-    body_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    body_bytes = _election_body(payload)
     body_hash = hashlib.sha256(body_bytes).hexdigest()
-    sign_input = f"{wg_address}|{timestamp}|{body_hash}"
+    nonce = uuid.uuid4().hex
+    sign_input = f"{wg_address}|{timestamp}|{nonce}|{body_hash}"
     signature = hmac_mod.new(
         gateway_secret.encode(),
         sign_input.encode(),
         hashlib.sha256,
     ).hexdigest()
     return {
+        "Content-Type": "application/json",
         "X-Election-Signature": signature,
         "X-Request-Timestamp": timestamp,
+        "X-Election-Nonce": nonce,
     }
 
 
@@ -63,8 +72,8 @@ class ElectionService:
 
         from apps.deployments.models.election import HeartbeatLog
 
-        if not cluster.leader:
-            logger.warning("No leader set for cluster — skipping heartbeat")
+        if cluster.local_role != "LEADER":
+            logger.debug("Local server is not leader — skipping heartbeat")
             return
 
         # Get all peers except the local one
@@ -106,12 +115,17 @@ class ElectionService:
                 )
                 resp = requests.post(
                     url,
-                    json=payload,
+                    data=_election_body(payload),
                     headers=hmac_headers,
                     timeout=5,
                 )
                 latency = (time.monotonic() - start) * 1000
                 success = resp.status_code == 200
+                if success:
+                    reply_term = resp.json().get("term")
+                    if type(reply_term) is int and reply_term > cluster.term:
+                        cls.demote_to_follower(cluster, reply_term)
+                        return
                 if not success:
                     error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
             except Exception as e:
@@ -145,6 +159,7 @@ class ElectionService:
     # ── Heartbeat Receive ────────────────────────────────────────────────
 
     @classmethod
+    @transaction.atomic
     def receive_heartbeat(cls, cluster, term, leader_wg_address):
         """
         Process a received heartbeat from the leader.
@@ -152,6 +167,7 @@ class ElectionService:
         Returns True if heartbeat is accepted (valid term),
         False if rejected (stale term).
         """
+        cluster = type(cluster).objects.select_for_update().get(pk=cluster.pk)
         if term < cluster.term:
             # Stale heartbeat from an old leader — reject
             logger.info(
@@ -168,13 +184,15 @@ class ElectionService:
 
         cluster.last_heartbeat = timezone.now()
         cluster.leader_wg_address = leader_wg_address
+        leader_peer = cluster.mesh.peers.filter(wg_address=leader_wg_address, is_active=True).first() if cluster.mesh else None
+        cluster.leader = leader_peer.server if leader_peer else None
         cluster.state = "STABLE"
         cluster.save(update_fields=[
-            "term", "last_heartbeat", "leader_wg_address", "state",
+            "term", "last_heartbeat", "leader", "leader_wg_address", "state",
         ])
 
         # Ensure local server is in FOLLOWER role
-        cls._set_local_role("FOLLOWER")
+        cls._set_local_role("FOLLOWER", cluster)
 
         return True
 
@@ -212,178 +230,96 @@ class ElectionService:
         return False
 
     @classmethod
-    @transaction.atomic
     def start_election(cls, cluster):
-        """
-        Start a new leader election.
-
-        1. Increment term
-        2. Vote for self
-        3. Request votes from all peers
-        4. If majority, promote to leader
-        """
+        """Commit candidacy, collect votes without locks, then fence promotion."""
         import requests
 
         from apps.deployments.models.election import ElectionVote
 
-        # Increment term and become candidate
         with transaction.atomic():
-            cluster = cls.get_or_create_cluster(mesh=cluster.mesh)
             cluster = type(cluster).objects.select_for_update().get(pk=cluster.pk)
+            # A concurrent worker must not start another campaign for this node.
+            if cluster.local_role == "CANDIDATE" and cluster.last_heartbeat:
+                elapsed_ms = (timezone.now() - cluster.last_heartbeat).total_seconds() * 1000
+                if elapsed_ms <= cluster.election_timeout_ms:
+                    return False
             cluster.term += 1
             cluster.state = "ELECTION"
-            cluster.save(update_fields=["term", "state"])
-            cls._set_local_role("CANDIDATE")
-
+            cluster.last_heartbeat = timezone.now()
+            cluster.save(update_fields=["term", "state", "last_heartbeat"])
+            cls._set_local_role("CANDIDATE", cluster)
             new_term = cluster.term
-            logger.info(f"Starting election for term {new_term}")
-
-            # Vote for self
             ElectionVote.objects.create(
-                cluster=cluster,
-                term=new_term,
-                voter_server=None,  # local
-                candidate_server=None,  # local
-                candidate_is_local=True,
+                cluster=cluster, term=new_term, voter_server=None,
+                candidate_server=None, candidate_is_local=True,
             )
-            votes_for_self = 1
-
-            # Get peers and total count
             mesh = cluster.mesh
-            if not mesh:
-                # No mesh = auto-win (single server)
-                cls.promote_to_leader(cluster)
-                return True
-
-            local_peer = mesh.peers.filter(is_local=True).first()
-            remote_peers = list(
-                mesh.peers.filter(is_active=True).exclude(is_local=True)
-            )
-            total_servers = len(remote_peers) + 1  # +1 for self
+            local_peer = mesh.peers.filter(is_local=True, is_active=True).first() if mesh else None
+            remote_peers = list(mesh.peers.filter(is_active=True).exclude(is_local=True)) if mesh else []
+            total_servers = len(remote_peers) + 1
             majority = (total_servers // 2) + 1
-
-            # Get local gateway_secret for HMAC signing
             local_server = local_peer.server if local_peer else None
-            local_gateway_secret = str(
-                getattr(local_server, "gateway_secret", "") or ""
-            ).strip()
+            local_gateway_secret = str(getattr(local_server, "gateway_secret", "") or "").strip()
             if not local_gateway_secret:
                 local_gateway_secret = str(getattr(settings, "GATEWAY_SECRET", ""))
             local_wg = local_peer.wg_address if local_peer else ""
 
-            # Request votes from peers
-            for peer in remote_peers:
-                try:
-                    url = f"http://{peer.wg_address}:8000/api/v1/internal/vote/"
-                    payload = {
-                        "term": new_term,
-                        "candidate_wg_address": local_wg,
-                        "sender_wg_address": local_wg,
-                    }
-                    hmac_headers = _build_election_hmac_headers(
-                        payload, local_wg, local_gateway_secret,
-                    )
-                    resp = requests.post(
-                        url,
-                        json=payload,
-                        headers=hmac_headers,
-                        timeout=5,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data.get("vote_granted"):
-                            votes_for_self += 1
-                            ElectionVote.objects.create(
-                                cluster=cluster,
-                                term=new_term,
-                                voter_server=peer.server,
-                                candidate_server=None,
-                                candidate_is_local=True,
-                            )
-                    else:
-                        logger.warning(f"Vote denied by {peer.wg_address}: HTTP {resp.status_code}")
-                except Exception as e:
-                    logger.warning(f"Failed to request vote from {peer.wg_address}: {e}")
-
-            # --- SPECIAL CASE: Handle 2-node deadlock ---
-            # In a 2-node cluster, if 1 node is down, Raft cannot reach a majority (2/2).
-            # We allow a solo win ONLY after verifying the peer is genuinely unreachable.
-            if votes_for_self < majority and total_servers == 2:
-                peer = remote_peers[0]
-                logger.info("2-node deadlock detected. Probing peer %s...", peer.wg_address)
-
-                # Step 1: Probe the peer with an HTTP POST (timeout=3s)
-                peer_reachable = False
-                try:
-                    probe_url = f"http://{peer.wg_address}:8000/api/v1/internal/heartbeat/"
-                    probe_resp = requests.post(probe_url, json={"term": cluster.term, "leader_wg_address": local_wg}, timeout=3)
-                    peer_reachable = probe_resp.status_code == 200
-                except Exception:  # pylint: disable=broad-exception-caught
-                    peer_reachable = False
-
-                # Step 2: Also check recent heartbeat snapshots from Redis bus
-                if not peer_reachable:
-                    from apps.deployments.services.heartbeat_bus import get_latest_heartbeats
-                    recent_hbs = get_latest_heartbeats()
-                    now = time.time()
-                    for hb in recent_hbs:
-                        if (hb.get('wg_address') == peer.wg_address
-                                and hb.get('status') == 'alive'
-                                and (now - hb.get('ts', 0)) < 30):
-                            peer_reachable = True
-                            logger.info("Peer %s reachable via recent heartbeat bus snapshot", peer.wg_address)
-                            break
-
-                if not peer_reachable:
-                    # Fencing: Verify no other node has already claimed leadership
-                    # by checking if ANY heartbeat was received cluster-wide in the
-                    # last 30s (the leader would have sent one).
-                    from apps.deployments.services.heartbeat_bus import get_latest_heartbeats
-                    any_recent_leader_hb = False
-                    all_hbs = get_latest_heartbeats()
-                    now = time.time()
-                    for hb in all_hbs:
-                        if (hb.get('wg_address') != peer.wg_address
-                                and hb.get('status') == 'alive'
-                                and (now - hb.get('ts', 0)) < 30):
-                            any_recent_leader_hb = True
-                            break
-                    if not any_recent_leader_hb:
-                        # Safe to promote — peer is down, no other leader active
+        # No transaction/row lock spans network I/O: competing candidates must
+        # be able to process each other's requests while votes are outstanding.
+        votes_for_self = 1
+        for peer in remote_peers:
+            try:
+                payload = {
+                    "term": new_term,
+                    "candidate_wg_address": local_wg,
+                    "sender_wg_address": local_wg,
+                }
+                resp = requests.post(
+                    f"http://{peer.wg_address}:8000/api/v1/internal/vote/",
+                    data=_election_body(payload),
+                    headers=_build_election_hmac_headers(payload, local_wg, local_gateway_secret),
+                    timeout=5,
+                )
+                if resp.status_code != 200:
+                    logger.warning("Vote denied by %s: HTTP %s", peer.wg_address, resp.status_code)
+                    continue
+                data = resp.json()
+                with transaction.atomic():
+                    current = type(cluster).objects.select_for_update().get(pk=cluster.pk)
+                    reply_term = data.get("term")
+                    if type(reply_term) is int and reply_term > current.term:
+                        cls.demote_to_follower(current, reply_term)
+                        return False
+                    if current.term != new_term or current.local_role != "CANDIDATE":
+                        return False
+                    if data.get("vote_granted") is True:
                         votes_for_self += 1
-                        logger.warning(
-                            "Force-promoting in 2-node cluster: peer %s unreachable "
-                            "and no leader heartbeat detected",
-                            peer.wg_address,
+                        ElectionVote.objects.create(
+                            cluster=current, term=new_term, voter_server=peer.server,
+                            candidate_server=None, candidate_is_local=True,
                         )
-                    else:
-                        logger.warning(
-                            "Abstaining from 2-node force-promote: another "
-                            "leader heartbeat detected"
-                        )
-                else:
-                    logger.info("Peer %s is reachable — cannot force promote", peer.wg_address)
+            except Exception as exc:
+                logger.warning("Failed to request vote from %s: %s", peer.wg_address, exc)
 
-            logger.info(
-                f"Election term {new_term}: {votes_for_self}/{total_servers} votes "
-                f"(need {majority} for majority)"
-            )
-
-            if votes_for_self >= majority:
-                cls.promote_to_leader(cluster)
-                return True
-            else:
-                # Didn't win — revert to follower
-                cls._set_local_role("FOLLOWER")
-                cluster.state = "STABLE"
-                cluster.save(update_fields=["state"])
-                logger.info("Election lost — reverting to follower")
+        with transaction.atomic():
+            current = type(cluster).objects.select_for_update().get(pk=cluster.pk)
+            if current.term != new_term or current.local_role != "CANDIDATE":
                 return False
+            if votes_for_self < majority:
+                cls._set_local_role("FOLLOWER", current)
+                current.state = "STABLE"
+                current.save(update_fields=["state"])
+                return False
+            # Persist promotion while holding the same lock as the term/role
+            # comparison; the announcement is sent only after commit.
+            cls.promote_to_leader(current, announce=False)
+        cls.send_heartbeat(current)
+        return True
 
     # ── Promotion / Demotion ─────────────────────────────────────────────
 
     @classmethod
-    def promote_to_leader(cls, cluster):
+    def promote_to_leader(cls, cluster, announce=True):
         """
         Promote the local server to leader.
 
@@ -393,37 +329,41 @@ class ElectionService:
         local_peer = mesh.peers.filter(is_local=True).first() if mesh else None
 
         cluster.state = "STABLE"
-        cluster.leader = None  # local server (no ManagedServer record)
+        cluster.leader = local_peer.server if local_peer else None
         cluster.leader_wg_address = local_peer.wg_address if local_peer else None
         cluster.last_heartbeat = timezone.now()
         cluster.save()
 
-        cls._set_local_role("LEADER")
+        cls._set_local_role("LEADER", cluster)
 
         logger.info(
             f"Promoted to LEADER for term {cluster.term} "
             f"(wg: {local_peer.wg_address if local_peer else 'N/A'})"
         )
 
-        # Notify peers of new leadership via heartbeat
-        cls.send_heartbeat(cluster)
+        # Election finalization persists under lock, announces after commit.
+        if announce:
+            cls.send_heartbeat(cluster)
 
     @classmethod
+    @transaction.atomic
     def demote_to_follower(cls, cluster, new_leader_term):
         """
         Demote from leader to follower when a higher term is discovered.
 
         This handles split-brain resolution.
         """
+        cluster = type(cluster).objects.select_for_update().get(pk=cluster.pk)
         if new_leader_term <= cluster.term:
             return  # Ignore stale demotion requests
 
         cluster.term = new_leader_term
         cluster.state = "STABLE"
         cluster.leader = None  # Will be set by next heartbeat
-        cluster.save(update_fields=["term", "state", "leader"])
+        cluster.leader_wg_address = None
+        cluster.save(update_fields=["term", "state", "leader", "leader_wg_address"])
 
-        cls._set_local_role("FOLLOWER")
+        cls._set_local_role("FOLLOWER", cluster)
 
         logger.info(
             f"Demoted to FOLLOWER (new term: {new_leader_term})"
@@ -432,6 +372,7 @@ class ElectionService:
     # ── Vote Handling ────────────────────────────────────────────────────
 
     @classmethod
+    @transaction.atomic
     def handle_vote_request(cls, cluster, term, candidate_wg_address):
         """
         Handle a vote request from a candidate.
@@ -445,6 +386,9 @@ class ElectionService:
         """
         from apps.deployments.models.election import ElectionVote
 
+        # Serialize the local vote; nullable voter_server does not enforce
+        # uniqueness for local votes at the database constraint level.
+        cluster = type(cluster).objects.select_for_update().get(pk=cluster.pk)
         if term < cluster.term:
             return False  # Reject — we're in a newer term
 
@@ -462,7 +406,7 @@ class ElectionService:
         if term > cluster.term:
             cluster.term = term
             cluster.save(update_fields=["term"])
-            cls._set_local_role("FOLLOWER")
+            cls._set_local_role("FOLLOWER", cluster)
 
         # Grant vote
         ElectionVote.objects.create(

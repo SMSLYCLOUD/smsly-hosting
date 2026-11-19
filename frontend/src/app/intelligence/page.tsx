@@ -347,7 +347,7 @@ export default function IntelligencePage() {
   };
 
   const handleOpenAppSecModeSwitch = () => {
-    const current = securityStatus?.openappsec?.mode_configured || 'detect-learn';
+    const current = securityStatus?.openappsec?.mode_configured || 'prevent';
     const target = current === 'prevent' ? 'detect-learn' : 'prevent';
     const toPrevent = target === 'prevent';
     return handleDomainUpdate(`openappsec-mode-${target}`, { openappsec_mode: target }, {
@@ -972,7 +972,7 @@ export default function IntelligencePage() {
                         >
                           {domainUpdating?.startsWith('openappsec-mode-')
                             ? <Loader2 className="w-3 h-3 animate-spin" />
-                            : ((securityStatus?.openappsec?.mode_configured || 'detect-learn') === 'prevent'
+                            : ((securityStatus?.openappsec?.mode_configured || 'prevent') === 'prevent'
                               ? 'Demote to shadow' : 'Promote to prevent')}
                         </Button>
                       </div>

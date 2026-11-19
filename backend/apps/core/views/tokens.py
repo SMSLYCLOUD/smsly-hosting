@@ -7,12 +7,12 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.deployments.models.api_token import APIToken
+from apps.core.models.api_token import APIToken, CanManageAPITokens
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, CanManageAPITokens])
 def list_tokens(request):
     """List all API tokens for the current user."""
     tokens = APIToken.objects.filter(user=request.user).values(
@@ -23,7 +23,7 @@ def list_tokens(request):
 
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, CanManageAPITokens])
 def create_token(request):
     """
     Generate a new API token.
@@ -57,7 +57,7 @@ def create_token(request):
     responses=OpenApiTypes.OBJECT,
 )
 @api_view(["DELETE"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, CanManageAPITokens])
 def revoke_token(request, token_id):
     """Revoke (deactivate) an API token."""
     try:

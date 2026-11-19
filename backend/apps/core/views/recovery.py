@@ -8,6 +8,7 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from apps.core.models.api_token import CanManageAPITokens
 from apps.core.rate_limiting import TrustedIdentMixin
 from apps.deployments.models.core import PlatformConfig
 from apps.core.services.recovery import (
@@ -31,8 +32,8 @@ class RecoveryPhraseThrottle(TrustedIdentMixin, AnonRateThrottle):
     rate = '5/hour'  # 5 attempts per hour per IP
 
 
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated, CanManageAPITokens])
 def recovery_phrase_generate(request):
     """
     Generate a new 12-word recovery phrase and store its hash.
@@ -40,6 +41,10 @@ def recovery_phrase_generate(request):
     The phrase is displayed ONCE to the user and then only the salted
     SHA-256 hash is stored. The platform cannot recover the phrase.
     """
+    if not (request.user.is_superuser and request.user.is_active):
+        return Response({"detail": "Only an active superuser can generate the recovery phrase."},
+                        status=status.HTTP_403_FORBIDDEN)
+
     config = PlatformConfig.load()
 
     phrase = generate_recovery_phrase()
@@ -92,21 +97,24 @@ def recovery_phrase_verify(request):
         return Response({'error': 'Recovery configuration is corrupted'},
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    client_ip = (
-        request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
-        or request.META.get('REMOTE_ADDR', 'unknown')
-    )
+    client_ip = RecoveryPhraseThrottle().get_ident(request)
 
-    # Track failed attempts in cache for lockout
+    # Track failed attempts atomically in cache for lockout
     from django.core.cache import cache
     lockout_key = f"recovery_attempts:{client_ip}"
-    attempts = cache.get(lockout_key, 0)
-    if attempts >= 10:
+    if cache.add(lockout_key, 1, timeout=3600):
+        attempts = 1
+    else:
+        try:
+            attempts = cache.incr(lockout_key)
+        except ValueError:
+            cache.set(lockout_key, 1, timeout=3600)
+            attempts = 1
+    if attempts > 10:
         return Response(
             {'error': 'Too many failed attempts. Try again later.'},
             status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
-    cache.set(lockout_key, attempts + 1, timeout=3600)  # 1 hour window
 
     if not verify_recovery_phrase(words, stored_hash, salt):
         logger.warning("Failed recovery phrase attempt from %s for user '%s'", client_ip, username)
@@ -117,7 +125,7 @@ def recovery_phrase_verify(request):
     cache.delete(lockout_key)
 
     User = get_user_model()
-    user = User.objects.filter(username=username, is_superuser=True).first()
+    user = User.objects.filter(username=username, is_superuser=True, is_active=True).first()
     if not user:
         return Response({'error': 'Admin user not found'},
                         status=status.HTTP_404_NOT_FOUND)

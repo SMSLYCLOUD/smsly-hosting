@@ -107,9 +107,23 @@ class SecurityStatusWiringTests(TestCase):
         self.assertTrue(oa["enabled"])
         self.assertTrue(oa["agent_running"])
         self.assertTrue(oa["envoy_running"])
+        self.assertEqual(oa["mode_configured"], "prevent")
         self.assertEqual(oa["policy_mode"], "detect-learn")
         self.assertTrue(oa["verdicts_recent"])
         self.assertEqual(oa["shadow_port"], 18081)
+
+    @patch("apps.core.views.security.subprocess.run")
+    def test_openappsec_reports_prevent_policy_mode(self, mock_run):
+        def _run(cmd, **kwargs):
+            if "exec" in cmd and "local_policy.yaml" in " ".join(cmd):
+                return _resp("mode: prevent\n")
+            return _run_map()(cmd, **kwargs)
+        mock_run.side_effect = _run
+        with patch.dict("os.environ", {"OPENAPPSEC_ENABLED": "1"}):
+            data = self._get().data
+        oa = data["openappsec"]
+        self.assertEqual(oa["mode_configured"], "prevent")
+        self.assertEqual(oa["policy_mode"], "prevent")
 
     @patch("apps.core.views.security.subprocess.run")
     def test_openappsec_disabled_in_db_overrides_env(self, mock_run):

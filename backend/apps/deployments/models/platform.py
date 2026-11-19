@@ -355,19 +355,17 @@ class PlatformConfig(models.Model):
     openappsec_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="Enable the open-appsec WAF shadow stack (agent + Envoy "
-                  "attachment, detect-learn). Toggled from Settings → "
+                  "attachment, prevent by default). Toggled from Settings → "
                   "Security Scanning; synced to OPENAPPSEC_ENABLED in .env "
                   "for the installer reconcile.")
     openappsec_mode = models.CharField(  # type: ignore[var-annotated]
-        max_length=16, default='detect-learn',
+        max_length=16, default='prevent',
         choices=[('detect-learn', 'Shadow — detect and learn'),
                  ('prevent', 'Enforce — block')],
-        help_text="WAF enforcement mode. Shadow observes without blocking; "
-                  "enforce blocks malicious requests inline. Set from "
+        help_text="WAF enforcement mode. Enforce blocks malicious requests "
+                  "inline (default); shadow observes without blocking. Set from "
                   "Settings → Security Scanning; applied to local_policy.yaml "
-                  "by the installer reconcile (takes effect on next update). "
-                  "Prove shadow parity first — enforce on a mis-tuned policy "
-                  "blocks legitimate traffic.")
+                  "by the installer reconcile and periodic policy sync.")
     max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")

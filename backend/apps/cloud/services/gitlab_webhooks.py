@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 import requests
 from django.conf import settings
 
+from apps.cloud.webhooks.secrets import resolve_webhook_secret
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +40,7 @@ def setup_gitlab_webhook(user, repo_url: str) -> bool:
     if not token:
         return False
 
-    secret = getattr(settings, 'GITLAB_WEBHOOK_SECRET', '')
+    secret = resolve_webhook_secret('gitlab')
     if not secret:
         logger.error("GITLAB_WEBHOOK_SECRET not configured")
         return False

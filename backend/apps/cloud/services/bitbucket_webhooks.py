@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 import requests
 from django.conf import settings
 
+from apps.cloud.webhooks.secrets import resolve_webhook_secret
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,7 +33,7 @@ def setup_bitbucket_webhook(user, repo_url: str) -> bool:
     if not token:
         return False
 
-    secret = getattr(settings, 'BITBUCKET_WEBHOOK_SECRET', '')
+    secret = resolve_webhook_secret('bitbucket')
     if not secret:
         logger.error("BITBUCKET_WEBHOOK_SECRET not configured")
         return False
@@ -63,6 +65,7 @@ def setup_bitbucket_webhook(user, repo_url: str) -> bool:
                 'description': 'SMSLY Auto-Deploy',
                 'url': webhook_url,
                 'active': True,
+                'secret': secret,
                 'events': [
                     'repo:push',
                     'pullrequest:created',

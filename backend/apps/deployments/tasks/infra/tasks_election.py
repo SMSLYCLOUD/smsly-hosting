@@ -7,31 +7,13 @@ from apps.deployments.constants import TASK_TIME_LIMIT_TRIVIAL
 logger = logging.getLogger(__name__)
 
 
-def _get_local_role() -> str:
-    """Read local server role from DB, falling back to file."""
-    try:
-        from apps.deployments.models.mesh import MeshNetwork
-        from apps.deployments.services.election_service import ElectionService
-        mesh = MeshNetwork.objects.filter(is_active=True).first()
-        if mesh:
-            cluster = ElectionService.get_or_create_cluster(mesh=mesh)
-            return cluster.local_role
-    except Exception as exc:
-        logger.debug("Failed to get role from ElectionService: %s", exc)
-    try:
-        with open("/tmp/.smsly_cluster_role") as f:
-            return f.read().strip()
-    except Exception:
-        return "FOLLOWER"
-
-
 @shared_task(name="apps.deployments.tasks_election.heartbeat_task", soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def heartbeat_task():
     """
     Periodic task (every 5s):
     - If LEADER: send heartbeats to all followers
     - If FOLLOWER: check if leader heartbeat has timed out
-    - If CANDIDATE: do nothing (election in progress)
+    - If CANDIDATE: retry only after the campaign timeout (worker recovery)
     """
     from apps.deployments.models.mesh import MeshNetwork
     from apps.deployments.services.election_service import ElectionService
@@ -45,7 +27,7 @@ def heartbeat_task():
             logger.error(f"Failed to get cluster for mesh {mesh.name}: {e}")
             continue
 
-        role = _get_local_role()
+        role = cluster.local_role
 
         if role == "LEADER":
             try:
@@ -53,7 +35,7 @@ def heartbeat_task():
             except Exception as e:
                 logger.error(f"Heartbeat send failed: {e}")
 
-        elif role == "FOLLOWER":
+        elif role in ("FOLLOWER", "CANDIDATE"):
             try:
                 elected = ElectionService.check_leader_timeout(cluster)
                 if elected:

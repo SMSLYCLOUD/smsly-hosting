@@ -2,8 +2,9 @@
 
 No DB, no Docker, no broker: exercises the pure helpers — desired-mode
 normalization (must mirror install.sh _harden_openappsec_desired_mode:
-only exact 'prevent' enforces) and strict top-level mode extraction
-(must never match override-mode or response-code-only lines).
+only explicit 'detect-learn' shadows; anything else defaults to 'prevent')
+and strict top-level mode extraction (must never match override-mode or
+response-code-only lines).
 """
 from django.test import SimpleTestCase
 
@@ -25,17 +26,17 @@ SAMPLE_ENFORCE = SAMPLE_SHADOW.replace(
 
 
 class NormalizeDesiredModeTests(SimpleTestCase):
-    def test_prevent_enforces(self):
-        self.assertEqual(normalize_desired_mode("prevent"), "prevent")
+    def test_detect_learn_shadows(self):
+        self.assertEqual(normalize_desired_mode("detect-learn"), "detect-learn")
 
-    def test_anything_else_is_shadow(self):
-        for raw in ("detect-learn", "", None, "PREVENT",
+    def test_anything_else_enforces_prevent(self):
+        for raw in ("prevent", " prevent ", "", None, "DETECT-LEARN",
                     "enforce", "true"):
-            self.assertEqual(normalize_desired_mode(raw), "detect-learn")
+            self.assertEqual(normalize_desired_mode(raw), "prevent")
 
-    def test_whitespace_padded_prevent_enforces(self):
+    def test_whitespace_padded_detect_learn_shadows(self):
         # Parity with install.sh (tr -d '[:space:]'): padding is stripped.
-        self.assertEqual(normalize_desired_mode(" prevent "), "prevent")
+        self.assertEqual(normalize_desired_mode(" detect-learn "), "detect-learn")
 
 
 class ExtractPlainModeTests(SimpleTestCase):

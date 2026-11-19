@@ -49,10 +49,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const reconnectAttempts = useRef(0);
 
   const connect = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     setConnectionStatus('connecting');
 
     // Auth is provided by the HttpOnly auth cookie that the browser
@@ -63,15 +67,18 @@ export function useWebSocket(options: UseWebSocketOptions) {
     // server-side change.
 
     try {
-      wsRef.current = new WebSocket(url);
+      const socket = new WebSocket(url);
+      wsRef.current = socket;
 
-      wsRef.current.onopen = () => {
+      socket.onopen = () => {
+        if (wsRef.current !== socket) return;
         setConnectionStatus('open');
         reconnectAttempts.current = 0;
         onOpen?.();
       };
 
-      wsRef.current.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (wsRef.current !== socket) return;
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
           onMessage?.(message);
@@ -80,7 +87,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
       };
 
-      wsRef.current.onclose = (event) => {
+      socket.onclose = (event) => {
+        if (wsRef.current !== socket) return;
+        wsRef.current = null;
         setConnectionStatus('closed');
         onClose?.(event);
         
@@ -89,13 +98,15 @@ export function useWebSocket(options: UseWebSocketOptions) {
           // e.g. base=2000 → 2s, 4s, 8s, 16s, 30s, 30s, ...
           const delay = Math.min(reconnectInterval * Math.pow(2, reconnectAttempts.current), 30000);
           reconnectTimeoutRef.current = setTimeout(() => {
+            reconnectTimeoutRef.current = null;
             reconnectAttempts.current++;
             connect();
           }, delay);
         }
       };
 
-      wsRef.current.onerror = (event) => {
+      socket.onerror = (event) => {
+        if (wsRef.current !== socket) return;
         setConnectionStatus('error');
         onError?.(event);
       };
@@ -108,11 +119,13 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const disconnect = () => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
     
     if (wsRef.current) {
-      wsRef.current.close();
+      const socket = wsRef.current;
       wsRef.current = null;
+      socket.close();
     }
     
     setConnectionStatus('closed');

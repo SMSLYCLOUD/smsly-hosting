@@ -327,7 +327,7 @@ class SecurityStatusView(GenericAPIView):
             except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
                 pass
 
-        # ── open-appsec WAF (detect-learn shadow) ─────────────────────
+        # ── open-appsec WAF (prevent by default; Phase 1 loopback shadow) ──
         # Source of truth is the Settings toggle (PlatformConfig
         # .openappsec_enabled, synced to OPENAPPSEC_ENABLED in .env for
         # the installer reconcile). The env fallback covers rows that
@@ -335,7 +335,7 @@ class SecurityStatusView(GenericAPIView):
         openappsec = {
             "enabled": False, "agent_running": False,
             "envoy_running": False, "policy_mode": "unknown",
-            "mode_configured": str(getattr(config, "openappsec_mode", "detect-learn") or "detect-learn"),
+            "mode_configured": str(getattr(config, "openappsec_mode", "prevent") or "prevent"),
             "verdicts_recent": False, "shadow_port": 18081,
         }
         try:

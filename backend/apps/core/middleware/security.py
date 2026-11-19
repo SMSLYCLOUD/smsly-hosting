@@ -102,6 +102,11 @@ class SecurityMiddleware:
         ):
             return False
 
+        # These exact peer routes enforce their per-node election HMAC in DRF.
+        # Do not require the separate gateway-wide signing key as well.
+        if path in ("/api/v1/internal/heartbeat/", "/api/v1/internal/vote/"):
+            return False
+
         # Exempt allowlisted paths
         for exempt in self.exempt_routes:
             if path.startswith(exempt):

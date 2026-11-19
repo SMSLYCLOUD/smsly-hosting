@@ -1,5 +1,5 @@
 #!/bin/bash
-# open-appsec WAF — edge-first, detect-learn shadow (phase 1).
+# open-appsec WAF — edge-first, prevent by default on loopback shadow (phase 1).
 # Brings up agent + Envoy-with-attachment on LOOPBACK shadow port only
 # (no 80/443 touch, zero traffic impact). Phase 2 cutover flips Envoy
 # to 80/443 with SNI chains — separate change with its own rollback.
@@ -27,8 +27,8 @@ _harden_openappsec_desired_mode() {
     if [ -z "$_mode" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
         _mode=$(grep -E '^OPENAPPSEC_MODE=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
     fi
-    if [ "$_mode" != "prevent" ]; then
-        _mode="detect-learn"
+    if [ "$_mode" != "detect-learn" ]; then
+        _mode="prevent"
     fi
     printf '%s\n' "$_mode"
 }
@@ -85,7 +85,8 @@ _harden_openappsec_bootstrap() {
     local localconfig_dir="$INSTALL_DIR/infrastructure/openappsec/localconfig"
     mkdir -p "$conf_dir" "$localconfig_dir" 2>/dev/null || true
     # Seed the declarative policy from the image default on first run.
-    # The image default is detect-learn (observe-only) — we never ship a
+    # The upstream image seeds detect-learn before _harden_openappsec_apply_mode
+    # enforces OPENAPPSEC_MODE (prevent by default) — we never ship a
     # hand-written policy, so there is no schema to drift. Never
     # overwrite an existing policy (operator/SaaS tuning survives updates).
     if [ ! -f "$conf_dir/local_policy.yaml" ]; then
@@ -93,7 +94,7 @@ _harden_openappsec_bootstrap() {
         if timeout 60 docker run --rm -v "$conf_dir:/seed:z" "$agent_image" \
                 sh -c 'cp /etc/cp/conf/local_policy.yaml /seed/local_policy.yaml 2>/dev/null || cp /etc/cp/conf/*.yaml /seed/ 2>/dev/null || true' >/dev/null 2>&1; then
             if [ -f "$conf_dir/local_policy.yaml" ]; then
-                echo -e "${GREEN}  ✓ open-appsec policy seeded from image default (detect-learn)${NC}"
+                echo -e "${GREEN}  ✓ open-appsec policy seeded from image (apply mode enforces OPENAPPSEC_MODE)${NC}"
             else
                 echo -e "${YELLOW}  ⚠ open-appsec image carries no default policy — agent first-run will generate it${NC}"
             fi

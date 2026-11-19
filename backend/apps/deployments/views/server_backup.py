@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 import contextlib
+from django.core.exceptions import ValidationError
 from django.http import HttpResponse
 from rest_framework import parsers, permissions, status, viewsets
 from rest_framework.decorators import action
@@ -24,6 +25,8 @@ from ._helpers import (
     _resolve_encryption_key,
     _verify_signed_download,
 )
+
+
 class ServerBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServerBackupSerializer
     permission_classes = [permissions.IsAdminUser]
@@ -41,11 +44,11 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         backup = serializer.save(status='PENDING')
         create_server_backup_task.delay(backup_id=str(backup.id))
 
-    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
+    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.IsAdminUser], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
     def download_key(self, request, pk=None):
-        """Download the V2 backup header as a .key.json file. See
-        ServiceBackupViewSet.download_key for details. Public for the
-        same reason — key_id/fingerprint are not secret material.
+        """Download the V2 backup header as a .key.json file.
+
+        Requires admin authentication (IsAdminUser).
         """
         import json as _json
 
@@ -202,7 +205,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             ),
         })
 
-    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAdminUser], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
     def download(self, request, pk=None):
         signed_value = request.query_params.get('signed')
         token_value = request.query_params.get('token')
@@ -214,9 +217,10 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         elif not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Bypass get_queryset() which filters by request.user — signed/AllowAny
-        # requests have an AnonymousUser that crashes the queryset filter.
-        backup = self.queryset.model.objects.filter(pk=pk).first()
+        try:
+            backup = self.queryset.model.objects.filter(pk=pk).first()
+        except (ValidationError, ValueError):
+            backup = None
         if not backup:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         file_path = backup.file_path
@@ -224,8 +228,10 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         if not file_path or not os.path.exists(file_path):
             # File missing locally — try to download from cloud storage
             from ..services.backup_service import _download_backup_from_cloud
-            if getattr(backup, 'cloud_uploaded', False):
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            if file_path and getattr(backup, 'cloud_uploaded', False):
+                parent_dir = os.path.dirname(file_path)
+                if parent_dir:
+                    os.makedirs(parent_dir, exist_ok=True)
                 if _download_backup_from_cloud(backup, file_path):
                     logger.info("Downloaded server backup %s from cloud to %s", backup.id, file_path)
                 else:

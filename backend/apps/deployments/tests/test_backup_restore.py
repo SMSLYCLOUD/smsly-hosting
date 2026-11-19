@@ -75,6 +75,7 @@ class BackupRestoreTest(TestCase):
     def test_server_backup_download_supports_byte_ranges(self):
         admin_user = User.objects.create_superuser("download-admin", "download@test.com", "pwd")
         Token.objects.create(user=admin_user)
+        self.client.force_authenticate(user=admin_user)
         payload = b"0123456789" * 1024
         backup_file = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz")
         backup_file.write(payload)

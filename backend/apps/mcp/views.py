@@ -8,6 +8,8 @@ from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.models.api_token import CanManageAPITokens
+
 logger = logging.getLogger(__name__)
 
 _TYPE_MAP = {
@@ -202,7 +204,7 @@ class McpControlView(APIView):
 
 class McpTokenListView(APIView):
     """Personal API tokens for MCP/CLI access (raw shown once at creation)."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanManageAPITokens]
 
     def get(self, request):
         from apps.core.models.api_token import APIToken
@@ -271,7 +273,7 @@ class McpTokenListView(APIView):
 
 
 class McpTokenDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanManageAPITokens]
 
     def delete(self, request, token_id: str):
         from apps.core.models.api_token import APIToken

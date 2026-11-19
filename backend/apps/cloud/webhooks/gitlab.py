@@ -6,28 +6,21 @@ import re
 from apps.deployments.models import Deployment, Service
 from apps.core.models.audit import WebhookDelivery
 from apps.deployments.tasks.deployment.tasks_deploy import smart_deploy_task
-from django.conf import settings
+from .secrets import resolve_webhook_secret
 
 logger = logging.getLogger(__name__)
 
 
 class GitLabWebhookHandler:
     def verify_signature(self, request) -> bool:
-        secret = getattr(settings, 'GITLAB_WEBHOOK_SECRET', '')
-        try:
-            from apps.deployments.models.core import PlatformConfig
-            db_secret = PlatformConfig.load().get_webhook_secret('gitlab')
-            if db_secret:
-                secret = db_secret
-        except Exception as exc:
-            logger.debug("Failed to load GitLab webhook secret from PlatformConfig: %s", exc)
+        secret = resolve_webhook_secret('gitlab')
         if not secret:
             logger.warning("GITLAB_WEBHOOK_SECRET not set, rejecting webhook")
             return False
         signature = request.headers.get('X-Gitlab-Token', '')
         if not signature:
             return False
-        return hmac.compare_digest(signature, secret)
+        return hmac.compare_digest(signature.encode(), secret.encode())
 
     def handle_event(self, event_type, data, delivery_id=None):
         if event_type == 'Push Hook':

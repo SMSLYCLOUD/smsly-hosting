@@ -241,14 +241,14 @@ envCmd
             for (const pair of pairs) {
                 const [key, ...rest] = pair.split('=');
                 const value = rest.join('=');
-                if (!key || value === undefined) {
+                if (!key || !pair.includes('=')) {
                     console.log(chalk.red(`Invalid format: ${pair}. Use KEY=VALUE`));
                     continue;
                 }
 
                 await api(config.serverUrl, config.token,
-                    `/api/v1/services/${svc.id}/`, 'PATCH',
-                    { env_vars: [{ key, value }] }
+                    `/api/v1/services/${svc.id}/env_vars/`, 'POST',
+                    { key, value }
                 );
                 console.log(chalk.green(`  ✓ ${key} set`));
             }

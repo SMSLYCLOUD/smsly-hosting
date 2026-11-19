@@ -374,22 +374,14 @@ def delete_service_task(self, service_id: str, force: bool = False):
                 success = True
 
         if success:
-            # Capture project reference and owner before deleting the service.
+            # Capture project reference before deleting the service.
             service_project = getattr(service, 'project', None)
-            service_owner_id = service.owner_id
 
-            # GDPR right-to-erasure: delete all backup tarballs and DB rows
-            # owned by this service's user BEFORE the CASCADE fires. The
-            # backup file paths are not recoverable once the ServiceBackup row
-            # is gone.
-            try:
-                from .services.backup_service import purge_user_backups
-                purge_user_backups(service_owner_id)
-            except Exception as cleanup_exc:
-                logger.warning(
-                    "Backup purge during service deletion failed for %s: %s",
-                    service.id, cleanup_exc,
-                )
+            # Purge only this service's archives before their paths are lost to
+            # CASCADE. Failure must reach the task retry handler, even on force
+            # deletion: keeping records is necessary to retry erasure.
+            from apps.cloud.services.backup_service import purge_service_backups
+            purge_service_backups(service.id)
 
             try:
                 service.delete()

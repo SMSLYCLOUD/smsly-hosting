@@ -20,8 +20,9 @@ A row is stalled when ALL of these hold:
      — with one exception: REVIEW rows are swept even under a live
      plan. REVIEW means the wave engine already dispatched the row to a
      worker (QUEUED→REVIEW flip + smart_deploy_task send); a REVIEW row
-     idle past the threshold is a dead dispatch, not a parked future
-     wave. All other states stay protected while their plan is
+     with an empty review summary idle past the threshold is a dead
+     dispatch. A populated summary is a human review pause. All other
+     states stay protected while their plan is
      deploying, because long builds stream logs via append_log (which
      does not bump updated_at) and would otherwise look idle
      mid-build.
@@ -35,6 +36,7 @@ from datetime import timedelta
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.deployments.constants import (
@@ -92,6 +94,7 @@ def recover_stalled_deployments(self):
     idle_cutoff = now - timedelta(minutes=STALLED_DEPLOYMENT_IDLE_MINUTES)
 
     rows = list(Deployment.objects.select_related("service").filter(
+        ~Q(status=Deployment.Status.REVIEW) | Q(review_summary={}),
         status__in=_SWEEPABLE_STATES,
         created_at__lt=age_cutoff,
         updated_at__lt=idle_cutoff,
@@ -104,6 +107,11 @@ def recover_stalled_deployments(self):
     try:
         for dep in rows:
             try:
+                # Analysis deliberately parks completed reviews for a human.
+                # Empty summaries are also used for dispatch handoff, so those
+                # remain eligible for dead-worker recovery.
+                if dep.status == Deployment.Status.REVIEW and dep.review_summary:
+                    continue
                 project_id = getattr(getattr(dep, "service", None), "project_id", None)
                 # Under a live plan, only REVIEW rows are safe to sweep:
                 # REVIEW means dispatched-but-never-picked-up (dead
