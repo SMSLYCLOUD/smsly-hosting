@@ -73,6 +73,7 @@ class _ClosingFileResponse(FileResponse):
 
 class AddonSerializer(serializers.ModelSerializer):
     server = serializers.ReadOnlyField(source='service.server_id')
+    volume_encryption = serializers.SerializerMethodField()
 
     class Meta:
         model = Addon
@@ -86,9 +87,14 @@ class AddonSerializer(serializers.ModelSerializer):
             'public_domain',
             'is_bucket_public',
             'provision_mode',
+            'volume_encryption',
             'created_at']
-        read_only_fields = ['status', 'connection_url', 'created_at']
+        read_only_fields = ['status', 'connection_url', 'volume_encryption', 'created_at']
         extra_kwargs = {'provision_mode': {'allow_blank': True}}
+
+    def get_volume_encryption(self, obj):
+        from apps.addons.services.volume_encryption import get_sanitized_status
+        return get_sanitized_status(obj)
 
     def validate_provision_mode(self, value):
         allowed = {'', 'shared', 'container'}

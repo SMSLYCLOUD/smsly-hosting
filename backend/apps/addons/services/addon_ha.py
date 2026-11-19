@@ -105,16 +105,17 @@ class AddonHaManager:
 
         self._assert_running(primary)
         self._assert_no_existing_components(addon)
+        tls_enabled = self._container_has_mount(primary, '/etc/redis/tls')
 
         # 1. Standby — replicates the primary by its container name (always
         #    DNS-resolvable on the network, independent of the alias).
-        self._run_redis_replica(replica, primary, port, password)
+        self._run_redis_replica(replica, primary, port, password, tls_enabled=tls_enabled)
 
         # 2. Sentinel trio — monitors the primary by container name.
         sentinels = []
         for idx in (1, 2, 3):
             name = self.sentinel_container(addon, idx)
-            self._run_sentinel(name, primary, port, password)
+            self._run_sentinel(name, primary, port, password, tls_enabled=tls_enabled)
             sentinels.append(name)
 
         # 3. Proxy sidecar takes over the friendly alias BEFORE we strip it
@@ -122,7 +123,7 @@ class AddonHaManager:
         #    endpoint (both hold it briefly; docker round-robin during this
         #    window still reaches the master because the proxy forwards there).
         proxy = self.proxy_container(addon)
-        self._run_proxy(proxy, alias, primary, replica, port, password)
+        self._run_proxy(proxy, alias, primary, replica, port, password, tls_enabled=tls_enabled)
 
         try:
             self._wait_tcp(proxy, port, timeout=45)
@@ -164,6 +165,10 @@ class AddonHaManager:
                                          timeout=60, raise_on_error=False)
                         ssh.exec_command(
                             f"docker volume rm {shlex_quote(current_standby + '-data')}",
+                            timeout=30, raise_on_error=False,
+                        )
+                        ssh.exec_command(
+                            f"docker volume rm {shlex_quote(current_standby + '-tls')} 2>/dev/null",
                             timeout=30, raise_on_error=False,
                         )
                     finally:
@@ -221,7 +226,29 @@ class AddonHaManager:
 
     # ── component runners ────────────────────────────────────────────────
 
-    def _run_redis_replica(self, name: str, primary: str, port: int, password: str) -> None:
+    def _run_redis_replica(self, name: str, primary: str, port: int, password: str,
+                           tls_enabled: bool = False) -> None:
+        tls_mounts: list[str] = []
+        tls_flags = ''
+        if tls_enabled:
+            from apps.addons.services.addon_tls import ensure_tls_volume
+            tls_vol = f'{name}-tls'
+            ensure_tls_volume(
+                tls_vol,
+                name,
+                [name, primary, 'localhost'],
+                image=REDIS_IMAGE,
+                owner='redis',
+                target_dir='/certs',
+            )
+            tls_mounts = ['-v', f'{tls_vol}:/etc/redis/tls:ro']
+            tls_flags = (
+                f'--tls-port {port} --port 0 --tls-replication yes '
+                '--tls-cert-file /etc/redis/tls/server.crt '
+                '--tls-key-file /etc/redis/tls/server.key '
+                '--tls-ca-cert-file /etc/redis/tls/ca.crt '
+                '--tls-auth-clients no '
+            )
         cmd = [
             'docker', 'run', '-d', '--name', name,
             '--network', self.network_name,
@@ -229,22 +256,28 @@ class AddonHaManager:
             '--pids-limit', '1024',
             '--env-file', self._env_file({'REDIS_PASSWORD': password}),
             '-v', f'{name}-data:/data',
+            *tls_mounts,
             REDIS_IMAGE,
             'sh', '-c',
-            'exec redis-server '
+            'chown -R redis:redis /data 2>/dev/null; '
+            'exec setpriv --reuid redis --regid redis --clear-groups -- '
+            'redis-server '
             f'--requirepass "$REDIS_PASSWORD" '
             f'--masterauth "$REDIS_PASSWORD" '
             f'--replicaof {primary} {port} '
+            f'{tls_flags}'
             '--appendonly yes --save ""',
         ]
         self._docker_run(cmd, name)
 
-    def _run_sentinel(self, name: str, primary: str, port: int, password: str) -> None:
+    def _run_sentinel(self, name: str, primary: str, port: int, password: str,
+                      tls_enabled: bool = False) -> None:
         # Heredoc (unquoted EOF) so the SHELL expands $SENTINEL_MASTER_PASS
         # into the conf at container start — redis-server does NOT expand
         # env vars in conf files. The secret never appears in Config.Cmd.
-        conf_lines = (
-            'port 26379',
+        tls_mounts: list[str] = []
+        conf_lines_list = [
+            'port 0' if tls_enabled else 'port 26379',
             f'sentinel monitor mymaster {primary} {port} {_SENTINEL_QUORUM}',
             'sentinel auth-pass mymaster $SENTINEL_MASTER_PASS',
             f'sentinel down-after-milliseconds mymaster {_DOWN_AFTER_MS}',
@@ -252,8 +285,28 @@ class AddonHaManager:
             'sentinel parallel-syncs mymaster 1',
             'sentinel resolve-hostnames yes',
             'sentinel announce-hostnames yes',
-        )
-        heredoc = '\n'.join(conf_lines)
+        ]
+        if tls_enabled:
+            from apps.addons.services.addon_tls import ensure_tls_volume
+            tls_vol = f'{name}-tls'
+            ensure_tls_volume(
+                tls_vol,
+                name,
+                [name, primary, 'localhost'],
+                image=REDIS_IMAGE,
+                owner='redis',
+                target_dir='/certs',
+            )
+            tls_mounts = ['-v', f'{tls_vol}:/etc/redis/tls:ro']
+            conf_lines_list += [
+                'tls-port 26379',
+                'tls-replication yes',
+                'tls-cert-file /etc/redis/tls/server.crt',
+                'tls-key-file /etc/redis/tls/server.key',
+                'tls-ca-cert-file /etc/redis/tls/ca.crt',
+                'tls-auth-clients no',
+            ]
+        heredoc = '\n'.join(conf_lines_list)
         cmd = [
             'docker', 'run', '-d', '--name', name,
             '--network', self.network_name,
@@ -261,6 +314,7 @@ class AddonHaManager:
             '--pids-limit', '256',
             '--cap-drop=ALL',
             '--env-file', self._env_file({'SENTINEL_MASTER_PASS': password}),
+            *tls_mounts,
             REDIS_IMAGE,
             'sh', '-c',
             f'cat > /tmp/sentinel.conf <<EOF\n{heredoc}\nEOF\n'
@@ -269,7 +323,8 @@ class AddonHaManager:
         self._docker_run(cmd, name)
 
     def _run_proxy(self, name: str, alias: str, primary: str,
-                   replica: str, port: int, password: str) -> None:
+                   replica: str, port: int, password: str,
+                   tls_enabled: bool = False) -> None:
         # Two subtleties handled by the unquoted heredoc:
         # 1. $REDIS_PASSWORD is expanded BY THE SHELL into the cfg (haproxy
         #    does not reliably expand env vars inside quoted tcp-check args).
@@ -281,6 +336,9 @@ class AddonHaManager:
         # "$6\r\nmaster\r\n") instead of substring matching so a hostname
         # containing the word "master" can never be mistaken for the role.
         master_resp_hex = '24360d0a6d61737465720d0a'
+        tls_mounts = ['-v', f'{primary}-tls:/etc/redis/tls:ro'] if tls_enabled else []
+        tcp_connect = '    tcp-check connect ssl\n' if tls_enabled else '    tcp-check connect\n'
+        srv_tls = ' check-ssl verify required ca-file /etc/redis/tls/ca.crt' if tls_enabled else ''
         heredoc = (
             'defaults\n'
             '    mode tcp\n'
@@ -290,14 +348,14 @@ class AddonHaManager:
             'listen redis-master\n'
             f'    bind *:{port}\n'
             '    option tcp-check\n'
-            '    tcp-check connect\n'
+            f'{tcp_connect}'
             '    tcp-check send "AUTH $REDIS_PASSWORD\\r\\n"\n'
             '    tcp-check expect string +OK\n'
             '    tcp-check send "ROLE\\r\\n"\n'
             f'    tcp-check expect binary {master_resp_hex}\n'
             '    default-server inter 3s fall 3 rise 2\n'
-            f'    server primary {primary}:{port} check\n'
-            f'    server standby {replica}:{port} check\n'
+            f'    server primary {primary}:{port} check{srv_tls}\n'
+            f'    server standby {replica}:{port} check{srv_tls}\n'
         )
         cmd = [
             'docker', 'run', '-d', '--name', name,
@@ -307,6 +365,7 @@ class AddonHaManager:
             '--cap-drop=ALL',
             '--cap-add=NET_BIND_SERVICE',
             '--env-file', self._env_file({'REDIS_PASSWORD': password}),
+            *tls_mounts,
             '--network-alias', alias,
             HAPROXY_IMAGE,
             'sh', '-c',
@@ -506,6 +565,8 @@ class AddonHaManager:
         subprocess.run(['docker', 'rm', '-f', name],
                        capture_output=True, timeout=60)
 
+        tls_vol = self._ensure_pg_tls_volume(name, alias=getattr(addon, 'name', '') or name)
+
         env_file = self._env_file({'PGPASSWORD': replicator_password})
         try:
             cmd = [
@@ -515,6 +576,7 @@ class AddonHaManager:
                 *addon_provisioner.SECURITY_OPTS,
                 '--env-file', env_file,
                 '-v', f'{name}-data:/var/lib/postgresql/data',
+                '-v', f'{tls_vol}:/etc/ssl/smsly-addon:ro',
             ]
             if host_port:
                 cmd.extend(['-p', f'{host_port}:{port}'])
@@ -531,7 +593,11 @@ class AddonHaManager:
                 'gosu postgres pg_basebackup -h ' + source_container + ' -p ' + str(port) +
                 ' -U ' + replicator + ' -D /var/lib/postgresql/data '
                 '-Fp -Xs -P -R ; '
-                'exec gosu postgres postgres',
+                'exec gosu postgres postgres '
+                '-c ssl=on '
+                '-c ssl_cert_file=/etc/ssl/smsly-addon/server.crt '
+                '-c ssl_key_file=/etc/ssl/smsly-addon/server.key '
+                '-c ssl_ca_file=/etc/ssl/smsly-addon/ca.crt',
             ])
             self._docker_run(cmd, name)
         finally:
@@ -559,6 +625,7 @@ class AddonHaManager:
             'password': parsed.password or '',
             'db': (parsed.path or '/').lstrip('/') or 'postgres',
             'port': parsed.port or 5432,
+            'query': parsed.query or '',
         }
 
     def _recreate_primary_with_replication(self, addon, primary: str,
@@ -567,6 +634,9 @@ class AddonHaManager:
                                            publish: tuple[str, int] | None = None) -> None:
         """Recreate the primary with wal_level=replica, keeping its volume."""
         from apps.addons.services.addon_provisioner import addon_provisioner
+
+        alias = getattr(addon, 'name', '')
+        tls_vol = self._ensure_pg_tls_volume(primary, alias=alias or primary)
 
         env_file = self._env_file({
             'POSTGRES_PASSWORD': password,
@@ -589,10 +659,10 @@ class AddonHaManager:
                 *addon_provisioner.SECURITY_OPTS,
                 '--env-file', env_file,
                 '-v', f'{primary}-data:/var/lib/postgresql/data',
+                '-v', f'{tls_vol}:/etc/ssl/smsly-addon:ro',
             ]
             # The friendly alias MUST stay on the primary — the stored
             # connection_url resolves through it.
-            alias = getattr(addon, 'name', '')
             if alias:
                 cmd.extend(['--network-alias', alias])
             if host_port:
@@ -610,6 +680,10 @@ class AddonHaManager:
                 '-c', 'max_wal_senders=10',
                 '-c', 'max_replication_slots=8',
                 '-c', 'hot_standby=on',
+                '-c', 'ssl=on',
+                '-c', 'ssl_cert_file=/etc/ssl/smsly-addon/server.crt',
+                '-c', 'ssl_key_file=/etc/ssl/smsly-addon/server.key',
+                '-c', 'ssl_ca_file=/etc/ssl/smsly-addon/ca.crt',
             ])
             if _sync_replication_enabled():
                 # Durability mode: a commit is acknowledged only after the
@@ -656,6 +730,7 @@ class AddonHaManager:
         remote_temp_files: list[str] = [remote_env]
         try:
             ssh.upload_file(env_file, remote_env)
+            tls_vol = self._ensure_pg_tls_volume(name, alias=name, ssh=ssh)
 
             seed_cmd = (
                 'until pg_isready -h ' + wg_ip + ' -p ' + str(wg_port) +
@@ -664,7 +739,11 @@ class AddonHaManager:
                 'gosu postgres pg_basebackup -h ' + wg_ip + ' -p ' + str(wg_port) +
                 ' -U ' + replicator + ' -D /var/lib/postgresql/data '
                 '-Fp -Xs -P -R ; '
-                'exec gosu postgres postgres'
+                'exec gosu postgres postgres '
+                '-c ssl=on '
+                '-c ssl_cert_file=/etc/ssl/smsly-addon/server.crt '
+                '-c ssl_key_file=/etc/ssl/smsly-addon/server.key '
+                '-c ssl_ca_file=/etc/ssl/smsly-addon/ca.crt'
             )
             cmd_parts = [
                 'docker', 'run', '-d',
@@ -682,6 +761,7 @@ class AddonHaManager:
                 '--pids-limit', '1024',
                 '--env-file', remote_env,
                 '-v', f'{name}-data:/var/lib/postgresql/data',
+                '-v', f'{tls_vol}:/etc/ssl/smsly-addon:ro',
                 'pgvector/pgvector:pg16',
                 'sh', '-c', seed_cmd,
             ]
@@ -777,6 +857,7 @@ class AddonHaManager:
             new_url = (
                 f"postgresql://{creds['user']}:{creds['password']}"
                 f"@{wg_host}:{wg_port}/{creds['db']}"
+                + (f"?{creds['query']}" if creds.get('query') else "")
             )
             return {
                 'standby': standby,
@@ -801,12 +882,13 @@ class AddonHaManager:
              '-c', role_sql],
             capture_output=True, text=True, check=True, timeout=60,
         )
-        hba_line = 'host replication ha_replicator 0.0.0.0/0 scram-sha-256\n'
+        hba_line = f'hostssl replication {replicator} 0.0.0.0/0 scram-sha-256'
         subprocess.run(
             ['docker', 'exec', primary, 'sh', '-c',
-             f'grep -q "host replication {replicator}" '
-             '$PGDATA/pg_hba.conf || echo '
-             f"'{hba_line}' >> $PGDATA/pg_hba.conf"],
+             'HBA="${PGDATA:-/var/lib/postgresql/data}/pg_hba.conf"; '
+             f'sed -i -E "s/^host([[:space:]]+replication[[:space:]]+{replicator})/hostssl\\1/" "$HBA" 2>/dev/null || true; '
+             f'grep -q "hostssl replication {replicator}" "$HBA" || '
+             f'echo "{hba_line}" >> "$HBA"'],
             capture_output=True, text=True, check=True, timeout=30,
         )
         subprocess.run(
@@ -820,6 +902,7 @@ class AddonHaManager:
         """Seed a hot standby from the primary via pg_basebackup -R."""
         from apps.addons.services.addon_provisioner import addon_provisioner
 
+        tls_vol = self._ensure_pg_tls_volume(name, alias=primary)
         env_file = self._env_file({'PGPASSWORD': replicator_password})
         try:
             cmd = [
@@ -829,6 +912,7 @@ class AddonHaManager:
                 *addon_provisioner.SECURITY_OPTS,
                 '--env-file', env_file,
                 '-v', f'{name}-data:/var/lib/postgresql/data',
+                '-v', f'{tls_vol}:/etc/ssl/smsly-addon:ro',
                 'pgvector/pgvector:pg16',
                 'sh', '-c',
                 'until pg_isready -h ' + primary + ' -p ' + str(port) +
@@ -837,7 +921,11 @@ class AddonHaManager:
                 'gosu postgres pg_basebackup -h ' + primary + ' -p ' + str(port) +
                 ' -U ' + replicator + ' -D /var/lib/postgresql/data '
                 '-Fp -Xs -P -R ; '
-                'exec gosu postgres postgres',
+                'exec gosu postgres postgres '
+                '-c ssl=on '
+                '-c ssl_cert_file=/etc/ssl/smsly-addon/server.crt '
+                '-c ssl_key_file=/etc/ssl/smsly-addon/server.key '
+                '-c ssl_ca_file=/etc/ssl/smsly-addon/ca.crt',
             ]
             self._docker_run(cmd, name)
         finally:
@@ -985,6 +1073,32 @@ class AddonHaManager:
         )
         return result.returncode == 0
 
+    def _ensure_pg_tls_volume(self, name: str, alias: str = '', ssh=None) -> str:
+        from apps.addons.services.addon_tls import ensure_tls_volume
+
+        tls_vol = f'{name}-tls'
+        dns = [d for d in (alias, name, 'localhost') if d]
+        return ensure_tls_volume(
+            tls_vol,
+            alias or name,
+            dns,
+            image='pgvector/pgvector:pg16',
+            owner='postgres',
+            target_dir='/certs',
+            ssh=ssh,
+        )
+
+    def _container_has_mount(self, container: str, mount_dest: str) -> bool:
+        try:
+            proc = subprocess.run(
+                ['docker', 'inspect', '-f',
+                 '{{range .Mounts}}{{.Destination}} {{end}}', container],
+                capture_output=True, text=True, timeout=15,
+            )
+            return proc.returncode == 0 and mount_dest in (proc.stdout or '').split()
+        except Exception:
+            return False
+
     def _remove_container(self, name: str) -> bool:
         if not self._container_exists(name):
             return False
@@ -992,6 +1106,9 @@ class AddonHaManager:
         subprocess.run(['docker', 'rm', name], capture_output=True, timeout=60)
         subprocess.run(
             ['docker', 'volume', 'rm', f'{name}-data'], capture_output=True, timeout=60,
+        )
+        subprocess.run(
+            ['docker', 'volume', 'rm', f'{name}-tls'], capture_output=True, timeout=60,
         )
         logger.info("addon_ha: removed %s", name)
         return True
@@ -1016,7 +1133,9 @@ class AddonHaManager:
         for candidate in (self.primary_container(addon), self.replica_container(addon)):
             result = subprocess.run(
                 ['docker', 'exec', candidate, 'sh', '-c',
-                 'redis-cli -a "$REDIS_PASSWORD" ROLE 2>/dev/null | head -n1'],
+                 'TLS_ARGS=""; '
+                 '[ -f /etc/redis/tls/ca.crt ] && TLS_ARGS="--tls --cacert /etc/redis/tls/ca.crt"; '
+                 'redis-cli $TLS_ARGS -a "$REDIS_PASSWORD" ROLE 2>/dev/null | head -n1'],
                 capture_output=True, text=True, timeout=15,
             )
             if result.stdout.strip().startswith('master'):

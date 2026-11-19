@@ -93,7 +93,7 @@ services:
     container_name: smsly-postgres-exporter-shared
     restart: unless-stopped
     environment:
-      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD}@smsly-shared-postgres:5432/postgres?sslmode=disable
+      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD}@smsly-shared-postgres:5432/postgres?sslmode=require
       - PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
       - PG_EXPORTER_EXCLUDE_DATABASES=template0,template1,test_smsly_hosting
     networks:
@@ -116,7 +116,7 @@ services:
     container_name: smsly-postgres-exporter-platform
     restart: unless-stopped
     environment:
-      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD}@smsly-postgres-primary:5432/postgres?sslmode=disable
+      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD}@smsly-postgres-primary:5432/postgres?sslmode=prefer
       - PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
       - PG_EXPORTER_EXCLUDE_DATABASES=template0,template1,test_smsly_hosting
     networks:

@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 TENANTS_CONTAINER_MARK = 'pgbouncer-tenants'
 TENANTS_INI_PATH = '/etc/pgbouncer/pgbouncer.ini'
 TENANTS_USERLIST_PATH = '/etc/pgbouncer/userlist.txt'
+TENANTS_TLS_DIR = '/etc/pgbouncer/tls'
+TENANTS_CA_FILE = f'{TENANTS_TLS_DIR}/ca.crt'
+TENANTS_CERT_FILE = f'{TENANTS_TLS_DIR}/server.crt'
+TENANTS_KEY_FILE = f'{TENANTS_TLS_DIR}/server.key'
 TENANT_POOL_SIZE = 8
 # Hard ceiling on SERVER connections per pool. This is what lets tenant
 # count grow unbounded: server-side sockets stay <=
@@ -173,7 +177,7 @@ def _max_db_connections() -> int:
         return TENANT_MAX_DB_CONNECTIONS
 
 
-def render_tenants_config(pools):
+def render_tenants_config(pools, tls_enabled: bool = True):
     """Render (pgbouncer.ini, userlist.txt): one transaction pool per alias.
 
     Client user == server role with the same password (exactly the old
@@ -247,16 +251,25 @@ def render_tenants_config(pools):
         # pooler comparisons) keeps PgBouncer as the default pick with
         # this explicitly enabled rather than relying on the default.
         'max_prepared_statements = 100',
-        '',
     ]
+    if tls_enabled:
+        ini += [
+            'client_tls_sslmode = require',
+            f'client_tls_key_file = {TENANTS_KEY_FILE}',
+            f'client_tls_cert_file = {TENANTS_CERT_FILE}',
+            f'client_tls_ca_file = {TENANTS_CA_FILE}',
+            'server_tls_sslmode = verify-ca',
+            f'server_tls_ca_file = {TENANTS_CA_FILE}',
+        ]
+    ini.append('')
     ul = [f'"{user}" "{password}"' for user, password in users]
     ini_content = '\n'.join(ini)
     ul_content = '\n'.join(ul) + ('\n' if ul else '')
-    validate_rendered_config(ini_content, ul_content)
+    validate_rendered_config(ini_content, ul_content, tls_enabled=tls_enabled)
     return ini_content, ul_content
 
 
-def validate_rendered_config(ini_content, userlist_content=""):
+def validate_rendered_config(ini_content, userlist_content="", tls_enabled: bool = True):
     """Fail closed when the render would crash-loop the pooler.
 
     Raises RuntimeError listing what's missing. Called by
@@ -278,10 +291,22 @@ def validate_rendered_config(ini_content, userlist_content=""):
             if 'max_db_connections=' not in s:
                 raise RuntimeError(
                     f"tenants render: pool line without server cap: {s[:80]!r}")
-    for key in ('listen_port = 5432', 'auth_type = scram-sha-256',
-                f'auth_file = {TENANTS_USERLIST_PATH}',
-                'pool_mode = transaction',
-                'max_prepared_statements = 100'):
+    required_keys = [
+        'listen_port = 5432',
+        'auth_type = scram-sha-256',
+        f'auth_file = {TENANTS_USERLIST_PATH}',
+        'pool_mode = transaction',
+        'max_prepared_statements = 100',
+    ]
+    if tls_enabled:
+        required_keys.extend([
+            'client_tls_sslmode = require',
+            f'client_tls_key_file = {TENANTS_KEY_FILE}',
+            f'client_tls_cert_file = {TENANTS_CERT_FILE}',
+            'server_tls_sslmode = verify-ca',
+            f'server_tls_ca_file = {TENANTS_CA_FILE}',
+        ])
+    for key in required_keys:
         if key not in ini_content:
             raise RuntimeError(f"tenants render missing {key!r}")
     seen_users = set()
@@ -321,7 +346,7 @@ def _read_remote_file(container, remote_path):
         return None
 
 
-def _write_remote_file(container, content, remote_path, suffix):
+def _write_remote_file(container, content, remote_path, suffix, mode=0o644):
     path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -330,8 +355,8 @@ def _write_remote_file(container, content, remote_path, suffix):
             path = f.name
         # docker cp preserves mode bits but lands root-owned; the pooler
         # must read it regardless of runtime user, so 644 explicitly.
-        os.chmod(path, 0o644)
-        res = _run(['docker', 'cp', path, f'{container}:{remote_path}'], timeout=60)
+        os.chmod(path, mode)
+        res = _run(['docker', 'cp', path, f'{container}:{remote_path}'], timeout=30)
         return res
     finally:
         if path:
@@ -339,6 +364,78 @@ def _write_remote_file(container, content, remote_path, suffix):
                 os.unlink(path)
             except OSError:
                 pass
+
+
+def _cert_covers_sans(cert_pem: str, wanted_sans: list[str]) -> bool:
+    try:
+        import datetime as _dt
+        from cryptography import x509 as _x509
+        cert = _x509.load_pem_x509_certificate(cert_pem.encode('utf-8'))
+        if cert.not_valid_after_utc <= _dt.datetime.now(_dt.timezone.utc):
+            return False
+        san_ext = cert.extensions.get_extension_for_class(_x509.SubjectAlternativeName).value
+        present = {name.lower() for name in san_ext.get_values_for_type(_x509.DNSName)}
+        return all(str(s).lower() in present for s in wanted_sans if s)
+    except Exception:
+        return False
+
+
+def ensure_pooler_tls_certs(container: str, pools: list[dict]) -> bool:
+    """Sync Platform Addon CA + server certs into ``/etc/pgbouncer/tls`` before ini write.
+
+    Obeys ``AGENTS.md`` #23 (``chown postgres:postgres`` + ``chmod 0600 server.key``)
+    and ``AGENTS.md`` #6 (30s timeouts). Fail-closed: returns False if any step fails.
+    """
+    from apps.addons.services.addon_tls import issue_addon_cert
+
+    wanted_sans = list(dict.fromkeys(
+        ['pgbouncer-tenants', container, 'localhost']
+        + [str(p['alias']) for p in pools if p.get('alias')]
+    ))
+
+    existing_cert = _read_remote_file(container, TENANTS_CERT_FILE)
+    if existing_cert and _cert_covers_sans(existing_cert, wanted_sans):
+        key_ok = _run(
+            ['docker', 'exec', '-u', '0', container, 'sh', '-c',
+             f'test -s {TENANTS_KEY_FILE} && test -s {TENANTS_CA_FILE} && '
+             f'chown -R postgres:postgres {TENANTS_TLS_DIR} && '
+             f'chmod 0750 {TENANTS_TLS_DIR} && '
+             f'chmod 0644 {TENANTS_CA_FILE} {TENANTS_CERT_FILE} && '
+             f'chmod 0600 {TENANTS_KEY_FILE}'],
+            timeout=30,
+        )
+        if not key_ok.get('error'):
+            return True
+
+    ca_pem, srv_pem, key_pem = issue_addon_cert('pgbouncer-tenants', dns_names=wanted_sans)
+
+    mk = _run(['docker', 'exec', '-u', '0', container, 'mkdir', '-p', TENANTS_TLS_DIR], timeout=30)
+    if mk.get('error'):
+        logger.error("tenant pooler: failed to mkdir %s: %s", TENANTS_TLS_DIR, mk['error'])
+        return False
+
+    for remote_path, content, suffix, fmode in (
+        (TENANTS_CA_FILE, ca_pem.decode('utf-8'), '.crt', 0o644),
+        (TENANTS_CERT_FILE, srv_pem.decode('utf-8'), '.crt', 0o644),
+        (TENANTS_KEY_FILE, key_pem.decode('utf-8'), '.key', 0o600),
+    ):
+        res = _write_remote_file(container, content, remote_path, suffix, mode=fmode)
+        if res.get('error'):
+            logger.error("tenant pooler: failed writing %s: %s", remote_path, res['error'])
+            return False
+
+    perm = _run(
+        ['docker', 'exec', '-u', '0', container, 'sh', '-c',
+         f'chown -R postgres:postgres {TENANTS_TLS_DIR} && '
+         f'chmod 0750 {TENANTS_TLS_DIR} && '
+         f'chmod 0644 {TENANTS_CA_FILE} {TENANTS_CERT_FILE} && '
+         f'chmod 0600 {TENANTS_KEY_FILE}'],
+        timeout=30,
+    )
+    if perm.get('error'):
+        logger.error("tenant pooler: failed setting TLS perms on %s: %s", container, perm['error'])
+        return False
+    return True
 
 
 def push_tenants_config():
@@ -366,12 +463,18 @@ def push_tenants_config():
         if start.get('error'):
             return {'ok': False, 'pools': len(pools),
                     'error': f'pooler present but could not start: {start["error"]}'}
+    # Fail-closed: TLS cert files must exist with postgres:postgres 0600 key
+    # BEFORE pgbouncer.ini references them.
+    if not ensure_pooler_tls_certs(container, pools):
+        return {'ok': False, 'pools': len(pools),
+                'error': 'tenant pooler TLS cert sync failed — pooler untouched.'}
     current_ini = _read_remote_file(container, TENANTS_INI_PATH)
     current_ul = _read_remote_file(container, TENANTS_USERLIST_PATH)
     if current_ini == ini and current_ul == userlist:
         return {'ok': True, 'pools': len(pools), 'changed': False,
                 'restarted': False,
                 'alias_reconcile': reconcile_pooler_aliases()}
+    tls_newly_enabled = bool(current_ini is not None and 'client_tls_sslmode' not in current_ini)
     res = _write_remote_file(container, ini, TENANTS_INI_PATH, '.ini')
     if res.get('error'):
         return {'ok': False, 'pools': len(pools),
@@ -380,6 +483,14 @@ def push_tenants_config():
     if res.get('error'):
         return {'ok': False, 'pools': len(pools),
                 'error': f'userlist write failed: {res["error"]}'}
+    if tls_newly_enabled:
+        restart = _run(['docker', 'restart', container], timeout=90)
+        if restart.get('error'):
+            return {'ok': False, 'pools': len(pools),
+                    'error': f'config written but pooler restart failed: {restart["error"]}'}
+        return {'ok': True, 'pools': len(pools), 'changed': True,
+                'restarted': True,
+                'alias_reconcile': reconcile_pooler_aliases()}
     # Online reload first: SIGHUP re-reads databases/users/passwords
     # WITHOUT dropping pooled connections. A restart (old behavior)
     # blips every tenant on each provision/rotate. Restart only if the

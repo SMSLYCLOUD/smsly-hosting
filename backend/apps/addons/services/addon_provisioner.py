@@ -488,6 +488,25 @@ class AddonProvisioner:
                 )
         return attached
 
+    def _container_has_mount(self, container_name: str, mount_dest: str) -> bool:
+        try:
+            proc = subprocess.run(
+                ['docker', 'inspect', '-f', '{{range .Mounts}}{{.Destination}} {{end}}', container_name],
+                capture_output=True, text=True, check=False, timeout=15,
+            )
+            return proc.returncode == 0 and mount_dest in (proc.stdout or '').split()
+        except Exception:
+            return False
+
+    def _ensure_addon_data_volume(self, addon, container_name: str,
+                                  data_volume_name: str | None = None) -> str:
+        """Prepare (and encrypt when capable) the addon's data Docker volume."""
+        from apps.addons.services import volume_encryption
+
+        vol_name = data_volume_name or f"{container_name}-data"
+        volume_encryption.prepare_volume(addon, vol_name)
+        return vol_name
+
     def _container_status(self, container_name: str) -> tuple[str | None, bool]:
         """
         Return (container_id, is_running) for a given docker container name.
@@ -844,6 +863,8 @@ class AddonProvisioner:
 
         if existing_cid and cid:
             if not is_running:
+                if addon_type != 'PGBOUNCER':
+                    self._ensure_addon_data_volume(addon, container_name)
                 logger.info("Starting existing addon container: %s", container_name)
                 self._start_container(container_name)
                 time.sleep(1)
@@ -908,7 +929,7 @@ class AddonProvisioner:
             except Exception as e:
                 logger.warning("Network reconnect failed for %s: %s", container_name, e)
 
-            # Wait for readiness to reduce flakiness on immediate retries.
+        # Wait for readiness to reduce flakiness on immediate retries.
             try:
                 if addon_type == 'RABBITMQ':
                     self._wait_for_health(
@@ -935,10 +956,14 @@ class AddonProvisioner:
                     return cid, f"s3://{minio_user}:{minio_password}@{hostname}:{port}"
 
                 if addon_type == 'POSTGRES':
+                    from apps.addons.services.addon_tls import ensure_pg_ssl_url
                     db_user = self._get_container_env(container_name, 'POSTGRES_USER')
                     db_name = self._get_container_env(container_name, 'POSTGRES_DB')
                     password = self._get_container_env(container_name, 'POSTGRES_PASSWORD')
-                    return cid, f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+                    rebuilt = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+                    if self._container_has_mount(container_name, '/etc/ssl/smsly-addon'):
+                        rebuilt = ensure_pg_ssl_url(rebuilt)
+                    return cid, rebuilt
 
                 if addon_type == 'MYSQL':
                     db_user = self._get_container_env(container_name, 'MYSQL_USER')
@@ -957,12 +982,15 @@ class AddonProvisioner:
                     return cid, f"amqp://{user}:{password}@{hostname}:{port}//"
 
                 if addon_type == 'REDIS':
+                    from apps.addons.services.addon_tls import ensure_redis_tls_url
+                    redis_has_tls = self._container_has_mount(container_name, '/etc/redis/tls')
                     try:
                         password = self._get_container_env(container_name, 'REDIS_PASSWORD')
                     except Exception:
                         password = ''
                     if password:
-                        return cid, f"redis://:{password}@{hostname}:{port}/0"
+                        rebuilt = f"redis://:{password}@{hostname}:{port}/0"
+                        return cid, (ensure_redis_tls_url(rebuilt) if redis_has_tls else rebuilt)
                     # Legacy containers baked the password into the command line.
                     result = subprocess.run(
                         ['docker', 'inspect', '-f', '{{json .Config.Cmd}}', container_name],
@@ -977,7 +1005,8 @@ class AddonProvisioner:
                             idx = cmd.index('--requirepass')
                             if idx + 1 < len(cmd) and cmd[idx + 1]:
                                 password = cmd[idx + 1]
-                                return cid, f"redis://:{password}@{hostname}:{port}/0"
+                                rebuilt = f"redis://:{password}@{hostname}:{port}/0"
+                                return cid, (ensure_redis_tls_url(rebuilt) if redis_has_tls else rebuilt)
 
                 if addon_type in ('QDRANT', 'ELASTICSEARCH'):
                     return cid, f"http://{hostname}:{port}"
@@ -1011,6 +1040,11 @@ class AddonProvisioner:
 
             raise RuntimeError(f"Addon container exists but connection_url is missing: {container_name}")
 
+        # Prepare (and encrypt when capable) the persistent data volume before
+        # creating or recreating the container.
+        if addon_type != 'PGBOUNCER':
+            self._ensure_addon_data_volume(addon, container_name)
+
         # If the URL exists but container is missing, re-create the container using the same credentials.
         # This avoids password drift when persistent volumes are re-used.
         if existing_url:
@@ -1023,18 +1057,19 @@ class AddonProvisioner:
             if addon_type in ('POSTGRES', 'REDIS', 'MYSQL', 'MONGODB', 'RABBITMQ', 'MINIO') and not password:
                 raise ValueError("Existing connection_url is missing a password; refusing to reprovision.")
 
+            recreated_url = ''
             if generic_config:
                 if generic_config.get('auth') and not password:
                     raise ValueError(f"Existing connection_url is missing a password for {addon_type}; refusing to reprovision.")
-                container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), hostname, cast(dict, generic_config), username=username, db_name=db_name, public_domain=public_domain, host_port=host_port_for_recreate, extra_env=self._cli_extra_env(addon), extra_traefik=_cli.exposed_routers(addon) if _cli_shared else None, extra_aliases=_cli.sibling_aliases(addon) if _cli_shared else None)
+                container_id, recreated_url = self._provision_generic(addon_type, container_name, password, cast(int, port), hostname, cast(dict, generic_config), username=username, db_name=db_name, public_domain=public_domain, host_port=host_port_for_recreate, extra_env=self._cli_extra_env(addon), extra_traefik=_cli.exposed_routers(addon) if _cli_shared else None, extra_aliases=_cli.sibling_aliases(addon) if _cli_shared else None)
                 self._seed_cli_files(container_name, addon)
             elif addon_type == 'MINIO':
-                container_id, _ = self._provision_minio(container_name, password, cast(int, port), hostname, username=username, public_domain=public_domain, host_port=host_port_for_recreate)
+                container_id, recreated_url = self._provision_minio(container_name, password, cast(int, port), hostname, username=username, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'POSTGRES':
                 # user/db follow the CURRENT alias (see remote comment
                 # above); the row URL converges on them below.
                 _pg_suffix = (hostname or container_name).replace('-', '_').replace('.', '_').replace(' ', '_')[:63]
-                container_id, _ = self._provision_postgres(
+                container_id, recreated_url = self._provision_postgres(
                     container_name,
                     password,
                     cast(int, port),
@@ -1045,7 +1080,7 @@ class AddonProvisioner:
                     host_port=host_port_for_recreate,
                 )
             elif addon_type == 'REDIS':
-                container_id, _ = self._provision_redis(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
+                container_id, recreated_url = self._provision_redis(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'MYSQL':
                 container_id, _ = self._provision_mysql(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'MONGODB':
@@ -1057,7 +1092,7 @@ class AddonProvisioner:
             elif addon_type == 'RABBITMQ':
                 container_id, _ = self._provision_rabbitmq(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'PGBOUNCER':
-                container_id, _ = self._provision_pgbouncer(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
+                container_id, recreated_url = self._provision_pgbouncer(container_name, password, cast(int, port), hostname, public_domain=public_domain, host_port=host_port_for_recreate)
             else:
                 raise ValueError(f"Unsupported addon type: {addon_type}")
 
@@ -1077,6 +1112,15 @@ class AddonProvisioner:
                     existing_url = _uun(_pp._replace(netloc=_netloc, path=f"/{_suffix or db_name}"))
                 except Exception:
                     pass
+                if 'sslmode=' in (recreated_url or ''):
+                    from apps.addons.services.addon_tls import ensure_pg_ssl_url
+                    existing_url = ensure_pg_ssl_url(existing_url)
+            elif addon_type == 'REDIS' and (recreated_url or '').startswith('rediss://'):
+                from apps.addons.services.addon_tls import ensure_redis_tls_url
+                existing_url = ensure_redis_tls_url(existing_url)
+            elif addon_type == 'PGBOUNCER' and 'sslmode=' in (recreated_url or ''):
+                from apps.addons.services.addon_tls import ensure_pg_ssl_url
+                existing_url = ensure_pg_ssl_url(existing_url)
             return container_id, existing_url
 
         # First-time provisioning: generate fresh credentials for passworded addons.
@@ -1385,21 +1429,24 @@ class AddonProvisioner:
             return remote_path
 
         if addon_type == 'POSTGRES':
-            # Container recreates reuse the persisted URL's credentials
-            # (row is source of truth) — but the row's db name travels
-            # with the alias: when an alias moves to a fresh volume (e.g.
-            # cross-host consolidation), the persisted name would seed a
-            # WRONG database on the new host. Derive from the CURRENT
-            # alias instead so user/db always match the hostname the app
-            # dials (2026-10-09: node PG came up with db postgres_...pjja8
-            # from the row while the app dialed postgres-smsly-mar…; all
-            # connections landed on the empty default db).
+            from apps.addons.services.addon_tls import ensure_tls_volume
             safe_suffix = (
                 (alias_name or container_name)
                 .replace('-', '_').replace('.', '_').replace(' ', '_')
             )[:63]
             db_user = safe_suffix
             db_name = safe_suffix
+            hostname = alias_name or container_name
+            tls_vol = f'{container_name}-tls'
+            ensure_tls_volume(
+                tls_vol,
+                hostname,
+                [hostname, container_name, 'localhost'],
+                image=image,
+                owner='postgres',
+                target_dir='/certs',
+                ssh=ssh,
+            )
             env_vars.update({
                 'POSTGRES_PASSWORD': password,
                 'POSTGRES_USER': db_user,
@@ -1407,36 +1454,57 @@ class AddonProvisioner:
             })
             cmd_parts.extend([
                 '-v', f'{container_name}-data:/var/lib/postgresql/data',
+                '-v', f'{tls_vol}:/etc/ssl/smsly-addon:ro',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
             _attach_env_file()
-            cmd_parts.append(image)
+            cmd_parts.extend([
+                image,
+                'postgres',
+                '-c', 'ssl=on',
+                '-c', 'ssl_cert_file=/etc/ssl/smsly-addon/server.crt',
+                '-c', 'ssl_key_file=/etc/ssl/smsly-addon/server.key',
+                '-c', 'ssl_ca_file=/etc/ssl/smsly-addon/ca.crt',
+            ])
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
-            hostname = alias_name or container_name
-            connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+            connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}?sslmode=require"
 
         elif addon_type == 'REDIS':
-            # Password via container env (mirrors local _provision_redis:
-            # never on the command line, baked into container config so
-            # restarts keep working). The old mounted-conf approach needed
-            # a root-owned persist dir the ssh user cannot create
-            # ([Errno 2] on upload) — deleted, not fixed.
+            from apps.addons.services.addon_tls import ensure_tls_volume
+            hostname = alias_name or container_name
+            tls_vol = f'{container_name}-tls'
+            ensure_tls_volume(
+                tls_vol,
+                hostname,
+                [hostname, container_name, 'localhost'],
+                image=image,
+                owner='redis',
+                target_dir='/certs',
+                ssh=ssh,
+            )
             env_vars.update({'REDIS_PASSWORD': password})
             _attach_env_file()
             cmd_parts.extend([
                 '-v', f'{container_name}-data:/data',
+                '-v', f'{tls_vol}:/etc/redis/tls:ro',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
             cmd_parts.append(image)
             cmd_parts.extend([
                 'sh', '-c',
-                'redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes',
+                'chown -R redis:redis /data 2>/dev/null; '
+                'exec setpriv --reuid redis --regid redis --clear-groups -- '
+                f'redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes '
+                f'--tls-port {port} --port 0 '
+                '--tls-cert-file /etc/redis/tls/server.crt '
+                '--tls-key-file /etc/redis/tls/server.key '
+                '--tls-ca-cert-file /etc/redis/tls/ca.crt '
+                '--tls-auth-clients no',
             ])
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
-            hostname = alias_name or container_name
-            connection_url = f"redis://:{password}@{hostname}:{port}/0"
+            connection_url = f"rediss://:{password}@{hostname}:{port}/0?ssl_cert_reqs=none"
 
         elif addon_type == 'MYSQL':
             safe_suffix = (
@@ -1607,6 +1675,20 @@ class AddonProvisioner:
                 )
             except Exception as exc:
                 logger.debug("Remote addon %s ready-wait skipped: %s", container_name, exc)
+
+        if addon_type == 'POSTGRES':
+            hba_cmd = (
+                f"docker exec {shlex.quote(container_name)} sh -c "
+                "'HBA=\"${PGDATA:-/var/lib/postgresql/data}/pg_hba.conf\"; "
+                "[ -f \"$HBA\" ] || exit 0; TMP=\"${HBA}.smsly.tmp\"; "
+                "awk '\''/^host[[:space:]]+/ && $4 != \"127.0.0.1/32\" && $4 != \"::1/128\" "
+                "{ sub(/^host/, \"hostssl\") } { print }'\'' \"$HBA\" > \"$TMP\" && "
+                "mv \"$TMP\" \"$HBA\" && chown postgres:postgres \"$HBA\" 2>/dev/null || true; "
+                "chmod 0600 \"$HBA\" 2>/dev/null || true' && "
+                f"docker exec {shlex.quote(container_name)} psql -U {shlex.quote(db_user)} "
+                f"-d {shlex.quote(db_name)} -c 'SELECT pg_reload_conf();'"
+            )
+            ssh.exec_command(hba_cmd, timeout=30, raise_on_error=False)
 
         self._attach_remote_scoped_network(
             ssh, server, addon, container_name, alias_name,
@@ -2594,7 +2676,7 @@ metrics = false
         addon.provision_mode = 'shared'
         addon.pooler_routed = bool(_pooler)
         addon.save(update_fields=['provision_mode', 'pooler_routed', 'updated_at'])
-        connection_url = f"postgresql://{db_user}:{password}@{hostname}:5432/{db_name}"
+        connection_url = f"postgresql://{db_user}:{password}@{hostname}:5432/{db_name}?sslmode=require"
         logger.info("Postgres addon (shared) ready: %s -> %s", addon.name, hostname)
         # Shared HA: one streaming standby covers all logical tenants.
         # Best-effort — a replica hiccup must never fail a tenant
@@ -2637,6 +2719,18 @@ metrics = false
         # Postgres identifiers are limited to 63 bytes.
         db_user = str(db_user)[:63]
         db_name = str(db_name)[:63]
+        hostname = alias_name or container_name
+
+        from apps.addons.services.addon_tls import ensure_tls_volume
+        tls_volume = f"{container_name}-tls"
+        ensure_tls_volume(
+            tls_volume,
+            hostname,
+            [hostname, container_name, 'localhost'],
+            image=self.ADDON_IMAGES['POSTGRES'],
+            owner='postgres',
+            target_dir='/certs',
+        )
 
         env_file = self._write_env_file({
             'POSTGRES_PASSWORD': password,
@@ -2651,6 +2745,7 @@ metrics = false
             *self.SECURITY_OPTS,
             '--env-file', env_file,
             '-v', f'{container_name}-data:/var/lib/postgresql/data',
+            '-v', f'{tls_volume}:/etc/ssl/smsly-addon:ro',
         ]
 
         if host_port:
@@ -2661,7 +2756,14 @@ metrics = false
 
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
-        cmd.append(self.ADDON_IMAGES['POSTGRES'])
+        cmd.extend([
+            self.ADDON_IMAGES['POSTGRES'],
+            'postgres',
+            '-c', 'ssl=on',
+            '-c', 'ssl_cert_file=/etc/ssl/smsly-addon/server.crt',
+            '-c', 'ssl_key_file=/etc/ssl/smsly-addon/server.key',
+            '-c', 'ssl_ca_file=/etc/ssl/smsly-addon/ca.crt',
+        ])
 
         try:
             result = subprocess.run(
@@ -2677,10 +2779,33 @@ metrics = false
 
         # Use alias_name as hostname so apps reach the DB by friendly name
         # (e.g. "postgres-myapp" instead of "smsly-addon-postgres-uuid")
-        hostname = alias_name or container_name
-        connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+        connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}?sslmode=require"
 
         self._wait_for_health(container_name, port)
+
+        # Enforce hostssl for remote clients (keeping local and loopback intact)
+        try:
+            hba_script = (
+                'HBA="${PGDATA:-/var/lib/postgresql/data}/pg_hba.conf"; '
+                '[ -f "$HBA" ] || exit 0; '
+                'TMP="${HBA}.smsly.tmp"; '
+                'awk \'/^host[[:space:]]+/ && $4 != "127.0.0.1/32" && $4 != "::1/128" '
+                '{ sub(/^host/, "hostssl") } { print }\' "$HBA" > "$TMP" && '
+                'mv "$TMP" "$HBA" && '
+                'chown postgres:postgres "$HBA" 2>/dev/null || true; '
+                'chmod 0600 "$HBA" 2>/dev/null || true'
+            )
+            subprocess.run(
+                ['docker', 'exec', container_name, 'sh', '-c', hba_script],
+                check=False, capture_output=True, text=True, timeout=30,
+            )
+            subprocess.run(
+                ['docker', 'exec', container_name, 'psql',
+                 '-U', db_user, '-d', db_name, '-c', 'SELECT pg_reload_conf();'],
+                check=False, capture_output=True, text=True, timeout=30,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("pg_hba hostssl enforcement skipped for %s: %s", container_name, exc)
 
         # Ensure pgvector extension exists (safe to run repeatedly)
         try:
@@ -2704,7 +2829,20 @@ metrics = false
                          password: str, port: int,
                          alias_name: str = '', public_domain: str | None = None,
                          host_port: int | None = None) -> tuple[str, str]:
-        """Provision a Redis container with authentication."""
+        """Provision a TLS-only Redis container with authentication."""
+        from apps.addons.services.addon_tls import ensure_tls_volume
+
+        hostname = alias_name or container_name
+        tls_volume = f"{container_name}-tls"
+        ensure_tls_volume(
+            tls_volume,
+            hostname,
+            [hostname, container_name, 'localhost'],
+            image=self.ADDON_IMAGES['REDIS'],
+            owner='redis',
+            target_dir='/certs',
+        )
+
         env_file = self._write_env_file({
             'REDIS_PASSWORD': password,
         })
@@ -2716,6 +2854,7 @@ metrics = false
             *self.SECURITY_OPTS,
             '--env-file', env_file,
             '-v', f'{container_name}-data:/data',
+            '-v', f'{tls_volume}:/etc/redis/tls:ro',
         ]
         if host_port:
             cmd.extend(self._publish_args(host_port, port))
@@ -2726,19 +2865,15 @@ metrics = false
             cmd.extend(['--network-alias', alias_name])
         cmd.extend([
             self.ADDON_IMAGES['REDIS'],
-            # Password comes from the container env (--env-file above), never
-            # from the command line: keeps it out of `ps` output and survives
-            # container restarts (env is baked into the container config).
-            # chown (as root) normalizes volume ownership after restore or
-            # host-level chown. setpriv then drops to the redis user BEFORE
-            # exec'ing the server: SECURITY_OPTS drops ALL caps including
-            # CAP_DAC_OVERRIDE, so root-without-caps cannot write into a
-            # data dir owned by uid 999 ("appendonlydir: Permission denied").
-            # Running AS redis matches ownership and needs no capabilities.
             'sh', '-c',
             'chown -R redis:redis /data 2>/dev/null; '
             'exec setpriv --reuid redis --regid redis --clear-groups -- '
-            'redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes',
+            f'redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes '
+            f'--tls-port {port} --port 0 '
+            '--tls-cert-file /etc/redis/tls/server.crt '
+            '--tls-key-file /etc/redis/tls/server.key '
+            '--tls-ca-cert-file /etc/redis/tls/ca.crt '
+            '--tls-auth-clients no',
         ])
 
         try:
@@ -2753,8 +2888,7 @@ metrics = false
                 os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
-        hostname = alias_name or container_name
-        connection_url = f"redis://:{password}@{hostname}:{port}/0"
+        connection_url = f"rediss://:{password}@{hostname}:{port}/0?ssl_cert_reqs=none"
 
         self._wait_for_health(container_name, port, timeout=90)
         return container_id, connection_url
@@ -2787,8 +2921,19 @@ metrics = false
 
     @staticmethod
     def _render_pgbouncer_config(db_user: str, db_host: str, db_port: int,
-                                 db_name: str, verifier: str) -> tuple[str, str]:
+                                 db_name: str, verifier: str,
+                                 tls_enabled: bool = True) -> tuple[str, str]:
         """Render (pgbouncer.ini, userlist.txt) for a single pooled database."""
+        tls_block = ""
+        if tls_enabled:
+            tls_block = (
+                "client_tls_sslmode = require\n"
+                "client_tls_key_file = /etc/pgbouncer/tls/server.key\n"
+                "client_tls_cert_file = /etc/pgbouncer/tls/server.crt\n"
+                "client_tls_ca_file = /etc/pgbouncer/tls/ca.crt\n"
+                "server_tls_sslmode = verify-ca\n"
+                "server_tls_ca_file = /etc/pgbouncer/tls/ca.crt\n"
+            )
         ini = (
             "[databases]\n"
             f"{db_name} = host={db_host} port={db_port} dbname={db_name}\n"
@@ -2807,23 +2952,50 @@ metrics = false
             "server_check_query = select 1\n"
             "server_check_delay = 30\n"
             "ignore_startup_parameters = extra,statement_timeout\n"
+            f"{tls_block}"
         )
         userlist = f'"{db_user}" "{verifier}"\n'
         return ini, userlist
 
     def _write_pgbouncer_config(self, container_name: str, ini: str,
-                                userlist: str) -> str:
-        """Write pooler config into a named volume; returns the volume name.
+                                userlist: str,
+                                alias_name: str = '') -> str:
+        """Write pooler config + TLS certs into a named volume; returns the volume name.
 
         Files go through a transient helper container (never the host
-        filesystem, never process lists) and land mode 644 so the
-        image's postgres user can read them.
+        filesystem, never process lists). Config lands mode 644 and
+        ``/cfg/tls`` lands owned by ``postgres:postgres`` with ``0600``
+        private key.
         """
         volume = f"{container_name}-config"
         subprocess.run(['docker', 'volume', 'create', volume],
                        capture_output=True, check=False, timeout=60)
-        env_file = self._write_env_file({'PGB_INI_B64': base64.b64encode(ini.encode()).decode(),
-                                         'PGB_UL_B64': base64.b64encode(userlist.encode()).decode()})
+        env_map = {
+            'PGB_INI_B64': base64.b64encode(ini.encode()).decode(),
+            'PGB_UL_B64': base64.b64encode(userlist.encode()).decode(),
+        }
+        tls_cmd = ""
+        if 'client_tls_sslmode' in ini:
+            from apps.addons.services.addon_tls import issue_addon_cert
+            cn = alias_name or container_name
+            ca_pem, srv_pem, key_pem = issue_addon_cert(
+                cn, dns_names=[cn, container_name, 'localhost']
+            )
+            env_map['PGB_CA_B64'] = base64.b64encode(ca_pem).decode('ascii')
+            env_map['PGB_CRT_B64'] = base64.b64encode(srv_pem).decode('ascii')
+            env_map['PGB_KEY_B64'] = base64.b64encode(key_pem).decode('ascii')
+            tls_cmd = (
+                ' && mkdir -p /cfg/tls'
+                ' && printf "%s" "$PGB_CA_B64" | base64 -d > /cfg/tls/ca.crt'
+                ' && printf "%s" "$PGB_CRT_B64" | base64 -d > /cfg/tls/server.crt'
+                ' && printf "%s" "$PGB_KEY_B64" | base64 -d > /cfg/tls/server.key'
+                ' && (chown -R postgres:postgres /cfg/tls 2>/dev/null || true)'
+                ' && chmod 0750 /cfg/tls'
+                ' && chmod 0644 /cfg/tls/ca.crt /cfg/tls/server.crt'
+                ' && chmod 0600 /cfg/tls/server.key'
+            )
+
+        env_file = self._write_env_file(env_map)
         try:
             subprocess.run(
                 ['docker', 'run', '--rm',
@@ -2833,7 +3005,7 @@ metrics = false
                  'sh', '-c',
                  'echo "$PGB_INI_B64" | base64 -d > /cfg/pgbouncer.ini && '
                  'echo "$PGB_UL_B64" | base64 -d > /cfg/userlist.txt && '
-                 'chmod 644 /cfg/pgbouncer.ini /cfg/userlist.txt'],
+                 'chmod 644 /cfg/pgbouncer.ini /cfg/userlist.txt' + tls_cmd],
                 capture_output=True, text=True, check=True, timeout=120)
         finally:
             with contextlib.suppress(Exception):
@@ -2890,7 +3062,8 @@ metrics = false
         ini, userlist = self._render_pgbouncer_config(
             db_user, target_host, target_port, db_name,
             self._scram_verifier(db_password))
-        volume = self._write_pgbouncer_config(container_name, ini, userlist)
+        volume = self._write_pgbouncer_config(
+            container_name, ini, userlist, alias_name=alias_name or container_name)
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
@@ -2910,7 +3083,7 @@ metrics = false
         container_id = result.stdout.strip()[:12]
         hostname = alias_name or container_name
         connection_url = (
-            f"postgresql://{db_user}:{db_password}@{hostname}:{port}/{db_name}")
+            f"postgresql://{db_user}:{db_password}@{hostname}:{port}/{db_name}?sslmode=require")
         self._wait_for_health(container_name, port, timeout=90)
         return container_id, connection_url
 
@@ -2973,7 +3146,8 @@ metrics = false
                     logger.warning("PgBouncer %s recreate network wiring failed: %s",
                                    container_name, exc)
                 return True
-            self._write_pgbouncer_config(container_name, ini, userlist)
+            alias = str(getattr(addon, 'name', '') or '').strip()
+            self._write_pgbouncer_config(container_name, ini, userlist, alias_name=alias)
             if was_running:
                 subprocess.run(['docker', 'restart', container_name],
                                capture_output=True, check=False, timeout=90)
@@ -3300,8 +3474,8 @@ metrics = false
 
             # Remove associated volumes if container_name provided,
             # unless retention was requested. PgBouncer config volumes
-            # (`{name}-config`) are covered too — otherwise every
-            # pooler reprovision leaks one.
+            # (`{name}-config`) and TLS volumes (`{name}-tls`) are covered
+            # too — otherwise reprovision/deprovision leaks volumes.
             if container_name and not retain_volume:
                 subprocess.run(
                     ['docker', 'volume', 'rm', f'{container_name}-data'],
@@ -3313,6 +3487,10 @@ metrics = false
                     capture_output=True,
                     timeout=60,
                 )
+                from apps.addons.services.addon_tls import remove_tls_volume
+                from apps.addons.services import volume_encryption
+                remove_tls_volume(f'{container_name}-tls', timeout=60)
+                volume_encryption.cleanup_volume(None, f'{container_name}-data')
             elif container_name and retain_volume:
                 logger.info(
                     "Retaining data volume for %s (soft-delete window)",
@@ -3345,10 +3523,12 @@ metrics = false
             ssh.exec_command(f"docker stop {safe_id} 2>/dev/null; docker rm -f {safe_id}", timeout=30)
             if container_name:
                 safe_vol = shlex.quote(f'{container_name}-data')
-                ssh.exec_command(f"docker volume rm {safe_vol} 2>/dev/null", timeout=15)
+                ssh.exec_command(f"docker volume rm {safe_vol} 2>/dev/null", timeout=60, raise_on_error=False)
+                from apps.addons.services.addon_tls import remove_tls_volume
+                remove_tls_volume(f'{container_name}-tls', ssh=ssh, timeout=60)
                 # Remove the persisted redis.conf (mounted for requirepass)
                 safe_conf = shlex.quote(f'/var/lib/smsly/addon-envs/{container_name}.conf')
-                ssh.exec_command(f"rm -f {safe_conf} 2>/dev/null", timeout=15)
+                ssh.exec_command(f"rm -f {safe_conf} 2>/dev/null", timeout=15, raise_on_error=False)
             ssh.close()
             logger.info(f"Deprovisioned remote addon container: {container_id} on {server.host}")
             return True
@@ -3655,13 +3835,16 @@ metrics = false
             elif addon.addon_type == 'REDIS':
                 # Redis save and copy using argument lists only. Auth with the
                 # container's own REDIS_PASSWORD env when set (never put the
-                # password on the command line).
+                # password on the command line), and pass --tls when TLS certs
+                # are mounted inside the container.
                 subprocess.run(
                     ['docker', 'exec', container_name,
                      'sh', '-c',
+                     'TLS_ARGS=""; '
+                     '[ -f /etc/redis/tls/ca.crt ] && TLS_ARGS="--tls --cacert /etc/redis/tls/ca.crt"; '
                      'if [ -n "$REDIS_PASSWORD" ]; then '
-                     'exec redis-cli -a "$REDIS_PASSWORD" --no-auth-warning save; '
-                     'else exec redis-cli save; fi'],
+                     'exec redis-cli $TLS_ARGS -a "$REDIS_PASSWORD" --no-auth-warning save; '
+                     'else exec redis-cli $TLS_ARGS save; fi'],
                     check=True, timeout=60,
                 )
                 subprocess.run(['docker', 'cp', f'{container_name}:/data/dump.rdb', backup_path], check=True, timeout=120)

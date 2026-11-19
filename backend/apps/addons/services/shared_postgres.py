@@ -64,6 +64,15 @@ ROLE_STATEMENT_TIMEOUT = "30s"
 # logical tenants — the N-standby equivalent of per-addon HA).
 SHARED_STANDBY = "smsly-shared-postgres-replica"
 SHARED_STANDBY_VOLUME = "smsly-shared-postgres-replica-data"
+SHARED_TLS_VOLUME = f"{SHARED_CONTAINER}-tls"
+SHARED_STANDBY_TLS_VOLUME = f"{SHARED_STANDBY}-tls"
+SHARED_TLS_MOUNT = "/etc/ssl/smsly-addon"
+POSTGRES_SSL_FLAGS = [
+    "-c", "ssl=on",
+    "-c", f"ssl_cert_file={SHARED_TLS_MOUNT}/server.crt",
+    "-c", f"ssl_key_file={SHARED_TLS_MOUNT}/server.key",
+    "-c", f"ssl_ca_file={SHARED_TLS_MOUNT}/ca.crt",
+]
 REPLICATOR_ROLE = "shared_replicator"
 
 
@@ -119,6 +128,43 @@ def _container_running() -> bool:
     return bool((proc.stdout or "").strip())
 
 
+def _container_has_mount(container: str, mount_dest: str) -> bool:
+    proc = _run(
+        ["docker", "inspect", "-f",
+         "{{range .Mounts}}{{.Destination}} {{end}}", container],
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        return False
+    return mount_dest in (proc.stdout or "").split()
+
+
+def _enforce_pg_hba_ssl(container: str) -> None:
+    """Require TLS (hostssl) for non-loopback TCP clients while keeping local/loopback intact."""
+    script = (
+        'HBA="${PGDATA:-/var/lib/postgresql/data}/pg_hba.conf"; '
+        '[ -f "$HBA" ] || exit 0; '
+        'TMP="${HBA}.smsly.tmp"; '
+        'awk \'/^host[[:space:]]+/ && $4 != "127.0.0.1/32" && $4 != "::1/128" '
+        '{ sub(/^host/, "hostssl") } { print }\' "$HBA" > "$TMP" && '
+        'mv "$TMP" "$HBA" && '
+        'chown postgres:postgres "$HBA" 2>/dev/null || true; '
+        'chmod 0600 "$HBA" 2>/dev/null || true'
+    )
+    proc = _run(["docker", "exec", container, "sh", "-c", script], timeout=30)
+    if proc.returncode != 0:
+        logger.warning(
+            "shared postgres pg_hba hostssl enforce failed on %s: %s",
+            container,
+            (proc.stderr or "").strip()[:200],
+        )
+        return
+    try:
+        _psql_on(container, "postgres", "SELECT pg_reload_conf();", timeout=30)
+    except Exception as exc:
+        logger.warning("shared postgres pg_reload_conf failed on %s: %s", container, exc)
+
+
 def _wait_ready(timeout: int = 120) -> None:
     import time
 
@@ -142,8 +188,27 @@ def ensure_shared_server() -> str:
     create-race surfaces as "already in use" and resolves to the
     winner's container. Never raises for an already-correct setup.
     """
+    from apps.addons.services.addon_tls import ensure_tls_volume
+
+    ensure_tls_volume(
+        SHARED_TLS_VOLUME,
+        SHARED_CONTAINER,
+        [SHARED_CONTAINER, "postgres-shared", "localhost"],
+        image=SHARED_IMAGE,
+        owner="postgres",
+        target_dir="/certs",
+    )
+
     password = _superuser_password()
     cid = _container_exists()
+    preserved_nets: dict[str, list[str]] = {}
+    if cid is not None and not _container_has_mount(SHARED_CONTAINER, SHARED_TLS_MOUNT):
+        preserved_nets = _container_networks(SHARED_CONTAINER)
+        _run(["docker", "stop", "-t", "30", SHARED_CONTAINER], timeout=120)
+        _run(["docker", "rm", SHARED_CONTAINER], timeout=60)
+        logger.info("Upgrading %s to TLS-enabled shared Postgres (data volume preserved)", SHARED_CONTAINER)
+        cid = None
+
     if cid is None:
         env_file = _write_env_file({"POSTGRES_PASSWORD": password})
         try:
@@ -154,9 +219,11 @@ def ensure_shared_server() -> str:
                  "--restart", "unless-stopped",
                  "--env-file", env_file,
                  "-v", f"{SHARED_VOLUME}:/var/lib/postgresql/data",
+                 "-v", f"{SHARED_TLS_VOLUME}:{SHARED_TLS_MOUNT}:ro",
                  SHARED_IMAGE,
                  "postgres",
-                 *POSTGRES_TUNING_FLAGS],
+                 *POSTGRES_TUNING_FLAGS,
+                 *POSTGRES_SSL_FLAGS],
                 timeout=180,
             )
             if proc.returncode != 0 and "already in use" not in (proc.stderr or ""):
@@ -173,6 +240,20 @@ def ensure_shared_server() -> str:
     if not _container_running():
         _run(["docker", "start", SHARED_CONTAINER], timeout=60)
     _wait_ready()
+    for net, aliases in preserved_nets.items():
+        if net == "bridge":
+            continue
+        clean_aliases = [a for a in dict.fromkeys(aliases or []) if a and a != SHARED_CONTAINER[:12]]
+        if net == "smsly-net":
+            if not clean_aliases:
+                continue
+            _run(["docker", "network", "disconnect", net, SHARED_CONTAINER], timeout=60)
+        cmd = ["docker", "network", "connect"]
+        for entry in clean_aliases:
+            cmd += ["--alias", entry]
+        cmd += [net, SHARED_CONTAINER]
+        _run(cmd, timeout=60)
+    _enforce_pg_hba_ssl(SHARED_CONTAINER)
     # pgvector in template1 so every future database inherits it
     # (matches per-addon behavior of CREATE EXTENSION per database).
     _psql("template1", "CREATE EXTENSION IF NOT EXISTS vector;")
@@ -331,6 +412,16 @@ def ensure_shared_standby(reseed: bool = False) -> str:
         timeout=30,
     )
     if not (proc.stdout or "").strip():
+        from apps.addons.services.addon_tls import ensure_tls_volume
+
+        ensure_tls_volume(
+            SHARED_STANDBY_TLS_VOLUME,
+            SHARED_STANDBY,
+            [SHARED_STANDBY, SHARED_CONTAINER, "localhost"],
+            image=SHARED_IMAGE,
+            owner="postgres",
+            target_dir="/certs",
+        )
         password = _replicator_password()
         env_file = _write_env_file({"PGPASSWORD": password})
         try:
@@ -340,6 +431,7 @@ def ensure_shared_standby(reseed: bool = False) -> str:
                  "--restart", "unless-stopped",
                  "--env-file", env_file,
                  "-v", f"{volume}:/var/lib/postgresql/data",
+                 "-v", f"{SHARED_STANDBY_TLS_VOLUME}:{SHARED_TLS_MOUNT}:ro",
                  SHARED_IMAGE,
                 "sh", "-c",
                 f"until pg_isready -h {SHARED_CONTAINER} -p {SHARED_PORT} -q; "
@@ -356,7 +448,7 @@ def ensure_shared_standby(reseed: bool = False) -> str:
                 # Same tuning flags as the primary: command-line settings
                 # do not replicate, and recovery aborts when the standby's
                 # max_connections is lower (observed live).
-                "exec gosu postgres postgres " + " ".join(POSTGRES_TUNING_FLAGS)],
+                "exec gosu postgres postgres " + " ".join([*POSTGRES_TUNING_FLAGS, *POSTGRES_SSL_FLAGS])],
                 timeout=600,
             )
             if seed.returncode != 0 and "already in use" not in (seed.stderr or ""):
@@ -548,10 +640,11 @@ def _ensure_replication_access_on(container: str) -> None:
     )
     proc = _run(
         ["docker", "exec", container, "sh", "-c",
-         f"grep -q 'host replication {REPLICATOR_ROLE}' "
-         "$PGDATA/pg_hba.conf || echo "
-         f"'host replication {REPLICATOR_ROLE} 0.0.0.0/0 scram-sha-256' "
-         ">> $PGDATA/pg_hba.conf"],
+         'HBA="${PGDATA:-/var/lib/postgresql/data}/pg_hba.conf"; '
+         f"sed -i -E 's/^host([[:space:]]+replication[[:space:]]+{REPLICATOR_ROLE})/hostssl\\1/' \"$HBA\" 2>/dev/null || true; "
+         f"grep -q 'hostssl replication {REPLICATOR_ROLE}' \"$HBA\" || echo "
+         f"'hostssl replication {REPLICATOR_ROLE} 0.0.0.0/0 scram-sha-256' "
+         ">> \"$HBA\""],
         timeout=30,
     )
     if proc.returncode != 0:

@@ -460,9 +460,12 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
             staging_db = temp_db
             logger.debug("Migration %s: shared name probe failed (%s) — "
                          "staging under %r", addon.id, exc, staging_db)
+    from urllib.parse import urlparse as _urlparse_old
+    _old_query = _urlparse_old(old_url).query
     staging_url = (
         f"postgresql://{_quote(old_user, safe='')}:{_quote(old_password, safe='')}"
         f"@{alias}:{old_port}/{staging_db}"
+        + (f"?{_old_query}" if _old_query else "")
     )
 
     logger.info("Migrating addon %s (%s -> %s)", addon.id, old_mode or 'default', target_mode)

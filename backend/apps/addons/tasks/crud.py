@@ -253,20 +253,21 @@ def purge_retired_addon_volumes_task(self) -> None:
             proc = subprocess.run(
                 ['docker', 'volume', 'rm', vol],
                 capture_output=True, text=True, timeout=60)
-            if proc.returncode == 0:
+            if proc.returncode == 0 or 'No such volume' in (proc.stderr or ''):
+                from apps.addons.services import volume_encryption
+                volume_encryption.cleanup_volume(addon, vol)
+                if vol.endswith('-data'):
+                    tls_vol = f"{vol[:-5]}-tls"
+                    subprocess.run(
+                        ['docker', 'volume', 'rm', tls_vol],
+                        capture_output=True, text=True, timeout=60)
                 addon.retired_volume = ''
                 addon.save(update_fields=['retired_volume', 'updated_at'])
                 purged += 1
             else:
-                # Already gone counts as purged (idempotent).
-                if 'No such volume' in (proc.stderr or ''):
-                    addon.retired_volume = ''
-                    addon.save(update_fields=['retired_volume', 'updated_at'])
-                    purged += 1
-                else:
-                    failed += 1
-                    logger.warning("Purge failed for volume %s: %s",
-                                   vol, (proc.stderr or '')[:200])
+                failed += 1
+                logger.warning("Purge failed for volume %s: %s",
+                               vol, (proc.stderr or '')[:200])
         except Exception as exc:
             failed += 1
             logger.warning("Purge failed for volume %s: %s", vol, exc)

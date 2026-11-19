@@ -61,6 +61,8 @@ class RenderTests(TestCase):
         self.assertIn('listen_port = 6432', ini)
         self.assertIn('pool_mode = transaction', ini)
         self.assertIn('auth_type = scram-sha-256', ini)
+        self.assertIn('client_tls_sslmode = require', ini)
+        self.assertIn('server_tls_sslmode = verify-ca', ini)
         self.assertTrue(userlist.startswith('"appuser" "SCRAM-SHA-256$'))
 
     def test_no_plaintext_password_leak(self):

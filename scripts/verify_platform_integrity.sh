@@ -797,33 +797,60 @@ ensure_containerd_healthy() {
     fi
 }
 
-# ── 16. Tenant pooler (pgcat-tenants) must not crash-loop ────────────────
+# ── 16. Tenant pooler (pgbouncer-tenants / legacy pgcat-tenants) must not crash-loop ──
 # 2026-09-20: the pooler's volume got stamped with the PLATFORM render
 # (replica-sync fallback matched any name containing 'pgcat' while the
-# platform pooler restarted). pgcat rejects foreign content with
-# BadConfig and the container restart-loops, invisible until someone
-# runs `docker ps`. Alert-only by design: auto-deleting the volume
-# could drop live tenant pools — an operator decides.
+# platform pooler restarted). Rejects foreign content with BadConfig and
+# restart-loops, invisible until someone runs `docker ps`. Also checks
+# /etc/pgbouncer/tls/server.key ownership/mode (AGENTS.md #23) and
+# shared-postgres SSL active state.
 ensure_tenants_pooler_healthy() {
-    timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 >/dev/null 2>&1 \
-        || { log "pgcat-tenants absent — skipping pooler check"; return 0; }
+    command -v docker >/dev/null 2>&1 || return 0
+    local pooler=""
+    if timeout -k 5 10 docker inspect smsly-hosting-pgbouncer-tenants-1 >/dev/null 2>&1; then
+        pooler="smsly-hosting-pgbouncer-tenants-1"
+    elif timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 >/dev/null 2>&1; then
+        pooler="smsly-hosting-pgcat-tenants-1"
+    else
+        log "pgbouncer-tenants absent — skipping pooler check"
+        return 0
+    fi
     local state="" health="" restarts=""
-    state=$(timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 --format '{{.State.Status}}' 2>/dev/null || echo unknown)
-    health=$(timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>/dev/null || true)
-    restarts=$(timeout -k 5 10 docker inspect smsly-hosting-pgcat-tenants-1 --format '{{.RestartCount}}' 2>/dev/null || echo unknown)
+    state=$(timeout -k 5 10 docker inspect "$pooler" --format '{{.State.Status}}' 2>/dev/null || echo unknown)
+    health=$(timeout -k 5 10 docker inspect "$pooler" --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>/dev/null || true)
+    restarts=$(timeout -k 5 10 docker inspect "$pooler" --format '{{.RestartCount}}' 2>/dev/null || echo unknown)
     if [ "$state" = "restarting" ]; then
-        log "ALERT: pgcat-tenants is crash-looping (restarts=${restarts}) — check 'docker logs smsly-hosting-pgcat-tenants-1' for BadConfig (foreign content in pgcat_tenants_config volume?)"
+        log "ALERT: ${pooler} is crash-looping (restarts=${restarts}) — check 'docker logs ${pooler}'"
         return 0
     fi
     if [ -n "$health" ] && [ "$health" != "healthy" ] && [ "$health" != "starting" ]; then
-        log "ALERT: pgcat-tenants health is '${health}' (restarts=${restarts}) — tenants may be without pooling"
+        log "ALERT: ${pooler} health is '${health}' (restarts=${restarts}) — tenants may be without pooling"
         return 0
     fi
-    if timeout -k 5 15 docker logs smsly-hosting-pgcat-tenants-1 --since 60m 2>&1 | grep -a -q "Config parse error: BadConfig"; then
-        log "ALERT: pgcat-tenants logged BadConfig in the last hour — its volume holds an unparseable pgcat.toml (platform render stamped by replica sync?)"
+    if timeout -k 5 15 docker logs "$pooler" --since 60m 2>&1 | grep -a -qE "Config parse error: BadConfig|could not open key file|SSL.*error"; then
+        log "ALERT: ${pooler} logged config/TLS errors in the last hour — inspect 'docker logs ${pooler}'"
         return 0
     fi
-    log "pgcat-tenants ${state}${health:+ (health: ${health})}"
+    if [[ "$pooler" == *"pgbouncer-tenants"* ]] && timeout -k 5 10 docker exec "$pooler" grep -q "client_tls_sslmode" /etc/pgbouncer/pgbouncer.ini 2>/dev/null; then
+        local tls_stat=""
+        tls_stat=$(timeout -k 5 10 docker exec "$pooler" stat -c '%U:%a' /etc/pgbouncer/tls/server.key 2>/dev/null || echo missing)
+        if [ "$tls_stat" = "missing" ]; then
+            log "ALERT: ${pooler} enables TLS in pgbouncer.ini but /etc/pgbouncer/tls/server.key is missing — re-run push_tenants_config"
+        elif [ "$tls_stat" != "postgres:600" ]; then
+            log "ALERT: ${pooler} /etc/pgbouncer/tls/server.key has ${tls_stat} (expected postgres:600) — repairing"
+            timeout -k 5 15 docker exec -u 0 "$pooler" sh -c \
+                'chown -R postgres:postgres /etc/pgbouncer/tls && chmod 0750 /etc/pgbouncer/tls && chmod 0644 /etc/pgbouncer/tls/ca.crt /etc/pgbouncer/tls/server.crt && chmod 0600 /etc/pgbouncer/tls/server.key' >/dev/null 2>&1 \
+                || log "ALERT: ${pooler} TLS ownership repair FAILED"
+        fi
+    fi
+    if timeout -k 5 10 docker inspect smsly-shared-postgres >/dev/null 2>&1; then
+        local sp_ssl=""
+        sp_ssl=$(timeout -k 5 10 docker exec smsly-shared-postgres psql -U postgres -d postgres -tAc "SHOW ssl;" 2>/dev/null | tr -d '[:space:]' || echo unknown)
+        if [ -n "$sp_ssl" ] && [ "$sp_ssl" != "unknown" ] && [ "$sp_ssl" != "on" ]; then
+            log "ALERT: smsly-shared-postgres has ssl=${sp_ssl} (expected on) — re-run ensure_shared_server"
+        fi
+    fi
+    log "${pooler} ${state}${health:+ (health: ${health})}"
 }
 
 # ── 17. Mesh DNS (CoreDNS) must serve the mesh zone ──────────────────
@@ -921,6 +948,99 @@ ensure_host_firewall() {
     log "ALERT: UFW is INACTIVE — napd (:8972) and edge-sidecar (:8971) bind 0.0.0.0 and rely on the host firewall. Run: bash lib/harden_ufw.sh or enable UFW with SSH allowed."
 }
 
+# ── 19b. Per-tenant encrypted addon volumes & keystore integrity ───────
+# Verifies keystore permissions (0700/0600), LUKS2 loopback mounts,
+# fscrypt unlock status, and Docker `o: bind` `data/` target presence
+# (AGENTS.md #6, #23, #24). Skips cleanly when no encrypted volumes exist.
+ensure_encrypted_volumes_healthy() {
+    local base_dir="${SMSLY_ENCRYPTED_VOLUMES_DIR:-/var/lib/smsly/encrypted-volumes}"
+    local key_dir="${SMSLY_VOLUME_KEYS_DIR:-/var/lib/smsly/volume-keys}"
+    local crypt_script="${INSTALL_DIR}/scripts/smsly-volume-crypt.sh"
+    local has_bind="0"
+
+    if command -v docker >/dev/null 2>&1; then
+        local vname="" vdev=""
+        for vname in $(timeout -k 5 15 docker volume ls -q 2>/dev/null || true); do
+            vdev=$(timeout -k 5 10 docker volume inspect -f '{{index .Options "device"}}' "$vname" 2>/dev/null || true)
+            if [[ "$vdev" == "${base_dir}"* ]]; then
+                has_bind="1"
+                if [ ! -d "$vdev" ]; then
+                    log "ALERT: Docker encrypted volume ${vname} bind device missing/unmounted: ${vdev}"
+                fi
+            fi
+        done
+    fi
+
+    if [ ! -d "$base_dir" ] && [ ! -d "$key_dir" ] && [ "$has_bind" = "0" ]; then
+        log "encrypted addon volumes unused — skipping check"
+        return 0
+    fi
+
+    if [ -d "$key_dir" ]; then
+        local dir_mode=""
+        dir_mode=$(stat -c '%a' "$key_dir" 2>/dev/null || echo unknown)
+        if [ "$dir_mode" != "700" ]; then
+            log "ALERT: volume keystore ${key_dir} has mode ${dir_mode} (expected 700) — repairing"
+            chmod 0700 "$key_dir" 2>/dev/null || true
+        fi
+        local kf="" kmode=""
+        for kf in "${key_dir}"/*.enc; do
+            [ -e "$kf" ] || continue
+            kmode=$(stat -c '%a' "$kf" 2>/dev/null || echo unknown)
+            if [ "$kmode" != "600" ]; then
+                log "ALERT: volume key ${kf} has mode ${kmode} (expected 600) — repairing"
+                chmod 0600 "$kf" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    if [ -d "${base_dir}/images" ]; then
+        local img="" vol="" mnt="" hash="" mapper=""
+        for img in "${base_dir}/images"/*.img; do
+            [ -e "$img" ] || continue
+            vol=$(basename "$img" .img)
+            mnt="${base_dir}/mnt/${vol}"
+            hash=$(printf '%s' "$vol" | sha256sum | awk '{print substr($1, 1, 16)}')
+            mapper="smsly-vol-${hash}"
+            if ! timeout -k 5 10 mountpoint -q "$mnt" 2>/dev/null; then
+                local running_ctr=""
+                if command -v docker >/dev/null 2>&1; then
+                    running_ctr=$(timeout -k 5 10 docker ps -q --filter "volume=${vol}" 2>/dev/null || true)
+                fi
+                if [ -z "$running_ctr" ] && [ -f "$crypt_script" ] && [ -n "${FIELD_ENCRYPTION_KEY:-}" ]; then
+                    timeout -k 5 60 bash "$crypt_script" unlock-all >/dev/null 2>&1 || true
+                fi
+                if ! timeout -k 5 10 mountpoint -q "$mnt" 2>/dev/null; then
+                    log "ALERT: encrypted LUKS volume ${vol} is UNMOUNTED at ${mnt}"
+                    continue
+                fi
+            fi
+            if command -v cryptsetup >/dev/null 2>&1; then
+                if ! timeout -k 5 10 cryptsetup status "$mapper" >/dev/null 2>&1; then
+                    log "ALERT: encrypted mapper ${mapper} inactive for ${vol}"
+                fi
+            fi
+            if [ ! -d "${mnt}/data" ]; then
+                log "ALERT: encrypted mount ${mnt} missing data/ subdirectory"
+            fi
+        done
+    fi
+
+    if [ -d "${base_dir}/fscrypt" ] && command -v fscrypt >/dev/null 2>&1; then
+        local fdir=""
+        for fdir in "${base_dir}/fscrypt"/*; do
+            [ -d "$fdir" ] || continue
+            if ! timeout -k 5 10 fscrypt status "$fdir" 2>/dev/null | grep -q "Unlocked: Yes"; then
+                log "ALERT: fscrypt directory locked or unencrypted: ${fdir}"
+            elif [ ! -d "${fdir}/data" ]; then
+                log "ALERT: fscrypt directory missing data/ subdirectory: ${fdir}/data"
+            fi
+        done
+    fi
+
+    log "encrypted addon volumes check complete"
+}
+
 ensure_registry_pair
 ensure_egress_nic_rules
 ensure_spire_running
@@ -947,6 +1067,7 @@ ensure_tenants_pooler_healthy
 ensure_mesh_dns_serving
 ensure_postgres_archiving
 ensure_host_firewall
+ensure_encrypted_volumes_healthy
 
 # ── 20. Host /etc/hosts must not hijack customer or platform domains ──
 # 127.0.0.1 mapping of customer/platform domains in /etc/hosts poisons

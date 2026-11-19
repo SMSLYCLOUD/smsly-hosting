@@ -144,12 +144,54 @@ class DatabaseProxy:
 
     def _build_pg_connection(proxy):
         import psycopg2
+        from urllib.parse import parse_qs, urlparse
+        from apps.addons.services.addon_tls import get_addon_ca_cert_path
+
+        parsed = urlparse(proxy.connection_url or '')
+        sslmodes = [m.lower() for m in parse_qs(parsed.query).get('sslmode', [])]
+        current_mode = sslmodes[0] if sslmodes else ''
+        ca_path = get_addon_ca_cert_path()
+        if ca_path and current_mode in ('', 'prefer', 'require'):
+            try:
+                return psycopg2.connect(
+                    proxy.connection_url,
+                    connect_timeout=10,
+                    sslmode='verify-ca',
+                    sslrootcert=ca_path,
+                )
+            except psycopg2.OperationalError as exc:
+                # Legacy plaintext containers without SSL should still be
+                # reachable when the stored URL did not mandate TLS.
+                if current_mode in ('', 'prefer') and 'does not support ssl' in str(exc).lower():
+                    return psycopg2.connect(proxy.connection_url, connect_timeout=10)
+                raise
         return psycopg2.connect(proxy.connection_url, connect_timeout=10)
 
     def _build_redis_connection(proxy):
         import redis
+        from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+        from apps.addons.services.addon_tls import get_addon_ca_cert_path
+
+        url = proxy.connection_url or ''
+        ca_path = get_addon_ca_cert_path()
+        if url.startswith('rediss://') and ca_path:
+            parsed = urlparse(url)
+            filtered_qs = [
+                (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                if k != 'ssl_cert_reqs'
+            ]
+            clean_url = urlunparse(parsed._replace(query=urlencode(filtered_qs)))
+            return redis.from_url(
+                clean_url,
+                decode_responses=True,
+                socket_connect_timeout=10,
+                socket_timeout=15,
+                ssl_cert_reqs='required',
+                ssl_ca_certs=ca_path,
+                ssl_check_hostname=False,
+            )
         return redis.from_url(
-            proxy.connection_url,
+            url,
             decode_responses=True,
             socket_connect_timeout=10,
             socket_timeout=15,

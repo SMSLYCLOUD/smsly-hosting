@@ -47,7 +47,7 @@ class EnsureLogicalDbTests(SimpleTestCase):
         ensure_logical_db("tenant_a", "tenant_a", "pw123")
         joined = "\n".join(_sqls(mock_psql))
         self.assertIn('CREATE ROLE "tenant_a"', joined)
-        self.assertIn('CONNECTION LIMIT 10', joined)
+        self.assertIn(f'CONNECTION LIMIT {shared_postgres.ROLE_CONNECTION_LIMIT}', joined)
         self.assertIn('statement_timeout', joined)
         self.assertIn('CREATE DATABASE "tenant_a" OWNER "tenant_a"', joined)
         # PUBLIC locked out, owner granted — the tenant-isolation core.
@@ -221,6 +221,12 @@ class SharedStandbyTests(SimpleTestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        tls_patcher = patch(
+            "apps.addons.services.addon_tls.ensure_tls_volume",
+            return_value="smsly-shared-postgres-replica-tls",
+        )
+        tls_patcher.start()
+        self.addCleanup(tls_patcher.stop)
 
     def _run_ok(self, stdout=""):
         proc = MagicMock()
@@ -255,7 +261,7 @@ class SharedStandbyTests(SimpleTestCase):
         self.assertIn("-R", flat)
         # Standby must carry the primary's tuning flags: command-line
         # settings do not replicate and recovery aborts otherwise.
-        self.assertIn("max_connections=400", flat)
+        self.assertIn(f"max_connections={sp.SHARED_MAX_CONNECTIONS}", flat)
         # Fresh named volumes are root-owned 0755; the seed bypasses the image
         # entrypoint, so it must chown AND chmod (0700) or postgres refuses
         # to start.

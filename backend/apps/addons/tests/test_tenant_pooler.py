@@ -57,10 +57,20 @@ class RenderTests(TestCase):
         ini, _ = _render([])
         for key in ('listen_addr = 0.0.0.0', 'listen_port = 5432',
                     'auth_type = scram-sha-256',
-                    'pool_mode = transaction'):
+                    'pool_mode = transaction',
+                    'client_tls_sslmode = require',
+                    'client_tls_key_file = /etc/pgbouncer/tls/server.key',
+                    'client_tls_cert_file = /etc/pgbouncer/tls/server.crt',
+                    'server_tls_sslmode = verify-ca',
+                    'server_tls_ca_file = /etc/pgbouncer/tls/ca.crt'):
             self.assertIn(key, ini)
         self.assertIn('[databases]', ini)
         self.assertIn('[pgbouncer]', ini)
+
+    def test_render_tls_can_be_disabled(self):
+        ini, userlist = tp.render_tenants_config([], tls_enabled=False)
+        self.assertNotIn('client_tls_sslmode', ini)
+        tp.validate_rendered_config(ini, userlist, tls_enabled=False)
 
     def test_render_needs_no_admin_password(self):
         """PgBouncer has no admin-account requirement (pgcat did)."""
@@ -121,9 +131,10 @@ class PushTests(TestCase):
             status=Addon.Status.ACTIVE, provision_mode="shared",
             connection_url="postgresql://u1:pw1@postgres-a:5432/d1")
 
-    def _push(self, remote_ini, remote_ul):
+    def _push(self, remote_ini, remote_ul, certs_ok=True):
         with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
              mock.patch.object(tp, 'container_running', return_value=True), \
+             mock.patch.object(tp, 'ensure_pooler_tls_certs', return_value=certs_ok), \
              mock.patch.object(tp, '_read_remote_file',
                                side_effect=[remote_ini, remote_ul]), \
              mock.patch.object(tp, '_write_remote_file', return_value={}) as writer, \
@@ -144,7 +155,7 @@ class PushTests(TestCase):
     def test_write_and_reload_when_changed(self):
         # Online HUP reload: config changes apply without dropping
         # pooled connections (no container restart).
-        result, writer, runner = self._push('stale ini', 'stale userlist')
+        result, writer, runner = self._push('stale client_tls_sslmode ini', 'stale userlist')
         self.assertTrue(result['ok'])
         self.assertTrue(result['changed'])
         self.assertFalse(result['restarted'])
@@ -152,10 +163,30 @@ class PushTests(TestCase):
         hup_calls = [c for c in runner.call_args_list if 'HUP' in str(c)]
         self.assertEqual(len(hup_calls), 1)
 
+    def test_restarts_when_tls_newly_enabled(self):
+        result, writer, runner = self._push('stale plaintext ini', 'stale userlist')
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['changed'])
+        self.assertTrue(result['restarted'])
+        self.assertEqual(writer.call_count, 2)
+        restart_calls = [c for c in runner.call_args_list if 'restart' in str(c)]
+        self.assertEqual(len(restart_calls), 1)
+
+    def test_fails_closed_when_tls_cert_sync_fails(self):
+        with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
+             mock.patch.object(tp, 'container_running', return_value=True), \
+             mock.patch.object(tp, 'ensure_pooler_tls_certs', return_value=False), \
+             mock.patch.object(tp, '_write_remote_file') as writer:
+            result = tp.push_tenants_config()
+        self.assertFalse(result['ok'])
+        self.assertIn('TLS cert sync failed', result['error'])
+        writer.assert_not_called()
+
     def test_restart_when_hup_fails(self):
         with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
              mock.patch.object(tp, 'container_running', return_value=True), \
-             mock.patch.object(tp, '_read_remote_file', return_value='stale'), \
+             mock.patch.object(tp, 'ensure_pooler_tls_certs', return_value=True), \
+             mock.patch.object(tp, '_read_remote_file', return_value='stale client_tls_sslmode'), \
              mock.patch.object(tp, '_write_remote_file', return_value={}), \
              mock.patch.object(tp, '_run',
                                side_effect=[{'error': 'no kill'}, {}, {}]) as runner:
@@ -252,6 +283,7 @@ class ReconcileTests(TestCase):
         ini, userlist = _render(tp.list_tenant_pools(with_passwords=True))
         with mock.patch.object(tp, 'tenants_container_name', return_value='c1'), \
              mock.patch.object(tp, 'container_running', return_value=True), \
+             mock.patch.object(tp, 'ensure_pooler_tls_certs', return_value=True), \
              mock.patch.object(tp, '_read_remote_file',
                                side_effect=[ini, userlist]), \
              mock.patch.object(tp, '_run', return_value={}), \

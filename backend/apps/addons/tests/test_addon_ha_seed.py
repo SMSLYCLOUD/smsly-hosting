@@ -22,6 +22,9 @@ class StandbySeedOwnershipTests(SimpleTestCase):
     def test_local_standby_seed_fixes_ownership(self):
         mgr = _manager()
         with patch.object(
+            AddonHaManager, "_ensure_pg_tls_volume",
+            return_value="x-ha-standby-tls",
+        ), patch.object(
             AddonHaManager, "_docker_run",
             return_value="abc123",
         ) as mock_run:
@@ -32,6 +35,7 @@ class StandbySeedOwnershipTests(SimpleTestCase):
         self.assertIn("pg_basebackup", flat)
         self.assertIn("chown postgres:postgres /var/lib/postgresql/data", flat)
         self.assertIn("chmod 0700 /var/lib/postgresql/data", flat)
+        self.assertIn("ssl=on", flat)
 
     def test_remote_standby_seed_fixes_ownership(self):
         mgr = _manager()
@@ -39,6 +43,9 @@ class StandbySeedOwnershipTests(SimpleTestCase):
         ssh.exec_command.return_value = ("", "", 0)
         with patch.object(
             AddonHaManager, "_ssh_client", return_value=ssh,
+        ), patch.object(
+            AddonHaManager, "_ensure_pg_tls_volume",
+            return_value="x-ha-standby-tls",
         ):
             mgr._run_remote_postgres_standby(
                 MagicMock(host="10.0.0.9"), "x-ha-standby",
@@ -48,6 +55,7 @@ class StandbySeedOwnershipTests(SimpleTestCase):
         self.assertIn("pg_basebackup", sent)
         self.assertIn("chown postgres:postgres /var/lib/postgresql/data", sent)
         self.assertIn("chmod 0700 /var/lib/postgresql/data", sent)
+        self.assertIn("ssl=on", sent)
 
     def test_reseed_seed_fixes_ownership(self):
         mgr = _manager()
@@ -57,6 +65,9 @@ class StandbySeedOwnershipTests(SimpleTestCase):
         addon.public_domain = None
         addon.connection_url = "postgresql://u:p@x:5432/db"
         with patch.object(
+            AddonHaManager, "_ensure_pg_tls_volume",
+            return_value="smsly-addon-postgres-x-tls",
+        ), patch.object(
             AddonHaManager, "_docker_run", return_value="abc123",
         ) as mock_run, patch.object(
             AddonHaManager, "_move_alias_off",
@@ -71,6 +82,7 @@ class StandbySeedOwnershipTests(SimpleTestCase):
         self.assertIn("pg_basebackup", flat)
         self.assertIn("chown postgres:postgres /var/lib/postgresql/data", flat)
         self.assertIn("chmod 0700 /var/lib/postgresql/data", flat)
+        self.assertIn("ssl=on", flat)
 
     def test_ownership_fix_constant_covers_both(self):
         self.assertIn("chown postgres:postgres", SEED_OWNERSHIP_FIX)
