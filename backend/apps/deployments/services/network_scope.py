@@ -1102,19 +1102,25 @@ def reconcile_network_isolation() -> dict[str, int]:
 def _purge_stale_only() -> int:
     """Remove tagged rules whose bridge interface no longer exists."""
     removed = 0
+    bridge_cache: dict[str, bool] = {}
     for rule in _list_docker_user_rules():
+        has_tag = RULE_TAG_PREFIX in rule
+        if not has_tag:
+            continue
         parts = rule.split()
         iface = None
         for i, part in enumerate(parts):
             if part == "-i" and i + 1 < len(parts):
                 iface = parts[i + 1]
                 break
-        has_tag = RULE_TAG_PREFIX in rule
-        if iface and iface.startswith("br-") and not _bridge_exists(iface) and has_tag:
-            res = _sh(["iptables", "-D", "DOCKER-USER"] + parts)
-            if res.returncode == 0:
-                removed += 1
-                logger.info("Purged stale DOCKER-USER rules for dead bridge %s", iface)
+        if iface and iface.startswith("br-"):
+            if iface not in bridge_cache:
+                bridge_cache[iface] = _bridge_exists(iface)
+            if not bridge_cache[iface]:
+                res = _sh(["iptables", "-D", "DOCKER-USER"] + parts)
+                if res.returncode == 0:
+                    removed += 1
+                    logger.info("Purged stale DOCKER-USER rules for dead bridge %s", iface)
     return removed
 
 def cross_node_internal_endpoints(service, base_domain: str = "") -> dict:

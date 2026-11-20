@@ -4385,9 +4385,13 @@ _harden_openappsec_apply_mode() {
         return 0
     fi
     mv "$tmp_policy" "$policy"
-    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent...${NC}"
+    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent & envoy...${NC}"
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
+            echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
+    fi
     return 0
 }
 
@@ -11121,9 +11125,13 @@ _harden_openappsec_apply_mode() {
         return 0
     fi
     mv "$tmp_policy" "$policy"
-    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent...${NC}"
+    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent & envoy...${NC}"
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
+            echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
+    fi
     return 0
 }
 
@@ -12797,9 +12805,13 @@ _harden_openappsec_apply_mode() {
         return 0
     fi
     mv "$tmp_policy" "$policy"
-    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent...${NC}"
+    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent & envoy...${NC}"
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
+            echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
+    fi
     return 0
 }
 
@@ -23899,9 +23911,13 @@ _harden_openappsec_apply_mode() {
         return 0
     fi
     mv "$tmp_policy" "$policy"
-    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent...${NC}"
+    echo -e "${BLUE}  → [harden] open-appsec mode → $desired (incl. practice override-mode) — restarting agent & envoy...${NC}"
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
+    if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
+            echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
+    fi
     return 0
 }
 
