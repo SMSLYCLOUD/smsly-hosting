@@ -1841,6 +1841,7 @@ services:
     environment:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
       - CADDY_ASK_SECRET=${CADDY_ASK_SECRET:-}
+      - CROWDSEC_BOUNCER_KEY=${CROWDSEC_BOUNCER_KEY:-}
       - DOMAIN=${DOMAIN:-localhost}
     volumes:
       - ./caddy-config:/etc/caddy:z

@@ -73,6 +73,79 @@ EDGE_JWT_FORWARD_AUTH_LINES = [
 _ALIAS_REWRITE_ROOT_RE = re.compile(r"^/[A-Za-z0-9/_.-]{0,100}$")
 _MAX_HOST_ALIASES_PER_SERVICE = 10
 
+_CLOUDFLARE_TRUSTED_CIDRS: tuple[str, ...] = (
+    # Cloudflare IPv4
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "172.64.0.0/13", "131.0.72.0/22",
+    # Cloudflare IPv6
+    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+    "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+)
+
+
+def _format_host_cidr(raw_ip: str) -> str:
+    raw = str(raw_ip or "").strip()
+    if not raw:
+        return ""
+    try:
+        addr = ipaddress.ip_address(raw)
+        return f"{addr}/32" if addr.version == 4 else f"{addr}/128"
+    except ValueError:
+        try:
+            return str(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            return ""
+
+
+def _trusted_proxy_cidrs(include_cloudflare: bool = True, config=None) -> list[str]:
+    """Return ordered Caddy trusted_proxies CIDRs for master & node Caddyfiles.
+
+    Always trusts private_ranges, Tailscale/CGNAT/mesh 100.64.0.0/10, and known
+    ManagedServer host/WireGuard IPs so multi-hop master->node proxying preserves
+    real attacker IPs instead of banning the master server IP. Appends Cloudflare
+    edge CIDRs when edge proxying is enabled.
+    """
+    cidrs: list[str] = ["private_ranges", "100.64.0.0/10"]
+    if config is not None:
+        srv_cidr = _format_host_cidr(getattr(config, "server_ip", "") or "")
+        if srv_cidr:
+            cidrs.append(srv_cidr)
+    try:
+        from apps.deployments.models.core import ManagedServer
+        if _table_exists(ManagedServer._meta.db_table):
+            for host_ip, wg_ip in ManagedServer.objects.values_list("host", "wg_address"):
+                for raw in (host_ip, wg_ip):
+                    cidr = _format_host_cidr(raw or "")
+                    if cidr:
+                        cidrs.append(cidr)
+    except Exception as exc:
+        logger.debug("ManagedServer lookup skipped for trusted_proxies: %s", exc)
+    if include_cloudflare:
+        cidrs.extend(_CLOUDFLARE_TRUSTED_CIDRS)
+    return list(dict.fromkeys(cidrs))
+
+
+def _build_servers_trusted_proxies_lines(include_cloudflare: bool = True, config=None) -> list[str]:
+    proxies = " ".join(_trusted_proxy_cidrs(include_cloudflare=include_cloudflare, config=config))
+    return [
+        "    servers {",
+        f"        trusted_proxies static {proxies}",
+        "        client_ip_headers Cf-Connecting-Ip X-Forwarded-For",
+        "    }",
+    ]
+
+
+def _resolve_crowdsec_bouncer_key(config) -> str:
+    try:
+        key = str(getattr(config, "crowdsec_bouncer_key", "") or "").strip()
+        if key:
+            return key
+    except Exception:
+        pass
+    return str(os.environ.get("CROWDSEC_BOUNCER_KEY", "") or "").strip()
+
 
 def node_service_domain(slug: str, node_number, base_domain: str) -> str:
     """Flat per-node service hostname: ``{slug}-node{N}.{zone}``.
@@ -318,13 +391,16 @@ def _apply_backend_retry_budget(caddyfile: str) -> str:
 def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: str = ""):
     upstream_url = upstream_url or _service_proxy_upstream()
     has_fallbacks = len(str(upstream_url).split()) > 1
-    if upstream_host or has_fallbacks:
+    is_remote_upstream = "://" in str(upstream_url)
+    if upstream_host or has_fallbacks or is_remote_upstream:
         lines.append(f"    reverse_proxy {upstream_url} {{")
         if has_fallbacks:
             lines.append("        lb_try_duration 5s")
             lines.append("        lb_try_interval 250ms")
         if upstream_host:
             lines.append(f"        header_up Host {upstream_host}")
+        if is_remote_upstream:
+            lines.append("        header_up Cf-Connecting-Ip {client_ip}")
         if upstream_url.startswith("https://") and upstream_host:
             lines.append("        transport http {")
             lines.append("            tls")
@@ -519,7 +595,8 @@ def _alias_scoped_redirects(rules: list[tuple[str, str, str, str]],
 
 def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: str, host_header: str,
                            path_redirect_rules: list[tuple[str, str, str, str]] | None = None,
-                           edge_jwt_required: bool = False, waf_opt_out: bool = False) -> str:
+                           edge_jwt_required: bool = False, waf_opt_out: bool = False,
+                           crowdsec_enabled: bool = False) -> str:
     """Caddyfile site block for a host alias (accounts.google.com pattern).
 
     Semantics (from Service.host_aliases help_text):
@@ -544,6 +621,8 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         "    }",
         "    import secure_headers",
     ])
+    if crowdsec_enabled:
+        lines.append("    crowdsec")
     if not waf_opt_out:
         lines.extend([
             "    route {",
@@ -595,11 +674,14 @@ def _build_service_domain_block(
     path_redirect_rules: list[tuple[str, str, str, str]] | None = None,
     edge_jwt_required: bool = False,
     waf_opt_out: bool = False,
+    crowdsec_enabled: bool = False,
 ) -> str:
     lines = [f"{domain} {{"]
 
     lines.extend(_path_redirect_site_lines(path_redirect_rules or [], site_domain=domain))
     lines.append("    import secure_headers")
+    if crowdsec_enabled:
+        lines.append("    crowdsec")
     if not waf_opt_out:
         lines.extend([
             "    route {",
@@ -644,7 +726,7 @@ def _www_apex_redirect_target(value: str, verified_set: set[str]) -> str:
     return ""
 
 
-def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
+def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool = False) -> list:
     blocks = []
     seen = set()
 
@@ -696,6 +778,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                             path_redirect_rules=_service_path_redirect_rules(service),
                             edge_jwt_required=bool(getattr(service, "edge_jwt_required", False)),
                             waf_opt_out=bool(getattr(service, "waf_opt_out", False)),
+                            crowdsec_enabled=crowdsec_enabled,
                         )
                     )
 
@@ -746,6 +829,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         lines.append("        on_demand")
                         lines.append("    }")
                         lines.append("    import secure_headers")
+                        if crowdsec_enabled:
+                            lines.append("    crowdsec")
                         # Challenge handle BEFORE the apex redirect: the
                         # verifier fetches over http (308 to https) and the
                         # www host must answer the token itself, not bounce
@@ -766,6 +851,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         _service_path_redirect_rules(service), site_domain=value,
                     ))
                     lines.append("    import secure_headers")
+                    if crowdsec_enabled:
+                        lines.append("    crowdsec")
                     if not bool(getattr(service, "waf_opt_out", False)):
                         lines.extend([
                             "    route {",
@@ -824,6 +911,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     path_redirect_rules=alias_redirects,
                     edge_jwt_required=bool(getattr(service, "edge_jwt_required", False)),
                     waf_opt_out=bool(getattr(service, "waf_opt_out", False)),
+                    crowdsec_enabled=crowdsec_enabled,
                 ))
 
             # Custom staging domain: only route if this service has an active
@@ -852,6 +940,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                             lines.append("        on_demand")
                             lines.append("    }")
                             lines.append("    import secure_headers")
+                            if crowdsec_enabled:
+                                lines.append("    crowdsec")
                             lines.extend([
                                 "    route {",
                                 "        request_header -X-SMSLY-Remote-Sync",
@@ -879,9 +969,10 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         wildcard_domain,
                     )
                 else:
+                    _addon_cs = "\n    crowdsec" if crowdsec_enabled else ""
                     blocks.append(
                         f"""{public_domain} {{
-    import secure_headers
+    import secure_headers{_addon_cs}
     route {{
         request_header -X-SMSLY-Remote-Sync
         import coraza_waf
@@ -1535,7 +1626,11 @@ def _get_wildcard_path_redirect_lines(wildcard_domain: str) -> list[str]:
     return lines
 
 
-def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> list[str]:
+def _get_node_subdomain_blocks(
+    wildcard_domain: str,
+    cloudflare_token: str,
+    crowdsec_enabled: bool = False,
+) -> list[str]:
     """Generate Caddyfile blocks for node subdomains (node-{slug}.{domain}).
 
     These blocks reverse proxy to nodes via WireGuard mesh IP.
@@ -1574,11 +1669,13 @@ def _get_node_subdomain_blocks(wildcard_domain: str, cloudflare_token: str) -> l
             block.extend([
                 "    }",
                 "    import secure_headers",
+                *(["    crowdsec"] if crowdsec_enabled else []),
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
                 f"    reverse_proxy http://{mesh_ip}:80 {{",
                 "        header_up Host {host}",
+                "        header_up Cf-Connecting-Ip {client_ip}",
                 "    }",
                 "}",
             ])
@@ -1649,7 +1746,13 @@ def generate_node_caddyfile(node) -> str:
     sections.append(
         "{\n"
         "    order coraza_waf first\n"
-        "}"
+        + "\n".join(
+            _build_servers_trusted_proxies_lines(
+                include_cloudflare=bool(getattr(config, "edge_proxy_records", False)),
+                config=config,
+            )
+        )
+        + "\n}"
     )
     sections.append(CORAZA_SNIPPET)
 
@@ -1907,6 +2010,27 @@ def generate_caddyfile(config) -> str:
     sections = []
     domain = ""
     cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+    _FAKE_TOKENS = {
+        "fake", "changeme", "your_cloudflare_api_token", "test", "",
+        "dummy_token_for_testing",
+    }
+    if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
+        cloudflare_token = ""
+
+    env_domain = os.environ.get("DOMAIN", "").strip()
+    effective_domain = config.domain if config.domain else env_domain
+    use_ssl = config.use_ssl if config.domain else (os.environ.get("DEBUG", "False").lower() not in {"true", "1", "t"})
+
+    if effective_domain:
+        try:
+            domain = normalize_domain(effective_domain, allow_ip=True)
+            if _is_ip(domain):
+                use_ssl = False
+        except ValueError:
+            logger.warning("Ignoring invalid platform domain in config: %r", effective_domain)
+
+    _crowdsec_key = _resolve_crowdsec_bouncer_key(config)
+    _crowdsec_active = bool(getattr(config, "enable_crowdsec_waf", False) and _crowdsec_key)
 
     _ask_secret = ""
     try:
@@ -1951,50 +2075,35 @@ def generate_caddyfile(config) -> str:
         "    # the responder and rules never executed.",
         "    order coraza_waf first",
     ]
+    if _crowdsec_active:
+        global_lines.extend([
+            "    order crowdsec before coraza_waf",
+            "    crowdsec {",
+            "        api_url http://smsly-crowdsec:8080",
+            f"        api_key {_crowdsec_key}",
+            "        ticker_interval 2s",
+            "    }",
+        ])
 
-    # Edge Shield: when records are Cloudflare-proxied, ALL inbound
-    # connections arrive from Cloudflare IPs and X-Forwarded-For carries
-    # the true client. Without this, Caddy logs/rate-limits see only CF
-    # edge IPs — CrowdSec bans single Cloudflare nodes and every client
-    # shares one rate-limit bucket. trusted_proxies restricts
-    # X-Forwarded-For honoring to Cloudflare's published ranges only
-    # (a non-CF source cannot spoof its forwarding chain).
+    # Edge Shield & Mesh Proxy Trust: always trust internal/private/WG and
+    # known ManagedServer IPs so multi-hop master->node traffic never logs the
+    # master IP as client_ip; add Cloudflare ranges when edge_proxy_records is on.
     try:
         _edge_proxied = bool(getattr(config, "edge_proxy_records", False))
     except Exception:
         _edge_proxied = False
-    if _edge_proxied and domain:
-        global_lines.extend([
-            "    servers {",
-            "        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 172.64.0.0/13 131.0.72.0/22",
-            "    }",
-        ])
+    global_lines.extend(
+        _build_servers_trusted_proxies_lines(
+            include_cloudflare=bool(_edge_proxied and domain),
+            config=config,
+        )
+    )
 
     global_lines.append("}")
     sections.append("\n".join(global_lines))
 
     sections.append(SECURE_HEADERS_SNIPPET)
     sections.append(CORAZA_SNIPPET)
-
-    _FAKE_TOKENS = {
-        "fake", "changeme", "your_cloudflare_api_token", "test", "",
-        "dummy_token_for_testing",
-    }
-    if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
-        cloudflare_token = ""
-
-    env_domain = os.environ.get("DOMAIN", "").strip()
-
-    effective_domain = config.domain if config.domain else env_domain
-    use_ssl = config.use_ssl if config.domain else (os.environ.get("DEBUG", "False").lower() not in {"true", "1", "t"})
-
-    if effective_domain:
-        try:
-            domain = normalize_domain(effective_domain, allow_ip=True)
-            if _is_ip(domain):
-                use_ssl = False
-        except ValueError:
-            logger.warning("Ignoring invalid platform domain in config: %r", effective_domain)
 
     # Single source of truth for "the *.domain site exists". The
     # wildcard site block, the per-host block skip, known-hosts, and the
@@ -2012,6 +2121,7 @@ def generate_caddyfile(config) -> str:
             [
                 "    encode gzip",
                 "    import secure_headers",
+                *(["    crowdsec"] if _crowdsec_active else []),
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",
@@ -2139,6 +2249,8 @@ def generate_caddyfile(config) -> str:
             wildcard_lines.append("        output file /var/log/caddy/access.log")
             wildcard_lines.append("    }")
             wildcard_lines.append("    import secure_headers")
+            if _crowdsec_active:
+                wildcard_lines.append("    crowdsec")
             wildcard_lines.append("    request_header -X-SMSLY-Remote-Sync")
 
             local_previews = []
@@ -2313,6 +2425,7 @@ def generate_caddyfile(config) -> str:
                         wildcard_lines.extend(
                             [
                                 "            header_up Host {host}",
+                                "            header_up Cf-Connecting-Ip {client_ip}",
                                 "            transport http {",
                                 "                tls",
                                 f"                tls_server_name {host}",
@@ -2339,6 +2452,7 @@ def generate_caddyfile(config) -> str:
                 wildcard_lines.extend(
                     [
                         "            header_up Host {host}",
+                        "            header_up Cf-Connecting-Ip {client_ip}",
                         "        }",
                         "    }",
                     ]
@@ -2396,15 +2510,16 @@ def generate_caddyfile(config) -> str:
             sections.append("\n".join(wildcard_lines))
 
         # Node subdomains (node-{slug}.{domain}) — reverse proxy to nodes via WireGuard
-        node_blocks = _get_node_subdomain_blocks(domain, cloudflare_token)
+        node_blocks = _get_node_subdomain_blocks(domain, cloudflare_token, crowdsec_enabled=_crowdsec_active)
         for block in node_blocks:
             sections.append(block)
 
     if domain and not use_ssl:
+        _http_cs = "\n    crowdsec" if _crowdsec_active else ""
         sections.append(
             f"""http://{domain} {{
     encode gzip
-    import secure_headers
+    import secure_headers{_http_cs}
     handle /api/* {{
         reverse_proxy backend:8000
     }}
@@ -2501,10 +2616,11 @@ def generate_caddyfile(config) -> str:
         _tls_line = ""
         if _is_ip(str(domain)):
             _tls_line = f"    tls {_caddy_crt} {_caddy_key}"
+        _cs_443 = "    crowdsec\n" if _crowdsec_active else ""
         sections.append(
             f""":443 {{
 {_tls_line}
-    handle /api/* {{
+{_cs_443}    handle /api/* {{
         reverse_proxy backend:8000
     }}
     handle /ws/* {{
@@ -2542,9 +2658,11 @@ def generate_caddyfile(config) -> str:
         )
 
     if use_ssl and domain:
+        _cs_80_ssl = "    crowdsec\n" if _crowdsec_active else ""
         sections.append(
-            """:80 {
-    @redirectable {
+            ":80 {\n"
+            + _cs_80_ssl
+            + """    @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
         not host localhost
         not host 127.0.0.1
@@ -2607,9 +2725,11 @@ def generate_caddyfile(config) -> str:
 }"""
         )
     elif not domain:
+        _cs_80_plain = "    crowdsec\n" if _crowdsec_active else ""
         sections.append(
-            """:80 {
-    # HTTP-proof domain verification challenge (see the use_ssl branch
+            ":80 {\n"
+            + _cs_80_plain
+            + """    # HTTP-proof domain verification challenge (see the use_ssl branch
     # above). First so the catch-all below never swallows it.
     handle /.well-known/smsly-verify/* {
         reverse_proxy backend:8000 {
@@ -2652,7 +2772,10 @@ def generate_caddyfile(config) -> str:
     # (_wildcard_site_on). See the flag definition for why these must
     # never disagree (silent dead 301s, 2026-09-12).
     wildcard_base = domain if _wildcard_site_on else ""
-    service_blocks = _get_service_domain_blocks(wildcard_domain=wildcard_base)
+    service_blocks = _get_service_domain_blocks(
+        wildcard_domain=wildcard_base,
+        crowdsec_enabled=_crowdsec_active,
+    )
     sections.extend(service_blocks)
 
     header = "# Grid Caddyfile - Auto-generated by Settings UI\n"

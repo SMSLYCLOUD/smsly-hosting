@@ -7,7 +7,9 @@ FROM caddy:${CADDY_VERSION}-builder AS builder
 
 RUN xcaddy build --output /usr/bin/caddy \
     --with github.com/caddy-dns/cloudflare@v0.2.4 \
-    --with github.com/corazawaf/coraza-caddy/v2
+    --with github.com/corazawaf/coraza-caddy/v2 \
+    --with github.com/hslatman/caddy-crowdsec-bouncer/http \
+    --with github.com/hslatman/caddy-crowdsec-bouncer/crowdsec
 
 # Stage 2: Final Image
 FROM caddy:${CADDY_VERSION}-alpine

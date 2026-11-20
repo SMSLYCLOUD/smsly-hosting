@@ -104,8 +104,10 @@ class TestFirstStrikeSync(TestCase):
     def _hub_list(self, installed=True):
         import json
 
+        from apps.crowdsec.tasks import TIGHTENED_SCENARIOS
+
         names = (
-            list(FIRST_STRIKE_SCENARIOS)
+            [*FIRST_STRIKE_SCENARIOS, *TIGHTENED_SCENARIOS]
             if installed
             else []
         )
@@ -117,7 +119,6 @@ class TestFirstStrikeSync(TestCase):
         calls = []
 
         def fake(*cmd, **kwargs):
-            cmd = list(cmd)
             cmd = list(cmd)
             calls.append(cmd)
             if cmd[:2] == ["exec", "smsly-crowdsec"]:
@@ -148,6 +149,7 @@ class TestFirstStrikeSync(TestCase):
         self.assertEqual(res["status"], "ok")
         self.assertTrue(res["changed"])
         self.assertTrue(res["reloaded"])
+        self.assertIn("smsly/http-dotfile-probing-first-strike", res["applied"])
         flat = [" ".join(c) for c in calls]
         self.assertTrue(any("scenarios remove" in c for c in flat))
         # Collection-member originals require --force (rc 0 alone lies).
@@ -155,6 +157,15 @@ class TestFirstStrikeSync(TestCase):
         self.assertTrue(any(c.startswith("kill") for c in flat))
 
     def test_enabled_converged_is_noop(self):
+        from apps.crowdsec.tasks import (
+            _DOTFILE_SCENARIO_FILENAME,
+            _DOTFILE_TRIGGER_YAML,
+            _PLATFORM_WHITELIST_FILENAME,
+            TIGHTENED_SCENARIOS,
+            _build_override_content,
+            _build_platform_whitelist_content,
+        )
+
         def fake(*cmd, **kwargs):
             cmd = list(cmd)
             if cmd[:2] == ["exec", "smsly-crowdsec"]:
@@ -166,23 +177,34 @@ class TestFirstStrikeSync(TestCase):
                         stdout="http-sensitive-files-first-strike.yaml\n"
                         "http-admin-interface-probing-first-strike.yaml\n"
                         "http-path-traversal-probing-first-strike.yaml\n"
+                        "http-probing-first-strike.yaml\n"
+                        "http-sqli-probing-first-strike.yaml\n"
+                        "http-xss-probing-first-strike.yaml\n"
+                        f"{_DOTFILE_SCENARIO_FILENAME}\n"
                     )
                 if sub[0] == "cat":
-                    # Existing override already equals desired content.
-                    from apps.crowdsec.tasks import _build_override_content
-
                     path = sub[1]
                     if "hub/scenarios" in path:
                         return _result(stdout=HUB_YAML)
-                    hub = next(
-                        h for h in FIRST_STRIKE_SCENARIOS
-                        if path.endswith(
-                            h.split("/", 1)[1] + "-first-strike.yaml"
+                    if path.endswith(_DOTFILE_SCENARIO_FILENAME):
+                        return _result(stdout=_DOTFILE_TRIGGER_YAML)
+                    if path.endswith(_PLATFORM_WHITELIST_FILENAME):
+                        return _result(
+                            stdout=_build_platform_whitelist_content() or ""
                         )
-                    )
-                    return _result(
-                        stdout=_build_override_content(hub, HUB_YAML, 1)
-                    )
+                    for hub, cap in FIRST_STRIKE_SCENARIOS.items():
+                        if path.endswith(hub.split("/", 1)[1] + "-first-strike.yaml"):
+                            return _result(
+                                stdout=_build_override_content(hub, HUB_YAML, cap)
+                            )
+                    for hub, (cap, leak) in TIGHTENED_SCENARIOS.items():
+                        if path.endswith(hub.split("/", 1)[1] + "-first-strike.yaml"):
+                            return _result(
+                                stdout=_build_override_content(
+                                    hub, HUB_YAML, cap, leakspeed=leak
+                                )
+                            )
+                    return _result(stdout="")
             return _result(stdout="")
 
         res = _run_sync(fake, enabled=True)
@@ -280,3 +302,27 @@ class TestFirstStrikeSync(TestCase):
                 tasks_module._write_override_file("x-first-strike.yaml", "capacity: 1\n")
             )
         self.assertEqual(seen.get("mode"), "0o644")
+
+    def test_trigger_override_converts_leaky_to_immediate_trigger(self):
+        indented_hub = (
+            "type: leaky\n"
+            "name: crowdsecurity/http-sensitive-files\n"
+            "data:\n"
+            "  - source_url: https://example.test/list.txt\n"
+            "    dest_file: sensitive_data.txt\n"
+            "    type: string\n"
+            "capacity: 4\n"
+            "leakspeed: 5s\n"
+            "distinct: evt.Parsed.request\n"
+        )
+        out = _build_override_content(
+            "crowdsecurity/http-sensitive-files", indented_hub, 0
+        )
+        self.assertIsNotNone(out)
+        self.assertIn("\ntype: trigger\n", out)
+        # Indented `type: string` under `data:` MUST stay intact.
+        self.assertIn("    type: string\n", out)
+        self.assertNotIn("\ncapacity:", out)
+        self.assertNotIn("\nleakspeed:", out)
+        self.assertNotIn("\ndistinct:", out)
+        self.assertIn("name: smsly/http-sensitive-files-first-strike\n", out)

@@ -2,7 +2,18 @@
 
 _harden_kernel_bootstrap() {
     local sysctl_file="/etc/sysctl.d/99-smsly-security.conf"
-    [ -f "$sysctl_file" ] && return 0  # already applied
+    if [ -f "$sysctl_file" ]; then
+        if ! grep -q '^fs\.inotify\.max_user_instances' "$sysctl_file" 2>/dev/null; then
+            echo "fs.inotify.max_user_instances = 512" >> "$sysctl_file"
+            sysctl -p "$sysctl_file" >/dev/null 2>&1 || true
+        fi
+        local _cur_inotify=""
+        _cur_inotify="$(sysctl -n fs.inotify.max_user_instances 2>/dev/null || echo '0')"
+        if [ "${_cur_inotify:-0}" -lt 512 ] 2>/dev/null; then
+            sysctl -w fs.inotify.max_user_instances=512 >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
 
     cat > "$sysctl_file" <<'SYSCTL_EOF'
 net.ipv4.tcp_syncookies = 1
@@ -25,6 +36,7 @@ kernel.randomize_va_space = 2
 fs.protected_hardlinks = 1
 fs.protected_symlinks = 1
 fs.suid_dumpable = 0
+fs.inotify.max_user_instances = 512
 SYSCTL_EOF
     sysctl -p "$sysctl_file" || echo -e "${YELLOW}    ⚠ sysctl -p failed${NC}"
 }

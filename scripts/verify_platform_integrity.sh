@@ -378,16 +378,56 @@ ensure_fail2ban_running() {
 # while the Traefik plugin keeps working — worth an alert, not silence.
 ensure_cf_bouncer_running() {
     command -v docker >/dev/null 2>&1 || return 0
+    local cfg_file="/opt/smsly-hosting/crowdsec/cloudflare-bouncer.yaml"
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "smsly-cloudflare-bouncer"; then
-        log "cloudflare bouncer not running (ok when disabled in Settings > Security)"
+        if [ -s "$cfg_file" ]; then
+            local _dead_err=""
+            _dead_err=$(docker logs --tail 20 smsly-cloudflare-bouncer 2>&1 | grep -Ei "Authentication error|error code: 10000|level=fatal" | tail -n 1 || true)
+            log "ALERT: smsly-cloudflare-bouncer is stopped while configured (${_dead_err:-check docker logs smsly-cloudflare-bouncer}) — edge IP-list blocking inactive"
+        else
+            log "cloudflare bouncer not running (ok when disabled in Settings > Security)"
+        fi
         return 0
     fi
-    local last_pull=""
-    last_pull=$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list -o json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); [print(x.get('last_pull','')) for x in (d if isinstance(d,list) else d.get('bouncers',d)) if str(x.get('name',''))=='cloudflare-bouncer']" 2>/dev/null | head -n 1) || true
-    if [ -z "$last_pull" ]; then
+    local _auth_err=""
+    _auth_err=$(docker logs --since 15m --tail 30 smsly-cloudflare-bouncer 2>&1 | grep -Ei "Authentication error|error code: 10000|level=fatal|status=403" | tail -n 1 || true)
+    if [ -n "$_auth_err" ]; then
+        log "ALERT: cloudflare-bouncer error: ${_auth_err} — update crowdsec_cf_api_token with Account Filter Lists: Edit & Account Firewall Access Rules: Edit permissions"
+    fi
+    local _pull_info=""
+    _pull_info=$(timeout -k 5 30 docker exec smsly-crowdsec cscli bouncers list -o json 2>/dev/null | python3 -c "
+import json, sys, time
+from datetime import datetime
+d = json.load(sys.stdin)
+rows = d if isinstance(d, list) else (d or {}).get('bouncers', [])
+best_ts, best_str = None, ''
+for x in (rows or []):
+    name = str(x.get('name', ''))
+    if name == 'cloudflare-bouncer' or name.startswith('cloudflare-bouncer@'):
+        lp = str(x.get('last_pull') or '')
+        if not lp:
+            continue
+        try:
+            dt = datetime.fromisoformat(lp.replace('Z', '+00:00'))
+            ts = dt.timestamp()
+            if best_ts is None or ts > best_ts:
+                best_ts, best_str = ts, lp
+        except Exception:
+            pass
+if best_str:
+    age = int(max(0, time.time() - (best_ts or 0)))
+    print(f'{best_str}|{age}')
+" 2>/dev/null | head -n 1) || true
+    if [ -z "$_pull_info" ]; then
         log "ALERT: cloudflare-bouncer registered but never pulled decisions — edge blocking is stale; run install.sh --update"
     else
-        log "cloudflare bouncer active (last LAPI pull $last_pull)"
+        local last_pull="${_pull_info%%|*}"
+        local pull_age="${_pull_info##*|}"
+        if [ "${pull_age:-0}" -gt 900 ] 2>/dev/null; then
+            log "ALERT: cloudflare-bouncer LAPI pull is stale (${pull_age}s old, last_pull=$last_pull)"
+        else
+            log "cloudflare bouncer active (last LAPI pull $last_pull)"
+        fi
     fi
 }
 

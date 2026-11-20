@@ -173,3 +173,48 @@ class SecurityStatusWiringTests(TestCase):
         data = self._get().data
         self.assertFalse(data["apparmor"]["enabled"])
         self.assertTrue(data["seccomp"]["enabled"])
+
+    @patch("apps.core.views.security.subprocess.run")
+    def test_cf_bouncer_picks_newest_last_pull_and_reads_logs_when_stopped(self, mock_run):
+        import json as _json
+        from datetime import datetime, timezone
+        from apps.deployments.models.core import PlatformConfig
+
+        cfg = PlatformConfig.load()
+        cfg.crowdsec_cf_enabled = True
+        cfg.save(update_fields=["crowdsec_cf_enabled"])
+
+        fresh_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        bouncers_json = _json.dumps([
+            {"name": "cloudflare-bouncer", "last_pull": "2026-09-21T17:18:08Z"},
+            {"name": "cloudflare-bouncer@172.18.0.25", "last_pull": fresh_iso},
+        ])
+
+        def _run(cmd, **kwargs):
+            joined = " ".join(cmd)
+            if "ps" in cmd and "smsly-cloudflare-bouncer" in joined:
+                return _resp("")  # stopped!
+            if "cscli" in joined and "bouncers" in joined:
+                return _resp(bouncers_json)
+            if "logs" in cmd and "smsly-cloudflare-bouncer" in joined:
+                return _resp("level=fatal msg=\"Authentication error (10000)\"\n")
+            return _run_map()(cmd, **kwargs)
+
+        mock_run.side_effect = _run
+        data = self._get().data
+        self.assertFalse(data["cf_bouncer"]["running"])
+        self.assertIn("Authentication error (10000)", data["cf_bouncer"]["recent_error"])
+
+        # Also check newest pull selection when running
+        def _run_up(cmd, **kwargs):
+            joined = " ".join(cmd)
+            if "ps" in cmd and "smsly-cloudflare-bouncer" in joined:
+                return _resp("Up 5 minutes\n")
+            if "cscli" in joined and "bouncers" in joined:
+                return _resp(bouncers_json)
+            return _run(cmd, **kwargs)
+
+        mock_run.side_effect = _run_up
+        data_up = self._get().data
+        self.assertEqual(data_up["cf_bouncer"]["last_pull"], fresh_iso)
+        self.assertFalse(data_up["cf_bouncer"]["stale"])

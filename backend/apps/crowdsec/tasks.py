@@ -12,24 +12,63 @@ from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
 logger = logging.getLogger(__name__)
 
 FIRST_STRIKE_SCENARIOS: dict[str, int] = {
-    # Hub scenario name -> pinned leaky-bucket capacity. A single hit on
-    # any of these is certain malice (no legit client requests
-    # /.git/config, ../.. payloads, or phpmyadmin scans), so the bucket
-    # must overflow on the FIRST distinct event instead of serving N
-    # free probes while it fills (http-sensitive-files served 4).
+    # Hub scenario name -> mode (0 = convert leaky bucket to type: trigger
+    # so probe #1 triggers an immediate ban with zero grace events and zero
+    # leakspeed decay; >= 1 = pinned leaky bucket capacity).
     #
-    # Deliberately EXCLUDED (first hit is NOT proof of malice):
+    # A single hit on any of these is certain malice (no legit client requests
+    # /.env, /.git/config, ../.. payloads, or phpmyadmin scans), so waiting for
+    # a second hit with capacity: 1 leaky still permitted probe #1 (and leaked
+    # away when scanners spaced requests > 5s apart).
+    #
+    # Deliberately EXCLUDED from instant 1-hit ban (handled via TIGHTENED_SCENARIOS
+    # or left as hub behavior):
     #   http-probing / http-crawl-non_statics (typos, favicon, legit crawlers),
     #   http-generic-bf + 401/403-bf (one failed login must never ban),
     #   http-bad-user-agent (legit scripts).
-    # Already first-strike upstream, no override needed:
-    #   http-backdoors-attempts (capacity 1), http-cve-probing (trigger type).
-    "crowdsecurity/http-sensitive-files": 1,
-    "crowdsecurity/http-admin-interface-probing": 1,
-    "crowdsecurity/http-path-traversal-probing": 1,
+    "crowdsecurity/http-sensitive-files": 0,
+    "crowdsecurity/http-admin-interface-probing": 0,
+    "crowdsecurity/http-path-traversal-probing": 0,
+}
+
+# Tightened leaky overrides (scenario name -> (capacity, leakspeed)) for noisy
+# behavioral scanners that are too permissive out of the box (e.g. http-probing
+# defaults to capacity: 10 / 12 probes before banning).
+TIGHTENED_SCENARIOS: dict[str, tuple[int, str | None]] = {
+    "crowdsecurity/http-probing": (2, "10s"),
+    "crowdsecurity/http-sqli-probing": (1, "30s"),
+    "crowdsecurity/http-xss-probing": (1, "30s"),
 }
 
 _FIRST_STRIKE_SCENARIOS_DIR = "/etc/crowdsec/scenarios"
+_WHITELIST_PARSERS_DIR = "/etc/crowdsec/parsers/s02-enrich"
+_DOTFILE_SCENARIO_FILENAME = "http-dotfile-probing-first-strike.yaml"
+_PLATFORM_WHITELIST_FILENAME = "02-smsly-platform-servers-whitelist.yaml"
+
+# Matches dotenv variants (//.env.modele, ///.docker/.env.dev, .env?x=1),
+# exposed VCS dirs (.git, .svn, .hg, .bzr), cloud/SSH creds, and common
+# secret config files that sensitive_data.txt `endsWith` misses.
+_DOTFILE_TRIGGER_YAML = """\
+# SMSLY first-strike override — managed by crowdsec_first_strike_sync. DO NOT EDIT.
+type: trigger
+format: 2.0
+name: smsly/http-dotfile-probing-first-strike
+description: "Immediate ban on first probe to dotenv, VCS, cloud credential, or secret config paths"
+filter: |
+  evt.Meta.log_type in ["http_access-log", "http_error-log"] and
+  evt.Meta.http_path matches "(?i)(?:^|/+)(?:\\\\.(?:env(?:[._~-][^/?]*)?(?:\\\\?|$)|(?:git|svn|hg|bzr|aws|ssh|kube|docker)(?:/|$)|ht(?:access|passwd)(?:\\\\?|$)|ds_store(?:\\\\?|$))|(?:wp-config|phpinfo)\\\\.php(?:\\\\?|$)|actuator/env(?:/|$|\\\\?))"
+groupby: "evt.Meta.source_ip"
+blackhole: 5m
+labels:
+  remediation: true
+  classification:
+    - attack.T1595.003
+  behavior: "http:scan"
+  label: "First-Strike Dotfile / Secret Probing"
+  spoofable: 0
+  service: http
+  confidence: 3
+"""
 
 
 def _first_strike_slug(hub_name: str) -> str:
@@ -45,13 +84,37 @@ def _first_strike_filename(hub_name: str) -> str:
     return f"{_first_strike_slug(hub_name)}.yaml"
 
 
-def _pin_capacity(yaml_text: str, capacity: int) -> str | None:
-    """Pin the top-level bucket capacity; None when no capacity line exists."""
+def _pin_capacity(yaml_text: str, capacity: int, leakspeed: str | None = None) -> str | None:
+    """Convert top-level bucket threshold; None when no capacity line exists.
+
+    When *capacity* <= 0, converts a leaky bucket scenario to ``type: trigger``
+    and removes top-level ``capacity``, ``leakspeed``, and ``distinct`` keys
+    (strictly unindented lines so indented ``data[].type: string`` stays intact).
+    When *capacity* >= 1, pins ``capacity`` (and optionally ``leakspeed``).
+    """
     if not re.search(r"(?m)^capacity:\s*\d+\s*$", yaml_text):
         return None
-    return re.sub(
+    if capacity <= 0:
+        out_lines: list[str] = []
+        replaced_type = False
+        for line in yaml_text.splitlines():
+            if line.startswith("type:") and not replaced_type:
+                out_lines.append("type: trigger")
+                replaced_type = True
+            elif line.startswith(("capacity:", "leakspeed:", "distinct:")):
+                continue
+            else:
+                out_lines.append(line)
+        trailing = "\n" if yaml_text.endswith("\n") else ""
+        return "\n".join(out_lines) + trailing
+    pinned = re.sub(
         r"(?m)^capacity:\s*\d+\s*$", f"capacity: {capacity}", yaml_text, count=1
     )
+    if leakspeed:
+        pinned = re.sub(
+            r'(?m)^leakspeed:\s*.*$', f'leakspeed: "{leakspeed}"', pinned, count=1
+        )
+    return pinned
 
 
 def _first_strike_config() -> bool:
@@ -244,7 +307,11 @@ def _read_container_file(path: str) -> str | None:
     return result.stdout or ""
 
 
-def _write_override_file(filename: str, content: str) -> bool:
+def _write_override_file(
+    filename: str,
+    content: str,
+    target_dir: str = _FIRST_STRIKE_SCENARIOS_DIR,
+) -> bool:
     import os
     import tempfile
 
@@ -259,11 +326,11 @@ def _write_override_file(filename: str, content: str) -> bool:
         # 0600/uid-1000, which the CrowdSec container cannot read
         # (user-namespace mapping) — config test then fails with
         # "permission denied" (2026-09-14 live incident). World-readable
-        # content is fine: scenario files carry no secrets.
+        # content is fine: scenario/whitelist files carry no secrets.
         os.chmod(tmp, 0o644)
         result = _docker(
             "cp", tmp,
-            f"smsly-crowdsec:{_FIRST_STRIKE_SCENARIOS_DIR}/{filename}",
+            f"smsly-crowdsec:{target_dir}/{filename}",
             timeout=60,
         )
         return result.returncode == 0
@@ -305,8 +372,13 @@ def _crowdsec_reload() -> bool:
     return True
 
 
-def _build_override_content(hub_name: str, hub_yaml: str, capacity: int) -> str | None:
-    pinned = _pin_capacity(hub_yaml, capacity)
+def _build_override_content(
+    hub_name: str,
+    hub_yaml: str,
+    capacity: int,
+    leakspeed: str | None = None,
+) -> str | None:
+    pinned = _pin_capacity(hub_yaml, capacity, leakspeed=leakspeed)
     if pinned is None:
         logger.warning(
             "CrowdSec first-strike: hub file for %s has no capacity line — "
@@ -325,14 +397,83 @@ def _build_override_content(hub_name: str, hub_yaml: str, capacity: int) -> str 
             hub_name,
         )
         return None
+    mode_desc = (
+        "converted to type: trigger for immediate ban on probe #1"
+        if capacity <= 0
+        else f"bucket capacity pinned to {capacity}"
+    )
     header = (
         "# SMSLY first-strike override — managed by "
         "crowdsec_first_strike_sync. DO NOT EDIT.\n"
-        f"# Source: {hub_name} (scenario renamed to {fs_name}, bucket "
-        f"capacity pinned to {capacity}; filters/data track the hub file "
-        "and are re-derived on every sync).\n"
+        f"# Source: {hub_name} (scenario renamed to {fs_name}, {mode_desc}; "
+        "filters/data track the hub file and are re-derived on every sync).\n"
     )
     return header + renamed
+
+
+def _build_platform_whitelist_content() -> str | None:
+    """Build CrowdSec s02-enrich whitelist YAML for platform server IPs."""
+    import ipaddress
+
+    ips: list[str] = ["127.0.0.1", "::1"]
+    try:
+        from django.db import connection
+        from apps.deployments.models.core import ManagedServer, PlatformConfig
+
+        tables = set(connection.introspection.table_names())
+        if PlatformConfig._meta.db_table in tables:
+            srv_ip = str(getattr(PlatformConfig.load(), "server_ip", "") or "").strip()
+            if srv_ip:
+                ips.append(srv_ip)
+        if ManagedServer._meta.db_table in tables:
+            for host_ip, wg_ip in ManagedServer.objects.values_list("host", "wg_address"):
+                for raw in (host_ip, wg_ip):
+                    cleaned = str(raw or "").strip()
+                    if cleaned:
+                        ips.append(cleaned)
+    except Exception as exc:
+        logger.debug("CrowdSec platform whitelist DB lookup skipped: %s", exc)
+        return None
+
+    valid_ips: list[str] = []
+    for raw in dict.fromkeys(ips):
+        try:
+            valid_ips.append(str(ipaddress.ip_address(raw)))
+        except ValueError:
+            continue
+
+    ip_lines = "\n".join(f'    - "{ip}"' for ip in valid_ips)
+    return (
+        "# Managed by crowdsec_first_strike_sync — DO NOT EDIT.\n"
+        "name: smsly/platform-servers-whitelist\n"
+        'description: "Whitelist ManagedServer hosts and WireGuard/private infrastructure IPs"\n'
+        "whitelist:\n"
+        '  reason: "SMSLY platform servers and internal mesh"\n'
+        "  ip:\n"
+        f"{ip_lines}\n"
+        "  cidr:\n"
+        '    - "10.0.0.0/8"\n'
+        '    - "172.16.0.0/12"\n'
+        '    - "192.168.0.0/16"\n'
+        '    - "100.64.0.0/10"\n'
+    )
+
+
+def _sync_static_container_yaml(
+    target_dir: str,
+    filename: str,
+    desired: str,
+    label: str,
+    applied: list[str],
+) -> bool:
+    """Write *desired* YAML to *target_dir/filename* only if content differs."""
+    current = _read_container_file(f"{target_dir}/{filename}")
+    if current == desired:
+        return False
+    if _write_override_file(filename, desired, target_dir=target_dir):
+        applied.append(label)
+        return True
+    return False
 
 
 @shared_task(
@@ -341,14 +482,15 @@ def _build_override_content(hub_name: str, hub_yaml: str, capacity: int) -> str 
     name="apps.crowdsec.tasks.crowdsec_first_strike_sync",
 )
 def crowdsec_first_strike_sync():
-    """Enforce first-strike (capacity-1) overrides for exploit scenarios.
+    """Enforce first-strike triggers and tightened thresholds for exploit scenarios.
 
-    Derives each override from the CURRENT hub file (capacity line pinned
-    to 1), installs it as ``smsly/<slug>-first-strike``, and removes the
-    original hub scenario so only the harsh copy loads. When disabled,
-    removes the overrides and reinstalls the hub originals. Reloads
-    CrowdSec only when something actually changed (after a config test).
-    Idempotent: a converged host is a cheap no-op.
+    For ``FIRST_STRIKE_SCENARIOS`` (capacity 0), rewrites the hub scenario as
+    ``type: trigger`` so Probe #1 immediately triggers a ban, installs the
+    companion ``smsly/http-dotfile-probing-first-strike`` trigger scenario, and
+    applies ``TIGHTENED_SCENARIOS`` (e.g. ``http-probing`` capacity 2). Removes
+    the permissive hub originals so only hardened rules run, and keeps the
+    platform server IP whitelist synced to prevent self-bans. Reloads CrowdSec
+    only when something actually changed (after a config test).
     """
     try:
         enabled = _first_strike_config()
@@ -358,11 +500,16 @@ def crowdsec_first_strike_sync():
         logger.error("CrowdSec first-strike sync: discovery failed: %s", exc)
         return {"status": "error", "reason": str(exc)}
 
+    all_scenarios: list[tuple[str, int, str | None]] = [
+        *((hub, cap, None) for hub, cap in FIRST_STRIKE_SCENARIOS.items()),
+        *((hub, spec[0], spec[1]) for hub, spec in TIGHTENED_SCENARIOS.items()),
+    ]
+
     changed = False
     applied: list[str] = []
     skipped: list[str] = []
     try:
-        for hub_name, capacity in FIRST_STRIKE_SCENARIOS.items():
+        for hub_name, capacity, leakspeed in all_scenarios:
             filename = _first_strike_filename(hub_name)
             fs_name = _first_strike_scenario_name(hub_name)
             if enabled:
@@ -374,7 +521,9 @@ def crowdsec_first_strike_sync():
                     )
                     skipped.append(hub_name)
                     continue
-                desired = _build_override_content(hub_name, hub_yaml, capacity)
+                desired = _build_override_content(
+                    hub_name, hub_yaml, capacity, leakspeed=leakspeed
+                )
                 if desired is None:
                     skipped.append(hub_name)
                     continue
@@ -431,6 +580,36 @@ def crowdsec_first_strike_sync():
                     if install.returncode == 0:
                         changed = True
                         applied.append(f"restored:{hub_name}")
+
+        if enabled:
+            if _sync_static_container_yaml(
+                _FIRST_STRIKE_SCENARIOS_DIR,
+                _DOTFILE_SCENARIO_FILENAME,
+                _DOTFILE_TRIGGER_YAML,
+                "smsly/http-dotfile-probing-first-strike",
+                applied,
+            ):
+                changed = True
+        elif _DOTFILE_SCENARIO_FILENAME in overrides:
+            delete = _docker(
+                "exec", "smsly-crowdsec", "rm",
+                f"{_FIRST_STRIKE_SCENARIOS_DIR}/{_DOTFILE_SCENARIO_FILENAME}",
+                timeout=30,
+            )
+            if delete.returncode == 0:
+                changed = True
+                applied.append("deleted:smsly/http-dotfile-probing-first-strike")
+
+        whitelist_yaml = _build_platform_whitelist_content()
+        if whitelist_yaml and _sync_static_container_yaml(
+            _WHITELIST_PARSERS_DIR,
+            _PLATFORM_WHITELIST_FILENAME,
+            whitelist_yaml,
+            "smsly/platform-servers-whitelist",
+            applied,
+        ):
+            changed = True
+
         reloaded = False
         if changed:
             if _crowdsec_config_test():

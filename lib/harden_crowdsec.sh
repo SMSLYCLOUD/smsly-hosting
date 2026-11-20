@@ -127,7 +127,7 @@ _cf_render_cloudflare_bouncer_config() {
 # Managed by lib/harden_crowdsec.sh — DO NOT EDIT (regenerated every run).
 crowdsec_lapi_url: http://smsly-crowdsec:8080/
 crowdsec_lapi_key: ${lapi_key}
-crowdsec_update_frequency: 10s
+crowdsec_update_frequency: 2s
 include_scenarios_containing: []
 exclude_scenarios_containing: []
 only_include_decisions_from: []
@@ -137,7 +137,7 @@ cloudflare_config:
     token: ${token}
     ip_list_prefix: crowdsec
     default_action: ${action}
-  update_frequency: 60s
+  update_frequency: 10s
 daemon: false
 log_mode: stdout
 log_level: info
@@ -243,13 +243,34 @@ _harden_crowdsec_cloudflare_bouncer() {
         fi
     fi
     mkdir -p "$INSTALL_DIR/crowdsec"
-    _cf_render_cloudflare_bouncer_config "$token" "$account" "$action" "$lapi_key" \
-        "$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
+    local _cf_cfg="$INSTALL_DIR/crowdsec/cloudflare-bouncer.yaml"
+    local _prev_hash=""
+    [ -f "$_cf_cfg" ] && _prev_hash="$(sha256sum "$_cf_cfg" 2>/dev/null | awk '{print $1}' || true)"
+    _cf_render_cloudflare_bouncer_config "$token" "$account" "$action" "$lapi_key" "$_cf_cfg"
+    local _new_hash=""
+    [ -f "$_cf_cfg" ] && _new_hash="$(sha256sum "$_cf_cfg" 2>/dev/null | awk '{print $1}' || true)"
+
+    if command -v curl >/dev/null 2>&1; then
+        local _cf_code=""
+        _cf_code="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 8 \
+            -H "Authorization: Bearer ${token}" \
+            "https://api.cloudflare.com/client/v4/accounts/${account}/rules/lists" 2>/dev/null || true)"
+        if [ "$_cf_code" = "401" ] || [ "$_cf_code" = "403" ]; then
+            _harden_log warn "cloudflare bouncer: API token rejected by /accounts/${account}/rules/lists (HTTP $_cf_code) — grant Account Filter Lists: Edit + Account Firewall Access Rules: Edit"
+        fi
+    fi
+
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     local _cf=""
     _cf="$(_harden_crowdsec_compose_file)"
-    if docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1; then
+    local _up_rc=1
+    if [ "$_prev_hash" != "$_new_hash" ]; then
+        docker compose "${env_args[@]}" -f "$_cf" up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+    else
+        docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+    fi
+    if [ "$_up_rc" = "0" ]; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
     else
         _harden_log warn "cloudflare bouncer compose up failed (non-fatal)"

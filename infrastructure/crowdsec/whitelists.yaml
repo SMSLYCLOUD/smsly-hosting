@@ -1,5 +1,5 @@
-# SMSLY custom whitelist — prevents ACME challenge blocking
-# Placed in parsers/s02-enrich so ACME requests are filtered before
+# SMSLY custom whitelist — prevents ACME challenge blocking and internal mesh self-bans
+# Placed in parsers/s02-enrich so requests are filtered before
 # reaching scenarios, saving CPU and preventing false bans.
 name: smsly/whitelists-acme
 description: "Whitelist ACME challenge requests"
@@ -8,3 +8,19 @@ whitelist:
   reason: "ACME challenge request"
   expression:
     - evt.Meta.http_path startsWith '/.well-known/acme-challenge/'
+---
+name: smsly/whitelists-internal-mesh
+description: "Whitelist loopback, RFC1918, WireGuard/CGNAT mesh, and IPv6 link/ULA ranges"
+whitelist:
+  reason: "SMSLY internal loopback and WireGuard/CGNAT mesh"
+  ip:
+    - "127.0.0.1"
+    - "::1"
+  cidr:
+    - "127.0.0.0/8"
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+    - "100.64.0.0/10"
+    - "fc00::/7"
+    - "fe80::/10"

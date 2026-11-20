@@ -202,3 +202,39 @@ class WildcardWafTests(TestCase):
         self._assert_strips_before_coraza(blocks["node-tenant.grid1.trulay.site"])
         self._assert_strips_before_coraza(blocks["node-tenant-node1.trulay.site"])
         self._assert_strips_before_coraza(blocks["node-tenant-e1.trulay.site"])
+
+    def test_master_and_node_caddyfiles_emit_trusted_proxies_and_crowdsec_order(self):
+        PlatformConfig.clear_cache()
+        PlatformConfig.objects.update_or_create(
+            id=1,
+            defaults={
+                "domain": "trulay.site",
+                "use_ssl": True,
+                "enable_wildcard_subdomains": True,
+                "edge_proxy_records": True,
+                "enable_crowdsec_waf": True,
+                "crowdsec_bouncer_key": "test-bouncer-secret",
+                "server_ip": "89.58.45.52",
+            },
+        )
+        node = ManagedServer.objects.create(
+            owner=self.user, name="node-tp", host="95.111.211.243",
+            node_number=2, wg_address="10.100.0.2",
+        )
+        master_cfg = cg.generate_caddyfile(PlatformConfig.load())
+        # Domain calculation bug fix: trusted_proxies MUST now emit in global block!
+        self.assertIn("trusted_proxies static private_ranges 100.64.0.0/10 89.58.45.52/32 95.111.211.243/32 10.100.0.2/32", master_cfg)
+        self.assertIn("173.245.48.0/20", master_cfg)
+        self.assertIn("client_ip_headers Cf-Connecting-Ip X-Forwarded-For", master_cfg)
+        self.assertIn("order coraza_waf first", master_cfg)
+        self.assertIn("order crowdsec before coraza_waf", master_cfg)
+        self.assertLess(
+            master_cfg.index("order coraza_waf first"),
+            master_cfg.index("order crowdsec before coraza_waf"),
+        )
+        self.assertIn("api_url http://smsly-crowdsec:8080", master_cfg)
+        self.assertIn("    crowdsec\n", master_cfg)
+
+        node_cfg = cg.generate_node_caddyfile(node)
+        self.assertIn("trusted_proxies static private_ranges 100.64.0.0/10 89.58.45.52/32 95.111.211.243/32 10.100.0.2/32", node_cfg)
+        self.assertIn("client_ip_headers Cf-Connecting-Ip X-Forwarded-For", node_cfg)

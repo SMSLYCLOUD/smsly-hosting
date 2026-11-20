@@ -632,16 +632,27 @@ class SecurityStatusView(GenericAPIView):
                     capture_output=True, text=True, timeout=10,
                 )
                 if bl_result.returncode == 0:
+                    from datetime import datetime as _dt
                     _bl = json.loads(bl_result.stdout or "[]")
+                    _best_ts = None
                     if isinstance(_bl, list):
                         for _b in _bl:
                             if not isinstance(_b, dict):
                                 continue
-                            if "cloudflare" in str(
-                                    _b.get("name") or "").lower():
-                                cf_bouncer["last_pull"] = (
-                                    _b.get("last_pull") or None)
-                                break
+                            if "cloudflare" not in str(_b.get("name") or "").lower():
+                                continue
+                            _cand = _b.get("last_pull") or ""
+                            if not _cand:
+                                continue
+                            try:
+                                _cand_ts = _dt.fromisoformat(
+                                    str(_cand).replace("Z", "+00:00")
+                                ).timestamp()
+                            except (ValueError, TypeError):
+                                _cand_ts = 0.0
+                            if _best_ts is None or _cand_ts > _best_ts:
+                                _best_ts = _cand_ts
+                                cf_bouncer["last_pull"] = str(_cand)
             except (FileNotFoundError, subprocess.TimeoutExpired, OSError,
                     ValueError):
                 pass
@@ -657,6 +668,7 @@ class SecurityStatusView(GenericAPIView):
                     cf_bouncer["stale"] = True
             except (ValueError, OverflowError):
                 cf_bouncer["stale"] = None
+        if cf_bouncer["running"] or cf_bouncer["enabled"]:
             try:
                 cf_logs = subprocess.run(
                     ["docker", "logs", "--tail", "30",
