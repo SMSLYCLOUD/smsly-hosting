@@ -639,7 +639,9 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
     lines.extend([
         "    log {",
-        "        output file /var/log/caddy/access.log",
+        "        output file /var/log/caddy/access.log {",
+        "            mode 0644",
+        "        }",
         "    }",
     ])
     # Domain-scoped path redirects for THIS alias host (e.g. source
@@ -705,7 +707,9 @@ def _build_service_domain_block(
         [
             "    encode gzip",
             "    log {",
-            "        output file /var/log/caddy/access.log",
+            "        output file /var/log/caddy/access.log {",
+            "            mode 0644",
+            "        }",
             "    }",
             "}",
         ]
@@ -1671,7 +1675,9 @@ def _get_node_subdomain_blocks(
                 "    import secure_headers",
                 *(["    crowdsec"] if crowdsec_enabled else []),
                 "    log {",
-                "        output file /var/log/caddy/access.log",
+                "        output file /var/log/caddy/access.log {",
+                "            mode 0644",
+                "        }",
                 "    }",
                 f"    reverse_proxy http://{mesh_ip}:80 {{",
                 "        header_up Host {host}",
@@ -1774,7 +1780,9 @@ def generate_node_caddyfile(node) -> str:
         *_node_secure_header_lines(),
         "    import coraza_waf",
         "    log {",
-        "        output file /var/log/caddy/access.log",
+        "        output file /var/log/caddy/access.log {",
+        "            mode 0644",
+        "        }",
         "    }",
         "    handle /api/* {",
         "        reverse_proxy backend:8000",
@@ -1893,7 +1901,9 @@ def generate_node_caddyfile(node) -> str:
                 f"{http_host}:80 {{",
                 "    request_header -X-SMSLY-Remote-Sync",
                 "    log {",
-                "        output file /var/log/caddy/access.log",
+                "        output file /var/log/caddy/access.log {",
+                "            mode 0644",
+                "        }",
                 "    }",
                 f"    reverse_proxy {_plain_target} {{",
                 *_plain_retry,
@@ -1926,7 +1936,9 @@ def generate_node_caddyfile(node) -> str:
                 *_node_secure_header_lines(),
                 *_waf_lines,
                 "    log {",
-                "        output file /var/log/caddy/access.log",
+                "        output file /var/log/caddy/access.log {",
+                "            mode 0644",
+                "        }",
                 "    }",
                 f"    reverse_proxy {proxy_target} {{",
                 *proxy_retry_lines,
@@ -1948,7 +1960,9 @@ def generate_node_caddyfile(node) -> str:
             *_node_secure_header_lines(),
             *_waf_lines,
             "    log {",
-            "        output file /var/log/caddy/access.log",
+            "        output file /var/log/caddy/access.log {",
+            "            mode 0644",
+            "        }",
             "    }",
             f"    reverse_proxy {proxy_target} {{",
             *proxy_retry_lines,
@@ -1985,7 +1999,9 @@ def generate_node_caddyfile(node) -> str:
                 *_node_secure_header_lines(),
                 *_waf_lines,
                 "    log {",
-                "        output file /var/log/caddy/access.log",
+                "        output file /var/log/caddy/access.log {",
+                "            mode 0644",
+                "        }",
                 "    }",
                 f"    reverse_proxy {proxy_target} {{",
                 *proxy_retry_lines,
@@ -2123,7 +2139,9 @@ def generate_caddyfile(config) -> str:
                 "    import secure_headers",
                 *(["    crowdsec"] if _crowdsec_active else []),
                 "    log {",
-                "        output file /var/log/caddy/access.log",
+                "        output file /var/log/caddy/access.log {",
+                "            mode 0644",
+                "        }",
                 "    }",
                 "    handle /api/* {",
                 "        reverse_proxy backend:8000",
@@ -2245,9 +2263,13 @@ def generate_caddyfile(config) -> str:
                 wildcard_lines.append(f"        dns cloudflare {cloudflare_token}")
                 wildcard_lines.append("    }")
 
-            wildcard_lines.append("    log {")
-            wildcard_lines.append("        output file /var/log/caddy/access.log")
-            wildcard_lines.append("    }")
+            wildcard_lines.extend([
+                "    log {",
+                "        output file /var/log/caddy/access.log {",
+                "            mode 0644",
+                "        }",
+                "    }",
+            ])
             wildcard_lines.append("    import secure_headers")
             if _crowdsec_active:
                 wildcard_lines.append("    crowdsec")

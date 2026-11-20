@@ -38,13 +38,25 @@ ensure_caddy_logs_writable() {
     owner=$(stat -c '%u:%g' "$mnt" 2>/dev/null) || owner="unknown"
     if [ "$owner" = "1000:1000" ]; then
         log "caddy_logs volume writable (1000:1000)"
-        return 0
-    fi
-    log "ALERT: caddy_logs volume owned by $owner — routing reloads are failing; repairing"
-    if docker run --rm -v "$vol:/logs" alpine chown -R 1000:1000 /logs >/dev/null 2>&1; then
-        log "caddy_logs ownership repaired to 1000:1000"
     else
-        log "ALERT: caddy_logs ownership repair FAILED — future Caddy reloads will fail"
+        log "ALERT: caddy_logs volume owned by $owner — routing reloads are failing; repairing"
+        if docker run --rm -v "$vol:/logs" alpine chown -R 1000:1000 /logs >/dev/null 2>&1; then
+            log "caddy_logs ownership repaired to 1000:1000"
+        else
+            log "ALERT: caddy_logs ownership repair FAILED — future Caddy reloads will fail"
+        fi
+    fi
+    local access_log="$mnt/access.log"
+    if [ -f "$access_log" ]; then
+        local mode=""
+        mode=$(stat -c '%a' "$access_log" 2>/dev/null) || mode=""
+        case "$mode" in
+            *4|*5|*6|*7) ;;
+            *)
+                chmod a+r "$mnt"/*.log 2>/dev/null || true
+                log "caddy access logs made world-readable (was ${mode:-unknown}; CrowdSec/Promtail need read access)"
+                ;;
+        esac
     fi
 }
 

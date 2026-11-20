@@ -234,7 +234,9 @@ class WildcardWafTests(TestCase):
         )
         self.assertIn("api_url http://smsly-crowdsec:8080", master_cfg)
         self.assertIn("    crowdsec\n", master_cfg)
+        self.assertIn("mode 0644", master_cfg)
 
         node_cfg = cg.generate_node_caddyfile(node)
         self.assertIn("trusted_proxies static private_ranges 100.64.0.0/10 89.58.45.52/32 95.111.211.243/32 10.100.0.2/32", node_cfg)
         self.assertIn("client_ip_headers Cf-Connecting-Ip X-Forwarded-For", node_cfg)
+        self.assertIn("mode 0644", node_cfg)
