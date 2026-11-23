@@ -3524,6 +3524,10 @@ export interface SecurityStatusData {
     last_pull: string | null;
     stale: boolean | null;
     recent_error: string;
+    synced_ips?: number | null;
+    pending_sync?: number | null;
+    zones?: number | null;
+    list_id?: string;
   };
   cryptd?: {
     enabled: boolean;
@@ -3538,7 +3542,7 @@ export interface SecurityStatusData {
 
 export interface SecurityActivityEvent {
   id: string;
-  source: 'falco' | 'crowdsec' | 'fail2ban' | 'openappsec' | 'auditd' | 'trivy' | string;
+  source: 'falco' | 'crowdsec' | 'fail2ban' | 'openappsec' | 'coraza' | 'auditd' | 'trivy' | string;
   type: string;
   severity: 'CRITICAL' | 'HIGH' | 'WARNING' | 'INFO';
   title: string;
@@ -3556,6 +3560,7 @@ export interface SecurityEventsResponse {
     crowdsec_alerts_count: number;
     fail2ban_banned_count: number;
     waf_events_count: number;
+    coraza_events_count?: number;
     trivy_cves_count: number;
   };
   falco_events: any[];

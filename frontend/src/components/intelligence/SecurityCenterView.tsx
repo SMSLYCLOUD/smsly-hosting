@@ -778,7 +778,7 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
               OCSF v1.1.0 Normalized Security Log &amp; Telemetry Stream ({ocsfEvents.length} shown / {overview?.ocsf_events_count ?? ocsfEvents.length} total)
             </CardTitle>
             <div className="flex flex-wrap gap-1">
-              {["ALL", "openappsec", "crowdsec", "falco", "fail2ban", "image_cve", "dspm", "secrets", "aspm", "auditd"].map((src) => (
+              {["ALL", "openappsec", "coraza", "crowdsec", "falco", "fail2ban", "image_cve", "dspm", "secrets", "aspm", "auditd"].map((src) => (
                 <Button
                   key={src}
                   size="sm"

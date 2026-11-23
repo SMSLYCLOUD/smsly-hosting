@@ -1132,8 +1132,12 @@ export default function IntelligencePage() {
                         </span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Edge Decisions</span>
-                        <span className="font-mono font-medium">{securityEvents?.summary?.crowdsec_bans_count ?? 0} shared</span>
+                        <span className="text-muted-foreground block text-[10px] uppercase">Edge List &amp; Zones</span>
+                        <span className="font-mono font-medium">
+                          {securityStatus?.cf_bouncer?.synced_ips !== undefined && securityStatus?.cf_bouncer?.synced_ips !== null
+                            ? `${securityStatus.cf_bouncer.synced_ips} IPs / ${securityStatus.cf_bouncer.zones ?? 0} zones`
+                            : `${securityEvents?.summary?.crowdsec_bans_count ?? 0} shared`}
+                        </span>
                       </div>
                     </div>
                     {securityStatus?.cf_bouncer?.recent_error && (
@@ -1396,7 +1400,8 @@ export default function IntelligencePage() {
                         { id: 'falco', label: 'Falco' },
                         { id: 'crowdsec', label: 'CrowdSec' },
                         { id: 'fail2ban', label: 'Fail2ban' },
-                        { id: 'openappsec', label: 'WAF' },
+                        { id: 'openappsec', label: 'open-appsec' },
+                        { id: 'coraza', label: 'Coraza WAF' },
                         { id: 'trivy', label: 'Trivy' },
                         { id: 'auditd', label: 'Auditd' },
                       ].map((tab) => (
@@ -1483,6 +1488,7 @@ export default function IntelligencePage() {
                                     evt.source === 'crowdsec' && "bg-purple-500/10 text-purple-400",
                                     evt.source === 'fail2ban' && "bg-amber-500/10 text-amber-400",
                                     evt.source === 'openappsec' && "bg-teal-500/10 text-teal-400",
+                                    evt.source === 'coraza' && "bg-orange-500/10 text-orange-400",
                                     evt.source === 'trivy' && "bg-rose-500/10 text-rose-400",
                                     evt.source === 'auditd' && "bg-zinc-500/10 text-zinc-400"
                                   )}

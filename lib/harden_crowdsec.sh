@@ -193,8 +193,8 @@ _harden_crowdsec_cf_value() {
 }
 
 _harden_crowdsec_ensure_bouncer_file() {
-    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
-    # as a FILE. A missing source makes the daemon auto-create a
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml and scripts/cf_bouncer_rulesets.py
+    # are bind-mounted as FILEs. A missing source makes the daemon auto-create a
     # DIRECTORY, and every later start fails identically until a human
     # removes it. Guarantee a real file on every path through here:
     # drop poison dirs (rmdir only — never delete real content) and
@@ -206,6 +206,10 @@ _harden_crowdsec_ensure_bouncer_file() {
     if [ ! -e "$_f" ]; then
         mkdir -p "$(dirname "$_f")" 2>/dev/null || true
         : > "$_f" 2>/dev/null || true
+    fi
+    local _s="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cf_bouncer_rulesets.py"
+    if [ -d "$_s" ] && [ ! -L "$_s" ]; then
+        rmdir "$_s" 2>/dev/null || true
     fi
 }
 

@@ -4167,7 +4167,25 @@ _cf_render_cloudflare_bouncer_config() {
     local action="$3"
     local lapi_key="$4"
     local outfile="$5"
-    cat > "$outfile" <<CFEOF
+    local zones_block=""
+    if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
+        local _zids=""
+        _zids="$(curl -sS --max-time 8 -H "Authorization: Bearer ${token}" \
+            "https://api.cloudflare.com/client/v4/zones?account.id=${account}&per_page=50" 2>/dev/null \
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(" ".join(z["id"] for z in (d.get("result") or []) if isinstance(z, dict) and z.get("id")))' 2>/dev/null || true)"
+        if [ -n "$_zids" ]; then
+            zones_block="    zones:"
+            local _zid=""
+            for _zid in $_zids; do
+                zones_block="${zones_block}
+    - zone_id: ${_zid}
+      actions:
+      - ${action}"
+            done
+        fi
+    fi
+    {
+        cat <<CFEOF
 # Managed by lib/harden_crowdsec.sh — DO NOT EDIT (regenerated every run).
 crowdsec_lapi_url: http://smsly-crowdsec:8080/
 crowdsec_lapi_key: ${lapi_key}
@@ -4178,9 +4196,15 @@ only_include_decisions_from: []
 cloudflare_config:
   accounts:
   - id: ${account}
+CFEOF
+        if [ -n "$zones_block" ]; then
+            printf '%s\n' "$zones_block"
+        fi
+        cat <<CFEOF
     token: ${token}
     ip_list_prefix: crowdsec
     default_action: ${action}
+    total_ip_list_capacity: 10000
   update_frequency: 10s
 daemon: false
 log_mode: stdout
@@ -4188,6 +4212,7 @@ log_level: info
 prometheus:
   enabled: false
 CFEOF
+    } > "$outfile"
     chmod 600 "$outfile"
 }
 
@@ -4212,8 +4237,8 @@ _harden_crowdsec_cf_value() {
 }
 
 _harden_crowdsec_ensure_bouncer_file() {
-    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
-    # as a FILE. A missing source makes the daemon auto-create a
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml and scripts/cf_bouncer_rulesets.py
+    # are bind-mounted as FILEs. A missing source makes the daemon auto-create a
     # DIRECTORY, and every later start fails identically until a human
     # removes it. Guarantee a real file on every path through here:
     # drop poison dirs (rmdir only — never delete real content) and
@@ -4225,6 +4250,10 @@ _harden_crowdsec_ensure_bouncer_file() {
     if [ ! -e "$_f" ]; then
         mkdir -p "$(dirname "$_f")" 2>/dev/null || true
         : > "$_f" 2>/dev/null || true
+    fi
+    local _s="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cf_bouncer_rulesets.py"
+    if [ -d "$_s" ] && [ ! -L "$_s" ]; then
+        rmdir "$_s" 2>/dev/null || true
     fi
 }
 
@@ -4422,6 +4451,13 @@ _harden_openappsec_apply_mode() {
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
     if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        local _wait_idx=""
+        for _wait_idx in $(seq 1 15); do
+            if timeout 5 docker exec smsly-appsec-agent sh -c 'ls /dev/shm/check-point/cp-nano-http-transaction-handler-* >/dev/null 2>&1' 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
         timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
             echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
     fi
@@ -10940,7 +10976,25 @@ _cf_render_cloudflare_bouncer_config() {
     local action="$3"
     local lapi_key="$4"
     local outfile="$5"
-    cat > "$outfile" <<CFEOF
+    local zones_block=""
+    if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
+        local _zids=""
+        _zids="$(curl -sS --max-time 8 -H "Authorization: Bearer ${token}" \
+            "https://api.cloudflare.com/client/v4/zones?account.id=${account}&per_page=50" 2>/dev/null \
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(" ".join(z["id"] for z in (d.get("result") or []) if isinstance(z, dict) and z.get("id")))' 2>/dev/null || true)"
+        if [ -n "$_zids" ]; then
+            zones_block="    zones:"
+            local _zid=""
+            for _zid in $_zids; do
+                zones_block="${zones_block}
+    - zone_id: ${_zid}
+      actions:
+      - ${action}"
+            done
+        fi
+    fi
+    {
+        cat <<CFEOF
 # Managed by lib/harden_crowdsec.sh — DO NOT EDIT (regenerated every run).
 crowdsec_lapi_url: http://smsly-crowdsec:8080/
 crowdsec_lapi_key: ${lapi_key}
@@ -10951,9 +11005,15 @@ only_include_decisions_from: []
 cloudflare_config:
   accounts:
   - id: ${account}
+CFEOF
+        if [ -n "$zones_block" ]; then
+            printf '%s\n' "$zones_block"
+        fi
+        cat <<CFEOF
     token: ${token}
     ip_list_prefix: crowdsec
     default_action: ${action}
+    total_ip_list_capacity: 10000
   update_frequency: 10s
 daemon: false
 log_mode: stdout
@@ -10961,6 +11021,7 @@ log_level: info
 prometheus:
   enabled: false
 CFEOF
+    } > "$outfile"
     chmod 600 "$outfile"
 }
 
@@ -10985,8 +11046,8 @@ _harden_crowdsec_cf_value() {
 }
 
 _harden_crowdsec_ensure_bouncer_file() {
-    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
-    # as a FILE. A missing source makes the daemon auto-create a
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml and scripts/cf_bouncer_rulesets.py
+    # are bind-mounted as FILEs. A missing source makes the daemon auto-create a
     # DIRECTORY, and every later start fails identically until a human
     # removes it. Guarantee a real file on every path through here:
     # drop poison dirs (rmdir only — never delete real content) and
@@ -10998,6 +11059,10 @@ _harden_crowdsec_ensure_bouncer_file() {
     if [ ! -e "$_f" ]; then
         mkdir -p "$(dirname "$_f")" 2>/dev/null || true
         : > "$_f" 2>/dev/null || true
+    fi
+    local _s="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cf_bouncer_rulesets.py"
+    if [ -d "$_s" ] && [ ! -L "$_s" ]; then
+        rmdir "$_s" 2>/dev/null || true
     fi
 }
 
@@ -11195,6 +11260,13 @@ _harden_openappsec_apply_mode() {
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
     if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        local _wait_idx=""
+        for _wait_idx in $(seq 1 15); do
+            if timeout 5 docker exec smsly-appsec-agent sh -c 'ls /dev/shm/check-point/cp-nano-http-transaction-handler-* >/dev/null 2>&1' 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
         timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
             echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
     fi
@@ -12653,7 +12725,25 @@ _cf_render_cloudflare_bouncer_config() {
     local action="$3"
     local lapi_key="$4"
     local outfile="$5"
-    cat > "$outfile" <<CFEOF
+    local zones_block=""
+    if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
+        local _zids=""
+        _zids="$(curl -sS --max-time 8 -H "Authorization: Bearer ${token}" \
+            "https://api.cloudflare.com/client/v4/zones?account.id=${account}&per_page=50" 2>/dev/null \
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(" ".join(z["id"] for z in (d.get("result") or []) if isinstance(z, dict) and z.get("id")))' 2>/dev/null || true)"
+        if [ -n "$_zids" ]; then
+            zones_block="    zones:"
+            local _zid=""
+            for _zid in $_zids; do
+                zones_block="${zones_block}
+    - zone_id: ${_zid}
+      actions:
+      - ${action}"
+            done
+        fi
+    fi
+    {
+        cat <<CFEOF
 # Managed by lib/harden_crowdsec.sh — DO NOT EDIT (regenerated every run).
 crowdsec_lapi_url: http://smsly-crowdsec:8080/
 crowdsec_lapi_key: ${lapi_key}
@@ -12664,9 +12754,15 @@ only_include_decisions_from: []
 cloudflare_config:
   accounts:
   - id: ${account}
+CFEOF
+        if [ -n "$zones_block" ]; then
+            printf '%s\n' "$zones_block"
+        fi
+        cat <<CFEOF
     token: ${token}
     ip_list_prefix: crowdsec
     default_action: ${action}
+    total_ip_list_capacity: 10000
   update_frequency: 10s
 daemon: false
 log_mode: stdout
@@ -12674,6 +12770,7 @@ log_level: info
 prometheus:
   enabled: false
 CFEOF
+    } > "$outfile"
     chmod 600 "$outfile"
 }
 
@@ -12698,8 +12795,8 @@ _harden_crowdsec_cf_value() {
 }
 
 _harden_crowdsec_ensure_bouncer_file() {
-    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
-    # as a FILE. A missing source makes the daemon auto-create a
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml and scripts/cf_bouncer_rulesets.py
+    # are bind-mounted as FILEs. A missing source makes the daemon auto-create a
     # DIRECTORY, and every later start fails identically until a human
     # removes it. Guarantee a real file on every path through here:
     # drop poison dirs (rmdir only — never delete real content) and
@@ -12711,6 +12808,10 @@ _harden_crowdsec_ensure_bouncer_file() {
     if [ ! -e "$_f" ]; then
         mkdir -p "$(dirname "$_f")" 2>/dev/null || true
         : > "$_f" 2>/dev/null || true
+    fi
+    local _s="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cf_bouncer_rulesets.py"
+    if [ -d "$_s" ] && [ ! -L "$_s" ]; then
+        rmdir "$_s" 2>/dev/null || true
     fi
 }
 
@@ -12908,6 +13009,13 @@ _harden_openappsec_apply_mode() {
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
     if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        local _wait_idx=""
+        for _wait_idx in $(seq 1 15); do
+            if timeout 5 docker exec smsly-appsec-agent sh -c 'ls /dev/shm/check-point/cp-nano-http-transaction-handler-* >/dev/null 2>&1' 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
         timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
             echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
     fi
@@ -23950,7 +24058,25 @@ _cf_render_cloudflare_bouncer_config() {
     local action="$3"
     local lapi_key="$4"
     local outfile="$5"
-    cat > "$outfile" <<CFEOF
+    local zones_block=""
+    if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
+        local _zids=""
+        _zids="$(curl -sS --max-time 8 -H "Authorization: Bearer ${token}" \
+            "https://api.cloudflare.com/client/v4/zones?account.id=${account}&per_page=50" 2>/dev/null \
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(" ".join(z["id"] for z in (d.get("result") or []) if isinstance(z, dict) and z.get("id")))' 2>/dev/null || true)"
+        if [ -n "$_zids" ]; then
+            zones_block="    zones:"
+            local _zid=""
+            for _zid in $_zids; do
+                zones_block="${zones_block}
+    - zone_id: ${_zid}
+      actions:
+      - ${action}"
+            done
+        fi
+    fi
+    {
+        cat <<CFEOF
 # Managed by lib/harden_crowdsec.sh — DO NOT EDIT (regenerated every run).
 crowdsec_lapi_url: http://smsly-crowdsec:8080/
 crowdsec_lapi_key: ${lapi_key}
@@ -23961,9 +24087,15 @@ only_include_decisions_from: []
 cloudflare_config:
   accounts:
   - id: ${account}
+CFEOF
+        if [ -n "$zones_block" ]; then
+            printf '%s\n' "$zones_block"
+        fi
+        cat <<CFEOF
     token: ${token}
     ip_list_prefix: crowdsec
     default_action: ${action}
+    total_ip_list_capacity: 10000
   update_frequency: 10s
 daemon: false
 log_mode: stdout
@@ -23971,6 +24103,7 @@ log_level: info
 prometheus:
   enabled: false
 CFEOF
+    } > "$outfile"
     chmod 600 "$outfile"
 }
 
@@ -23995,8 +24128,8 @@ _harden_crowdsec_cf_value() {
 }
 
 _harden_crowdsec_ensure_bouncer_file() {
-    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
-    # as a FILE. A missing source makes the daemon auto-create a
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml and scripts/cf_bouncer_rulesets.py
+    # are bind-mounted as FILEs. A missing source makes the daemon auto-create a
     # DIRECTORY, and every later start fails identically until a human
     # removes it. Guarantee a real file on every path through here:
     # drop poison dirs (rmdir only — never delete real content) and
@@ -24008,6 +24141,10 @@ _harden_crowdsec_ensure_bouncer_file() {
     if [ ! -e "$_f" ]; then
         mkdir -p "$(dirname "$_f")" 2>/dev/null || true
         : > "$_f" 2>/dev/null || true
+    fi
+    local _s="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cf_bouncer_rulesets.py"
+    if [ -d "$_s" ] && [ ! -L "$_s" ]; then
+        rmdir "$_s" 2>/dev/null || true
     fi
 }
 
@@ -24205,6 +24342,13 @@ _harden_openappsec_apply_mode() {
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
     if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        local _wait_idx=""
+        for _wait_idx in $(seq 1 15); do
+            if timeout 5 docker exec smsly-appsec-agent sh -c 'ls /dev/shm/check-point/cp-nano-http-transaction-handler-* >/dev/null 2>&1' 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
         timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
             echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
     fi
@@ -25336,7 +25480,25 @@ _cf_render_cloudflare_bouncer_config() {
     local action="$3"
     local lapi_key="$4"
     local outfile="$5"
-    cat > "$outfile" <<CFEOF
+    local zones_block=""
+    if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
+        local _zids=""
+        _zids="$(curl -sS --max-time 8 -H "Authorization: Bearer ${token}" \
+            "https://api.cloudflare.com/client/v4/zones?account.id=${account}&per_page=50" 2>/dev/null \
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(" ".join(z["id"] for z in (d.get("result") or []) if isinstance(z, dict) and z.get("id")))' 2>/dev/null || true)"
+        if [ -n "$_zids" ]; then
+            zones_block="    zones:"
+            local _zid=""
+            for _zid in $_zids; do
+                zones_block="${zones_block}
+    - zone_id: ${_zid}
+      actions:
+      - ${action}"
+            done
+        fi
+    fi
+    {
+        cat <<CFEOF
 # Managed by lib/harden_crowdsec.sh — DO NOT EDIT (regenerated every run).
 crowdsec_lapi_url: http://smsly-crowdsec:8080/
 crowdsec_lapi_key: ${lapi_key}
@@ -25347,9 +25509,15 @@ only_include_decisions_from: []
 cloudflare_config:
   accounts:
   - id: ${account}
+CFEOF
+        if [ -n "$zones_block" ]; then
+            printf '%s\n' "$zones_block"
+        fi
+        cat <<CFEOF
     token: ${token}
     ip_list_prefix: crowdsec
     default_action: ${action}
+    total_ip_list_capacity: 10000
   update_frequency: 10s
 daemon: false
 log_mode: stdout
@@ -25357,6 +25525,7 @@ log_level: info
 prometheus:
   enabled: false
 CFEOF
+    } > "$outfile"
     chmod 600 "$outfile"
 }
 
@@ -25381,8 +25550,8 @@ _harden_crowdsec_cf_value() {
 }
 
 _harden_crowdsec_ensure_bouncer_file() {
-    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
-    # as a FILE. A missing source makes the daemon auto-create a
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml and scripts/cf_bouncer_rulesets.py
+    # are bind-mounted as FILEs. A missing source makes the daemon auto-create a
     # DIRECTORY, and every later start fails identically until a human
     # removes it. Guarantee a real file on every path through here:
     # drop poison dirs (rmdir only — never delete real content) and
@@ -25394,6 +25563,10 @@ _harden_crowdsec_ensure_bouncer_file() {
     if [ ! -e "$_f" ]; then
         mkdir -p "$(dirname "$_f")" 2>/dev/null || true
         : > "$_f" 2>/dev/null || true
+    fi
+    local _s="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cf_bouncer_rulesets.py"
+    if [ -d "$_s" ] && [ ! -L "$_s" ]; then
+        rmdir "$_s" 2>/dev/null || true
     fi
 }
 
@@ -26220,7 +26393,25 @@ _cf_render_cloudflare_bouncer_config() {
     local action="$3"
     local lapi_key="$4"
     local outfile="$5"
-    cat > "$outfile" <<CFEOF
+    local zones_block=""
+    if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
+        local _zids=""
+        _zids="$(curl -sS --max-time 8 -H "Authorization: Bearer ${token}" \
+            "https://api.cloudflare.com/client/v4/zones?account.id=${account}&per_page=50" 2>/dev/null \
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(" ".join(z["id"] for z in (d.get("result") or []) if isinstance(z, dict) and z.get("id")))' 2>/dev/null || true)"
+        if [ -n "$_zids" ]; then
+            zones_block="    zones:"
+            local _zid=""
+            for _zid in $_zids; do
+                zones_block="${zones_block}
+    - zone_id: ${_zid}
+      actions:
+      - ${action}"
+            done
+        fi
+    fi
+    {
+        cat <<CFEOF
 # Managed by lib/harden_crowdsec.sh — DO NOT EDIT (regenerated every run).
 crowdsec_lapi_url: http://smsly-crowdsec:8080/
 crowdsec_lapi_key: ${lapi_key}
@@ -26231,9 +26422,15 @@ only_include_decisions_from: []
 cloudflare_config:
   accounts:
   - id: ${account}
+CFEOF
+        if [ -n "$zones_block" ]; then
+            printf '%s\n' "$zones_block"
+        fi
+        cat <<CFEOF
     token: ${token}
     ip_list_prefix: crowdsec
     default_action: ${action}
+    total_ip_list_capacity: 10000
   update_frequency: 10s
 daemon: false
 log_mode: stdout
@@ -26241,6 +26438,7 @@ log_level: info
 prometheus:
   enabled: false
 CFEOF
+    } > "$outfile"
     chmod 600 "$outfile"
 }
 
@@ -26265,8 +26463,8 @@ _harden_crowdsec_cf_value() {
 }
 
 _harden_crowdsec_ensure_bouncer_file() {
-    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml is bind-mounted
-    # as a FILE. A missing source makes the daemon auto-create a
+    # AGENTS.md #24: crowdsec/cloudflare-bouncer.yaml and scripts/cf_bouncer_rulesets.py
+    # are bind-mounted as FILEs. A missing source makes the daemon auto-create a
     # DIRECTORY, and every later start fails identically until a human
     # removes it. Guarantee a real file on every path through here:
     # drop poison dirs (rmdir only — never delete real content) and
@@ -26278,6 +26476,10 @@ _harden_crowdsec_ensure_bouncer_file() {
     if [ ! -e "$_f" ]; then
         mkdir -p "$(dirname "$_f")" 2>/dev/null || true
         : > "$_f" 2>/dev/null || true
+    fi
+    local _s="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cf_bouncer_rulesets.py"
+    if [ -d "$_s" ] && [ ! -L "$_s" ]; then
+        rmdir "$_s" 2>/dev/null || true
     fi
 }
 

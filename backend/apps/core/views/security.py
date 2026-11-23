@@ -631,6 +631,10 @@ class SecurityStatusView(GenericAPIView):
             "last_pull": None,
             "stale": None,
             "recent_error": "",
+            "synced_ips": None,
+            "pending_sync": None,
+            "zones": None,
+            "list_id": "",
         }
         try:
             ps_cf = subprocess.run(
@@ -702,11 +706,31 @@ class SecurityStatusView(GenericAPIView):
                     if "starting crowdsec-cloudflare-bouncer" in _l.lower():
                         _last_start_idx = _idx
                 _current_run = _blob[_last_start_idx:]
+                import re as _re_cf
                 for _line in reversed(_current_run):
                     _low = _line.lower()
-                    if "error" in _low or "fatal" in _low:
+                    if "synced_ips=" in _line and cf_bouncer["synced_ips"] is None:
+                        _m_sync = _re_cf.search(r"synced_ips=(\d+)", _line)
+                        if _m_sync:
+                            cf_bouncer["synced_ips"] = int(_m_sync.group(1))
+                    if "pending_sync=" in _line and cf_bouncer["pending_sync"] is None:
+                        _m_pend = _re_cf.search(r"pending_sync=(\d+)", _line)
+                        if _m_pend:
+                            cf_bouncer["pending_sync"] = int(_m_pend.group(1))
+                    if "zones=" in _line and cf_bouncer["zones"] is None:
+                        _m_zn = _re_cf.search(r"zones=(\d+)", _line)
+                        if _m_zn:
+                            cf_bouncer["zones"] = int(_m_zn.group(1))
+                    if "list_id=" in _line and not cf_bouncer["list_id"]:
+                        _m_lid = _re_cf.search(r"list_id=([0-9a-fA-F]+)", _line)
+                        if _m_lid:
+                            cf_bouncer["list_id"] = _m_lid.group(1)
+                    if not cf_bouncer["recent_error"] and (
+                        "level=error" in _low
+                        or "level=fatal" in _low
+                        or ("429" not in _low and ("error" in _low or "fatal" in _low))
+                    ):
                         cf_bouncer["recent_error"] = _line.strip()[:220]
-                        break
                 if (
                     cf_bouncer["running"]
                     and not cf_bouncer["recent_error"]
@@ -1158,6 +1182,69 @@ class SecurityEventsView(GenericAPIView):
         except Exception as exc:
             logger.debug("grid-cryptd event telemetry skipped: %s", exc)
 
+        # ── 4c. Coraza WAF (Caddy) Violations ──────────────────────
+        try:
+            ps_caddy = subprocess.run(
+                ["docker", "ps", "--format", "{{.Names}}"],
+                capture_output=True, text=True, timeout=6,
+            )
+            caddy_ctr = next(
+                (n.strip() for n in (ps_caddy.stdout or "").splitlines() if "caddy" in n.lower()),
+                "",
+            )
+            if caddy_ctr:
+                coraza_proc = subprocess.run(
+                    ["docker", "logs", "--tail", "250", caddy_ctr],
+                    capture_output=True, text=True, timeout=8,
+                )
+                coraza_raw = (coraza_proc.stdout or "") + (coraza_proc.stderr or "")
+                rules_by_uid: dict[str, list[str]] = {}
+                rule_id_re = re.compile(r'\[id "([^"]+)"\].*?\[msg "([^"]+)"\]')
+                uid_re = re.compile(r'\[unique_id "([^"]+)"\]')
+                for line in coraza_raw.splitlines():
+                    line = line.strip()
+                    if not line.startswith("{"):
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    if ev.get("logger") != "http.handlers.waf":
+                        continue
+                    msg = str(ev.get("msg") or "")
+                    if "Coraza:" in msg:
+                        um = uid_re.search(msg)
+                        rm = rule_id_re.search(msg)
+                        if um and rm:
+                            rules_by_uid.setdefault(um.group(1), []).append(
+                                f"{rm.group(1)} ({rm.group(2)})"
+                            )
+                    elif msg == "WAF rule violation detected":
+                        uid = str(ev.get("unique_id") or "")
+                        host = str(ev.get("hostname") or "edge")
+                        uri = str(ev.get("uri") or "/")
+                        cip = str(ev.get("client_ip") or "unknown")
+                        matched = rules_by_uid.get(uid, [])
+                        rule_desc = "; ".join(matched[:3]) if matched else "OWASP CRS Anomaly Threshold Exceeded"
+                        ts_val = ev.get("ts")
+                        try:
+                            ts_iso = datetime.fromtimestamp(float(ts_val), tz=timezone.utc).isoformat()
+                        except Exception:
+                            ts_iso = datetime.now(timezone.utc).isoformat()
+                        activities.append({
+                            "id": _stable_id("coraza", uid or f"{ts_val}|{host}|{uri}|{cip}"),
+                            "source": "coraza",
+                            "type": "waf_block",
+                            "severity": "HIGH",
+                            "title": f"Coraza WAF Blocked Request on {host}",
+                            "details": f"Client: {cip} • URI: {uri[:120]} • Rules: {rule_desc}"[:240],
+                            "target": cip if cip != "unknown" else host,
+                            "timestamp": ts_iso,
+                            "raw": {**ev, "matched_rules": matched},
+                        })
+        except Exception as exc:
+            logger.debug("Coraza WAF events fetch skipped: %s", exc)
+
         # Loki {job="fail2ban"} — the durable source. fail2ban-client and
         # /var/log/fail2ban.log only exist on full host installs; inside
         # the platform container (and once promtail ships the host log)
@@ -1345,7 +1432,8 @@ class SecurityEventsView(GenericAPIView):
                 "crowdsec_bans_count": per_source.get("crowdsec", 0),
                 "crowdsec_alerts_count": len(crowdsec_alerts),
                 "fail2ban_banned_count": per_source.get("fail2ban", 0),
-                "waf_events_count": per_source.get("openappsec", 0),
+                "waf_events_count": per_source.get("openappsec", 0) + per_source.get("coraza", 0),
+                "coraza_events_count": per_source.get("coraza", 0),
                 "trivy_cves_count": per_source.get("trivy", 0),
             },
             "falco_events": falco_events[:50],
