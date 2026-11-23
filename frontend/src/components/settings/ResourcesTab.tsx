@@ -11,9 +11,10 @@ import { toast } from '@/components/ui/use-toast';
 interface ResourcesTabProps {
     serviceId: string;
     service?: Service;
+    onUpdated?: (updated: Partial<Service>) => void;
 }
 
-export function ResourcesTab({ serviceId, service: initialService }: ResourcesTabProps) {
+export function ResourcesTab({ serviceId, service: initialService, onUpdated }: ResourcesTabProps) {
     const [service, setService] = useState<any>(initialService || null);
     const [hostResources, setHostResources] = useState<{cpu_cores: number; ram_mb: number; swap_mb: number} | null>(null);
     const [loading, setLoading] = useState(!initialService);
@@ -65,14 +66,16 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
     const handleSave = async () => {
         setSaving(true);
         try {
-            await servicesApi.update(serviceId, {
+            const updated = await servicesApi.update(serviceId, {
                 cpu_cores: cpu,
                 memory_mb: memory,
                 min_replicas: minReplicas,
                 max_replicas: maxReplicas,
                 autoscale_cpu_target: cpuTarget,
+                autoscale_enabled: maxReplicas > 1,
             } as any);
             dirtyRef.current = false;
+            onUpdated?.(updated);
             toast({ title: '✓ Resources updated', description: 'Redeploy to apply changes.' });
         } catch (err) {
             toast({ title: 'Failed to save', variant: 'destructive' });

@@ -92,14 +92,25 @@ export const DeploymentApprovalsPanel: React.FC<DeploymentApprovalsPanelProps> =
     }
   };
 
+  const normalizeStatus = (status?: string) => (status || '').toUpperCase();
+
+  const formatTimestamp = (value?: string | null) => {
+    if (!value) return 'Just now';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? 'Just now' : d.toLocaleString();
+  };
+
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'pending':
+    switch (normalizeStatus(status)) {
+      case 'PENDING':
         return <Badge variant="warning">Pending</Badge>;
-      case 'approved':
-        return <Badge variant="success">Approved</Badge>;
-      case 'rejected':
+      case 'APPROVED':
+      case 'AUTO_APPROVED':
+        return <Badge variant="success">{normalizeStatus(status) === 'AUTO_APPROVED' ? 'Auto-Approved' : 'Approved'}</Badge>;
+      case 'REJECTED':
         return <Badge variant="destructive">Rejected</Badge>;
+      case 'EXPIRED':
+        return <Badge variant="outline">Expired</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -160,42 +171,49 @@ export const DeploymentApprovalsPanel: React.FC<DeploymentApprovalsPanelProps> =
                     </div>
                     <div className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-foreground">{approval.requester}</span>
+                        <span className="font-semibold text-foreground">
+                          {approval.requested_by_username || approval.requester || (approval.requested_by ? `User #${approval.requested_by}` : 'Automated Pipeline')}
+                        </span>
                         {getStatusBadge(approval.status)}
+                        {approval.risk_level && (
+                          <Badge variant="outline" className="text-[10px] font-mono">
+                            {approval.risk_level} RISK
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <Clock className="w-3.5 h-3.5" />
-                          {new Date(approval.requested_at).toLocaleString()}
+                          {formatTimestamp(approval.requested_at || approval.created_at)}
                         </span>
-                        {approval.environment && (
+                        {(approval.environment || approval.deployment) && (
                           <span className="flex items-center gap-1">
                             <ShieldCheck className="w-3.5 h-3.5" />
-                            {approval.environment}
+                            {approval.environment || `Deploy ${String(approval.deployment).slice(0, 8)}`}
                           </span>
                         )}
                       </div>
-                      {approval.reason && (
+                      {(approval.approval_notes || approval.reason) && (
                         <p className="text-xs text-muted-foreground/70 mt-1 italic">
-                          &ldquo;{approval.reason}&rdquo;
+                          &ldquo;{approval.approval_notes || approval.reason}&rdquo;
                         </p>
                       )}
-                      {approval.status === 'approved' && approval.approved_by && (
+                      {['APPROVED', 'AUTO_APPROVED'].includes(normalizeStatus(approval.status)) && (approval.approved_by_username || approval.approved_by) && (
                         <p className="text-xs text-emerald-500/70 mt-1">
-                          Approved by {approval.approved_by}
-                          {approval.approved_at ? ` — ${new Date(approval.approved_at).toLocaleString()}` : ''}
+                          Approved by {approval.approved_by_username || approval.approved_by}
+                          {approval.approved_at ? ` — ${formatTimestamp(approval.approved_at)}` : ''}
                         </p>
                       )}
-                      {approval.status === 'rejected' && approval.rejected_by && (
+                      {normalizeStatus(approval.status) === 'REJECTED' && (approval.rejected_by_username || approval.rejected_by) && (
                         <p className="text-xs text-red-500/70 mt-1">
-                          Rejected by {approval.rejected_by}
-                          {approval.rejected_at ? ` — ${new Date(approval.rejected_at).toLocaleString()}` : ''}
+                          Rejected by {approval.rejected_by_username || approval.rejected_by}
+                          {approval.rejected_at ? ` — ${formatTimestamp(approval.rejected_at)}` : ''}
                         </p>
                       )}
                     </div>
                   </div>
 
-                  {approval.status === 'pending' && (
+                  {normalizeStatus(approval.status) === 'PENDING' && (
                     <div className="flex items-center gap-2 shrink-0">
                       <Button
                         variant="default"
@@ -224,10 +242,10 @@ export const DeploymentApprovalsPanel: React.FC<DeploymentApprovalsPanelProps> =
                     </div>
                   )}
 
-                  {approval.status === 'approved' && (
+                  {['APPROVED', 'AUTO_APPROVED'].includes(normalizeStatus(approval.status)) && (
                     <CheckCircle2 className="w-6 h-6 text-emerald-500 shrink-0" />
                   )}
-                  {approval.status === 'rejected' && (
+                  {normalizeStatus(approval.status) === 'REJECTED' && (
                     <XCircle className="w-6 h-6 text-red-500 shrink-0" />
                   )}
                 </div>

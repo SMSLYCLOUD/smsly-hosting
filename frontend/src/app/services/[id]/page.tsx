@@ -124,7 +124,7 @@ export default function ServiceDetailPage() {
             });
             setServiceEnvMap(map);
 
-            setJulesAutoFixDeploy(parseBool(map.JULES_AUTO_FIX_DEPLOY?.value, true));
+            setJulesAutoFixDeploy(parseBool(map.JULES_AUTO_FIX_DEPLOY?.value, false));
             setRuntimeWatchEnabled(parseBool(map.JULES_RUNTIME_WATCH?.value, true));
             setNotifyInApp(parseBool(map.JULES_NOTIFY_IN_APP?.value, true));
             setNotifySms(parseBool(map.JULES_NOTIFY_SMS?.value, true));
@@ -171,19 +171,30 @@ export default function ServiceDetailPage() {
         if (!service) return;
         setWatchConfigSaving(true);
         try {
-            await Promise.all([
-                saveEnvPair(service.id, 'JULES_AUTO_FIX_DEPLOY', julesAutoFixDeploy ? 'true' : 'false'),
-                saveEnvPair(service.id, 'JULES_RUNTIME_WATCH', runtimeWatchEnabled ? 'true' : 'false'),
-                saveEnvPair(service.id, 'JULES_NOTIFY_IN_APP', notifyInApp ? 'true' : 'false'),
-                saveEnvPair(service.id, 'JULES_NOTIFY_SMS', notifySms ? 'true' : 'false'),
-                saveEnvPair(service.id, 'JULES_NOTIFY_EMAIL', notifyEmail ? 'true' : 'false'),
-                saveEnvPair(service.id, 'JULES_NOTIFY_TELEGRAM', notifyTelegram ? 'true' : 'false'),
-                saveEnvPair(service.id, 'JULES_NOTIFY_WHATSAPP', notifyWhatsapp ? 'true' : 'false'),
-                saveEnvPair(service.id, 'ALERT_EMAIL', alertEmail),
-                saveEnvPair(service.id, 'ALERT_PHONE', alertPhone),
-                saveEnvPair(service.id, 'ALERT_TELEGRAM_CHAT_ID', telegramChatId),
-                saveEnvPair(service.id, 'ALERT_WHATSAPP_TO', whatsappTo),
-            ]);
+            const pairs: Array<[string, string]> = [
+                ['JULES_AUTO_FIX_DEPLOY', julesAutoFixDeploy ? 'true' : 'false'],
+                ['JULES_RUNTIME_WATCH', runtimeWatchEnabled ? 'true' : 'false'],
+                ['JULES_NOTIFY_IN_APP', notifyInApp ? 'true' : 'false'],
+                ['JULES_NOTIFY_SMS', notifySms ? 'true' : 'false'],
+                ['JULES_NOTIFY_EMAIL', notifyEmail ? 'true' : 'false'],
+                ['JULES_NOTIFY_TELEGRAM', notifyTelegram ? 'true' : 'false'],
+                ['JULES_NOTIFY_WHATSAPP', notifyWhatsapp ? 'true' : 'false'],
+                ['ALERT_EMAIL', alertEmail.trim()],
+                ['ALERT_PHONE', alertPhone.trim()],
+                ['ALERT_TELEGRAM_CHAT_ID', telegramChatId.trim()],
+                ['ALERT_WHATSAPP_TO', whatsappTo.trim()],
+            ];
+            const toUpsert = pairs
+                .filter(([, val]) => Boolean(val))
+                .map(([key, value]) => ({ key, value, is_secret: false }));
+            const toDelete = pairs
+                .filter(([key, val]) => !val && serviceEnvMap[key])
+                .map(([key]) => serviceEnvMap[key].id);
+
+            await servicesApi.upsertEnvVars(service.id, toUpsert);
+            if (toDelete.length > 0) {
+                await Promise.all(toDelete.map((envId) => servicesApi.deleteEnvVar(service.id, envId)));
+            }
 
             await loadWatchConfig(service.id);
             toast({
@@ -420,10 +431,18 @@ export default function ServiceDetailPage() {
         loadWatchConfig(id);
     }, [id, loadWatchConfig]);
 
-    // Support deep-links like `/services/:id?tab=logs`
+    // Support deep-links like `/services/:id?tab=logs` without snapping back or rendering blank on unknown tabs
+    const VALID_TABS = useRef(new Set([
+        'overview', 'deployments', 'logs', 'console', 'build', 'files', 'addons', 'storage',
+        'env', 'ai-insights', 'router', 'domains', 'mtls', 'metrics', 'resources', 'health',
+        'container-logs', 'monitoring', 'topology', 'network', 'scaling', 'ha', 'cloud-storage',
+        'cron', 'backups', 'approvals', 'previews', 'safedeploy', 'settings', 'advanced',
+    ]));
     const tabParam = searchParams.get('tab');
     useEffect(() => {
-        if (tabParam) setActiveTab(tabParam);
+        if (tabParam && VALID_TABS.current.has(tabParam)) {
+            setActiveTab(tabParam);
+        }
     }, [tabParam]);
 
     // Auto-verify domain on first load if domain exists but is not verified.
@@ -560,7 +579,7 @@ export default function ServiceDetailPage() {
                                     <div>
                                         <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Project</p>
                                         <a
-                                            href={`/project/${service.project}`}
+                                            href={`/projects/${service.project}`}
                                             className="text-lg font-bold text-foreground hover:text-emerald-400 transition-colors flex items-center gap-2"
                                         >
                                             {service.project_name || 'Unnamed Project'}
@@ -605,7 +624,7 @@ export default function ServiceDetailPage() {
                                                 disabled={moving || !moveTarget || moveTarget === service.project}
                                                 className="text-xs px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 font-medium hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
                                             >
-                                                {moving ? 'Moving???' : 'Confirm'}
+                                                {moving ? 'Moving...' : 'Confirm'}
                                             </button>
                                             <button
                                                 onClick={() => setMovePickerOpen(false)}
@@ -666,39 +685,6 @@ export default function ServiceDetailPage() {
                                         <Globe className="w-3 h-3 shrink-0" />
                                         {service.public_domain || `${service.name}.cloud.trulay.co`}
                                     </a>
-                                    <button
-                                        onClick={async () => {
-                                            const currentlyEnabled = service.wildcard_url_enabled !== false;
-                                            if (currentlyEnabled) {
-                                                if (!await confirm({ title: 'Destroy wildcard domain?', message: 'The auto-generated platform domain is removed from routing entirely (no proxy, no redirect). Custom domains keep working.', confirmText: 'Destroy', variant: 'destructive' })) return;
-                                            }
-                                            try {
-                                                const updated = await servicesApi.toggleWildcardUrl(service.id, !currentlyEnabled);
-                                                setService(prev => (prev ? { ...prev, wildcard_url_enabled: updated.wildcard_url_enabled } : prev));
-                                                toast({
-                                                    title: !currentlyEnabled ? 'Wildcard domain restored' : 'Wildcard domain destroyed',
-                                                    description: !currentlyEnabled
-                                                        ? 'The auto-generated domain routes to the service again.'
-                                                        : 'Auto-generated domain removed from all routing. Custom domains keep working.',
-                                                });
-                                            } catch (err) {
-                                                console.error(err);
-                                                toast({ title: 'Failed to update wildcard domain', variant: 'destructive' });
-                                            }
-                                        }}
-                                        title={service.wildcard_url_enabled !== false ? 'Destroy wildcard domain' : 'Restore wildcard domain'}
-                                        className={`flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold transition-all shrink-0 ${
-                                            service.wildcard_url_enabled !== false
-                                                ? 'bg-emerald-500/10 text-emerald-500 hover:bg-red-500/20 hover:text-red-500'
-                                                : 'bg-zinc-500/10 text-zinc-400 hover:bg-emerald-500/20 hover:text-emerald-500'
-                                        }`}
-                                    >
-                                        {service.wildcard_url_enabled !== false ? (
-                                            <><Shield className="w-3 h-3" /> Destroy</>
-                                        ) : (
-                                            <><Globe className="w-3 h-3" /> Restore</>
-                                        )}
-                                    </button>
                                 </div>
                             </div>
                             {(service.node_url && (service.node_domains?.master || service.public_domain)) && (
@@ -1224,7 +1210,12 @@ export default function ServiceDetailPage() {
 
             {activeTab === 'logs' && <LogsTab deployment={deployment} />}
 
-            {activeTab === 'build' && <BuildTab service={service} />}
+            {activeTab === 'build' && (
+                <BuildTab
+                    service={service}
+                    onUpdated={(updated) => setService(prev => (prev ? { ...prev, ...updated } : prev))}
+                />
+            )}
 
             {activeTab === 'files' && <FilesTab serviceId={service.id} />}
 
@@ -1294,7 +1285,13 @@ export default function ServiceDetailPage() {
                 </div>
             )}
 
-            {activeTab === 'resources' && <ResourcesTab serviceId={service.id} service={service} />}
+            {activeTab === 'resources' && (
+                <ResourcesTab
+                    serviceId={service.id}
+                    service={service}
+                    onUpdated={(updated) => setService(prev => (prev ? { ...prev, ...updated } : prev))}
+                />
+            )}
 
             {activeTab === 'health' && <HealthTab serviceId={service.id} service={service} />}
 
@@ -1339,9 +1336,15 @@ export default function ServiceDetailPage() {
                                 />
                                 <button
                                     className="bg-primary text-primary-foreground px-4 py-2 rounded font-bold hover:opacity-90"
-                                    onClick={() => {
+                                    onClick={async () => {
                                         sessionStorage.setItem('smsly_ai_key', aiKey);
-                                        toast({ title: 'AI Key saved', description: 'Key stored locally in your browser.' });
+                                        try {
+                                            await saveEnvPair(service.id, 'JULES_AUTO_FIX_DEPLOY', julesAutoFixDeploy ? 'true' : 'false');
+                                            await loadWatchConfig(service.id);
+                                        } catch {
+                                            // session key still saved locally
+                                        }
+                                        toast({ title: 'Jules AI settings saved', description: 'API key stored in your browser and Auto Fix setting persisted.' });
                                     }}
                                 >
                                     Save
@@ -1472,7 +1475,12 @@ export default function ServiceDetailPage() {
 
             {activeTab === 'safedeploy' && <SafeDeployPanel serviceId={service.id} />}
 
-            {activeTab === 'advanced' && <AdvancedTab service={service} />}
+            {activeTab === 'advanced' && (
+                <AdvancedTab
+                    service={service}
+                    onUpdated={(updated) => setService(prev => (prev ? { ...prev, ...updated } : prev))}
+                />
+            )}
 
             {activeTab === 'console' && (
                 // TODO(extract): Extract the terminal/console tab into `ConsoleTab` component.

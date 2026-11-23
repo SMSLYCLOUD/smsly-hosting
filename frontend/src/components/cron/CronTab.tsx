@@ -12,7 +12,7 @@ interface CloudDestination {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
-import { Clock, Plus, Trash2, Play, CheckCircle2 } from 'lucide-react';
+import { Clock, Plus, Trash2, Play, CheckCircle2, Loader2 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
@@ -30,6 +30,7 @@ export const CronTab = React.memo(function CronTab({ serviceId }: CronTabProps) 
     const [newCommand, setNewCommand] = useState('');
     const [destinations, setDestinations] = useState<CloudDestination[]>([]);
     const [selectedDestination, setSelectedDestination] = useState<string>('');
+    const [triggeringId, setTriggeringId] = useState<string | number | null>(null);
 
     const loadDestinations = useCallback(async () => {
         try {
@@ -78,7 +79,7 @@ export const CronTab = React.memo(function CronTab({ serviceId }: CronTabProps) 
         }
     };
 
-    const handleDelete = async (id: number) => {
+    const handleDelete = async (id: string | number) => {
         if (!await confirm({ title: 'Delete scheduled task?', message: 'Are you sure you want to delete this scheduled task?', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
             await servicesApi.deleteCronJob(serviceId, id);
@@ -86,6 +87,25 @@ export const CronTab = React.memo(function CronTab({ serviceId }: CronTabProps) 
             toast({ title: "Cron Job deleted" });
         } catch (err) {
             toast({ title: "Failed to delete", variant: "destructive" });
+        }
+    };
+
+    const handleTrigger = async (job: CronJob) => {
+        setTriggeringId(job.id);
+        try {
+            await servicesApi.triggerCronJob(serviceId, job.id);
+            toast({
+                title: "Cron Job triggered",
+                description: `"${job.name}" queued for immediate execution inside the container.`,
+            });
+            setTimeout(() => void loadJobs(), 2000);
+        } catch {
+            toast({
+                title: "Failed to trigger cron job",
+                variant: "destructive",
+            });
+        } finally {
+            setTriggeringId(null);
         }
     };
 
@@ -175,8 +195,19 @@ export const CronTab = React.memo(function CronTab({ serviceId }: CronTabProps) 
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Button variant="ghost" size="icon" className="hover:bg-primary/10 hover:text-primary">
-                                        <Play className="w-4 h-4" /> {/* Trigger manually (future) */}
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="hover:bg-primary/10 hover:text-primary"
+                                        onClick={() => handleTrigger(job)}
+                                        disabled={triggeringId === job.id}
+                                        title="Run scheduled task now"
+                                    >
+                                        {triggeringId === job.id ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                            <Play className="w-4 h-4" />
+                                        )}
                                     </Button>
                                     <Button
                                         variant="ghost"

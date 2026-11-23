@@ -29,7 +29,12 @@ CFG_PATH = os.environ.get(
 )
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
 LAPI_POLL_SECONDS = 2
-BULK_BATCH_SIZE = 5000
+BULK_BATCH_SIZE = 500
+LIST_MIN_CAPI_INTERVAL = 180
+LIST_FULL_REFRESH_INTERVAL = 3600
+FAST_LANE_DESC = "CrowdSec First-Strike Fast-Lane (local)"
+FAST_LANE_MAX_IPS = 80
+FAST_LANE_MAX_EXPR_LEN = 3800
 RUNNING = True
 
 
@@ -176,7 +181,8 @@ def ensure_zone_rulesets(
     list_name: str,
     action: str,
     cf_headers: dict[str, str],
-) -> int:
+) -> dict[str, dict[str, str | None]]:
+    """Ensure the main IP-list rule exists per zone and return zone ruleset state."""
     expr = f"(ip.src in ${list_name})"
     rule_spec = {
         "action": action,
@@ -184,7 +190,7 @@ def ensure_zone_rulesets(
         "description": f"CrowdSec Edge Block List ({list_name})",
         "enabled": True,
     }
-    protected = 0
+    zone_state: dict[str, dict[str, str | None]] = {}
     for zid in zones:
         if not RUNNING:
             break
@@ -196,26 +202,31 @@ def ensure_zone_rulesets(
             rs = ep.get("result") or {}
             rs_id = rs.get("id") or ""
             rules = rs.get("rules") or []
-            if any(list_name in str(r.get("expression") or "") for r in rules):
-                protected += 1
-            elif rs_id:
+            fast_rule_id = next(
+                (r.get("id") for r in rules if r.get("description") == FAST_LANE_DESC and r.get("id")),
+                None,
+            )
+            if not any(list_name in str(r.get("expression") or "") for r in rules) and rs_id:
                 http_json(
                     f"{CF_API_BASE}/zones/{zid}/rulesets/{rs_id}/rules",
                     method="POST",
                     headers=cf_headers,
                     payload=rule_spec,
                 )
-                protected += 1
+            if rs_id:
+                zone_state[zid] = {"ruleset_id": rs_id, "fast_rule_id": fast_rule_id}
         except urllib.error.HTTPError as he:
             if he.code == 404:
                 try:
-                    http_json(
+                    created = http_json(
                         f"{CF_API_BASE}/zones/{zid}/rulesets/phases/http_request_firewall_custom/entrypoint",
                         method="PUT",
                         headers=cf_headers,
                         payload={"rules": [rule_spec]},
                     )
-                    protected += 1
+                    rs_id = (created.get("result") or {}).get("id") or ""
+                    if rs_id:
+                        zone_state[zid] = {"ruleset_id": rs_id, "fast_rule_id": None}
                 except Exception as exc2:
                     log("warning", f"zone {zid} ruleset init deferred: {exc2}")
             else:
@@ -223,7 +234,93 @@ def ensure_zone_rulesets(
         except Exception as exc:
             log("warning", f"zone {zid} ruleset check skipped: {exc}")
         time.sleep(0.2)
-    return protected
+    return zone_state
+
+
+def build_fast_lane_ips(
+    active_local_ips: dict[str, float],
+    known_ips: dict[str, str],
+) -> tuple[str, ...]:
+    """Select newest active local attacker IPs not yet confirmed in crowdsec_block."""
+    ordered = [
+        ip for ip, _ts in sorted(active_local_ips.items(), key=lambda kv: (-kv[1], kv[0]))
+        if ip not in known_ips
+    ]
+    chosen: list[str] = []
+    # "(ip.src in {" + " ".join(chosen) + "})"
+    running_len = len("(ip.src in {})")
+    for ip in ordered:
+        if len(chosen) >= FAST_LANE_MAX_IPS:
+            break
+        sep = 1 if chosen else 0
+        if running_len + sep + len(ip) > FAST_LANE_MAX_EXPR_LEN:
+            break
+        chosen.append(ip)
+        running_len += sep + len(ip)
+    return tuple(sorted(chosen))
+
+
+def sync_fast_lane_rules(
+    zone_state: dict[str, dict[str, str | None]],
+    ips: tuple[str, ...],
+    action: str,
+    cf_headers: dict[str, str],
+) -> None:
+    """Push or clear an inline zone custom WAF rule for urgent local First Strike bans.
+
+    Zone custom rules are outside the /accounts/{id}/rules/lists quota (error 10040),
+    keeping edge enforcement < 4s even while CAPI bulk list writes are rate-limited.
+    """
+    for zid, meta in zone_state.items():
+        if not RUNNING:
+            break
+        rs_id = meta.get("ruleset_id")
+        if not rs_id:
+            continue
+        fast_rule_id = meta.get("fast_rule_id")
+        if ips:
+            payload = {
+                "action": action,
+                "expression": f"(ip.src in {{{' '.join(ips)}}})",
+                "description": FAST_LANE_DESC,
+                "enabled": True,
+            }
+            if fast_rule_id:
+                try:
+                    http_json(
+                        f"{CF_API_BASE}/zones/{zid}/rulesets/{rs_id}/rules/{fast_rule_id}",
+                        method="PATCH",
+                        headers=cf_headers,
+                        payload=payload,
+                    )
+                    continue
+                except urllib.error.HTTPError as he:
+                    if he.code != 404:
+                        raise
+                    meta["fast_rule_id"] = None
+            resp = http_json(
+                f"{CF_API_BASE}/zones/{zid}/rulesets/{rs_id}/rules",
+                method="POST",
+                headers=cf_headers,
+                payload=payload,
+            )
+            rules = (resp.get("result") or {}).get("rules") or []
+            meta["fast_rule_id"] = next(
+                (r.get("id") for r in rules if r.get("description") == FAST_LANE_DESC and r.get("id")),
+                None,
+            )
+        elif fast_rule_id:
+            try:
+                http_json(
+                    f"{CF_API_BASE}/zones/{zid}/rulesets/{rs_id}/rules/{fast_rule_id}",
+                    method="DELETE",
+                    headers=cf_headers,
+                )
+            except urllib.error.HTTPError as he:
+                if he.code != 404:
+                    raise
+            meta["fast_rule_id"] = None
+        time.sleep(0.05)
 
 
 def _extract_rate_limit_wait(he: urllib.error.HTTPError, default_wait: int) -> int:
@@ -306,7 +403,8 @@ def main() -> int:
     if not RUNNING:
         return 0
 
-    protected_zones = ensure_zone_rulesets(zones, list_name, action, cf_headers)
+    zone_state = ensure_zone_rulesets(zones, list_name, action, cf_headers)
+    protected_zones = len(zone_state)
     known_ips: dict[str, str] = {}
     try:
         known_ips = fetch_all_list_items(account_id, list_id, cf_headers)
@@ -327,13 +425,19 @@ def main() -> int:
     # priority: 0 = local CrowdSec/cscli decision (top priority), 1 = CAPI/lists feed
     pending_adds: dict[str, tuple[int, str]] = {}
     pending_dels: set[str] = set()
-    cf_cooldown_until = 0.0
+    active_local_ips: dict[str, float] = {}
+    list_cooldown_until = 0.0
+    fast_lane_cooldown_until = 0.0
     cf_backoff_sec = 120
+    last_capi_write_ts = 0.0
+    last_list_refresh_ts = time.time()
+    last_fast_lane: tuple[str, ...] = ()
     startup = "true"
     last_status_log = 0.0
 
     while RUNNING:
         # 1. Always keep CrowdSec LAPI stream fresh every cycle.
+        now = time.time()
         try:
             stream = http_json(
                 f"{lapi_url}/v1/decisions/stream?startup={startup}",
@@ -346,6 +450,7 @@ def main() -> int:
                 nip = norm_ip(dec.get("value"))
                 if not nip:
                     continue
+                active_local_ips.pop(nip, None)
                 pending_adds.pop(nip, None)
                 if nip in known_ips:
                     pending_dels.add(nip)
@@ -355,9 +460,12 @@ def main() -> int:
                 if not nip:
                     continue
                 pending_dels.discard(nip)
+                orig = str(dec.get("origin") or "crowdsec").strip().lower()
+                is_local = orig not in ("capi", "lists")
+                if is_local:
+                    active_local_ips[nip] = now
                 if nip not in known_ips:
-                    orig = str(dec.get("origin") or "crowdsec").strip().lower()
-                    prio = 1 if orig in ("capi", "lists") else 0
+                    prio = 0 if is_local else 1
                     comment = f"crowdsec:{dec.get('scenario', 'ban')}"[:100]
                     prev = pending_adds.get(nip)
                     if prev is None or prio < prev[0]:
@@ -371,11 +479,47 @@ def main() -> int:
         except Exception as exc:
             log("warning", f"crowdsec LAPI poll transient: {exc}")
 
-        # 2. Flush pending list changes to Cloudflare if outside cooldown.
+        # 2. Keep Cloudflare zone fast-lane inline WAF rule synced for local First-Strike bans.
         now = time.time()
-        if (pending_dels or pending_adds) and now >= cf_cooldown_until:
+        desired_fast_lane = build_fast_lane_ips(active_local_ips, known_ips)
+        if desired_fast_lane != last_fast_lane and now >= fast_lane_cooldown_until:
+            try:
+                sync_fast_lane_rules(zone_state, desired_fast_lane, action, cf_headers)
+                last_fast_lane = desired_fast_lane
+                if desired_fast_lane:
+                    log(
+                        "info",
+                        f"synced {len(desired_fast_lane)} local first-strike IPs to Cloudflare fast-lane rule",
+                        zones=protected_zones,
+                    )
+                else:
+                    log("info", "cleared Cloudflare fast-lane rule", zones=protected_zones)
+            except urllib.error.HTTPError as he:
+                wait_sec = _extract_rate_limit_wait(he, 60) if he.code == 429 else 30
+                fast_lane_cooldown_until = time.time() + wait_sec
+                log("warning", f"fast-lane zone sync transient status={he.code} wait={wait_sec}s")
+            except Exception as exc:
+                fast_lane_cooldown_until = time.time() + 30
+                log("warning", f"fast-lane zone sync transient: {exc}")
+
+        # 3. Flush pending account IP-list changes outside list cooldown, pacing CAPI bulk writes.
+        now = time.time()
+        if now - last_list_refresh_ts >= LIST_FULL_REFRESH_INTERVAL:
+            try:
+                known_ips = fetch_all_list_items(account_id, list_id, cf_headers)
+                last_list_refresh_ts = now
+            except Exception as exc:
+                log("warning", f"periodic list refresh skipped: {exc}")
+
+        has_local_adds = any(v[0] == 0 for v in pending_adds.values())
+        capi_due = bool(pending_adds) and (now - last_capi_write_ts >= LIST_MIN_CAPI_INTERVAL)
+        if (pending_dels or has_local_adds or capi_due) and now >= list_cooldown_until:
             try:
                 if pending_dels:
+                    # Resolve real Cloudflare item IDs if any target was tracked optimistically.
+                    if any(ip in known_ips and not known_ips[ip] for ip in pending_dels):
+                        known_ips = fetch_all_list_items(account_id, list_id, cf_headers)
+                        last_list_refresh_ts = time.time()
                     del_items = []
                     flushed_ips = []
                     for ip in list(pending_dels)[:BULK_BATCH_SIZE]:
@@ -384,6 +528,7 @@ def main() -> int:
                             del_items.append({"id": iid})
                             flushed_ips.append(ip)
                         else:
+                            known_ips.pop(ip, None)
                             pending_dels.discard(ip)
                     if del_items:
                         resp = http_json(
@@ -402,31 +547,40 @@ def main() -> int:
                         log("info", f"removed {len(flushed_ips)} expired ip bans from {list_name}", synced_ips=len(known_ips))
 
                 slots = max(0, capacity - len(known_ips))
-                if pending_adds and slots > 0:
+                if (has_local_adds or capi_due) and slots > 0:
                     ordered = sorted(pending_adds.items(), key=lambda kv: (kv[1][0], kv[0]))
                     batch_entries = ordered[: min(slots, BULK_BATCH_SIZE)]
-                    payload = [{"ip": ip, "comment": meta[1]} for ip, meta in batch_entries]
-                    resp = http_json(
-                        f"{CF_API_BASE}/accounts/{account_id}/rules/lists/{list_id}/items",
-                        method="POST",
-                        headers=cf_headers,
-                        payload=payload,
-                        timeout=45,
-                    )
-                    op_id = (resp.get("result") or {}).get("operation_id") or ""
-                    op_status = await_bulk_operation(account_id, op_id, cf_headers)
-                    known_ips = fetch_all_list_items(account_id, list_id, cf_headers)
-                    for ip, _meta in batch_entries:
-                        if ip in known_ips or op_status == "completed":
-                            pending_adds.pop(ip, None)
-                    cf_backoff_sec = 120
-                    log(
-                        "info",
-                        f"synced {len(batch_entries)} ip bans to {list_name}",
-                        synced_ips=len(known_ips),
-                        pending_sync=len(pending_adds),
-                        op_status=op_status,
-                    )
+                    if batch_entries:
+                        payload = [{"ip": ip, "comment": meta[1]} for ip, meta in batch_entries]
+                        resp = http_json(
+                            f"{CF_API_BASE}/accounts/{account_id}/rules/lists/{list_id}/items",
+                            method="POST",
+                            headers=cf_headers,
+                            payload=payload,
+                            timeout=45,
+                        )
+                        op_id = (resp.get("result") or {}).get("operation_id") or ""
+                        op_status = await_bulk_operation(account_id, op_id, cf_headers)
+                        if any(meta[0] > 0 for _, meta in batch_entries):
+                            last_capi_write_ts = time.time()
+                        if op_status == "completed":
+                            for ip, _meta in batch_entries:
+                                known_ips.setdefault(ip, "")
+                                pending_adds.pop(ip, None)
+                        else:
+                            known_ips = fetch_all_list_items(account_id, list_id, cf_headers)
+                            last_list_refresh_ts = time.time()
+                            for ip, _meta in batch_entries:
+                                if ip in known_ips:
+                                    pending_adds.pop(ip, None)
+                        cf_backoff_sec = 120
+                        log(
+                            "info",
+                            f"synced {len(batch_entries)} ip bans to {list_name}",
+                            synced_ips=len(known_ips),
+                            pending_sync=len(pending_adds),
+                            op_status=op_status,
+                        )
                 elif pending_adds and slots == 0:
                     # Respect Cloudflare plan capacity; trim low-priority CAPI queue.
                     pending_adds = {k: v for k, v in pending_adds.items() if v[0] == 0}
@@ -434,28 +588,28 @@ def main() -> int:
                 body = he.read().decode("utf-8", errors="replace")[:200]
                 if he.code == 429:
                     wait_sec = _extract_rate_limit_wait(he, cf_backoff_sec)
-                    cf_cooldown_until = time.time() + wait_sec
+                    list_cooldown_until = time.time() + wait_sec
                     cf_backoff_sec = min(1800, max(300, cf_backoff_sec * 2))
                     log(
                         "warning",
-                        f"cloudflare bulk write rate-limited (status 429); cooling down {wait_sec}s",
+                        f"cloudflare bulk write rate-limited (status 429); cooling down {wait_sec}s (fast-lane active for {len(last_fast_lane)} local IPs)",
                         synced_ips=len(known_ips),
                         pending_sync=len(pending_adds),
                         zones=protected_zones,
                     )
                 elif he.code in (401, 403):
                     log("error", f"cloudflare token unauthorized status={he.code}: {body}")
-                    cf_cooldown_until = time.time() + 300
+                    list_cooldown_until = time.time() + 300
                 elif re.search(r"exceed|maximum|limit|capacity", body, re.I):
                     log("warning", f"cloudflare list capacity reached ({len(known_ips)} items): {body}")
                     pending_adds = {k: v for k, v in pending_adds.items() if v[0] == 0}
-                    cf_cooldown_until = time.time() + 300
+                    list_cooldown_until = time.time() + 300
                 else:
                     log("warning", f"cloudflare list sync transient status={he.code}: {body}")
-                    cf_cooldown_until = time.time() + 60
+                    list_cooldown_until = time.time() + 60
             except Exception as exc:
                 log("warning", f"cloudflare list sync transient: {exc}")
-                cf_cooldown_until = time.time() + 60
+                list_cooldown_until = time.time() + 60
 
         if now - last_status_log >= 300:
             last_status_log = now
@@ -465,6 +619,7 @@ def main() -> int:
                 list_id=list_id,
                 synced_ips=len(known_ips),
                 pending_sync=len(pending_adds),
+                fast_lane_ips=len(last_fast_lane),
                 zones=protected_zones,
             )
 

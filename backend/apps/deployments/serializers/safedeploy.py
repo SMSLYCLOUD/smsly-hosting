@@ -43,6 +43,12 @@ class ApprovalApproveSerializer(serializers.Serializer):
 
 class ApprovalRejectSerializer(serializers.Serializer):
     notes = serializers.CharField(max_length=2000, required=False, allow_blank=True, trim_whitespace=True)
+    reason = serializers.CharField(max_length=2000, required=False, allow_blank=True, trim_whitespace=True)
+
+    def validate(self, attrs):
+        if not attrs.get('notes') and attrs.get('reason'):
+            attrs['notes'] = attrs['reason']
+        return attrs
 
 
 class ApprovalCreateSerializer(serializers.ModelSerializer):
@@ -86,11 +92,23 @@ class DeploymentArtifactSerializer(serializers.ModelSerializer):
 
 
 class DeploymentApprovalSerializer(serializers.ModelSerializer):
+    requested_by_username = serializers.CharField(
+        source='requested_by.username', read_only=True, default=None
+    )
+    approved_by_username = serializers.CharField(
+        source='approved_by.username', read_only=True, default=None
+    )
+    rejected_by_username = serializers.CharField(
+        source='rejected_by.username', read_only=True, default=None
+    )
+
     class Meta:
         model = DeploymentApproval
         fields = [
             'id', 'service', 'deployment', 'preview_environment',
-            'requested_by', 'approved_by', 'rejected_by',
+            'requested_by', 'requested_by_username',
+            'approved_by', 'approved_by_username',
+            'rejected_by', 'rejected_by_username',
             'status', 'risk_level', 'approval_notes',
             'approved_at', 'rejected_at',
             'created_at', 'updated_at',

@@ -1,6 +1,8 @@
 """Views Cron module."""
 from django.db.models import Q
-from rest_framework import permissions, serializers, viewsets
+from rest_framework import permissions, serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
 from apps.teams.permissions import (
     assert_can_delete,
@@ -82,3 +84,11 @@ class CronJobViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         assert_can_delete(self.request.user, instance.service)
         instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def trigger(self, request, pk=None, service_pk=None):
+        job = self.get_object()
+        assert_can_write(self.request.user, job.service, action='trigger cron job')
+        from apps.deployments.tasks.scheduling.tasks_cron import trigger_cron_job
+        trigger_cron_job.delay(job_id=str(job.id), force=True)
+        return Response({'status': 'triggered', 'id': str(job.id)}, status=status.HTTP_202_ACCEPTED)

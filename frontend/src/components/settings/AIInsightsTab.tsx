@@ -322,7 +322,7 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
 
           <Card className="border-border shadow-sm overflow-hidden">
             {logsSubTab === 'live' ? (
-              <LogsTab deployment={serviceInfo?.latest_deployment || null} />
+              <LogsTab deployment={serviceInfo?.latest_deployment || null} defaultLogType="RUNTIME" />
             ) : (
               <LogsView searchParams={{ service: serviceId }} embed={true} />
             )}

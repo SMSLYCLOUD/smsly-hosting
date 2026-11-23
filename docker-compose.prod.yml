@@ -1270,6 +1270,7 @@ services:
     - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     - backups_data:/app/backups
     - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
@@ -1367,6 +1368,7 @@ services:
     - traefik_dynamic:/traefik-dynamic
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     - /opt/smsly-hosting/cosign-keys:/opt/smsly-hosting/cosign-keys:z
     - backups_data:/app/backups
     - caddy_logs:/var/log/caddy:ro
@@ -2390,7 +2392,7 @@ services:
   # modern_ebpf probe must match the host kernel generation.
   falco:
     profiles: ["full"]
-    image: falcosecurity/falco:${FALCO_VERSION:-0.44.1}
+    image: falcosecurity/falco:${FALCO_VERSION:-0.45.2}
     container_name: smsly-falco
     restart: unless-stopped
     cap_drop:

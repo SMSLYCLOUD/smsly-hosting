@@ -59,7 +59,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
     ];
 
     return (
-        <main className="min-h-screen flex flex-col text-foreground relative">
+        <div className="min-h-screen flex flex-col text-foreground relative">
 
             <div className="border-b border-border bg-card/60 backdrop-blur-md">
                 <div className="container mx-auto py-6">
@@ -94,7 +94,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                             <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
                                 <span className="flex items-center gap-1.5">
                                     <Globe size={12} />
-                                    {service.public_domain || `${service.name}.cloud.Trulay.co`}
+                                    {service.public_domain || `${service.name}.cloud.trulay.co`}
                                 </span>
                                 <span className="flex items-center gap-1.5">
                                     <GitCommit size={12} />
@@ -104,18 +104,29 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                         </div>
                     </div>
 
-                    <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-hide">
+                    <div role="tablist" aria-label="Service configuration tabs" className="flex gap-1 overflow-x-auto pb-2 scrollbar-hide">
                         {tabs.map((tab) => {
                             const Icon = tab.icon;
                             const isActive = activeTab === tab.id;
                             return (
                                 <button
                                     key={tab.id}
+                                    role="tab"
+                                    aria-selected={isActive}
                                     onClick={() => {
                                         if (tab.href) {
                                             router.push(tab.href);
                                         } else {
                                             setActiveTab(tab.id);
+                                            if (typeof window !== 'undefined') {
+                                                const url = new URL(window.location.href);
+                                                if (tab.id === 'overview') {
+                                                    url.searchParams.delete('tab');
+                                                } else {
+                                                    url.searchParams.set('tab', tab.id);
+                                                }
+                                                window.history.replaceState(null, '', url.toString());
+                                            }
                                         }
                                     }}
                                     className={`
@@ -140,6 +151,6 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                     {children}
                 </div>
             </div>
-        </main>
+        </div>
     );
 }

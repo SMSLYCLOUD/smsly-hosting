@@ -14,6 +14,7 @@ from apps.deployments.services.mtls_integration import (
     get_mtls_volumes,
 )
 from .exceptions import BuildError
+from .utils import resolve_compose_path
 
 
 logger = logging.getLogger(__name__)
@@ -658,7 +659,10 @@ class ComposeNetworkingMixin:
         cpus_val = max(0.1, cpus_val)
 
         # Apply security_opt + shared network to ALL services in the compose file
-        compose_path = _os.path.join(routing_dir, self.service.compose_file)
+        try:
+            compose_path = resolve_compose_path(routing_dir, self.service.compose_file)
+        except ValueError as exc:
+            raise BuildError(f"Invalid compose_file path: {exc}") from exc
         if _os.path.isfile(compose_path):
             try:
                 with open(compose_path, "r", encoding="utf-8") as f:

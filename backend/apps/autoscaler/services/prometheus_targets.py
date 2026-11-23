@@ -173,6 +173,7 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False) -> bool:
         user=server.ssh_user,
         port=server.ssh_port,
         password=server.ssh_password,
+        key_passphrase=getattr(server, "ssh_key_passphrase", "") or "",
         wg_address=server.wg_address,
     )
 
@@ -184,10 +185,12 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False) -> bool:
 
     tmp = None
     try:
-        # 0. Check if exporter is already running — skip if not forced
+        # 0. Check if exporter is already running (standalone or compose-managed) — skip if not forced
         if not force:
             out, _err, _code = client.exec_command(
-                "docker inspect smsly-docker-labels --format='{{.State.Status}}' 2>/dev/null",
+                "for cname in smsly-docker-labels smsly-hosting-docker-labels-1; do "
+                "st=$(docker inspect \"$cname\" --format='{{.State.Status}}' 2>/dev/null); "
+                "if [ \"$st\" = \"running\" ]; then echo running; break; fi; done",
                 raise_on_error=False,
                 timeout=SSH_TIMEOUT_QUICK,
             )
@@ -564,6 +567,7 @@ def _write_target_file(filename, targets):
 def _get_exporter_script_content():
     """Read the docker-labels-exporter.py script content."""
     candidates = [
+        os.path.join(os.path.dirname(__file__), "docker-labels-exporter.py"),
         os.path.join(os.path.dirname(__file__), "../../../infrastructure/monitoring/docker-labels-exporter.py"),
         "/app/infrastructure/monitoring/docker-labels-exporter.py",
         "/platform-src/infrastructure/monitoring/docker-labels-exporter.py",

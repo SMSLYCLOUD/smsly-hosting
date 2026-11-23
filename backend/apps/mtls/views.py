@@ -224,7 +224,10 @@ def mtls_status(request, service_id):
     if not _user_can_access_service(request.user, service):
         return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
 
-    config = get_object_or_404(MtlsConfig, service=service)
+    config, _ = MtlsConfig.objects.get_or_create(
+        service=service,
+        defaults={"enabled": False, "trust_domain": "ecosystem.local"},
+    )
     from apps.mtls.services.envoy_sidecar import EnvoySidecar
     sidecar = EnvoySidecar.get_sidecar_status(service)
     return Response({
@@ -338,7 +341,10 @@ def mtls_disable(request, service_id):
     if not _user_can_access_service(request.user, service):
         return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
 
-    config = get_object_or_404(MtlsConfig, service=service)
+    config, _ = MtlsConfig.objects.get_or_create(
+        service=service,
+        defaults={"enabled": False, "trust_domain": "ecosystem.local"},
+    )
     config.enabled = False
     config.save()
 

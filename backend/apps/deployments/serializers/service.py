@@ -325,6 +325,8 @@ class ServiceSerializer(serializers.ModelSerializer):
     estimated_cost = serializers.SerializerMethodField()
     node_metadata = serializers.SerializerMethodField()
     domain_instances = serializers.SerializerMethodField()
+    deployment_count = serializers.SerializerMethodField()
+    failed_deployments = serializers.SerializerMethodField()
 
     def validate_docker_image(self, value):
         if not value:
@@ -343,6 +345,28 @@ class ServiceSerializer(serializers.ModelSerializer):
             return validate_image_registry(value, service=MockService())
         except ValueError as e:
             raise serializers.ValidationError(str(e))
+
+    def validate_compose_file(self, value):
+        if value is None:
+            return 'docker-compose.yml'
+        from ..services.pipeline.utils import normalize_compose_file_path
+        try:
+            return normalize_compose_file_path(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
+
+    def validate_compose_main_service(self, value):
+        if not value:
+            return ''
+        cleaned = str(value).strip()
+        if not cleaned:
+            return ''
+        from ..services.pipeline.utils import _SAFE_COMPOSE_SVC_RE
+        if not _SAFE_COMPOSE_SVC_RE.match(cleaned):
+            raise serializers.ValidationError(
+                "compose_main_service must contain only letters, numbers, '.', '_', or '-'."
+            )
+        return cleaned
 
     def validate_name(self, value):
         if not value or not isinstance(value, str):
@@ -564,6 +588,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'deploy_strategy', 'canary_percentage',
             'promotion_policy', 'addon_placement',
             'is_preview', 'parent_service', 'pr_number',
+            'watch_paths', 'bot_pr_strategy',
             'health_check_path', 'health_check_port',
             'health_check_interval', 'health_check_timeout',
             'health_check_retries', 'auto_restart', 'health_status', 'ha_mode',
@@ -597,7 +622,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'sleep_state',
             'project_name', 'project_slug', 'project_emoji',
             'estimated_cost', 'node_metadata', 'domain_instances',
-            'running_replicas',
+            'running_replicas', 'deployment_count', 'failed_deployments',
         ]
         read_only_fields = [
             'id',
@@ -606,7 +631,6 @@ class ServiceSerializer(serializers.ModelSerializer):
             'owner',
             'server',
             'verification_token',
-            'compose_file',
             'active_target_type',
             'active_host_ip',
             'active_runtime_id',
@@ -886,3 +910,17 @@ class ServiceSerializer(serializers.ModelSerializer):
             return url.replace('https://', '').replace('http://', '').rstrip('/')
         except Exception:
             return None
+
+    def get_deployment_count(self, obj) -> int:
+        try:
+            return obj.deployments.count()
+        except Exception:
+            return 0
+
+    def get_failed_deployments(self, obj) -> int:
+        try:
+            return obj.deployments.filter(
+                status__in=('FAILED', 'MIGRATION_FAILED', 'ROLLED_BACK')
+            ).count()
+        except Exception:
+            return 0

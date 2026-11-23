@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Copy, ExternalLink, Loader2, RefreshCw, ShieldCheck, Wrench } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Copy, ExternalLink, Loader2, Power, RefreshCw, Shield, ShieldCheck, Wrench } from 'lucide-react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -21,8 +21,10 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
     const [repairReport, setRepairReport] = useState<any>(null);
     const [reloading, setReloading] = useState(false);
     const [reloadReport, setReloadReport] = useState<any>(null);
+    const [togglingMtls, setTogglingMtls] = useState(false);
+    const [togglingSidecar, setTogglingSidecar] = useState(false);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         setLoading(true);
         try {
             const response = await api.get(`/services/${serviceId}/mtls/status/`);
@@ -36,9 +38,53 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
         } finally {
             setLoading(false);
         }
+    }, [serviceId]);
+
+    useEffect(() => { void load(); }, [load]);
+
+    const handleToggleMtls = async () => {
+        setTogglingMtls(true);
+        try {
+            const endpoint = status?.mtls_enabled
+                ? `/services/${serviceId}/mtls/disable/`
+                : `/services/${serviceId}/mtls/enable/`;
+            const res = await api.post(endpoint, {});
+            toast({
+                title: status?.mtls_enabled ? 'mTLS disabled' : 'mTLS enabled',
+                description: res.data?.message || 'Service mTLS configuration updated.',
+            });
+            await load();
+        } catch (error: any) {
+            toast({
+                title: 'Failed to update mTLS',
+                description: error?.response?.data?.detail || error?.response?.data?.error || 'Could not toggle mTLS.',
+                variant: 'destructive',
+            });
+        } finally {
+            setTogglingMtls(false);
+        }
     };
 
-    useEffect(() => { void load(); }, [serviceId]);
+    const handleToggleSidecar = async () => {
+        setTogglingSidecar(true);
+        try {
+            const nextEnabled = !status?.sidecar_enabled;
+            const res = await api.post(`/services/${serviceId}/mtls/sidecar/`, { enabled: nextEnabled });
+            toast({
+                title: nextEnabled ? 'Envoy sidecar enabled' : 'Envoy sidecar disabled',
+                description: res.data?.message || 'Envoy sidecar setting saved.',
+            });
+            await load();
+        } catch (error: any) {
+            toast({
+                title: 'Failed to update Envoy sidecar',
+                description: error?.response?.data?.detail || error?.response?.data?.error || 'Could not toggle Envoy sidecar.',
+                variant: 'destructive',
+            });
+        } finally {
+            setTogglingSidecar(false);
+        }
+    };
 
     const handleRepair = async () => {        setRepairing(true);
         setRepairReport(null);
@@ -129,7 +175,30 @@ export function ServiceMtlsTab({ serviceId, serviceName, internalPort, publicDom
                             SPIFFE identity, SVID, and Envoy sidecar configuration for {serviceName}.
                         </p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <Button
+                            variant={status?.mtls_enabled ? 'destructive' : 'default'}
+                            size="sm"
+                            onClick={() => void handleToggleMtls()}
+                            disabled={togglingMtls || loading}
+                        >
+                            {togglingMtls
+                                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                : <Power className="mr-2 h-4 w-4" />}
+                            {status?.mtls_enabled ? 'Disable mTLS' : 'Enable mTLS'}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void handleToggleSidecar()}
+                            disabled={togglingSidecar || loading || !status?.mtls_enabled}
+                            title={!status?.mtls_enabled ? 'Enable mTLS first to attach an Envoy sidecar' : 'Toggle transparent Envoy mTLS sidecar'}
+                        >
+                            {togglingSidecar
+                                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                : <Shield className="mr-2 h-4 w-4" />}
+                            {status?.sidecar_enabled ? 'Disable Envoy Sidecar' : 'Enable Envoy Sidecar'}
+                        </Button>
                         {status?.mtls_enabled ? (
                             <Button
                                 variant="default"

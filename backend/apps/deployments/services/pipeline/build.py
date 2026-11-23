@@ -25,7 +25,7 @@ from apps.deployments.utils import (
     update_stage,
 )
 from .exceptions import BuildError
-from .utils import _read_env_file
+from .utils import _read_env_file, resolve_compose_path
 
 
 logger = logging.getLogger(__name__)
@@ -656,7 +656,10 @@ class BuildMixin:
 
     def _build_with_compose(self):
         """Build and start all services via docker-compose."""
-        compose_path = os.path.join(self.source_dir, self.service.compose_file)
+        try:
+            compose_path = resolve_compose_path(self.source_dir, self.service.compose_file)
+        except ValueError as exc:
+            raise BuildError(f"Invalid compose_file path: {exc}") from exc
         if not os.path.isfile(compose_path):
             raise BuildError(
                 f"Compose file not found: {self.service.compose_file}"

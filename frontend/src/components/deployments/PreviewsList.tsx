@@ -61,17 +61,35 @@ export function PreviewsList({ serviceId }: { serviceId: string }) {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {previews.map(p => (
+                        {previews.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground text-sm">
+                                    No branch preview environments found for this service.
+                                </TableCell>
+                            </TableRow>
+                        ) : previews.map(p => (
                             <TableRow key={p.id}>
-                                <TableCell className="font-medium">{p.branch_name}</TableCell>
-                                <TableCell>{p.commit_sha}</TableCell>
-                                <TableCell><Badge variant="secondary">{p.status}</Badge></TableCell>
+                                <TableCell className="font-medium">{p.branch_name || p.branch || '—'}</TableCell>
+                                <TableCell className="font-mono text-xs">{(p.commit_sha || '').slice(0, 7) || '—'}</TableCell>
+                                <TableCell><Badge variant="secondary">{p.status || 'UNKNOWN'}</Badge></TableCell>
                                 <TableCell>
-                                    {p.migration_validation && (
+                                    {p.migration_validation ? (
                                         <Badge variant="outline">{p.migration_validation.risk_level}</Badge>
+                                    ) : (
+                                        <span className="text-xs text-muted-foreground">—</span>
                                     )}
                                 </TableCell>
-                                <TableCell>
+                                <TableCell className="space-x-3">
+                                    {p.preview_url && (
+                                        <a
+                                            href={p.preview_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-primary hover:underline text-sm font-medium"
+                                        >
+                                            Open
+                                        </a>
+                                    )}
                                     <button
                                         className="text-blue-600 hover:underline text-sm"
                                         onClick={() => setSelectedPreview(p)}

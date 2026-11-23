@@ -36,10 +36,7 @@ export function TopologyView({
     if (!targetService) return;
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (uuidRegex.test(targetService)) {
-      fetch(`/api/v1/services/${encodeURIComponent(targetService)}/`, {
-        credentials: "include",
-      })
-        .then(r => r.ok ? r.json() : null)
+      servicesApi.get(targetService)
         .then(svc => { if (svc?.name) setSelectedService(svc.name); })
         .catch(() => {});
     } else {

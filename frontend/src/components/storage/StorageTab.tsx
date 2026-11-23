@@ -361,7 +361,7 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
                                                                 <div className="p-8 text-center text-muted-foreground">Listing files...</div>
                                                             ) : (
                                                                 <div className="space-y-1">
-                                                                    {files.map((file, i) => (
+                                                                    {files.filter(f => f.name !== '.' && f.name !== '..').map((file, i) => (
                                                                         <div
                                                                             key={i}
                                                                             className="flex items-center gap-2 p-2 hover:bg-white/5 rounded cursor-pointer group"
@@ -375,14 +375,16 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
                                                                             <span className="flex-1 font-mono text-sm truncate">{file.name}</span>
                                                                             <span className="text-xs text-muted-foreground w-16 text-right">{file.size}</span>
                                                                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                                <Button 
-                                                                                    variant="ghost" 
-                                                                                    size="icon" 
-                                                                                    className="h-7 w-7 text-blue-400"
-                                                                                    onClick={(e) => { e.stopPropagation(); handleFileDownload(file); }}
-                                                                                >
-                                                                                    <Download className="w-3 h-3" />
-                                                                                </Button>
+                                                                                {!file.permissions.startsWith('d') && (
+                                                                                    <Button 
+                                                                                        variant="ghost" 
+                                                                                        size="icon" 
+                                                                                        className="h-7 w-7 text-blue-400"
+                                                                                        onClick={(e) => { e.stopPropagation(); handleFileDownload(file); }}
+                                                                                    >
+                                                                                        <Download className="w-3 h-3" />
+                                                                                    </Button>
+                                                                                )}
                                                                                 <Button 
                                                                                     variant="ghost" 
                                                                                     size="icon" 

@@ -219,6 +219,13 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 setSnapRetentionDays(sched.retention_days);
                 setSnapScheduleEnabled(sched.enabled);
                 setSnapScheduleCloudUpload(sched.cloud_upload_enabled !== false);
+                setSnapScheduleCloudDest(
+                    sched.cloud_destination
+                        ? String(sched.cloud_destination)
+                        : sched.cloud_destination_id
+                          ? String(sched.cloud_destination_id)
+                          : ''
+                );
             }
         } catch (err) {
             console.error('Failed to load snapshot schedule', err);

@@ -11,6 +11,7 @@ from rest_framework.response import Response
 
 from ...models import EnvironmentVariable
 from ...serializers import EnvVarSerializer
+from ...serializers.service import _must_mask_env_value
 from .._helpers import _is_valid_env_key, _looks_masked_secret, _parse_bool
 from apps.teams.permissions import assert_can_write
 from apps.deployments.utils.env_sanitizer import (
@@ -114,7 +115,7 @@ class EnvVarActionsMixin:
                 existing = EnvironmentVariable.objects.filter(
                     service=service, key=key).first()
                 value = str(row.get('value', '') or '')
-                if existing and existing.is_secret and _looks_masked_secret(value):
+                if existing and _must_mask_env_value(existing.key, existing.value, existing.is_secret) and _looks_masked_secret(value):
                     value = existing.value
                 else:
                     value = _scrub_user_value(value, key)
@@ -204,7 +205,7 @@ class EnvVarActionsMixin:
 
         existing = EnvironmentVariable.objects.filter(service=service, key=key).first()
         value = str(request.data.get('value', '') or '')
-        if existing and existing.is_secret and _looks_masked_secret(value):
+        if existing and _must_mask_env_value(existing.key, existing.value, existing.is_secret) and _looks_masked_secret(value):
             value = existing.value
         else:
             value = _scrub_user_value(value, key)

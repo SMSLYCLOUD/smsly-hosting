@@ -3,6 +3,7 @@ from datetime import datetime
 
 import croniter  # type: ignore[import-untyped]
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
 
 from apps.deployments.constants import (
@@ -76,7 +77,7 @@ def check_cron_jobs(self):
     max_retries=1,
     default_retry_delay=RETRY_DELAY_SLOW,
     name="apps.deployments.tasks_cron.trigger_cron_job")
-def trigger_cron_job(self, job_id):
+def trigger_cron_job(self, job_id, force=False):
     """Execute a single cron job inside its service container."""
     try:
         job = CronJob.objects.select_related('service').get(id=job_id)
@@ -84,7 +85,7 @@ def trigger_cron_job(self, job_id):
         logger.warning("Cron job %s not found — skipping", job_id)
         return
 
-    if not job.is_active:
+    if not job.is_active and not force:
         return
 
     service = job.service
@@ -138,6 +139,8 @@ def trigger_cron_job(self, job_id):
             except Exception as up_exc:
                 logger.error("Failed to upload cron log for %s: %s", job.name, up_exc)
 
+    except SoftTimeLimitExceeded:
+        logger.error("Cron job %s timed out after soft limit", job.name)
     except Exception as exc:
         logger.error("Failed to run cron job %s: %s", job.name, exc)
         if self.request.retries < self.max_retries:

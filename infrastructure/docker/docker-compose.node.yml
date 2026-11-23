@@ -561,7 +561,7 @@ services:
   # modern_ebpf probe must match the host kernel generation.
   # ============================================================
   falco:
-    image: falcosecurity/falco:${FALCO_VERSION:-0.44.1}
+    image: falcosecurity/falco:${FALCO_VERSION:-0.45.2}
     restart: unless-stopped
     cap_drop:
       - ALL

@@ -10,9 +10,15 @@ import {
     LiveLogViewerHandle,
 } from '@/components/logs/LiveLogViewer';
 
-export function LogsTab({ deployment }: { deployment: Deployment | null }) {
+export function LogsTab({
+    deployment,
+    defaultLogType = 'BUILD',
+}: {
+    deployment: Deployment | null;
+    defaultLogType?: 'BUILD' | 'RUNTIME';
+}) {
     const { toast } = useToast();
-    const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>('BUILD');
+    const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>(defaultLogType);
     const [runtimeMessage, setRuntimeMessage] = useState('');
     const [runtimeRole, setRuntimeRole] = useState<'candidate' | 'live' | ''>('');
     const [pipelineStages, setPipelineStages] = useState<PipelineStage[]>([]);
@@ -24,6 +30,20 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
     const initialLoadDoneRef = useRef<{ build: boolean; runtime: boolean }>({ build: false, runtime: false });
     const activeWsTypeRef = useRef<'BUILD' | 'RUNTIME' | null>(null);
+    const lastDeploymentIdRef = useRef<string | undefined>(deployment?.id);
+
+    // Reset viewer buffers and initial-load flags when switching to a new deployment
+    useEffect(() => {
+        if (lastDeploymentIdRef.current !== deployment?.id) {
+            lastDeploymentIdRef.current = deployment?.id;
+            initialLoadDoneRef.current = { build: false, runtime: false };
+            buildViewerRef.current?.clear();
+            runtimeViewerRef.current?.clear();
+            setPipelineStages(deployment?.pipeline_stages || []);
+            setRuntimeMessage('');
+            setRuntimeRole('');
+        }
+    }, [deployment?.id, deployment?.pipeline_stages]);
 
     // Initial load of pipeline stages from prop
     useEffect(() => {

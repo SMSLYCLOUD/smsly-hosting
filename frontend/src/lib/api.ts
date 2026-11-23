@@ -456,6 +456,8 @@ export interface Service {
   // Environment scan depth
   env_scan_depth?: 'shallow' | 'standard' | 'deep';
   running_replicas?: number;
+  deployment_count?: number;
+  failed_deployments?: number;
   node_metadata?: { id: string; name: string; host: string; status: string };
   estimated_cost?: {
     enabled: boolean;
@@ -639,11 +641,14 @@ export interface EnvVar {
 }
 
 export interface CronJob {
-    id: number;
+    id: string | number;
     name: string;
     schedule: string;
     command: string;
+    is_active?: boolean;
     last_run_at?: string;
+    next_run_at?: string;
+    cloud_destination?: string | null;
 }
 
 export interface Volume {
@@ -953,8 +958,12 @@ export const servicesApi = {
     const response = await api.post(`/services/${serviceId}/cron/`, data);
     return response.data;
   },
-  deleteCronJob: async (serviceId: string, jobId: number): Promise<void> => {
+  deleteCronJob: async (serviceId: string, jobId: string | number): Promise<void> => {
     await api.delete(`/services/${serviceId}/cron/${jobId}/`);
+  },
+  triggerCronJob: async (serviceId: string, jobId: string | number): Promise<{ status: string; id: string }> => {
+    const response = await api.post(`/services/${serviceId}/cron/${jobId}/trigger/`);
+    return response.data;
   },
 
   // Storage
@@ -1496,8 +1505,12 @@ export interface PreviewEnvironment {
   commit_sha?: string;
   pr_number?: number | null;
   preview_url?: string;
+  preview_username?: string;
+  preview_password?: string;
   health_status?: string;
   status?: string;
+  error_message?: string;
+  database_clone?: Record<string, any>;
   migration_validation?: Record<string, any>;
   created_at: string;
   updated_at?: string;
@@ -1584,15 +1597,26 @@ export const teamsApi = {
 
 export interface DeploymentApproval {
   id: string;
-  requester: string;
-  requested_at: string;
-  status: 'pending' | 'approved' | 'rejected';
+  service?: string;
+  deployment?: string | null;
+  preview_environment?: string | null;
+  requester?: string;
+  requested_by?: number | string | null;
+  requested_by_username?: string | null;
+  requested_at?: string;
+  created_at?: string;
+  updated_at?: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'AUTO_APPROVED' | 'pending' | 'approved' | 'rejected';
+  risk_level?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | string;
   environment?: string;
   reason?: string;
-  approved_at?: string;
-  rejected_at?: string;
-  approved_by?: string;
-  rejected_by?: string;
+  approval_notes?: string;
+  approved_at?: string | null;
+  rejected_at?: string | null;
+  approved_by?: number | string | null;
+  approved_by_username?: string | null;
+  rejected_by?: number | string | null;
+  rejected_by_username?: string | null;
 }
 
 export const deploymentApprovalApi = {
@@ -1608,7 +1632,7 @@ export const deploymentApprovalApi = {
   approve: (serviceId: string, approvalId: string): Promise<DeploymentApproval> =>
     api.post(`/services/${serviceId}/approvals/${approvalId}/approve/`).then(r => r.data),
   reject: (serviceId: string, approvalId: string, reason?: string): Promise<DeploymentApproval> =>
-    api.post(`/services/${serviceId}/approvals/${approvalId}/reject/`, { reason }).then(r => r.data),
+    api.post(`/services/${serviceId}/approvals/${approvalId}/reject/`, { notes: reason || '', reason: reason || '' }).then(r => r.data),
 };
 
 // ─── Servers API ────────────────────────────────────────────────────────────

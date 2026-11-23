@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -32,6 +32,37 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
   const [replicas, setReplicas] = useState<Replica[]>([]);
   const [loadingReplicas, setLoadingReplicas] = useState(false);
   const [spawning, setSpawning] = useState(false);
+  const dirtyRef = useRef(false);
+  const seededIdRef = useRef(service.id);
+
+  // Sync local state if service changes or another tab (e.g. ResourcesTab) updated HPA values while clean
+  useEffect(() => {
+    const idChanged = seededIdRef.current !== service.id;
+    seededIdRef.current = service.id;
+    if (idChanged || !dirtyRef.current) {
+      setMinReplicas(service.min_replicas || 1);
+      setMaxReplicas(service.max_replicas || 1);
+      setCpuTarget(service.autoscale_cpu_target || 80);
+      setVpaEnabled(service.vpa_enabled || false);
+      setEdgeJwt(service.edge_jwt_required || false);
+      setSablier(service.sablier_enabled || false);
+      setSablierSession(service.sablier_session || '10m');
+      setPlacement(service.addon_placement || 'AUTO');
+      setWafOptOut(service.waf_opt_out || false);
+      if (idChanged) dirtyRef.current = false;
+    }
+  }, [
+    service.id,
+    service.min_replicas,
+    service.max_replicas,
+    service.autoscale_cpu_target,
+    service.vpa_enabled,
+    service.edge_jwt_required,
+    service.sablier_enabled,
+    service.sablier_session,
+    service.addon_placement,
+    service.waf_opt_out,
+  ]);
 
   const fetchReplicas = useCallback(async () => {
     setLoadingReplicas(true);
@@ -77,6 +108,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
 
   const handleReplicaChange = (value: number[]) => {
     if (value.length === 2) {
+      dirtyRef.current = true;
       setMinReplicas(value[0]);
       setMaxReplicas(value[1]);
     }
@@ -89,6 +121,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         min_replicas: minReplicas,
         max_replicas: maxReplicas,
         autoscale_cpu_target: cpuTarget,
+        autoscale_enabled: maxReplicas > 1,
         vpa_enabled: vpaEnabled,
         edge_jwt_required: edgeJwt,
         sablier_enabled: sablier,
@@ -96,6 +129,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         addon_placement: placement,
         waf_opt_out: wafOptOut,
       });
+      dirtyRef.current = false;
       toast({
         title: "Scaling settings updated",
         description: "The autoscaler will adjust replicas based on these rules.",

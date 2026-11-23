@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { Database, RotateCcw, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe, Play, Square } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { toast } from '@/components/ui/use-toast';
 import { addonsApi, Addon, systemApi } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
 import { CLI_ADDON_TYPES } from '@/lib/addonRegistry';
@@ -71,7 +72,11 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         setCreating(true);
         try {
             const svcId = serviceId || newServiceId;
-            if (!svcId) { alert('Select a service first'); setCreating(false); return; }
+            if (!svcId) {
+                toast({ title: 'Select a service first', variant: 'destructive' });
+                setCreating(false);
+                return;
+            }
             const name = newName || `${newType.toLowerCase()}-${Date.now().toString(36)}`;
             const payload: any = { service: svcId, addon_type: newType, name };
             // Hosting choice only affects POSTGRES; other types always use
@@ -82,8 +87,10 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
             setNewName('');
             setNewMode('');
             fetchAddons();
-        } catch (e) {
+            toast({ title: 'Addon provisioning started', description: `${name} (${newType}) is being provisioned.` });
+        } catch (e: any) {
             console.error('Failed to create addon:', e);
+            toast({ title: 'Failed to create addon', description: e?.response?.data?.error || 'Could not provision addon.', variant: 'destructive' });
         } finally {
             setCreating(false);
         }
@@ -92,11 +99,25 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const handleDeprovision = async (addonId: string, addonName: string) => {
         const typed = prompt(`Type "${addonName}" to permanently delete this addon and all its data.`);
         if (typed === null) return;
+        if (typed.trim() !== addonName) {
+            toast({
+                title: 'Deletion cancelled',
+                description: `Type "${addonName}" exactly to confirm deletion.`,
+                variant: 'destructive',
+            });
+            return;
+        }
         try {
-            await addonsApi.deprovision(addonId, typed);
+            await addonsApi.deprovision(addonId, typed.trim());
             fetchAddons();
-        } catch (e) {
+            toast({ title: 'Addon deprovisioning queued', description: `${addonName} is being removed.` });
+        } catch (e: any) {
             console.error('Failed to deprovision:', e);
+            toast({
+                title: 'Failed to delete addon',
+                description: e?.response?.data?.error || e?.response?.data?.detail || 'Could not deprovision addon.',
+                variant: 'destructive',
+            });
         }
     };
 
@@ -111,9 +132,10 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         try {
             await addonsApi.migrateMode(addon.id, target);
             fetchAddons();
+            toast({ title: 'Migration queued', description: `Migrating ${addon.name} to ${targetLabel}.` });
         } catch (e: any) {
             console.error('Failed to queue migration:', e);
-            alert(e?.response?.data?.error || 'Failed to queue migration');
+            toast({ title: 'Migration failed', description: e?.response?.data?.error || 'Failed to queue migration.', variant: 'destructive' });
         }
     };
 
@@ -121,8 +143,14 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         try {
             await addonsApi.retryDelete(addonId);
             fetchAddons();
-        } catch (e) {
+            toast({ title: 'Deletion retry queued' });
+        } catch (e: any) {
             console.error('Failed to retry delete:', e);
+            toast({
+                title: 'Failed to retry deletion',
+                description: e?.response?.data?.error || e?.response?.data?.detail || 'Operation failed.',
+                variant: 'destructive',
+            });
         }
     };
 
@@ -139,9 +167,10 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
             if (start) await addonsApi.startContainer(addon.id);
             else await addonsApi.stopContainer(addon.id);
             fetchAddons();
+            toast({ title: `Addon ${start ? 'started' : 'stopped'}` });
         } catch (e: any) {
             console.error(`Failed to ${verb.toLowerCase()} addon:`, e);
-            alert(e?.response?.data?.error || `Failed to ${verb.toLowerCase()} addon`);
+            toast({ title: `Failed to ${verb.toLowerCase()} addon`, description: e?.response?.data?.error || 'Operation failed.', variant: 'destructive' });
         }
     };
 
@@ -150,8 +179,14 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         try {
             await addonsApi.delete(addonId);
             fetchAddons();
-        } catch (e) {
+            toast({ title: 'Addon record removed' });
+        } catch (e: any) {
             console.error('Failed to clear addon:', e);
+            toast({
+                title: 'Failed to remove addon record',
+                description: e?.response?.data?.error || e?.response?.data?.detail || 'Could not clear record.',
+                variant: 'destructive',
+            });
         }
     };
 
@@ -161,9 +196,10 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
             try {
                 await addonsApi.expose(addonId);
                 fetchAddons();
+                toast({ title: 'Addon exposed publicly' });
             } catch (e) {
                 console.error('Failed to expose addon:', e);
-                alert("Failed to expose addon");
+                toast({ title: 'Failed to expose addon', variant: 'destructive' });
             }
             return;
         }
@@ -174,9 +210,10 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         try {
             await addonsApi.update(addonId, { public_domain: domain.trim() || null });
             fetchAddons();
+            toast({ title: 'Public domain updated' });
         } catch (e) {
             console.error('Failed to update public domain:', e);
-            alert("Failed to update public domain");
+            toast({ title: 'Failed to update public domain', variant: 'destructive' });
         }
     };
 
@@ -185,18 +222,36 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         try {
             await addonsApi.unexpose(addonId);
             fetchAddons();
+            toast({ title: 'Addon returned to internal-only networking' });
         } catch (e) {
             console.error('Failed to unexpose addon:', e);
-            alert("Failed to make addon internal");
+            toast({ title: 'Failed to make addon internal', variant: 'destructive' });
         }
     };
 
     const handleBackup = async (addonId: string) => {
         try {
             await addonsApi.backup(addonId);
+            toast({ title: 'Addon backup started' });
             fetchBackups(addonId);
         } catch (e) {
             console.error('Failed to trigger backup:', e);
+            toast({ title: 'Failed to trigger backup', variant: 'destructive' });
+        }
+    };
+
+    const handleRestoreAddonBackup = async (addonId: string, backupId: string) => {
+        if (!await confirm({
+            title: 'Restore Addon Backup?',
+            message: 'This will restore the addon data from the selected backup snapshot. Existing data will be overwritten. Continue?',
+            variant: 'destructive',
+            confirmText: 'Restore',
+        })) return;
+        try {
+            await addonsApi.restore(addonId, backupId);
+            toast({ title: 'Addon restore queued', description: 'Backup restoration is running in the background.' });
+        } catch (e: any) {
+            toast({ title: 'Failed to restore backup', description: e?.response?.data?.error || 'Could not restore addon backup.', variant: 'destructive' });
         }
     };
 
@@ -204,9 +259,10 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         try {
             await addonsApi.toggleBucketPublic(addonId, isPublic);
             setAddons(prev => prev.map(a => a.id === addonId ? { ...a, is_bucket_public: isPublic } : a));
+            toast({ title: `Bucket is now ${isPublic ? 'Public' : 'Private'}` });
         } catch (e) {
             console.error('Failed to toggle bucket access:', e);
-            alert("Failed to change bucket access policy");
+            toast({ title: 'Failed to change bucket access policy', variant: 'destructive' });
         }
     };
 
@@ -331,7 +387,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                 ))}
                             </div>
                             <p className="text-[11px] text-muted-foreground">
-                                Hosting is fixed at creation — changing it later requires delete + recreate.
+                                You can migrate between Shared pool and Individual container at any time from the addon&apos;s action bar.
                             </p>
                         </div>
                     )}
@@ -443,9 +499,10 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                     try {
                                                         await addonsApi.reprovision(addon.id);
                                                         fetchAddons();
+                                                        toast({ title: 'Addon rebuild queued' });
                                                     } catch (err) {
                                                         console.error('Failed to rebuild addon:', err);
-                                                        alert('Failed to trigger rebuild');
+                                                        toast({ title: 'Failed to trigger rebuild', variant: 'destructive' });
                                                     }
                                                 }}
                                                 className="flex items-center gap-2 px-3 py-2 bg-indigo-500/10 text-indigo-400 rounded-lg text-xs font-medium hover:bg-indigo-500/20 transition-colors"
@@ -657,13 +714,25 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                                     </p>
                                                                 </div>
                                                             </div>
-                                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                                                b.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-500' :
-                                                                b.status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
-                                                                'bg-yellow-500/10 text-yellow-500'
-                                                            }`}>
-                                                                {b.status}
-                                                            </span>
+                                                            <div className="flex items-center gap-2">
+                                                                {b.status === 'COMPLETED' && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={(e) => { e.stopPropagation(); void handleRestoreAddonBackup(addon.id, b.id); }}
+                                                                        className="inline-flex items-center gap-1 px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-[10px] font-semibold transition-colors"
+                                                                        title="Restore addon from this backup"
+                                                                    >
+                                                                        <RotateCcw size={10} /> Restore
+                                                                    </button>
+                                                                )}
+                                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                                                    b.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-500' :
+                                                                    b.status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
+                                                                    'bg-yellow-500/10 text-yellow-500'
+                                                                }`}>
+                                                                    {b.status}
+                                                                </span>
+                                                            </div>
                                                         </div>
                                                     ))}
                                                 </div>

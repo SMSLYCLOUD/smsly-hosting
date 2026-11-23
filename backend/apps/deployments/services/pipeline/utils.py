@@ -1,8 +1,43 @@
 import logging
 import os
+import posixpath
+import re
 import tempfile
 
 logger = logging.getLogger(__name__)
+
+_SAFE_COMPOSE_REL_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+_SAFE_COMPOSE_SVC_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def normalize_compose_file_path(value: str) -> str:
+    """Validate and normalize a relative compose file path inside the repo."""
+    if not isinstance(value, str):
+        raise ValueError("compose_file must be a string.")
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("compose_file cannot be empty.")
+    if "\x00" in cleaned or "\\" in cleaned:
+        raise ValueError("compose_file contains invalid characters.")
+    if cleaned.startswith("/") or not _SAFE_COMPOSE_REL_RE.match(cleaned):
+        raise ValueError(
+            "compose_file must be a safe relative path using only letters, numbers, '.', '_', '-', and '/'."
+        )
+    normalized = posixpath.normpath(cleaned)
+    parts = [p for p in normalized.split("/") if p]
+    if not parts or normalized in (".", "..") or normalized.startswith("/") or ".." in parts:
+        raise ValueError("compose_file must stay within the repository directory.")
+    return normalized
+
+
+def resolve_compose_path(base_dir: str, compose_file: str) -> str:
+    """Resolve compose_file under base_dir safely, blocking traversal."""
+    normalized = normalize_compose_file_path(compose_file or "docker-compose.yml")
+    base_real = os.path.realpath(base_dir)
+    target_real = os.path.realpath(os.path.join(base_real, normalized))
+    if target_real != base_real and not target_real.startswith(base_real + os.sep):
+        raise ValueError("compose_file resolves outside the build workspace.")
+    return target_real
 
 
 def _is_dir_writable(path: str) -> bool:

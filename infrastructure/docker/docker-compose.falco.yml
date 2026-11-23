@@ -17,7 +17,7 @@
 
 services:
   falco:
-    image: falcosecurity/falco:${FALCO_VERSION:-0.44.1}
+    image: falcosecurity/falco:${FALCO_VERSION:-0.45.2}
     container_name: smsly-falco
     restart: unless-stopped
     # Modern eBPF least-privileged mode (per falco.org/docs/setup/container/)

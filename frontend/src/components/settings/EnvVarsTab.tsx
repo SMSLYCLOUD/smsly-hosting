@@ -37,6 +37,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     {},
   );
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [loadingEditId, setLoadingEditId] = useState<number | null>(null);
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -88,8 +89,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
         }
 
         if (existing) {
-          // Update: delete old, create new
-          await servicesApi.deleteEnvVar(serviceId, existing.id);
+          // Safe upsert: backend POST /env_vars/ uses update_or_create
           await servicesApi.createEnvVar(serviceId, {
             key,
             value,
@@ -185,12 +185,32 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     }
   };
 
-  const startEdit = (v: EnvVar) => {
+  const isMaskedVar = (v: EnvVar) => Boolean(v.is_secret || v.value === "********");
+
+  const resolveUnmaskedValue = async (v: EnvVar): Promise<string> => {
+    if (unmaskedSecrets[v.id] !== undefined) return unmaskedSecrets[v.id];
+    if (!isMaskedVar(v)) return v.value;
+    try {
+      const val = await servicesApi.getEnvVarValue(serviceId, v.id);
+      setUnmaskedSecrets((prev) => ({ ...prev, [v.id]: val }));
+      return val;
+    } catch {
+      return v.value;
+    }
+  };
+
+  const startEdit = async (v: EnvVar) => {
     busyRef.current = true;
-    setEditingId(v.id);
-    setEditValue(v.value);
-    // Make sure the value is visible while editing
-    setVisibleValues((prev) => ({ ...prev, [v.id]: true }));
+    setLoadingEditId(v.id);
+    setEditValue("");
+    try {
+      const actualValue = await resolveUnmaskedValue(v);
+      setEditValue(actualValue);
+      setEditingId(v.id);
+      setVisibleValues((prev) => ({ ...prev, [v.id]: true }));
+    } finally {
+      setLoadingEditId(null);
+    }
   };
 
   const handleDownloadEnv = () => {
@@ -209,9 +229,9 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     if (!showBulk || bulkMode !== "export") {
       setBulkMode("export");
 
-      // Fetch all secret values that are currently masked
+      // Fetch all secret or auto-masked values that are currently masked
       const missingSecretIds = vars
-        .filter(v => v.is_secret && v.source !== 'ADDON' && v.source !== 'SYSTEM' && !unmaskedSecrets[v.id])
+        .filter(v => isMaskedVar(v) && v.source !== 'ADDON' && v.source !== 'SYSTEM' && unmaskedSecrets[v.id] === undefined)
         .map(v => v.id);
 
       const newUnmaskedSecrets = { ...unmaskedSecrets };
@@ -229,7 +249,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
       const exportVars = vars
         .filter(v => v.source !== 'ADDON' && v.source !== 'SYSTEM')
         .map(v => {
-          const val = newUnmaskedSecrets[v.id] || v.value || '';
+          const val = newUnmaskedSecrets[v.id] ?? v.value ?? '';
           return `${v.key}=${val}`;
         });
       setBulkText(exportVars.join('\n'));
@@ -244,19 +264,20 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
   };
 
   const handleSaveEdit = async (v: EnvVar) => {
-    if (editValue === v.value) {
+    const currentActual = unmaskedSecrets[v.id] ?? v.value;
+    if (editValue === currentActual) {
       cancelEdit();
       return;
     }
     setSaving(true);
     try {
-      // Delete old, create new with same key (no PATCH endpoint)
-      await servicesApi.deleteEnvVar(serviceId, v.id);
+      // Safe atomic upsert via POST /env_vars/ (uses update_or_create on backend)
       await servicesApi.createEnvVar(serviceId, {
         key: v.key,
         value: editValue,
         is_secret: v.is_secret,
       });
+      setUnmaskedSecrets((prev) => ({ ...prev, [v.id]: editValue }));
       await loadVars();
       setEditingId(null);
       setEditValue("");
@@ -315,8 +336,12 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     }
   };
 
-  const toggleVisibility = (id: number) => {
-    setVisibleValues((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggleVisibility = async (v: EnvVar) => {
+    const nextVisible = !visibleValues[v.id];
+    setVisibleValues((prev) => ({ ...prev, [v.id]: nextVisible }));
+    if (nextVisible && isMaskedVar(v) && unmaskedSecrets[v.id] === undefined) {
+      await resolveUnmaskedValue(v);
+    }
   };
 
   const handleToggleLock = async (v: EnvVar) => {
@@ -593,12 +618,12 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                     </div>
                   ) : (
                     <>
-                      {v.is_secret && !visibleValues[v.id] ? (
+                      {isMaskedVar(v) && !visibleValues[v.id] ? (
                         <span className="text-muted-foreground flex items-center gap-2">
                           <Lock className="w-3 h-3" /> ••••••••••••••••
                         </span>
                       ) : (
-                        <span className="break-all">{v.value}</span>
+                        <span className="break-all">{unmaskedSecrets[v.id] ?? v.value}</span>
                       )}
                     </>
                   )}
@@ -626,20 +651,25 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-primary"
-                        onClick={() => startEdit(v)}
+                        onClick={() => void startEdit(v)}
+                        disabled={loadingEditId === v.id}
                         title="Edit value"
                         >
-                        <Pencil className="w-4 h-4" />
+                        {loadingEditId === v.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Pencil className="w-4 h-4" />
+                        )}
                         </Button>
                     )}
 
                     {/* Show/Hide Secret */}
-                    {v.is_secret && (
+                    {isMaskedVar(v) && (
                       <Button
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        onClick={() => toggleVisibility(v.id)}
+                        onClick={() => void toggleVisibility(v)}
                       >
                         {visibleValues[v.id] ? (
                           <EyeOff className="w-4 h-4" />

@@ -640,8 +640,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 <div className="mb-8">
                     <div className="flex items-center justify-between mb-3">
                         <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Default Domain</h4>
-                        {domains.length > 0 && (
-                            <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted-foreground">Access</span>
                                 <div className="flex items-center rounded-lg border border-border overflow-hidden">
                                     {([
@@ -689,8 +688,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                         );
                                     })}
                                 </div>
-                            </div>
-                        )}
+                        </div>
                     </div>
                     <div className={`flex items-center gap-3 p-3 border rounded-lg transition-colors ${service.public_domain_hidden ? 'bg-muted/10 border-border/50 opacity-60' : 'bg-muted/30 border-border'}`}>
                         <div className={`h-2 w-2 rounded-full ${service.public_domain_hidden ? 'bg-zinc-500' : service.wildcard_internal_only ? 'bg-blue-500' : 'bg-emerald-500 animate-pulse'}`} />

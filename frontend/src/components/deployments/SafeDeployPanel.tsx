@@ -270,18 +270,18 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
 
       {/* Previews List */}
       <div className="space-y-4">
-        {loading ? (
+        {loading && !preview ? (
           <div className="flex justify-center py-12">
             <Loader2 className="w-8 h-8 text-primary animate-spin" />
           </div>
-        ) : previews.length === 0 ? (
+        ) : (preview ? [previews.find((p) => p.id === preview.id) || preview] : previews).length === 0 ? (
           <div className="text-center py-12 bg-muted/30 border border-dashed border-border rounded-xl">
             <Database className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
             <p className="text-muted-foreground text-sm font-medium">No active previews found for this service.</p>
           </div>
         ) : (
-          previews.map((preview) => (
-            <Card key={preview.id} className="overflow-hidden border-border bg-card">
+          (preview ? [previews.find((p) => p.id === preview.id) || preview] : previews).map((item) => (
+            <Card key={item.id} className="overflow-hidden border-border bg-card">
               <div className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-start gap-4">
                   <div className="mt-1 p-2 bg-primary/10 rounded-lg">
@@ -289,26 +289,26 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
                   </div>
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-bold text-foreground">{preview.branch_name}</span>
+                      <span className="font-bold text-foreground">{item.branch_name}</span>
                       <Badge variant="secondary" className="font-mono text-[10px]">
-                        {String(preview.commit_sha || '').substring(0, 7) || 'N/A'}
+                        {String(item.commit_sha || '').substring(0, 7) || 'N/A'}
                       </Badge>
                       <Badge className={`text-[10px] font-bold ${
-                        preview.status === 'READY' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
-                        (preview.status || '').includes('FAILED') ? 'bg-red-500/10 text-red-500 border-red-500/20' :
+                        item.status === 'READY' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
+                        (item.status || '').includes('FAILED') ? 'bg-red-500/10 text-red-500 border-red-500/20' :
                         'bg-muted text-muted-foreground'
                       }`}>
-                        {preview.status || 'UNKNOWN'}
+                        {item.status || 'UNKNOWN'}
                       </Badge>
                     </div>
-                    <div className="flex items-center gap-4 text-xs text-muted-foreground font-medium">
+                    <div className="flex items-center gap-4 flex-wrap text-xs text-muted-foreground font-medium">
                       <span className="flex items-center gap-1">
                         <Database className="w-3.5 h-3.5" />
-                        {preview.database_clone?.clone_database_name || 'Allocating...'}
+                        {item.database_clone?.clone_database_name || 'Allocating...'}
                       </span>
-                      {preview.preview_url && (
+                      {item.preview_url && (
                         <a 
-                          href={preview.preview_url} 
+                          href={item.preview_url} 
                           target="_blank" 
                           rel="noopener noreferrer"
                           className="flex items-center gap-1 text-primary hover:underline transition-colors"
@@ -316,6 +316,22 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
                           <ExternalLink className="w-3.5 h-3.5" />
                           Visit Preview
                         </a>
+                      )}
+                      {item.preview_password && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${item.preview_username || 'preview'}:${item.preview_password}`);
+                            toast({
+                              title: 'Preview credentials copied',
+                              description: `Basic Auth: ${item.preview_username || 'preview'} / ${item.preview_password}`,
+                            });
+                          }}
+                          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border font-mono text-[11px] text-foreground hover:border-primary/40 transition-colors"
+                          title="Click to copy Basic Auth credentials for this preview URL"
+                        >
+                          Auth: {item.preview_username || 'preview'} / {item.preview_password}
+                        </button>
                       )}
                     </div>
                   </div>
@@ -326,7 +342,7 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
                     variant="outline" 
                     size="sm" 
                     className="gap-2 font-bold h-9"
-                    onClick={() => handleRebuildPreview(preview.id)}
+                    onClick={() => handleRebuildPreview(item.id)}
                   >
                     <RefreshCcw className="w-3.5 h-3.5" />
                     Rebuild
@@ -334,7 +350,7 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
                   <Button 
                     variant="ghost" 
                     size="icon" 
-                    onClick={() => handleDeletePreview(preview.id)}
+                    onClick={() => handleDeletePreview(item.id)}
                     className="text-muted-foreground hover:text-red-500 h-9 w-9"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -351,10 +367,10 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
                     Snapshot Status
                   </h4>
                   <div className="p-3 bg-muted/40 rounded-lg border border-border">
-                    {preview.database_clone ? (
+                    {item.database_clone ? (
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium text-foreground">{preview.database_clone.status}</span>
-                        {preview.database_clone.status === 'READY' && (
+                        <span className="text-sm font-medium text-foreground">{item.database_clone.status}</span>
+                        {item.database_clone.status === 'READY' && (
                           <CheckCircle2 className="w-4 h-4 text-emerald-500" />
                         )}
                       </div>
@@ -371,13 +387,13 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
                     Migration Impact
                   </h4>
                   <div className={`p-3 rounded-lg border flex items-center justify-between ${
-                    preview.migration_validation ? getRiskColor(preview.migration_validation.risk_level) : 'bg-muted/40 border-border text-muted-foreground'
+                    item.migration_validation ? getRiskColor(item.migration_validation.risk_level) : 'bg-muted/40 border-border text-muted-foreground'
                   }`}>
-                    {preview.migration_validation ? (
+                    {item.migration_validation ? (
                       <>
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold">{preview.migration_validation.risk_level} RISK</span>
-                          <span className="text-[10px] font-bold opacity-70">Score: {preview.migration_validation.risk_score}</span>
+                          <span className="text-sm font-bold">{item.migration_validation.risk_level} RISK</span>
+                          <span className="text-[10px] font-bold opacity-70">Score: {item.migration_validation.risk_score}</span>
                         </div>
                         <Info className="w-4 h-4 opacity-50 cursor-help" />
                       </>
@@ -389,9 +405,9 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
               </div>
 
               {/* Risk Summary if exists */}
-              {preview.migration_validation?.summary && (
+              {item.migration_validation?.summary && (
                 <div className="px-5 py-3 bg-card border-t border-border text-[11px] text-muted-foreground font-medium">
-                  <p className="line-clamp-2 leading-relaxed">{preview.migration_validation.summary}</p>
+                  <p className="line-clamp-2 leading-relaxed">{item.migration_validation.summary}</p>
                 </div>
               )}
             </Card>

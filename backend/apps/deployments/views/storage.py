@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import StreamingHttpResponse
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import NotFound, PermissionDenied
+from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 
 from apps.deployments.utils.file_browser import exec_file_list
@@ -160,30 +160,42 @@ class VolumeViewSet(viewsets.ModelViewSet):
             return None
 
     def get_queryset(self):
+        from apps.teams.permissions import get_team_q_filter
+        allowed_services = Service.objects.filter(
+            get_team_q_filter(self.request.user, request=self.request)
+        )
         service_uuid = self._validated_service_uuid()
         if service_uuid:
             return Volume.objects.filter(
                 service_id=service_uuid,
-                service__owner=self.request.user,
-            ).order_by("id")
+                service__in=allowed_services,
+            ).distinct().order_by("id")
         return Volume.objects.filter(
-            service__owner=self.request.user,
-        ).order_by("id")
+            service__in=allowed_services,
+        ).distinct().order_by("id")
 
     def perform_create(self, serializer):
+        from apps.teams.permissions import assert_can_write, get_team_q_filter
         service_uuid = self._validated_service_uuid()
         if not service_uuid:
             raise NotFound("Service not found.")
         try:
-            service = Service.objects.get(pk=service_uuid)
+            service = Service.objects.filter(
+                get_team_q_filter(self.request.user, request=self.request)
+            ).distinct().get(pk=service_uuid)
         except (Service.DoesNotExist, DjangoValidationError):
             raise NotFound("Service not found.")
-        # M-1 fix: verify the requesting user owns this service
-        if service.owner != self.request.user:
-            raise PermissionDenied("You do not own this service.")
+        assert_can_write(self.request.user, service, action="create volume")
         serializer.save(service=service)
 
+    def perform_update(self, serializer):
+        from apps.teams.permissions import assert_can_write
+        assert_can_write(self.request.user, serializer.instance.service, action="update volume")
+        serializer.save()
+
     def perform_destroy(self, instance):
+        from apps.teams.permissions import assert_can_delete
+        assert_can_delete(self.request.user, instance.service)
         try:
             from apps.core.crypto_daemon import cryptd_client, is_service_encryption_enabled
             if cryptd_client.is_enabled() and is_service_encryption_enabled(instance.service):
@@ -371,6 +383,8 @@ class VolumeViewSet(viewsets.ModelViewSet):
     def delete_file(self, request, pk=None, service_pk=None):
         """Delete a file or directory in the volume."""
         volume = self.get_object()
+        from apps.teams.permissions import assert_can_write
+        assert_can_write(self.request.user, volume.service, action="delete volume file")
         path = request.data.get('path')
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -462,6 +476,8 @@ class VolumeViewSet(viewsets.ModelViewSet):
     def mkdir(self, request, pk=None, service_pk=None):
         """Create a directory in the volume."""
         volume = self.get_object()
+        from apps.teams.permissions import assert_can_write
+        assert_can_write(self.request.user, volume.service, action="create directory in volume")
         path = request.data.get('path')
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -554,6 +570,8 @@ class VolumeViewSet(viewsets.ModelViewSet):
     def file_write(self, request, pk=None, service_pk=None):
         """Write contents to a file in the volume."""
         volume = self.get_object()
+        from apps.teams.permissions import assert_can_write
+        assert_can_write(self.request.user, volume.service, action="write volume file")
         path = request.data.get('path')
         content = request.data.get('content')
 
@@ -645,6 +663,8 @@ class VolumeViewSet(viewsets.ModelViewSet):
     def file_upload(self, request, pk=None, service_pk=None):
         """Upload a file to the volume via multipart form data."""
         volume = self.get_object()
+        from apps.teams.permissions import assert_can_write
+        assert_can_write(self.request.user, volume.service, action="upload volume file")
         path = request.data.get('path')
         if 'file' not in request.FILES or not path:
             return Response({'error': 'file and path are required'}, status=status.HTTP_400_BAD_REQUEST)

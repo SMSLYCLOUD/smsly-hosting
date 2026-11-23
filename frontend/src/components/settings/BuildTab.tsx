@@ -13,9 +13,10 @@ import { FolderRoot, Container, Layers, AlertTriangle, GitBranch, Github, Filter
 
 interface BuildTabProps {
   service: Service;
+  onUpdated?: (updated: Partial<Service>) => void;
 }
 
-export function BuildTab({ service }: BuildTabProps) {
+export function BuildTab({ service, onUpdated }: BuildTabProps) {
   const { toast } = useToast();
   const [repositoryUrl, setRepositoryUrl] = useState(service.repository_url || '');
   const [branch, setBranch] = useState(service.branch || 'main');
@@ -23,6 +24,8 @@ export function BuildTab({ service }: BuildTabProps) {
   const [rootDirectory, setRootDirectory] = useState(service.root_directory || '/');
   const [buildCommand, setBuildCommand] = useState(service.build_command || '');
   const [deployMode, setDeployMode] = useState<'SINGLE' | 'COMPOSE'>(service.deploy_mode || 'SINGLE');
+  const [composeFile, setComposeFile] = useState(service.compose_file || 'docker-compose.yml');
+  const [composeMainService, setComposeMainService] = useState(service.compose_main_service || '');
   const [watchPaths, setWatchPaths] = useState<string>((service.watch_paths || []).join('\n'));
   const [botPrStrategy, setBotPrStrategy] = useState<string>(service.bot_pr_strategy || 'DEPLOY');
   const [nodeLocalBuild, setNodeLocalBuild] = useState<'inherit' | 'node' | 'master'>(
@@ -45,6 +48,8 @@ export function BuildTab({ service }: BuildTabProps) {
     setRootDirectory(service.root_directory || '/');
     setBuildCommand(service.build_command || '');
     setDeployMode(service.deploy_mode || 'SINGLE');
+    setComposeFile(service.compose_file || 'docker-compose.yml');
+    setComposeMainService(service.compose_main_service || '');
     setWatchPaths((service.watch_paths || []).join('\n'));
     setBotPrStrategy(service.bot_pr_strategy || 'DEPLOY');
     setNodeLocalBuild(service.node_local_build === true ? 'node' : service.node_local_build === false ? 'master' : 'inherit');
@@ -119,17 +124,20 @@ export function BuildTab({ service }: BuildTabProps) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await servicesApi.update(service.id, {
+      const updated = await servicesApi.update(service.id, {
         repository_url: repositoryUrl || undefined,
         branch: pinnedCommit || branch || 'main',
         buildpack: buildpack,
         root_directory: rootDirectory,
         build_command: buildCommand,
         deploy_mode: deployMode,
+        compose_file: deployMode === 'COMPOSE' ? (composeFile.trim() || 'docker-compose.yml') : service.compose_file,
+        compose_main_service: deployMode === 'COMPOSE' ? composeMainService.trim() : service.compose_main_service,
         watch_paths: watchPaths.split('\n').map(s => s.trim()).filter(Boolean),
         bot_pr_strategy: botPrStrategy as 'DEPLOY' | 'SKIP' | 'COMMENT_ONLY',
         node_local_build: nodeLocalBuild === 'inherit' ? null : nodeLocalBuild === 'node',
       });
+      onUpdated?.(updated);
       toast({
         title: "Build settings updated",
         description: `Service will use ${deployMode === 'COMPOSE' ? 'Docker Compose' : buildpack} from "${rootDirectory}" for the next deployment.`,
@@ -292,6 +300,28 @@ export function BuildTab({ service }: BuildTabProps) {
               <div className="flex items-center gap-2 text-xs text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
                 <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
                 <span>Deploy mode changed. Save and redeploy for it to take effect.</span>
+              </div>
+            )}
+            {deployMode === 'COMPOSE' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="compose-file" className="text-xs">Compose File Path</Label>
+                  <Input
+                    id="compose-file"
+                    value={composeFile}
+                    onChange={(e) => setComposeFile(e.target.value)}
+                    placeholder="docker-compose.yml"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="compose-main-service" className="text-xs">Primary Routed Service (optional)</Label>
+                  <Input
+                    id="compose-main-service"
+                    value={composeMainService}
+                    onChange={(e) => setComposeMainService(e.target.value)}
+                    placeholder="e.g. web or api"
+                  />
+                </div>
               </div>
             )}
           </div>
