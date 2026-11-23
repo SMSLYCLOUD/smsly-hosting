@@ -46,6 +46,9 @@ class SecurityMiddleware:
             # never fired even with the webhook secret correctly configured.
             '/api/v1/services/webhook/',
             '/api/v1/system/route-recheck/',  # Public fallback-page recheck hook
+            '/api/v1/system/health/',  # Public AllowAny health endpoint (/status & monitors)
+            '/api/v1/contact/',  # Public AllowAny contact form submission
+            '/api/v1/licensing/status/',  # Public licensing status badge check
             '/api/v1/auth/node-token-exchange',  # Node token exchange handles own auth
             '/api/v1/transfers/register-incoming/',  # Transfer sync verifies node auth in-view
             '/api/v1/services/check-domain/',  # Caddy On-Demand TLS authorization (Public)
