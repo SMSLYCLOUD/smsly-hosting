@@ -1682,6 +1682,7 @@ services:
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiScheme=http"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiHost=crowdsec:8080"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=${CROWDSEC_BOUNCER_KEY:-}"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.updateIntervalSeconds=2"
     # Fail-open: never block traffic when the LAPI is unreachable, and
     # never block boot waiting for the first stream sync (availability
     # over strictness — bans still enforce whenever the LAPI answers).
@@ -2147,7 +2148,7 @@ services:
     environment:
       LOKI_URL: http://smsly-loki:3100
       CROWDSEC_LOG_DIR: /var/log/crowdsec/nodes
-      POLL_INTERVAL: "10"
+      POLL_INTERVAL: "2"
       LOOKBACK: "5m"
     volumes:
       - node_logs:/var/log/crowdsec/nodes

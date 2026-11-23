@@ -29,15 +29,45 @@ FIRST_STRIKE_SCENARIOS: dict[str, int] = {
     "crowdsecurity/http-sensitive-files": 0,
     "crowdsecurity/http-admin-interface-probing": 0,
     "crowdsecurity/http-path-traversal-probing": 0,
+    "crowdsecurity/http-sqli-probing": 0,
+    "crowdsecurity/http-xss-probing": 0,
+    "crowdsecurity/http-backdoors-attempts": 0,
 }
 
 # Tightened leaky overrides (scenario name -> (capacity, leakspeed)) for noisy
 # behavioral scanners that are too permissive out of the box (e.g. http-probing
 # defaults to capacity: 10 / 12 probes before banning).
 TIGHTENED_SCENARIOS: dict[str, tuple[int, str | None]] = {
-    "crowdsecurity/http-probing": (2, "10s"),
-    "crowdsecurity/http-sqli-probing": (1, "30s"),
-    "crowdsecurity/http-xss-probing": (1, "30s"),
+    "crowdsecurity/http-probing": (10, "10s"),
+}
+
+# False-positive route/status exclusions injected into generated overrides so
+# authenticated dashboard polling (/api/*, /ws/*, HTTP 403 expired sessions,
+# Django /admin) never triggers an automated self-ban on legitimate browsers.
+_SCENARIO_FILTER_GUARDS: dict[str, str] = {
+    "crowdsecurity/http-probing": (
+        "!(evt.Meta.http_path startsWith '/api/' "
+        "|| evt.Meta.http_path startsWith '/ws/' "
+        "|| evt.Meta.http_path startsWith '/_next/')"
+    ),
+    "crowdsecurity/http-admin-interface-probing": (
+        "!(evt.Meta.http_path startsWith '/api/' "
+        "|| evt.Meta.http_path startsWith '/ws/' "
+        "|| Lower(evt.Meta.http_path) == '/admin' "
+        "|| Lower(evt.Meta.http_path) startsWith '/admin/' "
+        "|| Lower(evt.Meta.http_path) == '/manager' "
+        "|| Lower(evt.Meta.http_path) startsWith '/manager/')"
+    ),
+    "crowdsecurity/http-sqli-probing": (
+        "!(evt.Meta.http_path startsWith '/api/v1/security/' "
+        "|| evt.Meta.http_path startsWith '/api/v1/ai/' "
+        "|| evt.Meta.http_path startsWith '/api/v1/intelligence/')"
+    ),
+    "crowdsecurity/http-xss-probing": (
+        "!(evt.Meta.http_path startsWith '/api/v1/security/' "
+        "|| evt.Meta.http_path startsWith '/api/v1/ai/' "
+        "|| evt.Meta.http_path startsWith '/api/v1/intelligence/')"
+    ),
 }
 
 _FIRST_STRIKE_SCENARIOS_DIR = "/etc/crowdsec/scenarios"
@@ -372,6 +402,50 @@ def _crowdsec_reload() -> bool:
     return True
 
 
+def _harden_scenario_filter(yaml_text: str, hub_name: str) -> str:
+    """Apply scenario-specific false-positive guards to CrowdSec filter expressions."""
+    out = yaml_text
+    if hub_name == "crowdsecurity/http-probing":
+        # Remove HTTP 403 from http-probing: expired JWT/RBAC/WebSocket handshakes
+        # on SPA dashboards legitimately emit concurrent 403s that are not directory probing.
+        out = out.replace("['404', '403', '400']", "['404', '400']").replace(
+            '["404", "403", "400"]', '["404", "400"]'
+        )
+    guard = _SCENARIO_FILTER_GUARDS.get(hub_name)
+    if not guard:
+        return out
+
+    lines = out.splitlines()
+    for idx, line in enumerate(lines):
+        if not line.startswith("filter:"):
+            continue
+        rest = line[len("filter:"):].strip()
+        if rest in ("|", "|-", ">", ">-"):
+            # Multiline block scalar: insert guard at end of indented filter lines.
+            end_idx = idx + 1
+            while end_idx < len(lines) and (
+                lines[end_idx].startswith(" ") or lines[end_idx].startswith("\t") or not lines[end_idx].strip()
+            ):
+                end_idx += 1
+            # Walk back over blank lines before inserting
+            insert_at = end_idx
+            while insert_at > idx + 1 and not lines[insert_at - 1].strip():
+                insert_at -= 1
+            if insert_at > idx + 1:
+                lines.insert(insert_at, f"  and ({guard})")
+        elif len(rest) >= 2 and rest[0] in ('"', "'") and rest[-1] == rest[0]:
+            inner = rest[1:-1]
+            # Convert to literal block scalar to avoid single/double quote escaping issues.
+            lines[idx : idx + 1] = [
+                "filter: |",
+                f"  ({inner}) &&",
+                f"  ({guard})",
+            ]
+        break
+    trailing = "\n" if yaml_text.endswith("\n") else ""
+    return "\n".join(lines) + trailing
+
+
 def _build_override_content(
     hub_name: str,
     hub_yaml: str,
@@ -397,6 +471,7 @@ def _build_override_content(
             hub_name,
         )
         return None
+    renamed = _harden_scenario_filter(renamed, hub_name)
     mode_desc = (
         "converted to type: trigger for immediate ban on probe #1"
         if capacity <= 0

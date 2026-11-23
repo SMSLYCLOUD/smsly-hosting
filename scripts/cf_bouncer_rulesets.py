@@ -28,7 +28,7 @@ CFG_PATH = os.environ.get(
     "/etc/crowdsec/bouncers/crowdsec-cloudflare-bouncer.yaml",
 )
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
-LAPI_POLL_SECONDS = 15
+LAPI_POLL_SECONDS = 2
 BULK_BATCH_SIZE = 5000
 RUNNING = True
 

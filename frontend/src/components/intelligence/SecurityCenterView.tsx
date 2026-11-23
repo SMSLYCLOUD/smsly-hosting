@@ -22,6 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -39,15 +40,16 @@ interface SecurityCenterViewProps {
 }
 
 const SEV_BADGE: Record<string, string> = {
-  CRITICAL: "bg-red-500/15 text-red-400 border-red-500/30",
-  HIGH: "bg-orange-500/15 text-orange-400 border-orange-500/30",
-  MEDIUM: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  LOW: "bg-sky-500/15 text-sky-400 border-sky-500/30",
-  INFO: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30",
+  CRITICAL: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/30",
+  HIGH: "bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/30",
+  MEDIUM: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30",
+  LOW: "bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30",
+  INFO: "bg-muted/60 text-slate-700 dark:text-zinc-400 border-border",
 };
 
 export const SecurityCenterView = React.memo(function SecurityCenterView({ serviceId, compact = false }: SecurityCenterViewProps) {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [overview, setOverview] = useState<SecurityOverviewData | null>(null);
   const [findings, setFindings] = useState<SecurityFindingItem[]>([]);
   const [sboms, setSboms] = useState<SbomArtifactItem[]>([]);
@@ -66,6 +68,9 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
   const [huntQuery, setHuntQuery] = useState<string>("");
   const [huntResult, setHuntResult] = useState<any>(null);
   const [hunting, setHunting] = useState(false);
+  const [showAllToxic, setShowAllToxic] = useState(false);
+  const [showAllForensics, setShowAllForensics] = useState(false);
+  const [showAllSboms, setShowAllSboms] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -148,6 +153,15 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
   };
 
   const handleFindingStatus = async (findingId: string, nextStatus: SecurityFindingItem["status"]) => {
+    if (nextStatus === "RISK_ACCEPTED") {
+      const ok = await confirm({
+        title: "Accept security risk?",
+        message: "Accepting suppresses this finding for 90 days in audit views. Continue?",
+        confirmText: "Accept Risk",
+        variant: "destructive",
+      });
+      if (!ok) return;
+    }
     try {
       await securityCenterApi.updateFindingStatus(findingId, nextStatus);
       toast({ title: `Finding marked ${nextStatus}` });
@@ -164,6 +178,18 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
   const handleSoar = async (action: string, targetServiceId?: string | null) => {
     const sid = targetServiceId || serviceId;
     if (!sid) return;
+    if (action === "quarantine_service" || action === "lock_service_cryptd") {
+      const ok = await confirm({
+        title: action === "lock_service_cryptd" ? "Lock service in grid-cryptd?" : "Quarantine service?",
+        message:
+          action === "lock_service_cryptd"
+            ? "Locking revokes the active lease and severs DB/Redis/volume access until unlocked."
+            : "Quarantining isolates ingress and suspends workload traffic.",
+        confirmText: action === "lock_service_cryptd" ? "Lock Cryptd" : "Quarantine",
+        variant: "destructive",
+      });
+      if (!ok) return;
+    }
     setSoarBusy(`${action}:${sid}`);
     try {
       const res = await securityCenterApi.executeSoar({ action, service_id: sid });
@@ -300,38 +326,44 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             <div className="p-3 rounded-lg bg-muted/20 border border-border/50">
-              <div className="text-[10px] uppercase text-muted-foreground">Risk Fusion Score</div>
-              <div className="text-xl font-bold font-mono mt-0.5">
-                {overview?.risk_score ?? 0}/100{" "}
-                <Badge variant="outline" className="ml-1 text-[10px]">Grade {overview?.posture_grade ?? "A"}</Badge>
+              <div className="text-[11px] uppercase text-muted-foreground">Risk Fusion Score</div>
+              <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
+                {loading && !overview ? (
+                  <span className="inline-block h-6 w-16 rounded bg-muted animate-pulse" />
+                ) : (
+                  <>
+                    {overview?.risk_score ?? 0}/100{' '}
+                    <Badge variant="outline" className="ml-1 text-[11px]">Grade {overview?.posture_grade ?? 'A'}</Badge>
+                  </>
+                )}
               </div>
             </div>
             <div className="p-3 rounded-lg bg-muted/20 border border-border/50">
-              <div className="text-[10px] uppercase text-muted-foreground">Open Findings</div>
-              <div className="text-xl font-bold font-mono mt-0.5">
+              <div className="text-[11px] uppercase text-muted-foreground">Open Findings</div>
+              <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
                 {overview?.open_findings?.total ?? 0}
-                <span className="text-xs font-normal text-red-400 ml-1.5">
+                <span className="text-xs font-normal text-red-700 dark:text-red-400 ml-1.5">
                   ({overview?.open_findings?.critical ?? 0} crit)
                 </span>
               </div>
             </div>
             <div className="p-3 rounded-lg bg-muted/20 border border-border/50">
-              <div className="text-[10px] uppercase text-muted-foreground">cryptd At-Rest Coverage</div>
-              <div className="text-xl font-bold font-mono mt-0.5">
+              <div className="text-[11px] uppercase text-muted-foreground">cryptd At-Rest Coverage</div>
+              <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
                 {overview?.encryption_coverage?.encrypted_services ?? 0}/{overview?.encryption_coverage?.total_services ?? 0}
               </div>
             </div>
             <div className="p-3 rounded-lg bg-muted/20 border border-border/50">
-              <div className="text-[10px] uppercase text-muted-foreground">CycloneDX SBOM / SLSA</div>
-              <div className="text-xl font-bold font-mono mt-0.5">
+              <div className="text-[11px] uppercase text-muted-foreground">CycloneDX SBOM / SLSA</div>
+              <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
                 {overview?.sbom_summary?.artifacts_count ?? 0} BOMs
               </div>
             </div>
             <div className="p-3 rounded-lg bg-muted/20 border border-border/50">
-              <div className="text-[10px] uppercase text-muted-foreground">MITRE Techniques</div>
-              <div className="text-xl font-bold font-mono mt-0.5">
+              <div className="text-[11px] uppercase text-muted-foreground">MITRE Techniques</div>
+              <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
                 {overview?.mitre_summary?.techniques_detected ?? 0}/{overview?.mitre_summary?.techniques_total ?? 14} active
               </div>
             </div>
@@ -340,16 +372,31 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
           {/* Toxic Combinations */}
           {(overview?.toxic_combinations?.length ?? 0) > 0 && (
             <div className="mt-4 space-y-2">
-              <div className="text-xs font-semibold uppercase tracking-wider text-red-400 flex items-center gap-1.5">
-                <GitFork className="w-3.5 h-3.5" />
-                Toxic Attack Paths Detected ({overview!.toxic_combinations.length})
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold uppercase tracking-wider text-red-700 dark:text-red-400 flex items-center gap-1.5">
+                  <GitFork className="w-3.5 h-3.5" />
+                  Toxic Attack Paths Detected ({overview!.toxic_combinations.length})
+                </div>
+                {overview!.toxic_combinations.length > 4 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setShowAllToxic((v) => !v)}
+                  >
+                    {showAllToxic ? "Show fewer" : `Show all (${overview!.toxic_combinations.length})`}
+                  </Button>
+                )}
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {overview!.toxic_combinations.slice(0, 4).map((tc) => (
+                {(showAllToxic
+                  ? overview!.toxic_combinations
+                  : overview!.toxic_combinations.slice(0, 4)
+                ).map((tc) => (
                   <div key={tc.service_id} className="p-3 rounded-lg border border-red-500/30 bg-red-500/5 text-xs space-y-1">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-mono font-semibold text-foreground">{tc.path}</span>
-                      <Badge variant="outline" className="bg-red-500/15 text-red-400 border-red-500/30 text-[10px]">
+                      <Badge variant="outline" className="bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/30 text-[11px] font-mono tabular-nums">
                         Risk {tc.risk_score}
                       </Badge>
                     </div>
@@ -444,18 +491,30 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
           {/* Recent DFIR Forensic Snapshots */}
           {forensics.length > 0 && (
             <div className="mt-4 pt-3 border-t border-border/50 space-y-1.5">
-              <div className="text-[11px] font-semibold uppercase text-muted-foreground flex items-center gap-1.5">
-                <Camera className="w-3.5 h-3.5 text-cyan-400" />
-                SHA-256 DFIR Forensic Snapshots ({forensics.length})
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] font-semibold uppercase text-muted-foreground flex items-center gap-1.5">
+                  <Camera className="w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400" />
+                  SHA-256 DFIR Forensic Snapshots ({forensics.length})
+                </div>
+                {forensics.length > 4 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setShowAllForensics((v) => !v)}
+                  >
+                    {showAllForensics ? "Show fewer" : `Show all (${forensics.length})`}
+                  </Button>
+                )}
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {forensics.slice(0, 4).map((snap) => (
+                {(showAllForensics ? forensics : forensics.slice(0, 4)).map((snap) => (
                   <div key={snap.id} className="p-2 rounded border border-border/50 bg-muted/15 text-xs flex items-center justify-between gap-2">
                     <div className="truncate">
                       <span className="font-semibold">{snap.service_name}</span>{" "}
                       <span className="text-muted-foreground">({snap.trigger})</span>
                     </div>
-                    <Badge variant="outline" className="font-mono text-[10px]">
+                    <Badge variant="outline" className="font-mono tabular-nums text-[11px]" title={snap.sha256_digest}>
                       SHA256:{snap.sha256_digest.slice(0, 12)}
                     </Badge>
                   </div>
@@ -624,19 +683,32 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
       <div className={cn("grid gap-6", compact ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-2")}>
         <Card className="border-border">
           <CardHeader className="pb-2">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <Package className="w-4 h-4 text-cyan-400" />
+                <Package className="w-4 h-4 text-cyan-700 dark:text-cyan-400" />
                 CycloneDX SBOM &amp; SLSA v1.0 Provenance ({sboms.length})
               </CardTitle>
-              <div className="relative w-48">
-                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-muted-foreground" />
-                <Input
-                  placeholder="Search pkg e.g. django"
-                  value={packageSearch}
-                  onChange={(e) => setPackageSearch(e.target.value)}
-                  className="h-7 pl-7 text-[11px]"
-                />
+              <div className="flex items-center gap-2">
+                <div className="relative w-full sm:w-52">
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
+                  <Input
+                    aria-label="Search SBOM packages by name"
+                    placeholder="Search pkg e.g. django"
+                    value={packageSearch}
+                    onChange={(e) => setPackageSearch(e.target.value)}
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+                {sboms.length > 10 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs shrink-0"
+                    onClick={() => setShowAllSboms((v) => !v)}
+                  >
+                    {showAllSboms ? "Top 10" : `All (${sboms.length})`}
+                  </Button>
+                )}
               </div>
             </div>
           </CardHeader>
@@ -646,15 +718,15 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
                 No SBOM artifacts recorded yet. Deploy a service to generate CycloneDX v1.5 BOMs.
               </p>
             ) : (
-              sboms.slice(0, 10).map((sb) => (
+              (showAllSboms ? sboms : sboms.slice(0, 10)).map((sb) => (
                 <div key={sb.id} className="p-2.5 rounded border border-border/50 bg-muted/15 text-xs flex items-center justify-between gap-2">
                   <div>
                     <div className="font-semibold">{sb.service_name}</div>
-                    <div className="text-[11px] text-muted-foreground font-mono">
+                    <div className="text-[11px] text-muted-foreground font-mono tabular-nums">
                       CycloneDX v{sb.spec_version} • {sb.package_count} packages
                     </div>
                   </div>
-                  <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                  <Badge variant="outline" className="text-[11px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20">
                     {sb.provenance_verified ? "SLSA v1.0 Verified" : "Unsigned"}
                   </Badge>
                 </div>
@@ -837,7 +909,7 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
                     </div>
                     {ev.details && <div className="text-[11px] text-muted-foreground font-mono">{ev.details}</div>}
                     {isExp && (
-                      <pre className="mt-1.5 p-2 rounded bg-black/40 border border-border/40 text-[10px] font-mono text-zinc-300 overflow-x-auto max-h-44">
+                      <pre className="mt-1.5 p-2.5 rounded bg-slate-950 text-slate-100 border border-border text-xs font-mono overflow-x-auto max-h-48">
                         {JSON.stringify(ev.raw_ocsf || ev, null, 2)}
                       </pre>
                     )}

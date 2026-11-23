@@ -813,6 +813,7 @@ services:
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiScheme=http"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiHost=crowdsec:8080"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=${CROWDSEC_BOUNCER_KEY:-}"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.updateIntervalSeconds=2"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.updateMaxFailure=-1"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.streamStartupBlock=false"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.forwardedHeadersTrustedIPs=127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,100.64.0.0/10"

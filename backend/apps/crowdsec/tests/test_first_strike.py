@@ -85,6 +85,9 @@ class TestFirstStrikeHelpers(TestCase):
         self.assertIn(
             "crowdsecurity/http-path-traversal-probing", FIRST_STRIKE_SCENARIOS
         )
+        self.assertIn("crowdsecurity/http-sqli-probing", FIRST_STRIKE_SCENARIOS)
+        self.assertIn("crowdsecurity/http-xss-probing", FIRST_STRIKE_SCENARIOS)
+        self.assertIn("crowdsecurity/http-backdoors-attempts", FIRST_STRIKE_SCENARIOS)
         for excluded in (
             "crowdsecurity/http-probing",
             "crowdsecurity/http-crawl-non_statics",
@@ -180,6 +183,7 @@ class TestFirstStrikeSync(TestCase):
                         "http-probing-first-strike.yaml\n"
                         "http-sqli-probing-first-strike.yaml\n"
                         "http-xss-probing-first-strike.yaml\n"
+                        "http-backdoors-attempts-first-strike.yaml\n"
                         f"{_DOTFILE_SCENARIO_FILENAME}\n"
                     )
                 if sub[0] == "cat":
@@ -326,3 +330,35 @@ class TestFirstStrikeSync(TestCase):
         self.assertNotIn("\nleakspeed:", out)
         self.assertNotIn("\ndistinct:", out)
         self.assertIn("name: smsly/http-sensitive-files-first-strike\n", out)
+
+    def test_false_positive_guards_applied(self):
+        from apps.crowdsec.tasks import _build_override_content
+
+        probing_hub = (
+            "type: leaky\n"
+            "name: crowdsecurity/http-probing\n"
+            "filter: \"evt.Meta.service == 'http' && evt.Meta.http_status in ['404', '403', '400']\"\n"
+            "capacity: 10\n"
+            "leakspeed: 10s\n"
+        )
+        out_probe = _build_override_content("crowdsecurity/http-probing", probing_hub, 10, "10s")
+        self.assertIsNotNone(out_probe)
+        self.assertIn("['404', '400']", out_probe)
+        self.assertNotIn("'403'", out_probe)
+        self.assertIn("evt.Meta.http_path startsWith '/api/'", out_probe)
+        self.assertIn("capacity: 10", out_probe)
+
+        admin_hub = (
+            "type: leaky\n"
+            "name: crowdsecurity/http-admin-interface-probing\n"
+            "filter: |\n"
+            "  evt.Meta.service == 'http' and\n"
+            "  evt.Meta.http_status in ['404', '403']\n"
+            "capacity: 2\n"
+            "leakspeed: 5s\n"
+        )
+        out_admin = _build_override_content("crowdsecurity/http-admin-interface-probing", admin_hub, 0)
+        self.assertIsNotNone(out_admin)
+        self.assertIn("type: trigger", out_admin)
+        self.assertIn("Lower(evt.Meta.http_path) == '/admin'", out_admin)
+        self.assertIn("Lower(evt.Meta.http_path) startsWith '/manager/'", out_admin)

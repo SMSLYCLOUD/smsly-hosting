@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import CodeMapView from '@/components/intelligence/CodeMapView';
-import { SecurityCenterView } from '@/components/intelligence/SecurityCenterView';
+import { SecurityIntelWorkspace } from '@/components/intelligence/SecurityIntelWorkspace';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import {
   aiApi,
@@ -25,7 +25,6 @@ import {
   type SecurityStatusData,
   type SecurityEventsResponse,
   type SecurityAnalysisResponse,
-  type SecurityActivityEvent,
 } from '@/lib/api';
 import api from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -34,7 +33,6 @@ import { Input } from '@/components/ui/input';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 import { Progress } from '@/components/ui/progress';
@@ -114,11 +112,9 @@ export default function IntelligencePage() {
   // zero rows of the selected source while the (global) pills still show
   // its count. A ref (not state) so fetchData's useCallback stays stable.
   const securitySourceRef = useRef<string>('all');
-  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [unbanningIp, setUnbanningIp] = useState<string | null>(null);
   const [unbanningF2bIp, setUnbanningF2bIp] = useState<string | null>(null);
   const [domainUpdating, setDomainUpdating] = useState<string | null>(null);
-  const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -401,10 +397,26 @@ export default function IntelligencePage() {
     });
   };
 
-  const handleCopyJson = (id: string, data: any) => {
-    navigator.clipboard.writeText(JSON.stringify(data, null, 2));
-    setCopiedEventId(id);
-    setTimeout(() => setCopiedEventId(null), 2000);
+  const handleOpenAppSecToggle = () => {
+    const enabling = !securityStatus?.openappsec?.enabled;
+    return handleDomainUpdate('openappsec-enabled', { openappsec_enabled: enabling }, {
+      title: enabling ? 'Enable open-appsec stack?' : 'Disable open-appsec stack?',
+      message: enabling
+        ? 'The 6-container ML WAF stack will be started (images pull on first run) and traffic shadow screening resumes.'
+        : 'All 6 open-appsec containers will be stopped and removed. WAF protections are reduced.',
+      confirmText: enabling ? 'Enable stack' : 'Disable stack',
+      success: enabling ? 'open-appsec stack converging (starting).' : 'open-appsec stack converging (stopping).',
+      destructive: !enabling,
+    });
+  };
+
+  const handleTrivySeverityChange = (severity: string) => {
+    return handleDomainUpdate('trivy-severity', { trivy_fail_on_severity: severity }, {
+      title: 'Change CVE gate threshold?',
+      message: `Builds will block on ${severity} and above. Lowering the threshold blocks more builds.`,
+      confirmText: 'Apply threshold',
+      success: `Trivy gate set to ${severity}.`,
+    });
   };
 
   useEffect(() => {
@@ -565,26 +577,6 @@ export default function IntelligencePage() {
   const modeConfig = MODE_CONFIG[providers?.mode || 'mock'] || MODE_CONFIG.mock;
   const failedDeploys = deployments.filter(d => d.status === 'FAILED');
   const diagnosedDeploys = deployments.filter(d => d.ai_diagnosis);
-
-  const filteredSecurityEvents = (securityEvents?.recent_activities || []).filter((evt) => {
-    if (securityEventsSource !== 'all' && evt.source !== securityEventsSource) {
-      return false;
-    }
-    if (securitySeverityFilter !== 'all' && evt.severity !== securitySeverityFilter) {
-      return false;
-    }
-    if (securitySearchQuery.trim()) {
-      const q = securitySearchQuery.toLowerCase();
-      const matchTitle = evt.title?.toLowerCase().includes(q);
-      const matchDetails = evt.details?.toLowerCase().includes(q);
-      const matchTarget = evt.target?.toLowerCase().includes(q);
-      const matchSource = evt.source?.toLowerCase().includes(q);
-      if (!matchTitle && !matchDetails && !matchTarget && !matchSource) {
-        return false;
-      }
-    }
-    return true;
-  });
 
   if (loading) {
     return (
@@ -760,851 +752,34 @@ export default function IntelligencePage() {
             </TabsContent>
 
             {/* ── Security Intel Tab ───────────────────────────────── */}
-            <TabsContent value="security" className="space-y-6 mt-6">
-              {/* Header and Trigger Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-bold flex items-center gap-2">
-                    <Shield className="w-5 h-5 text-purple-400" />
-                    Security Infrastructure & Threat Intelligence
-                  </h2>
-                  <p className="text-sm text-muted-foreground mt-0.5">
-                    Unified telemetry, kernel eBPF monitoring, ML WAF, and autonomous threat defense.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    onClick={handleRunSecurityAnalysis}
-                    disabled={securityAnalyzing}
-                    className="bg-purple-600 hover:bg-purple-700 text-white shadow-sm flex items-center gap-2"
-                  >
-                    {securityAnalyzing ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Sparkles className="w-4 h-4 text-purple-200" />
-                    )}
-                    Run AI Threat Assessment
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => refreshSecurityData(securitySourceFilter !== 'all' ? securitySourceFilter : undefined)}
-                    disabled={securityLoading}
-                  >
-                    <RefreshCw className={cn("w-4 h-4 mr-1.5", securityLoading && "animate-spin")} />
-                    Refresh
-                  </Button>
-                </div>
-              </div>
-
-              {/* Subsystems Status Matrix (6 Cards) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {/* Falco eBPF */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <ShieldAlert className="w-4 h-4 text-blue-400" />
-                        <span>Falco Kernel eBPF</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        securityStatus?.falco?.running ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400"
-                      )}>
-                        {securityStatus?.falco?.running ? "Active" : "Offline"}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Real-time kernel syscall tracing & anomaly alerting.
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Driver</span>
-                        <span className="font-mono font-medium">{securityStatus?.falco?.driver || "modern-bpf"}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Events Sniffed</span>
-                        <span className="font-mono font-medium">{securityStatus?.falco?.events_detected ?? securityEvents?.summary?.falco_alerts_count ?? 0}</span>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* CrowdSec IPS */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <Shield className="w-4 h-4 text-purple-400" />
-                        <span>CrowdSec IPS</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        securityStatus?.crowdsec?.running ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400"
-                      )}>
-                        {securityStatus?.crowdsec?.running ? "Armed" : "Disabled"}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Multi-server crowd intelligence & behavioral bouncer.
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Active Decisions</span>
-                        <span className="font-mono font-medium">{securityEvents?.summary?.crowdsec_bans_count ?? securityStatus?.crowdsec?.active_bans ?? 0} banned</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">First-Strike</span>
-                        <span className="font-mono font-medium">{securityStatus?.crowdsec?.first_strike_enabled ? "Active" : "Standard"}</span>
-                      </div>
-                    </div>
-                    <div className="pt-2 flex items-center justify-between">
-                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Control</span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-[11px]"
-                        disabled={domainUpdating === 'crowdsec-enabled'}
-                        onClick={handleCrowdSecToggle}
-                      >
-                        {domainUpdating === 'crowdsec-enabled'
-                          ? <Loader2 className="w-3 h-3 animate-spin" />
-                          : (securityStatus?.crowdsec?.enabled ? 'Disable IPS' : 'Enable IPS')}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Fail2ban Host Defense */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <Ban className="w-4 h-4 text-amber-400" />
-                        <span>Fail2ban Host Defense</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        securityStatus?.fail2ban?.active ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400"
-                      )}>
-                        {securityStatus?.fail2ban?.active ? "Active" : "Inactive"}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Brute-force mitigation on SSH, auth endpoints, & DoS limits.
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Jails</span>
-                        <span className="font-mono font-medium">{securityStatus?.fail2ban?.jails?.length || 0} active</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Currently Banned</span>
-                        <span className="font-mono font-medium">{securityEvents?.summary?.fail2ban_banned_count || 0} IPs</span>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* open-appsec ML WAF */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <Lock className="w-4 h-4 text-teal-400" />
-                        <span>open-appsec ML WAF</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        securityStatus?.openappsec?.agent_running ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400"
-                      )}>
-                        {!securityStatus?.openappsec?.enabled
-                          ? "DISABLED"
-                          : (securityStatus?.openappsec?.policy_mode?.toUpperCase() || "MONITORING")}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Dual-engine AI payload parsing & OWASP Top 10 defense.
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Agent / Envoy</span>
-                        <span className="font-mono font-medium">
-                          {securityStatus?.openappsec?.agent_running ? "OK" : "Down"} / {securityStatus?.openappsec?.envoy_running ? "OK" : "Down"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Shadow Port</span>
-                        <span className="font-mono font-medium">:{securityStatus?.openappsec?.shadow_port || 8089}</span>
-                      </div>
-                    </div>
-                    <div className="pt-2 flex items-center justify-between">
-                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Policy Mode</span>
-                      <div className="flex items-center gap-1.5">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-[11px]"
-                          disabled={domainUpdating === 'openappsec-enabled'}
-                          onClick={() => {
-                            const enabling = !securityStatus?.openappsec?.enabled;
-                            return handleDomainUpdate('openappsec-enabled', { openappsec_enabled: enabling }, {
-                              title: enabling ? 'Enable open-appsec stack?' : 'Disable open-appsec stack?',
-                              message: enabling
-                                ? 'The 6-container ML WAF stack will be started (images pull on first run) and traffic shadow screening resumes.'
-                                : 'All 6 open-appsec containers will be stopped and removed. WAF protections are reduced.',
-                              confirmText: enabling ? 'Enable stack' : 'Disable stack',
-                              success: enabling ? 'open-appsec stack converging (starting).' : 'open-appsec stack converging (stopping).',
-                              destructive: !enabling,
-                            });
-                          }}
-                        >
-                          {domainUpdating === 'openappsec-enabled'
-                            ? <Loader2 className="w-3 h-3 animate-spin" />
-                            : (securityStatus?.openappsec?.enabled ? 'Disable' : 'Enable')}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-[11px]"
-                          disabled={domainUpdating?.startsWith('openappsec-mode-') || !securityStatus?.openappsec?.enabled}
-                          onClick={handleOpenAppSecModeSwitch}
-                          title={securityStatus?.openappsec?.enabled ? undefined : 'Enable the stack first'}
-                        >
-                          {domainUpdating?.startsWith('openappsec-mode-')
-                            ? <Loader2 className="w-3 h-3 animate-spin" />
-                            : ((securityStatus?.openappsec?.mode_configured || 'prevent') === 'prevent'
-                              ? 'Demote to shadow' : 'Promote to prevent')}
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* MicroVM Sandbox & Hardening */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <Cpu className="w-4 h-4 text-emerald-400" />
-                        <span>Sandboxed Runtime</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        securityStatus?.container_runtime?.sandboxed ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                      )}>
-                        {securityStatus?.container_runtime?.active || "runc"}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      MicroVM hypervisor or hardened container namespace boundary.
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">AppArmor / Seccomp</span>
-                        <span className="font-mono font-medium">
-                          {securityStatus?.apparmor?.enabled ? "Active" : "Off"} / {securityStatus?.seccomp?.enabled ? "Active" : "Off"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Kernel Isolation</span>
-                        <span className="font-mono font-medium">{securityStatus?.kernel_hardening?.enabled ? "Hardened" : "Standard"}</span>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Trivy CVE Scanner & Device Trust */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <Bug className="w-4 h-4 text-rose-400" />
-                        <span>Trivy CVE & Device Trust</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        securityStatus?.trivy?.enabled ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400"
-                      )}>
-                        {securityStatus?.trivy?.enabled ? "Enforced" : "Inactive"}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Build-time container vulnerability gates & WebAuthn device trust.
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Gate Policy</span>
-                        <span className="font-mono font-medium">{securityStatus?.trivy?.fail_on_severity || "CRITICAL,HIGH"}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Device Trust</span>
-                        <span className="font-mono font-medium">{securityStatus?.device_trust?.enabled ? "MFA Enforced" : "Standard"}</span>
-                      </div>
-                    </div>
-                    <div className="pt-2 space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">CVE Gate</span>
-                        <div className="flex items-center gap-1.5">
-                          <select
-                            className="h-7 rounded-md border border-input bg-background px-1.5 text-[11px]"
-                            value={(securityStatus?.trivy?.fail_on_severity || "CRITICAL").split(',')[0]}
-                            disabled={domainUpdating === 'trivy-severity' || !securityStatus?.trivy?.enabled}
-                            onChange={(e) => handleDomainUpdate('trivy-severity', { trivy_fail_on_severity: e.target.value }, {
-                              title: 'Change CVE gate threshold?',
-                              message: `Builds will block on ${e.target.value} and above. Lowering the threshold blocks more builds.`,
-                              confirmText: 'Apply threshold',
-                              success: `Trivy gate set to ${e.target.value}.`,
-                            })}
-                            title="Fail builds on this severity and above"
-                          >
-                            {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map((sev) => (
-                              <option key={sev} value={sev}>{sev}+</option>
-                            ))}
-                          </select>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-[11px]"
-                            disabled={domainUpdating === 'trivy-enabled'}
-                            onClick={handleTrivyToggle}
-                          >
-                            {domainUpdating === 'trivy-enabled'
-                              ? <Loader2 className="w-3 h-3 animate-spin" />
-                              : (securityStatus?.trivy?.enabled ? 'Disable' : 'Enable')}
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Device Trust (Beta)</span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-[11px]"
-                          disabled={domainUpdating === 'device-trust'}
-                          onClick={handleDeviceTrustToggle}
-                        >
-                          {domainUpdating === 'device-trust'
-                            ? <Loader2 className="w-3 h-3 animate-spin" />
-                            : (securityStatus?.device_trust?.enabled ? 'Disable' : 'Enforce')}
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-                {/* CrowdSec Cloudflare edge bouncer */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <Globe className="w-4 h-4 text-sky-400" />
-                        <span>Cloudflare Edge Bouncer</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        !securityStatus?.cf_bouncer?.enabled
-                          ? "bg-zinc-500/10 text-zinc-400"
-                          : securityStatus?.cf_bouncer?.running && securityStatus?.cf_bouncer?.stale === false
-                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                            : securityStatus?.cf_bouncer?.running
-                              ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
-                              : "bg-red-500/10 text-red-400 border-red-500/20"
-                      )}>
-                        {!securityStatus?.cf_bouncer?.enabled
-                          ? "Off"
-                          : securityStatus?.cf_bouncer?.running && securityStatus?.cf_bouncer?.stale === false
-                            ? "Enforcing"
-                            : securityStatus?.cf_bouncer?.running
-                              ? "Degraded"
-                              : "Down"}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Pushes the shared LAPI decision stream to Cloudflare account IP lists.
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Last LAPI Pull</span>
-                        <span className="font-mono font-medium">
-                          {securityStatus?.cf_bouncer?.last_pull
-                            ? new Date(securityStatus.cf_bouncer.last_pull).toLocaleString()
-                            : "never"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Edge List &amp; Zones</span>
-                        <span className="font-mono font-medium">
-                          {securityStatus?.cf_bouncer?.synced_ips !== undefined && securityStatus?.cf_bouncer?.synced_ips !== null
-                            ? `${securityStatus.cf_bouncer.synced_ips} IPs / ${securityStatus.cf_bouncer.zones ?? 0} zones`
-                            : `${securityEvents?.summary?.crowdsec_bans_count ?? 0} shared`}
-                        </span>
-                      </div>
-                    </div>
-                    {securityStatus?.cf_bouncer?.recent_error && (
-                      <p className="text-[10px] font-mono text-amber-400/90 break-words leading-relaxed">
-                        {securityStatus.cf_bouncer.recent_error}
-                      </p>
-                    )}
-                    <div className="pt-2 flex items-center justify-between">
-                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Account Token</span>
-                      <a href="/settings">
-                        <Button variant="outline" size="sm" className="h-7 text-[11px]">
-                          Configure
-                        </Button>
-                      </a>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Coraza WAF (Caddy-embedded) */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <Filter className="w-4 h-4 text-orange-400" />
-                        <span>Coraza WAF (Caddy)</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        securityStatus?.coraza?.module_loaded
-                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                          : "bg-red-500/10 text-red-400 border-red-500/20"
-                      )}>
-                        {securityStatus?.coraza?.module_loaded ? "Enforcing" : "Missing"}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      OWASP CRS inspection embedded in Caddy. Per-service opt-out only — no global kill-switch (fail-closed).
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Protected / Opted-out</span>
-                        <span className="font-mono font-medium">
-                          {securityStatus?.coraza?.services_protected ?? 0} / {securityStatus?.coraza?.services_opted_out ?? 0}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Edge-JWT Gated</span>
-                        <span className="font-mono font-medium">{securityStatus?.coraza?.edge_jwt_gated ?? 0} services</span>
-                      </div>
-                    </div>
-                    <div className="pt-2 flex items-center justify-between">
-                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                        {securityStatus?.coraza?.site_imports ?? 0} site imports
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">Manage per-service in service Scaling settings</span>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* grid-cryptd Vault & Volume Encryption */}
-                <Card className="bg-card border-border">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-semibold text-sm">
-                        <Lock className="w-4 h-4 text-cyan-400" />
-                        <span>grid-cryptd Vault &amp; LUKS2</span>
-                      </div>
-                      <Badge variant="outline" className={cn(
-                        "text-xs px-2 py-0.5",
-                        securityStatus?.cryptd?.enabled && securityStatus?.cryptd?.state === "ACTIVE"
-                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                          : "bg-zinc-500/10 text-zinc-400"
-                      )}>
-                        {securityStatus?.cryptd?.enabled ? securityStatus.cryptd.state : "Standby"}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Hierarchical MK → weekly SMK → per-service SEK custody with point-of-contact DB/Redis &amp; LUKS2 locking.
-                    </p>
-                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Epoch / Key Version</span>
-                        <span className="font-mono font-medium">
-                          Wk {securityStatus?.cryptd?.current_week ?? 0} ({securityStatus?.cryptd?.key_version || "mk-v1"})
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[10px] uppercase">Active Service Leases</span>
-                        <span className="font-mono font-medium">
-                          {securityStatus?.cryptd?.active_leases ?? 0} / {securityStatus?.cryptd?.opted_services ?? 0} unlocked
-                        </span>
-                      </div>
-                    </div>
-                    <div className="pt-2 flex items-center justify-between">
-                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                        Provider: {securityStatus?.cryptd?.provider || "http_vault"}
-                      </span>
-                      <span className="text-[10px] text-emerald-400 font-mono">mlock2 + zero-on-lock</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* AI Security Threat Posture & Defense Analysis Card */}
-              <Card className="border-border">
-                <CardHeader className="pb-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <Brain className="w-5 h-5 text-purple-400" />
-                      <CardTitle className="text-base font-semibold">AI Threat Posture & Attack Vector Analysis</CardTitle>
-                    </div>
-                    {securityAnalysis && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">
-                          Analyzed: {new Date(securityAnalysis.analyzed_at).toLocaleTimeString()}
-                        </span>
-                        <Badge
-                          className={cn(
-                            "font-semibold uppercase tracking-wider text-xs",
-                            securityAnalysis.threat_level === 'LOW' && "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-                            securityAnalysis.threat_level === 'ELEVATED' && "bg-amber-500/15 text-amber-400 border-amber-500/30",
-                            securityAnalysis.threat_level === 'HIGH' && "bg-orange-500/15 text-orange-400 border-orange-500/30",
-                            securityAnalysis.threat_level === 'SEVERE' && "bg-red-500/15 text-red-400 border-red-500/30"
-                          )}
-                        >
-                          {securityAnalysis.threat_level} THREAT
-                        </Badge>
-                      </div>
-                    )}
-                  </div>
-                  <CardDescription>
-                    Synthesized neural evaluation of active bans, open-appsec ML anomalies, Falco eBPF security events, and host audit logs.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {securityAnalysis ? (
-                    <>
-                      {/* Risk Gauge Bar */}
-                      <div className="space-y-1.5 p-3 rounded-lg bg-muted/20 border border-border/50">
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="font-medium text-muted-foreground uppercase tracking-wider text-[11px]">System Risk Score</span>
-                          <span className="font-mono font-bold text-sm">{securityAnalysis.risk_score} <span className="text-muted-foreground font-normal text-xs">/ 100</span></span>
-                        </div>
-                        <Progress
-                          value={securityAnalysis.risk_score}
-                          className={cn(
-                            "h-2",
-                            securityAnalysis.risk_score < 25 ? "[&>div]:bg-emerald-500" :
-                            securityAnalysis.risk_score < 60 ? "[&>div]:bg-amber-500" :
-                            securityAnalysis.risk_score < 80 ? "[&>div]:bg-orange-500" : "[&>div]:bg-red-500"
-                          )}
-                        />
-                      </div>
-
-                      {/* Executive Summary */}
-                      <div className="text-sm bg-muted/30 p-4 rounded-lg leading-relaxed border-l-2 border-purple-500 whitespace-pre-wrap">
-                        {securityAnalysis.executive_summary}
-                      </div>
-
-                      {/* Vectors & Recommendations */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {/* Vectors */}
-                        <div className="p-3 rounded-lg bg-muted/10 border border-border/50 space-y-2">
-                          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                            <Target className="w-3.5 h-3.5 text-amber-400" />
-                            Identified Attack Vectors ({securityAnalysis.attack_vectors?.length || 0})
-                          </h4>
-                          <ul className="space-y-1.5 text-xs">
-                            {securityAnalysis.attack_vectors?.map((vec, idx) => (
-                              <li key={idx} className="flex items-start gap-2 text-muted-foreground">
-                                <span className="text-amber-500 font-bold">•</span>
-                                <span>{vec}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-
-                        {/* Recommendations */}
-                        <div className="p-3 rounded-lg bg-muted/10 border border-border/50 space-y-2">
-                          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                            Hardening Recommendations ({securityAnalysis.hardening_actions?.length || 0})
-                          </h4>
-                          <ul className="space-y-1.5 text-xs">
-                            {securityAnalysis.hardening_actions?.map((act, idx) => (
-                              <li key={idx} className="flex items-start gap-2 text-muted-foreground">
-                                <span className="text-emerald-500 font-bold">✓</span>
-                                <span>{act}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="p-6 text-center rounded-lg border border-dashed border-border/60 bg-muted/10">
-                      <Sparkles className="w-8 h-8 mx-auto text-purple-400 mb-2 opacity-60" />
-                      <p className="text-sm font-medium">No real-time threat assessment generated yet</p>
-                      <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
-                        Click &quot;Run AI Threat Assessment&quot; to synthesize all recent kernel events, CrowdSec bans, open-appsec ML verdicts, and Fail2ban logs.
-                      </p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Unified Security Activity & Audit Stream Console */}
-              <Card className="border-border">
-                <CardHeader className="pb-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-base font-semibold flex items-center gap-2">
-                        <Activity className="w-4 h-4 text-emerald-400" />
-                        Security Event & Audit Stream
-                      </CardTitle>
-                      <CardDescription>
-                        Live aggregate feed across Falco eBPF, CrowdSec, Fail2ban, WAF, and CVE scans.
-                      </CardDescription>
-                    </div>
-                    {/* Summary count pills */}
-                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                      <Badge variant="outline" className="bg-muted/40">
-                        Total: {securityEvents?.summary?.total_events || 0}
-                      </Badge>
-                      <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20">
-                        Falco: {securityEvents?.summary?.falco_alerts_count || 0}
-                      </Badge>
-                      <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20">
-                        CrowdSec: {securityEvents?.summary?.crowdsec_bans_count || 0}
-                      </Badge>
-                      <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20">
-                        Fail2ban: {securityEvents?.summary?.fail2ban_banned_count || 0}
-                      </Badge>
-                      <Badge variant="outline" className="bg-teal-500/10 text-teal-400 border-teal-500/20">
-                        WAF: {securityEvents?.summary?.waf_events_count || 0}
-                      </Badge>
-                      <Badge variant="outline" className="bg-rose-500/10 text-rose-400 border-rose-500/20">
-                        CVEs: {securityEvents?.summary?.trivy_cves_count || 0}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  {/* Filter Bar */}
-                  <div className="pt-3 flex flex-col md:flex-row gap-3">
-                    {/* Search */}
-                    <div className="relative flex-1">
-                      <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search by event title, IP address, container, or rule..."
-                        value={securitySearchQuery}
-                        onChange={(e) => setSecuritySearchQuery(e.target.value)}
-                        className="pl-9 h-9 text-xs"
-                      />
-                    </div>
-
-                    {/* Source Filter Tabs */}
-                    <div className="flex flex-wrap gap-1 items-center">
-                      {[
-                        { id: 'all', label: 'All Sources' },
-                        { id: 'falco', label: 'Falco' },
-                        { id: 'crowdsec', label: 'CrowdSec' },
-                        { id: 'fail2ban', label: 'Fail2ban' },
-                        { id: 'openappsec', label: 'open-appsec' },
-                        { id: 'coraza', label: 'Coraza WAF' },
-                        { id: 'trivy', label: 'Trivy' },
-                        { id: 'auditd', label: 'Auditd' },
-                      ].map((tab) => (
-                        <Button
-                          key={tab.id}
-                          variant={securitySourceFilter === tab.id ? "default" : "outline"}
-                          size="sm"
-                          className="h-8 text-xs px-2.5 py-0"
-                          onClick={() => {
-                            setSecuritySourceFilter(tab.id);
-                            refreshSecurityData(tab.id !== 'all' ? tab.id : undefined);
-                          }}
-                        >
-                          {tab.label}
-                        </Button>
-                      ))}
-                    </div>
-
-                    {/* Severity Filter */}
-                    <div className="flex gap-1 items-center">
-                      {['all', 'CRITICAL', 'HIGH', 'WARNING', 'INFO'].map((sev) => (
-                        <Button
-                          key={sev}
-                          variant={securitySeverityFilter === sev ? "secondary" : "ghost"}
-                          size="sm"
-                          className="h-8 text-xs px-2 py-0"
-                          onClick={() => setSecuritySeverityFilter(sev)}
-                        >
-                          {sev === 'all' ? 'All Sev' : sev}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {/* Event Stream List */}
-                  <div className="space-y-2">
-                    {filteredSecurityEvents.length === 0 ? (
-                      <div className="text-center py-10 text-muted-foreground text-sm">
-                        <ShieldCheck className="h-8 w-8 mx-auto mb-2 text-emerald-500/40" />
-                        <p>No security activity events matching current filters.</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">All monitored security layers are operating normally.</p>
-                      </div>
-                    ) : (
-                      filteredSecurityEvents.map((evt) => {
-                        const isExpanded = expandedEventId === evt.id;
-                        const isCrowdSecBan = evt.source === 'crowdsec' && evt.type === 'ban';
-                        const isF2bBan = evt.source === 'fail2ban' && (evt.type === 'ban' || evt.type === 'restore_ban');
-                        const targetIp = evt.target && /^[\d\.:a-fA-F]+$/.test(evt.target) ? evt.target : null;
-                        const f2bJail = (() => {
-                          const raw = evt.raw as any;
-                          if (raw && typeof raw === 'object' && typeof raw.jail === 'string' && raw.jail) return raw.jail;
-                          const m = /Jail:\s*(\S+)/.exec(evt.details || '');
-                          return m ? m[1] : 'sshd';
-                        })();
-
-                        return (
-                          <div
-                            key={evt.id}
-                            className="p-3 bg-muted/20 hover:bg-muted/30 transition-colors rounded-lg border border-border/50 text-xs space-y-2"
-                          >
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                {/* Severity Badge */}
-                                <Badge
-                                  variant="outline"
-                                  className={cn(
-                                    "text-[10px] font-semibold uppercase px-1.5 py-0",
-                                    evt.severity === 'CRITICAL' && "bg-red-500/15 text-red-400 border-red-500/30",
-                                    evt.severity === 'HIGH' && "bg-orange-500/15 text-orange-400 border-orange-500/30",
-                                    evt.severity === 'WARNING' && "bg-amber-500/15 text-amber-400 border-amber-500/30",
-                                    evt.severity === 'INFO' && "bg-sky-500/15 text-sky-400 border-sky-500/30"
-                                  )}
-                                >
-                                  {evt.severity}
-                                </Badge>
-
-                                {/* Source Chip */}
-                                <Badge
-                                  variant="secondary"
-                                  className={cn(
-                                    "text-[10px] uppercase font-mono px-1.5 py-0",
-                                    evt.source === 'falco' && "bg-blue-500/10 text-blue-400",
-                                    evt.source === 'crowdsec' && "bg-purple-500/10 text-purple-400",
-                                    evt.source === 'fail2ban' && "bg-amber-500/10 text-amber-400",
-                                    evt.source === 'openappsec' && "bg-teal-500/10 text-teal-400",
-                                    evt.source === 'coraza' && "bg-orange-500/10 text-orange-400",
-                                    evt.source === 'trivy' && "bg-rose-500/10 text-rose-400",
-                                    evt.source === 'auditd' && "bg-zinc-500/10 text-zinc-400"
-                                  )}
-                                >
-                                  {evt.source}
-                                </Badge>
-
-                                {/* Title */}
-                                <span className="font-semibold text-foreground">{evt.title}</span>
-
-                                {/* Target pill */}
-                                {evt.target && (
-                                  <span className="px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground font-mono text-[10px]">
-                                    target: {evt.target}
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Timestamp & Actions */}
-                              <div className="flex items-center gap-2 shrink-0 text-muted-foreground">
-                                <span>{new Date(evt.timestamp).toLocaleString()}</span>
-
-                                {/* Unban Action if IP target */}
-                                {targetIp && isCrowdSecBan && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-6 px-2 text-[10px] text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                                    disabled={unbanningIp === targetIp}
-                                    onClick={() => handleUnbanIp(targetIp)}
-                                  >
-                                    {unbanningIp === targetIp ? (
-                                      <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                                    ) : (
-                                      <Ban className="w-3 h-3 mr-1" />
-                                    )}
-                                    Unban IP
-                                  </Button>
-                                )}
-                                {targetIp && isF2bBan && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-6 px-2 text-[10px] text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
-                                    disabled={unbanningF2bIp === targetIp}
-                                    onClick={() => handleUnbanFail2banIp(targetIp, f2bJail)}
-                                    title={`Unban from fail2ban jail ${f2bJail}`}
-                                  >
-                                    {unbanningF2bIp === targetIp ? (
-                                      <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                                    ) : (
-                                      <Ban className="w-3 h-3 mr-1" />
-                                    )}
-                                    Unban IP
-                                  </Button>
-                                )}
-
-                                {/* Expand Payload */}
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 px-1.5 text-[10px]"
-                                  onClick={() => setExpandedEventId(isExpanded ? null : evt.id)}
-                                >
-                                  {isExpanded ? (
-                                    <ChevronUp className="w-3.5 h-3.5" />
-                                  ) : (
-                                    <ChevronDown className="w-3.5 h-3.5" />
-                                  )}
-                                </Button>
-                              </div>
-                            </div>
-
-                            {/* Details text */}
-                            <div className="text-muted-foreground pl-1 break-words font-mono text-[11px]">
-                              {evt.details}
-                            </div>
-
-                            {/* Collapsible raw data */}
-                            {isExpanded && (
-                              <div className="mt-2 pt-2 border-t border-border/40 space-y-1.5">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[10px] uppercase font-semibold text-muted-foreground flex items-center gap-1">
-                                    <Terminal className="w-3 h-3" /> Raw Event Payload
-                                  </span>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-5 px-1.5 text-[10px]"
-                                    onClick={() => handleCopyJson(evt.id, evt.raw || evt)}
-                                  >
-                                    {copiedEventId === evt.id ? (
-                                      <>
-                                        <Check className="w-3 h-3 text-emerald-400 mr-1" /> Copied
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Copy className="w-3 h-3 mr-1" /> Copy JSON
-                                      </>
-                                    )}
-                                  </Button>
-                                </div>
-                                <pre className="p-2 rounded bg-black/40 border border-border/40 text-[10px] font-mono text-zinc-300 overflow-x-auto max-h-48 scrollbar-thin">
-                                  {JSON.stringify(evt.raw || evt, null, 2)}
-                                </pre>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <SecurityCenterView />
+            <TabsContent value="security" className="mt-6">
+              <SecurityIntelWorkspace
+                securityStatus={securityStatus}
+                securityEvents={securityEvents}
+                securityLoading={securityLoading}
+                securityAnalysis={securityAnalysis}
+                securityAnalyzing={securityAnalyzing}
+                securitySourceFilter={securitySourceFilter}
+                securityEventsSource={securityEventsSource}
+                securitySeverityFilter={securitySeverityFilter}
+                securitySearchQuery={securitySearchQuery}
+                onChangeSourceFilter={setSecuritySourceFilter}
+                onChangeSeverityFilter={setSecuritySeverityFilter}
+                onChangeSearchQuery={setSecuritySearchQuery}
+                onRefreshSecurity={refreshSecurityData}
+                onRunSecurityAnalysis={handleRunSecurityAnalysis}
+                onUnbanCrowdSec={handleUnbanIp}
+                onUnbanFail2ban={handleUnbanFail2banIp}
+                onCrowdSecToggle={handleCrowdSecToggle}
+                onOpenAppSecToggle={handleOpenAppSecToggle}
+                onOpenAppSecModeSwitch={handleOpenAppSecModeSwitch}
+                onTrivySeverityChange={handleTrivySeverityChange}
+                onTrivyToggle={handleTrivyToggle}
+                onDeviceTrustToggle={handleDeviceTrustToggle}
+                unbanningIp={unbanningIp}
+                unbanningF2bIp={unbanningF2bIp}
+                domainUpdating={domainUpdating}
+              />
             </TabsContent>
 
             {/* ── Anomalies Tab ──────────────────────────────────────── */}

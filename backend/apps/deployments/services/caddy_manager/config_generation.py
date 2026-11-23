@@ -2097,7 +2097,7 @@ def generate_caddyfile(config) -> str:
             "    crowdsec {",
             "        api_url http://smsly-crowdsec:8080",
             f"        api_key {_crowdsec_key}",
-            "        ticker_interval 2s",
+            "        ticker_interval 1s",
             "    }",
         ])
 
