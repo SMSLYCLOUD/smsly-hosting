@@ -74,6 +74,13 @@ _harden_openappsec_apply_mode() {
     timeout -k 5 60 docker restart smsly-appsec-agent >/dev/null 2>&1 || \
         echo -e "${YELLOW}    ⚠ smsly-appsec-agent restart failed (non-fatal — new mode applies on next restart)${NC}"
     if docker inspect smsly-appsec-envoy >/dev/null 2>&1; then
+        local _wait_idx=""
+        for _wait_idx in $(seq 1 15); do
+            if timeout 5 docker exec smsly-appsec-agent sh -c 'ls /dev/shm/check-point/cp-nano-http-transaction-handler-* >/dev/null 2>&1' 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
         timeout -k 5 60 docker restart smsly-appsec-envoy >/dev/null 2>&1 || \
             echo -e "${YELLOW}    ⚠ smsly-appsec-envoy restart failed (non-fatal — netns follows appsec-agent)${NC}"
     fi

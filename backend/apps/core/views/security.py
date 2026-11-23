@@ -239,6 +239,20 @@ class SecurityStatusView(GenericAPIView):
                     falco["driver"] = "ebpf"
             except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
                 pass
+            if falco["driver"] == "unknown":
+                try:
+                    cmd_result = subprocess.run(
+                        ["docker", "inspect", "-f", "{{json .Config.Cmd}}",
+                         falco["container"]],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    cmd_out = (cmd_result.stdout or "").lower()
+                    if "modern_ebpf" in cmd_out:
+                        falco["driver"] = "modern_ebpf"
+                    elif "ebpf" in cmd_out:
+                        falco["driver"] = "ebpf"
+                except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                    pass
             try:
                 subprocess.run(
                     ["docker", "exec", falco["container"],
@@ -517,13 +531,17 @@ class SecurityStatusView(GenericAPIView):
         # ── Kernel hardening ────────────────────────────────────────
         kernel = {"enabled": False}
         try:
-            kptr = subprocess.run(
-                ["sysctl", "-n", "kernel.kptr_restrict"],
-                capture_output=True, text=True, timeout=5,
-            )
-            kernel["enabled"] = (kptr.stdout or "").strip() == "2"
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            kernel["enabled"] = False
+            with open("/proc/sys/kernel/kptr_restrict", "r", encoding="utf-8") as _kf:
+                kernel["enabled"] = _kf.read().strip() == "2"
+        except OSError:
+            try:
+                kptr = subprocess.run(
+                    ["sysctl", "-n", "kernel.kptr_restrict"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                kernel["enabled"] = (kptr.stdout or "").strip() == "2"
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                kernel["enabled"] = False
 
         # ── no-new-privileges (system-level) ────────────────────────
         no_new_privs = {"enabled": True}  # enforced per-container via security_opt

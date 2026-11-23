@@ -68,10 +68,13 @@ class AuditLog(models.Model):
         if self.pk:
             raise ValidationError("Audit logs are immutable and cannot be modified.")
 
-        from django.db import transaction
+        from django.db import connection, transaction
         with transaction.atomic():
-            # H-4 fix: select_for_update on the last log to prevent
-            # concurrent writes from reading the same previous_hash
+            if connection.vendor == "postgresql":
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT pg_advisory_xact_lock(7829104)")
+            # H-4 fix: select_for_update + pg_advisory_xact_lock on the last log
+            # to prevent concurrent READ COMMITTED writes from reading the same previous_hash
             last_log = (
                 AuditLog.objects
                 .select_for_update()
