@@ -124,11 +124,11 @@ _cf_render_cloudflare_bouncer_config() {
     local lapi_key="$4"
     local outfile="$5"
     local zones_block=""
-    if command -v curl >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
+    if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
         local _zids=""
         _zids="$(curl -sS --max-time 8 -H "Authorization: Bearer ${token}" \
             "https://api.cloudflare.com/client/v4/zones?account.id=${account}&per_page=50" 2>/dev/null \
-            | grep -oE '"id":"[0-9a-f]{32}"' | cut -d'"' -f4 | awk -v acct="$account" '$0 != acct && !seen[$0]++' || true)"
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(" ".join(z["id"] for z in (d.get("result") or []) if isinstance(z, dict) and z.get("id")))' 2>/dev/null || true)"
         if [ -n "$_zids" ]; then
             zones_block="    zones:"
             local _zid=""
