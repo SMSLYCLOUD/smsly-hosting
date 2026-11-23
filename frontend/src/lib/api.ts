@@ -471,6 +471,7 @@ export interface Service {
   last_pr_comment_id?: number;
   // Internal network (per-service)
   use_internal_network?: boolean;
+  encryption_at_rest_enabled?: boolean;
   platform_internal_ip?: string | null;
   internal_addresses?: {
     network: string;
@@ -479,6 +480,29 @@ export interface Service {
     gateway?: string;
     aliases?: string[];
   }[];
+}
+
+export interface ServiceEncryptionStatus {
+  service_id: string;
+  encryption_at_rest_enabled: boolean;
+  platform_cryptd_enabled: boolean;
+  sync?: {
+    ok?: boolean;
+    error?: string;
+    [key: string]: unknown;
+  } | null;
+  policy?: {
+    ok?: boolean;
+    opted_in?: boolean;
+    allowed?: boolean;
+    reason?: string;
+    error?: string;
+  } | null;
+  daemon_status?: {
+    state?: string;
+    current_week?: number;
+    provider?: string;
+  } | null;
 }
 
 export interface TrafficSplitStatus {
@@ -857,6 +881,22 @@ export const servicesApi = {
     if (!match) throw new Error(`Environment variable not found: ${key}`);
     const value = await servicesApi.getEnvVarValue(serviceId, match.id);
     return { value };
+  },
+  getEncryptionStatus: async (serviceId: string): Promise<ServiceEncryptionStatus> => {
+    const response = await api.get(`/services/${serviceId}/encryption/`);
+    return response.data;
+  },
+  setEncryptionOptIn: async (serviceId: string, enabled: boolean): Promise<ServiceEncryptionStatus> => {
+    const response = await api.post(`/services/${serviceId}/encryption/`, { enabled });
+    return response.data;
+  },
+  lockEncryption: async (serviceId: string, reason?: string): Promise<any> => {
+    const response = await api.post(`/services/${serviceId}/encryption/lock/`, reason ? { reason } : {});
+    return response.data;
+  },
+  unlockEncryption: async (serviceId: string, ttlSeconds: number = 7200): Promise<any> => {
+    const response = await api.post(`/services/${serviceId}/encryption/unlock/`, { ttl_seconds: ttlSeconds });
+    return response.data;
   },
   getAiRouterConfig: async (serviceId: string): Promise<AiRouterConfig> => {
     const response = await api.get(`/services/${serviceId}/ai-router-config/`);
@@ -3551,6 +3591,175 @@ export const systemSecurityApi = {
   },
   unbanFail2ban: async (ip: string, jail?: string): Promise<any> => {
     const res = await api.post('/system/fail2ban-unban/', { ip, ...(jail ? { jail } : {}) });
+    return res.data;
+  },
+};
+
+export interface SecurityFindingItem {
+  id: string;
+  pillar: 'CORE' | 'ASPM' | 'CNAPP' | 'XDR';
+  category: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+  status: 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED' | 'FALSE_POSITIVE' | 'RISK_ACCEPTED';
+  risk_score: number;
+  epss_score: number;
+  internet_exposed: boolean;
+  data_sensitive: boolean;
+  privileged: boolean;
+  title: string;
+  description: string;
+  remediation: string;
+  package_name?: string;
+  cve_id?: string;
+  cwe_id?: string;
+  file_path?: string;
+  line_number?: number | null;
+  mitre_tactic?: string;
+  mitre_technique?: string;
+  mitre_technique_name?: string;
+  service_id?: string | null;
+  service_name?: string | null;
+  sla_due_at?: string | null;
+  last_seen_at?: string | null;
+}
+
+export interface SecurityOverviewData {
+  risk_score: number;
+  posture_grade: 'A' | 'B' | 'C' | 'D';
+  open_findings: {
+    total: number;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    by_pillar: Record<string, number>;
+  };
+  encryption_coverage: {
+    encrypted_services: number;
+    total_services: number;
+    waf_protected_services: number;
+  };
+  sbom_summary: {
+    artifacts_count: number;
+    slsa_verified_count: number;
+  };
+  toxic_combinations: Array<{
+    service_id: string;
+    service_name: string;
+    risk_score: number;
+    path: string;
+    factors: string[];
+    recommended_action: string;
+  }>;
+  mitre_summary: {
+    techniques_total: number;
+    techniques_detected: number;
+    matrix: Array<{
+      tactic: string;
+      technique_id: string;
+      name: string;
+      coverage_status: 'DETECTED' | 'MONITORED';
+      events_count: number;
+      open_findings_count: number;
+    }>;
+  };
+  ocsf_events_count: number;
+  policy: Record<string, boolean>;
+  compliance_frameworks?: Record<string, { controls: number; passed: number; score_pct: number }>;
+}
+
+export interface SbomArtifactItem {
+  id: string;
+  service_id: string;
+  service_name: string;
+  deployment_id: string;
+  sbom_format: string;
+  spec_version: string;
+  image_ref: string;
+  image_digest: string;
+  package_count: number;
+  provenance_verified: boolean;
+  matched_packages: Array<{ name: string; version: string; ecosystem: string; purl: string }>;
+  created_at: string;
+}
+
+export interface ComplianceControlItem {
+  framework: string;
+  control_id: string;
+  control_name: string;
+  status: 'PASS' | 'PARTIAL' | 'FAIL';
+  score_pct: number;
+  evidence_summary: string;
+  remediation: string;
+}
+
+export interface ForensicSnapshotItem {
+  id: string;
+  service_id: string;
+  service_name: string;
+  container_id: string;
+  trigger: string;
+  captured_by: string;
+  sha256_digest: string;
+  bundle: Record<string, any>;
+  created_at: string;
+}
+
+export const securityCenterApi = {
+  getOverview: async (serviceId?: string): Promise<SecurityOverviewData> => {
+    const res = await api.get('/security/overview/', {
+      params: serviceId ? { service_id: serviceId } : undefined,
+    });
+    return res.data;
+  },
+  getFindings: async (params?: Record<string, string | number>): Promise<{ count: number; results: SecurityFindingItem[] }> => {
+    const res = await api.get('/security/findings/', { params });
+    return res.data;
+  },
+  triggerScan: async (serviceId?: string): Promise<any> => {
+    const res = await api.post('/security/findings/', serviceId ? { service_id: serviceId } : {});
+    return res.data;
+  },
+  updateFindingStatus: async (findingId: string, statusVal: SecurityFindingItem['status']): Promise<SecurityFindingItem> => {
+    const res = await api.patch(`/security/findings/${findingId}/`, { status: statusVal });
+    return res.data;
+  },
+  getSboms: async (params?: { service_id?: string; package?: string }): Promise<{ count: number; results: SbomArtifactItem[] }> => {
+    const res = await api.get('/security/sbom/', { params });
+    return res.data;
+  },
+  getCompliance: async (framework?: string): Promise<{ evaluated_at: string; frameworks: Record<string, any>; controls: ComplianceControlItem[] }> => {
+    const res = await api.get('/security/compliance/', {
+      params: framework ? { framework } : undefined,
+    });
+    return res.data;
+  },
+  exportComplianceBundle: async (framework?: string): Promise<any> => {
+    const res = await api.get('/security/compliance/', {
+      params: { export: 'json', ...(framework ? { framework } : {}) },
+    });
+    return res.data;
+  },
+  executeSoar: async (payload: { action: string; service_id?: string; ip?: string; reason?: string }): Promise<any> => {
+    const res = await api.post('/security/soar/execute/', payload);
+    return res.data;
+  },
+  aiHunt: async (query: string): Promise<any> => {
+    const res = await api.post('/security/ai-hunt/', { query });
+    return res.data;
+  },
+  updatePolicy: async (patch: Record<string, boolean>): Promise<Record<string, boolean>> => {
+    const res = await api.patch('/security/policy/', patch);
+    return res.data;
+  },
+  getForensics: async (serviceId?: string): Promise<{ count: number; results: ForensicSnapshotItem[] }> => {
+    const res = await api.get('/security/forensics/', {
+      params: serviceId ? { service_id: serviceId } : undefined,
+    });
+    return res.data;
+  },
+  getOcsfEvents: async (params?: { service_id?: string; source?: string; limit?: number }): Promise<{ schema: string; count: number; results: any[] }> => {
+    const res = await api.get('/security/events/', { params });
     return res.data;
   },
 };

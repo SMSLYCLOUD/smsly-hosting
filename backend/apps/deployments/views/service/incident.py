@@ -25,12 +25,17 @@ class IncidentMixin:
         and CrowdSec WAF bans.
         """
         service = self.get_object()
+        from django.db.models import Q
         from apps.deployments.models.audit import AuditLog
         from apps.deployments.models.backup import ServiceBackup, ServiceSnapshot
         from apps.deployments.models.transfer import ServerTransfer
         from apps.notifications.models import ResourceAlert
 
         events: list = []
+        is_staff_or_admin = bool(
+            getattr(request.user, 'is_staff', False)
+            or getattr(request.user, 'is_superuser', False)
+        )
 
         # ── 1. All non-success deployments (last 90 days) ─────────────
         from apps.deployments.models.core import Deployment
@@ -70,7 +75,7 @@ class IncidentMixin:
                 'type': 'resource_alert',
                 'severity': a.severity.lower(),
                 'timestamp': a.created_at.isoformat() if a.created_at else '',
-                'title': a.title or a.metric or 'Resource alert',
+                'title': getattr(a, 'title', None) or (f"{a.metric.upper()} alert" if a.metric else 'Resource alert'),
                 'detail': a.message or '',
                 'metric': a.metric or '',
                 'threshold': getattr(a, 'threshold', None),
@@ -87,8 +92,9 @@ class IncidentMixin:
         health_audits = (
             AuditLog.objects
             .filter(
+                Q(metadata__service_id=str(service.id))
+                | Q(target__in=[f"Service: {service.name}", f"Service:{service.id}"]),
                 action__in=health_actions,
-                metadata__contains={'service_id': str(service.id)},
             )
             .order_by('-timestamp')[:15]
         )
@@ -116,8 +122,9 @@ class IncidentMixin:
         rollback_audits = (
             AuditLog.objects
             .filter(
+                Q(metadata__service_id=str(service.id))
+                | Q(target__in=[f"Service: {service.name}", f"Service:{service.name}", f"Service:{service.id}", service.name]),
                 action__in=['AUTO_ROLLBACK_TRIGGERED', 'STUCK_ROLLBACK_DETECTED', 'DEPLOYMENT_ROLLBACK', 'DEPLOYMENT_ROLLBACK_INSTANT'],
-                metadata__contains={'service_id': str(service.id)},
             )
             .order_by('-timestamp')[:10]
         )
@@ -136,11 +143,12 @@ class IncidentMixin:
         backup_audits = (
             AuditLog.objects
             .filter(
+                Q(metadata__service_id=str(service.id))
+                | Q(target__in=[f"Service: {service.name}", f"Service:{service.id}", service.name]),
                 action__in=[
                     'BACKUP_CREATE', 'BACKUP_RESTORE', 'BACKUP_INTEGRITY_CHECK',
                     'BACKUP_KEY_IMPORTED', 'BACKUP_CLOUD_UPLOAD_FAILED',
                 ],
-                target__icontains=service.name,
             )
             .order_by('-timestamp')[:10]
         )
@@ -176,8 +184,9 @@ class IncidentMixin:
         ai_audits = (
             AuditLog.objects
             .filter(
+                Q(metadata__service_id=str(service.id))
+                | Q(target__in=[f"Service: {service.name}", f"Service:{service.name}", f"Service:{service.id}", service.name]),
                 action__in=['SCALE_UP', 'DIAGNOSE', 'DIAGNOSIS', 'CLEANUP', 'TRIGGER_JULES_FIX'],
-                metadata__contains={'service_id': str(service.id)},
             )
             .order_by('-timestamp')[:10]
         )
@@ -198,11 +207,12 @@ class IncidentMixin:
         lifecycle_audits = (
             AuditLog.objects
             .filter(
+                Q(metadata__service_id=str(service.id))
+                | Q(target__in=[f"Service: {service.name}", f"Service:{service.id}", service.name]),
                 action__in=[
                     'SERVICE_STOP', 'SERVICE_RESTART', 'SERVICE_FAST_RESTART',
                     'SERVICE_CREATE', 'SERVICE_DELETE_REQUESTED',
                 ],
-                target__icontains=service.name,
             )
             .order_by('-timestamp')[:10]
         )
@@ -252,55 +262,56 @@ class IncidentMixin:
                 'trigger': s.trigger,
             })
 
-        # ── 10. Routing / infrastructure events ──────────────────────
-        infra_audits = (
-            AuditLog.objects
-            .filter(
-                action__in=['CADDY_RELOAD'],
+        # ── 10. Routing / infrastructure events (staff/admin only) ────
+        if is_staff_or_admin:
+            infra_audits = (
+                AuditLog.objects
+                .filter(
+                    action__in=['CADDY_RELOAD'],
+                )
+                .order_by('-timestamp')[:5]
             )
-            .order_by('-timestamp')[:5]
-        )
-        for a in infra_audits:
-            events.append({
-                'type': 'infrastructure',
-                'severity': 'info',
-                'timestamp': a.timestamp.isoformat() if a.timestamp else '',
-                'title': 'Caddy reload',
-                'detail': (a.metadata or {}).get('message', ''),
-                'actor': a.actor,
-            })
+            for a in infra_audits:
+                events.append({
+                    'type': 'infrastructure',
+                    'severity': 'info',
+                    'timestamp': a.timestamp.isoformat() if a.timestamp else '',
+                    'title': 'Caddy reload',
+                    'detail': (a.metadata or {}).get('message', ''),
+                    'actor': a.actor,
+                })
 
-        # ── 11. Mesh / WireGuard network events ──────────────────────
-        mesh_audits = (
-            AuditLog.objects
-            .filter(
-                action__in=[
-                    'MESH_PEER_UNREACHABLE', 'MESH_DEPLOY_FAILED',
-                    'MESH_DEPLOY_SUCCESS',
-                ],
+            # ── 11. Mesh / WireGuard network events ──────────────────
+            mesh_audits = (
+                AuditLog.objects
+                .filter(
+                    action__in=[
+                        'MESH_PEER_UNREACHABLE', 'MESH_DEPLOY_FAILED',
+                        'MESH_DEPLOY_SUCCESS',
+                    ],
+                )
+                .order_by('-timestamp')[:5]
             )
-            .order_by('-timestamp')[:5]
-        )
-        for a in mesh_audits:
-            events.append({
-                'type': 'mesh',
-                'severity': (
-                    'critical' if 'UNREACHABLE' in a.action or 'FAILED' in a.action
-                    else 'info'
-                ),
-                'timestamp': a.timestamp.isoformat() if a.timestamp else '',
-                'title': a.action.replace('_', ' ').title(),
-                'detail': (a.metadata or {}).get('message', ''),
-                'actor': a.actor,
-                'action': a.action,
-            })
+            for a in mesh_audits:
+                events.append({
+                    'type': 'mesh',
+                    'severity': (
+                        'critical' if 'UNREACHABLE' in a.action or 'FAILED' in a.action
+                        else 'info'
+                    ),
+                    'timestamp': a.timestamp.isoformat() if a.timestamp else '',
+                    'title': a.action.replace('_', ' ').title(),
+                    'detail': (a.metadata or {}).get('message', ''),
+                    'actor': a.actor,
+                    'action': a.action,
+                })
 
         # ── 12. Cloud / object storage upload failures ────────────────
         cloud_failures = (
             ServiceBackup.objects
             .filter(
                 service=service,
-                metadata__has_key='cloud_upload_error',
+                metadata__cloud_upload_error__isnull=False,
             )
             .order_by('-created_at')[:5]
         )
@@ -314,31 +325,32 @@ class IncidentMixin:
                 'backup_id': str(b.id),
             })
 
-        # ── 13. CrowdSec WAF summary ──────────────────────────────────
-        try:
-            import subprocess
-            bans_result = subprocess.run(
-                ['docker', 'exec', 'smsly-crowdsec',
-                 'cscli', 'decisions', 'list', '-o', 'json'],
-                capture_output=True, text=True, timeout=10,
-            )
-            if bans_result.returncode == 0:
-                ban_count = 0
-                try:
-                    import json
-                    bans = json.loads(bans_result.stdout)
-                    ban_count = len(bans) if isinstance(bans, list) else 0
-                except (ValueError, TypeError) as exc:
-                    logger.debug("Failed to parse CrowdSec ban JSON: %s", exc)
-                events.append({
-                    'type': 'waf_summary',
-                    'severity': 'warning' if ban_count > 50 else 'info',
-                    'timestamp': '',
-                    'title': f'{ban_count} active WAF bans',
-                    'detail': 'CrowdSec decisions currently enforcing',
-                })
-        except Exception as exc:
-            logger.debug("CrowdSec WAF summary unavailable: %s", exc)
+        # ── 13. CrowdSec WAF summary (staff/admin only) ───────────────
+        if is_staff_or_admin:
+            try:
+                import subprocess
+                bans_result = subprocess.run(
+                    ['docker', 'exec', 'smsly-crowdsec',
+                     'cscli', 'decisions', 'list', '-o', 'json'],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if bans_result.returncode == 0:
+                    ban_count = 0
+                    try:
+                        import json
+                        bans = json.loads(bans_result.stdout)
+                        ban_count = len(bans) if isinstance(bans, list) else 0
+                    except (ValueError, TypeError) as exc:
+                        logger.debug("Failed to parse CrowdSec ban JSON: %s", exc)
+                    events.append({
+                        'type': 'waf_summary',
+                        'severity': 'warning' if ban_count > 50 else 'info',
+                        'timestamp': '',
+                        'title': f'{ban_count} active WAF bans',
+                        'detail': 'CrowdSec decisions currently enforcing',
+                    })
+            except Exception as exc:
+                logger.debug("CrowdSec WAF summary unavailable: %s", exc)
         events.sort(key=lambda e: e['timestamp'] or '', reverse=True)
 
         # Summary counts

@@ -895,13 +895,38 @@ class LocalAdapter(BaseCloudAdapter):
         if volumes:
             for vol in volumes:
                 vol_name = vol['name']
-                try:
-                    self.docker_client.volumes.get(vol_name)
-                except docker.errors.NotFound:
-                    self.docker_client.volumes.create(name=vol_name)
+                host_vol_path = None
+                if vol.get('encrypted'):
+                    from apps.core.crypto_daemon import cryptd_client
+                    if cryptd_client.is_enabled():
+                        require_vol = os.environ.get('CRYPTD_VOLUME_REQUIRE', 'true').strip().lower() not in ('0', 'false', 'no', 'off')
+                        try:
+                            prov = cryptd_client.provision_volume(
+                                vol_name,
+                                service_id=str(vol.get('service_id') or ''),
+                                project_id=str(vol.get('project_id') or 'default'),
+                            )
+                            host_vol_path = prov.get('host_path') or None
+                            if require_vol and not host_vol_path:
+                                raise RuntimeError(f"Encrypted volume {vol_name} returned no host_path")
+                        except Exception as exc:
+                            if require_vol:
+                                raise RuntimeError(
+                                    f"Refusing unencrypted fallback for opted-in volume {vol_name}: {exc}"
+                                ) from exc
+                            logger.warning("Encrypted volume provision skipped for %s: %s", vol_name, exc)
 
-                docker_volumes[vol_name] = {
-                    'bind': vol['mount_path'], 'mode': 'rw'}
+                if host_vol_path:
+                    docker_volumes[host_vol_path] = {
+                        'bind': vol['mount_path'], 'mode': 'rw'}
+                else:
+                    try:
+                        self.docker_client.volumes.get(vol_name)
+                    except docker.errors.NotFound:
+                        self.docker_client.volumes.create(name=vol_name)
+
+                    docker_volumes[vol_name] = {
+                        'bind': vol['mount_path'], 'mode': 'rw'}
 
         old_container = None
         with contextlib.suppress(docker.errors.NotFound):
@@ -1272,6 +1297,11 @@ class LocalAdapter(BaseCloudAdapter):
         # reporting "no available server". Verified live on the host:
         #   network=primary + networking_config={net1: epc, net2: epc}
         # preserves BOTH bridges and BOTH alias sets.
+        if 'extra_hosts' not in run_kwargs:
+            from apps.core.crypto_daemon import needs_host_gateway
+            if needs_host_gateway(env):
+                run_kwargs['extra_hosts'] = {'host.docker.internal': 'host-gateway'}
+
         create_kwargs = {
             "image": image,
             "name": container_name,
@@ -1381,7 +1411,11 @@ class LocalAdapter(BaseCloudAdapter):
 
         from apps.deployments.services.container_runtime import get_runtime_for_container
         container_runtime = get_runtime_for_container(
-            service_name=self.service_id if hasattr(self, "service_id") else "",
+            service_name=(
+                getattr(self, "_service_id", None)
+                or getattr(self, "service_id", None)
+                or name
+            ),
         )
         if container_runtime:
             create_kwargs["runtime"] = container_runtime
@@ -2127,7 +2161,18 @@ class LocalAdapter(BaseCloudAdapter):
                     promote_aliases.append(_mesh_alias2)
             except Exception as exc:
                 logger.debug("Mesh alias lookup skipped on promote for %s: %s", name, exc)
-            initial_aliases = [create_name] if old_is_live_running else promote_aliases
+            from apps.deployments.services.container_runtime import (
+                ensure_sandbox_resolv_conf,
+                is_sandboxed_runtime,
+                sandbox_dns_servers,
+            )
+            green_runtime = green_host_config.get('Runtime')
+            sandboxed_promote = bool(green_runtime and is_sandboxed_runtime(green_runtime))
+            initial_aliases = (
+                promote_aliases
+                if (not old_is_live_running or sandboxed_promote)
+                else [create_name]
+            )
             promote_networks_dict: dict[str, Any] = {
                 network_name: self.docker_client.api.create_endpoint_config(
                     aliases=initial_aliases
@@ -2153,7 +2198,6 @@ class LocalAdapter(BaseCloudAdapter):
             except Exception as exc:
                 logger.debug("Promote dual-homing skipped: %s", exc)
 
-            green_runtime = green_host_config.get('Runtime')
             if green_runtime and green_runtime != 'runc':
                 run_kwargs['runtime'] = green_runtime
 
@@ -2218,11 +2262,6 @@ class LocalAdapter(BaseCloudAdapter):
                     if _eh_dict:
                         run_kwargs['extra_hosts'] = _eh_dict
 
-            from apps.deployments.services.container_runtime import (
-                ensure_sandbox_resolv_conf,
-                is_sandboxed_runtime,
-                sandbox_dns_servers,
-            )
             green_dns = green_host_config.get('Dns')
             if green_dns:
                 run_kwargs['dns'] = list(green_dns)
@@ -2251,6 +2290,18 @@ class LocalAdapter(BaseCloudAdapter):
                                 green_volumes[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
                 except Exception as exc:
                     logger.debug("Promote sandbox resolv.conf mount skipped: %s", exc)
+
+            from apps.core.crypto_daemon import needs_host_gateway
+            if needs_host_gateway(promoted_env):
+                eh = run_kwargs.get('extra_hosts')
+                if isinstance(eh, list):
+                    if not any(str(x).startswith('host.docker.internal:') for x in eh):
+                        eh.append('host.docker.internal:host-gateway')
+                    run_kwargs['extra_hosts'] = eh
+                else:
+                    eh_dict = dict(eh) if isinstance(eh, dict) else {}
+                    eh_dict.setdefault('host.docker.internal', 'host-gateway')
+                    run_kwargs['extra_hosts'] = eh_dict
 
             create_kwargs = {
                 "image": image_ref,
@@ -2335,6 +2386,16 @@ class LocalAdapter(BaseCloudAdapter):
                     for needed_net in sorted(expected):
                         try:
                             net_obj = self.docker_client.networks.get(needed_net)
+                            if sandboxed_promote:
+                                # Sandboxed runtimes (runsc/Kata) cannot hot-replug
+                                # disconnected primary interfaces at runtime: doing
+                                # disconnect()+connect() leaves kernel-bound NICs that
+                                # bypass the sandbox netstack and return ECONNREFUSED.
+                                # Promote already passed initial_aliases=promote_aliases
+                                # at create time; only detach old_container here.
+                                with contextlib.suppress(Exception):
+                                    net_obj.disconnect(old_container)
+                                continue
                             if needed_net in attached:
                                 net_obj.disconnect(promoted)
                             net_obj.connect(promoted, aliases=promote_aliases)

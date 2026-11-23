@@ -21,7 +21,7 @@ export default function PlatformNotice({
   onRetry,
 }: PlatformNoticeProps) {
   return (
-    <main className="notice-root">
+    <div className="notice-root">
       <section className="notice-card">
         <div className="notice-grid">
           <div className="notice-text">
@@ -31,27 +31,27 @@ export default function PlatformNotice({
             <h1>{title}</h1>
             <p>{message}</p>
           </div>
-          <div className="notice-icon">
+          <div className="notice-icon" aria-hidden="true">
             <ShieldAlert size={44} />
           </div>
         </div>
 
         {secondaryMessage && (
           <div className="notice-secondary">
-            <Zap size={18} />
+            <Zap size={18} aria-hidden="true" />
             <p>{secondaryMessage}</p>
           </div>
         )}
 
         <div className="notice-actions">
           {showRetry && onRetry && (
-            <button className="notice-btn notice-primary" onClick={onRetry}>
+            <button type="button" className="notice-btn notice-primary" onClick={onRetry}>
               Retry Connection
             </button>
           )}
 
           <Link href="/" className="notice-btn notice-outline">
-            <Home size={18} style={{ marginRight: 8 }} />
+            <Home size={18} style={{ marginRight: 8 }} aria-hidden="true" />
             Go Back Home
           </Link>
         </div>
@@ -69,20 +69,15 @@ export default function PlatformNotice({
         </div>
       </section>
 
-      {/* Inline critical styles so the notice stays fully styled even if /_next/static is blocked */}
+      {/* Inline critical styles so the notice stays styled cleanly even if /_next/static is unavailable */}
       <style jsx>{`
-        :global(body) {
-          margin: 0;
-          background: #080c18;
-          color: #e5e7eb;
-          font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        }
         .notice-root {
-          min-height: 100vh;
+          min-height: calc(100vh - 3.5rem);
           display: flex;
           align-items: center;
           justify-content: center;
           padding: 32px;
+          color: #e5e7eb;
           background-color: #080c18;
           background-image:
             linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
@@ -199,15 +194,16 @@ export default function PlatformNotice({
           display: flex;
           flex-wrap: wrap;
           gap: 18px;
-          font-size: 11px;
-          letter-spacing: 0.16em;
+          font-size: 12px;
+          letter-spacing: 0.14em;
           text-transform: uppercase;
-          color: #6b7280;
+          color: #9ca3af;
           font-weight: 700;
         }
         .notice-link {
           color: inherit;
           text-decoration: none;
+          padding: 8px 0;
         }
         .notice-link:hover {
           color: #10b981;
@@ -225,6 +221,6 @@ export default function PlatformNotice({
           }
         }
       `}</style>
-    </main>
+    </div>
   );
 }

@@ -1190,6 +1190,12 @@ class SecurityEventsView(GenericAPIView):
                 deduped.append(a)
 
         deduped.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+        try:
+            from apps.security.ocsf import ingest_activity_list
+            if deduped:
+                ingest_activity_list(deduped[:50])
+        except Exception:
+            pass
         # Pills must describe the feed, not the raw collections: every pill
         # is a count over this same deduped pre-limit list (previously the
         # WAF pill counted raw agent lines including info noise while the

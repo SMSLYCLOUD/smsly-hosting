@@ -9,6 +9,8 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
 import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug, History, Plus } from 'lucide-react';
 import { InternalNetworkCard } from '@/components/settings/InternalNetworkCard';
+import { EncryptionAtRestCard } from '@/components/settings/EncryptionAtRestCard';
+import { SecurityCenterView } from '@/components/intelligence/SecurityCenterView';
 import { SleepingZzz } from '@/components/SleepingZzz';
 import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -623,6 +625,15 @@ export default function ServiceDetailPage() {
                         service={service}
                         onUpdated={(updated) => setService(prev => ({ ...prev, ...updated }))}
                     />
+
+                    {/* Opt-In Hierarchical Encryption at Rest & DB Lock */}
+                    <EncryptionAtRestCard
+                        service={service}
+                        onUpdated={(updated) => setService(prev => ({ ...prev, ...updated }))}
+                    />
+
+                    {/* Per-Service ASPM / DSPM / DAST / SBOM & SOAR Posture */}
+                    <SecurityCenterView serviceId={service.id} compact />
 
                     <div className="col-span-1 md:col-span-4 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
                         <h3 className="font-bold mb-6 text-lg text-foreground">Configuration</h3>

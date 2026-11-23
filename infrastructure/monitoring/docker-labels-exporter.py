@@ -150,14 +150,14 @@ def _collect_metrics():
     except Exception:
         traceback.print_exc(file=sys.stdout)
         sys.stdout.flush()
-        return ""
+        return "", 0
 
     # ── header ──────────────────────────────────────────────────────────
     out = [
         "# HELP docker_container_labels Docker container labels",
         "# TYPE docker_container_labels gauge",
-        "# HELP docker_container_cpu_usage_seconds_total Cumulative CPU usage",
-        "# TYPE docker_container_cpu_usage_seconds_total counter",
+        "# HELP docker_container_cpu_usage_seconds_total Instantaneous CPU usage ratio in cores",
+        "# TYPE docker_container_cpu_usage_seconds_total gauge",
         "# HELP docker_container_memory_usage_bytes Current memory usage in bytes",
         "# TYPE docker_container_memory_usage_bytes gauge",
         "# HELP docker_container_network_receive_bytes_total Network bytes received",
@@ -182,7 +182,7 @@ def _collect_metrics():
 
     if not managed:
         out.append("")
-        return "\n".join(out)
+        return "\n".join(out), 0
 
     # ── resource stats ─────────────────────────────────────────────────
     if _HAS_POOL and len(managed) > 1:
@@ -202,7 +202,7 @@ def _collect_metrics():
               f"({len(managed)} containers)", flush=True)
 
     out.append("")
-    return "\n".join(out)
+    return "\n".join(out), len(managed)
 
 
 def _background_collector():
@@ -215,11 +215,11 @@ def _background_collector():
                 continue
 
             _collecting.set()
-            data = _collect_metrics()
+            data, managed_count = _collect_metrics()
             with _lock:
                 _metrics_cache["data"] = data
                 _metrics_cache["ts"] = time.time()
-                _metrics_cache["container_count"] = data.count('\n') if data else 0
+                _metrics_cache["container_count"] = managed_count
         except Exception:
             traceback.print_exc(file=sys.stdout)
             sys.stdout.flush()

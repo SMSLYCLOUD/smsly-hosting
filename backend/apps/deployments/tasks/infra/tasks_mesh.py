@@ -1,14 +1,13 @@
 import logging
 
-logger = logging.getLogger(__name__)
-import logging
-
 from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
 
 from apps.deployments.constants import TASK_TIME_LIMIT_LONG, TASK_TIME_LIMIT_STANDARD
 from apps.core.tasks.coalesce import skip_if_recent
+
+logger = logging.getLogger(__name__)
 
 
 def _bounded_error(exc, limit=2000):
@@ -55,6 +54,21 @@ def check_mesh_health_task():
                         f"Mesh {mesh.name}: peer {peer_result['wg_address']} "
                         f"is {peer_result['status']}"
                     )
+                    try:
+                        from apps.deployments.utils import log_event
+                        log_event(
+                            action="MESH_PEER_UNREACHABLE",
+                            target=f"Mesh:{mesh.name}",
+                            actor="system",
+                            metadata={
+                                "mesh_id": str(mesh.id),
+                                "wg_address": peer_result.get("wg_address"),
+                                "status": peer_result.get("status"),
+                                "message": f"Mesh {mesh.name} peer {peer_result.get('wg_address')} is {peer_result.get('status')}",
+                            },
+                        )
+                    except Exception:
+                        pass
                     # Self-healing logic for unreachable peers
                     try:
                         peer = mesh.peers.filter(wg_address=peer_result["wg_address"], is_active=True).first()
@@ -185,6 +199,19 @@ def deploy_mesh_task(self, mesh_id: str):
             "mesh_last_deployed_at",
             "updated_at",
         ])
+        try:
+            from apps.deployments.utils import log_event
+            log_event(
+                action="MESH_DEPLOY_FAILED" if failed else "MESH_DEPLOY_SUCCESS",
+                target=f"Mesh:{mesh.name}",
+                actor="system",
+                metadata={
+                    "mesh_id": str(mesh.id),
+                    "message": mesh.mesh_last_error or f"Deployed mesh {mesh.name} ({len(results.get('success', []))} peers)",
+                },
+            )
+        except Exception:
+            pass
         logger.info("Mesh deploy completed for %s: success=%s failed=%s", mesh.name, len(results.get("success", [])), len(failed))
         return results
     except MeshNetwork.DoesNotExist:

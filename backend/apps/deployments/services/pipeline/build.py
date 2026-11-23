@@ -56,6 +56,25 @@ def _use_buildx() -> bool:
     return os.environ.get("SMSLY_DOCKER_BUILDER", "buildx").strip().lower() != "classic"
 
 
+_SAFE_COMPOSE_ENV_KEYS = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "TERM", "LANG", "LC_ALL",
+    "TMPDIR", "TEMP", "TMP", "XDG_RUNTIME_DIR", "COMSPEC", "SYSTEMROOT",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+})
+_SAFE_COMPOSE_ENV_PREFIXES = ("DOCKER_", "BUILDX_", "COMPOSE_")
+
+
+def _safe_compose_process_env() -> dict[str, str]:
+    """Return a minimal CLI process env without leaking PaaS secrets into tenant compose files."""
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k in _SAFE_COMPOSE_ENV_KEYS or k.startswith(_SAFE_COMPOSE_ENV_PREFIXES)
+    }
+
+
 def _ephemeral_builder_enabled() -> bool:
     """Containment is mandatory; legacy opt-out flags cannot disable it."""
     return True
@@ -80,6 +99,36 @@ def _create_ephemeral_builder(name: str, mem_mb: int, cpu_pct: int) -> str | Non
             with open(config_path, "w", encoding="utf-8") as config:
                 if registry:
                     config.write(f"[registry.{json.dumps(registry)}]\n  insecure = true\n")
+                nameservers = [
+                    ns.strip()
+                    for ns in os.environ.get("SMSLY_BUILDKIT_DNS", "").split(",")
+                    if ns.strip()
+                ]
+                if not nameservers:
+                    for resolv_file in ("/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"):
+                        if not os.path.exists(resolv_file):
+                            continue
+                        try:
+                            with open(resolv_file, encoding="utf-8", errors="ignore") as rf:
+                                content = rf.read()
+                            for ln in content.splitlines():
+                                parts = ln.strip().split()
+                                if len(parts) >= 2 and parts[0] == "nameserver" and ":" not in parts[1]:
+                                    if not parts[1].startswith("127.") and parts[1] not in nameservers:
+                                        nameservers.append(parts[1])
+                            if not nameservers:
+                                ext_match = re.search(r"ExtServers:\s*\[([^\]]+)\]", content)
+                                if ext_match:
+                                    for tok in ext_match.group(1).split():
+                                        if ":" not in tok and not tok.startswith("host(") and not tok.startswith("127.") and tok not in nameservers:
+                                            nameservers.append(tok)
+                        except OSError:
+                            pass
+                        if nameservers:
+                            break
+                if not nameservers:
+                    nameservers = ["46.38.252.230", "46.38.225.230"]
+                config.write(f"[dns]\n  nameservers = {json.dumps(nameservers[:4])}\n")
             created = subprocess.run(
                 ["docker", "buildx", "create", "--driver", "docker-container",
                  "--driver-opt", f"network={build_net}",
@@ -657,10 +706,8 @@ class BuildMixin:
                 f"  ℹ️ Main compose service set to: {main_svc}\n"
             )
 
-        override_path = self._write_compose_routing_override(main_svc, project_name)
-
-        # Build env vars to inject (addons, runtime config)
-        env = os.environ.copy()
+        # Build env vars to inject (addons, runtime config) without exposing control-plane secrets.
+        env = _safe_compose_process_env()
         env['DOCKER_BUILDKIT'] = '1'
         _forbidden_env = NixpacksBuilder._FORBIDDEN_BUILD_ENV_KEYS
         # Merge compose .env file if present (Coolify parity: supports ${VAR} interpolation)
@@ -672,8 +719,11 @@ class BuildMixin:
                 if k_clean and not k_clean.startswith('#') and k_clean.upper() not in _forbidden_env:
                     env.setdefault(k_clean, val.strip())
         for ev in self.service.env_vars.all():
+            val = ev.value
+            if isinstance(val, str) and val.startswith('gAAAA') and len(val) > 50:
+                continue
             if str(ev.key or '').strip().upper() not in _forbidden_env:
-                env[ev.key] = ev.value
+                env[ev.key] = val
 
         # Inject addon connection URLs
         from apps.addons.services.addon_provisioner import AddonProvisioner
@@ -686,11 +736,43 @@ class BuildMixin:
             if env_key and addon.connection_url:
                 env.setdefault(env_key, addon.connection_url)
 
+        # Opt-in grid-cryptd service registration, lease activation, and DB/Redis gate routing.
+        from apps.core.crypto_daemon import apply_cryptd_runtime_env, needs_host_gateway
+        cryptd_overlay: dict[str, str] = {}
+        cryptd_probe_keys = (
+            'DATABASE_URL', 'DB_URL', 'SQLALCHEMY_DATABASE_URL', 'SQLALCHEMY_DATABASE_URI',
+            'DB_HOST', 'DB_PORT', 'POSTGRES_HOST', 'POSTGRES_PORT',
+            'REDIS_URL', 'CELERY_BROKER_URL', 'CELERY_RESULT_BACKEND', 'CACHE_URL',
+        )
+        cryptd_in = {k: str(env[k]) for k in cryptd_probe_keys if k in env}
+        before_cryptd = dict(cryptd_in)
+        try:
+            applied = apply_cryptd_runtime_env(self.service, cryptd_in, unlock_now=True)
+        except Exception as exc:
+            append_log(self.deployment, f"[CRYPTD] Compose deployment blocked (fail-closed): {exc}\n")
+            raise BuildError(f"grid-cryptd refused deploy for opted-in service {self.service.name}: {exc}") from exc
+        if applied:
+            for k, v in cryptd_in.items():
+                if k == 'GRID_CRYPTD_SERVICE_ID' or before_cryptd.get(k) != v:
+                    cryptd_overlay[k] = v
+                    env[k] = v
+
+        override_path = self._write_compose_routing_override(
+            main_svc,
+            project_name,
+            cryptd_env=cryptd_overlay or None,
+            host_gateway=needs_host_gateway(env),
+        )
+
         # Ensure scoped network exists
         network_name = self._resolve_service_network_name()
         if hasattr(self, '_validate_merged_compose_config'):
             self._validate_merged_compose_config(
                 compose_path, override_path, env, allowed_network=network_name
+            )
+        if hasattr(self, '_inject_encrypted_compose_volumes'):
+            self._inject_encrypted_compose_volumes(
+                compose_path, override_path, main_service=main_svc
             )
 
         # ─── Phase 1: Build images while old containers keep serving ───
@@ -1179,12 +1261,12 @@ class BuildMixin:
                 )
             except FileNotFoundError as exc:
                 raise RuntimeError(f"docker CLI not found for build: {exc}") from exc
-            tail = ((proc.stdout or "")[-20000:] + (proc.stderr or "")[-4000:])
+            tail = ((proc.stdout or "")[-8000:] + "\n" + (proc.stderr or "")[-16000:])
             redacted = redact_values(tail, self.secret_values)
             if redacted.strip():
                 append_log(self.deployment, redacted[-20000:] + "\n")
             if proc.returncode != 0:
-                raise BuildError(f"Docker build failed: {redacted[-500:]}")
+                raise BuildError(f"Docker build failed: {redacted[-2500:]}")
             # ── Output verification ──────────────────────────────────
             # Exit 0 is NOT success: with a docker-container builder
             # (buildx default flapping, ephemeral leftovers) and no

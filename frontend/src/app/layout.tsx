@@ -10,9 +10,40 @@ import { TierProvider } from "@/context/TierContext";
 import { PoweredByBadge } from "@/components/licensing/PoweredByBadge";
 import { LazyMotion, domAnimation } from "framer-motion";
 
+const siteUrl = (() => {
+  const raw = (process.env.NEXT_PUBLIC_APP_URL || "https://grid.trulay.co").trim();
+  try {
+    return new URL(raw);
+  } catch {
+    return new URL("https://grid.trulay.co");
+  }
+})();
+
 export const metadata: Metadata = {
-  title: "Grid — Free Open-Source PaaS for Ecosystem Deployment",
-  description: "Grid is a free, open-source PaaS powered by Grid. Deploy apps, services, databases, workers, queues, SSL, backups, and multi-server infrastructure on your own VPS.",
+  metadataBase: siteUrl,
+  title: {
+    default: "Trulay Grid — Free Open-Source Sovereign PaaS",
+    template: "%s — Grid",
+  },
+  description:
+    "Deploy apps, PostgreSQL HA, Redis Sentinel, workers, and WireGuard multi-server infrastructure on your own VPS with Trulay Grid—MIT open-source PaaS.",
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    type: "website",
+    siteName: "Trulay Grid",
+    title: "Trulay Grid — Free Open-Source Sovereign PaaS",
+    description:
+      "Deploy apps, databases, workers, and multi-server WireGuard infrastructure on your own VPS with full ownership and zero vendor lock-in.",
+    url: "/",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Trulay Grid — Free Open-Source Sovereign PaaS",
+    description:
+      "Self-hosted open-source PaaS for deploying full-stack infrastructure on any VPS.",
+  },
   icons: {
     icon: "/images/logo.svg",
     apple: "/images/logo.svg",
@@ -62,10 +93,16 @@ export default function RootLayout({
                 <ConfirmProvider>
                   <SpaceOpsProvider>
                   <TelemetryProvider>
+                  <a
+                    href="#main-content"
+                    className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    Skip to main content
+                  </a>
                   <AppBackground />
                   <CommandPalette />
                   <Navbar />
-                  <main className="min-h-[calc(100vh-3.5rem)] flex flex-col">
+                  <main id="main-content" tabIndex={-1} className="min-h-[calc(100vh-3.5rem)] flex flex-col focus:outline-none">
                     <div className="flex-1">
                       {children}
                     </div>

@@ -155,10 +155,19 @@ class DownloadActionsMixin:
 
         key = BackupService._get_encryption_key()
 
-        # If the file is encrypted, we must decrypt it for the user to download
-        if file_path.endswith('.enc') and key:
+        # If the file is encrypted, we must decrypt it (or check cryptd envelope) for download
+        has_cryptd_meta = False
+        if file_path.endswith('.enc') and not key and os.path.exists(file_path + '.meta'):
             try:
-                decrypted_path = BackupService.decrypt_backup(file_path, key)
+                import json as _json
+                with open(file_path + '.meta', 'r', encoding='utf-8') as _mf:
+                    has_cryptd_meta = bool((_json.load(_mf) or {}).get('cryptd_wrapped_dek'))
+            except Exception:
+                has_cryptd_meta = False
+
+        if file_path.endswith('.enc') and (key or has_cryptd_meta):
+            try:
+                decrypted_path = BackupService.decrypt_backup(file_path, key or '')
                 return _open_backup_download_response(
                     request,
                     decrypted_path,
@@ -183,6 +192,11 @@ class DownloadActionsMixin:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
                 error_msg = str(e).lower()
+                if 'refused by grid-cryptd' in error_msg or 'backup locked' in error_msg:
+                    return Response(
+                        {'error': str(e)},
+                        status=status.HTTP_423_LOCKED,
+                    )
                 if 'hmac' in error_msg or 'invalid' in error_msg or 'tag' in error_msg:
                     try:
                         current_fp = BackupService.compute_backup_key_fingerprint(key)

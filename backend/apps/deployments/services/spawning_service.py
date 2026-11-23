@@ -384,7 +384,11 @@ class SpawningService:
                 "labels are best-effort; verify no service-block conflict "
                 "after spawn", service.name, node.name,
             )
-        db_env_remote = {ev.key: ev.value for ev in service.env_vars.all()}
+        db_env_remote = {
+            ev.key: ev.value
+            for ev in service.env_vars.all()
+            if not (isinstance(ev.value, str) and ev.value.startswith("gAAAA") and len(ev.value) > 50)
+        }
         remote_env = merge_replica_env(follower_env, db_env_remote)
         port = str(remote_env.get("PORT") or service.internal_port or 8000)
         scoped_net = _scoped_network_for(service)
@@ -449,10 +453,13 @@ class SpawningService:
             mesh_overrides = rewrite_env_for_mesh(service)
         except Exception as e:
             logger.warning("Addon mesh rewrite failed for %s: %s", service.name, e)
+        from apps.core.crypto_daemon import apply_cryptd_remote_runtime_env
+        merged_remote_pre = dict(remote_env)
+        merged_remote_pre.update(mesh_overrides)
+        apply_cryptd_remote_runtime_env(service, merged_remote_pre, unlock_now=True)
         env_args = ""
         final_env = {}
-        for key, val in remote_env.items():
-            value = mesh_overrides.get(key, val)
+        for key, value in merged_remote_pre.items():
             final_env[key] = value
             env_args += f" -e {shlex.quote(key)}={shlex.quote(value)}"
 
@@ -713,7 +720,11 @@ class SpawningService:
             merge_replica_env,
             reference_config,
         )
-        db_env = {ev.key: ev.value for ev in service.env_vars.all()}
+        db_env = {
+            ev.key: ev.value
+            for ev in service.env_vars.all()
+            if not (isinstance(ev.value, str) and ev.value.startswith("gAAAA") and len(ev.value) > 50)
+        }
         live_env, ref_block = reference_config(client, service.name)
         if not live_env and not ref_block:
             logger.warning(
@@ -824,6 +835,10 @@ class SpawningService:
         except Exception as e:
             logger.debug("mTLS env injection skipped: %s", e)
 
+        # --- grid-cryptd: Enforce opt-in registration, lease activation & DB/Redis gate ---
+        from apps.core.crypto_daemon import apply_cryptd_runtime_env, needs_host_gateway
+        apply_cryptd_runtime_env(service, env_vars, unlock_now=True)
+
         # --- mTLS: SPIRE volume mounts ---
         mtls_volumes = get_mtls_docker_run_volumes(service)
 
@@ -855,6 +870,11 @@ class SpawningService:
                     run_extra_kwargs["extra_hosts"] = extra_hosts
             except Exception as exc:
                 logger.debug("Replica gVisor extra_hosts skipped: %s", exc)
+        if needs_host_gateway(env_vars):
+            hosts_list = list(run_extra_kwargs.get("extra_hosts") or [])
+            if not any(str(h).startswith("host.docker.internal:") for h in hosts_list):
+                hosts_list.append("host.docker.internal:host-gateway")
+            run_extra_kwargs["extra_hosts"] = hosts_list
         from apps.deployments.services.container_runtime import (
             ensure_sandbox_resolv_conf,
             is_sandboxed_runtime,

@@ -1,31 +1,39 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, FileText } from 'lucide-react';
 
+export const metadata: Metadata = {
+  title: 'Terms of Service',
+  description:
+    'Terms of Service, acceptable use, data ownership, and MIT open-source license terms for Trulay Grid.',
+  alternates: { canonical: '/legal/terms' },
+};
+
 export default function TermsPage() {
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
-      <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-slate-50/60 to-white dark:from-slate-900/40 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
+    <div className="bg-white dark:bg-slate-950">
+      <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-slate-50/80 to-white dark:from-slate-900/40 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-3xl mx-auto">
-          <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400 hover:underline mb-6">
-            <ArrowLeft size={14} /> Home
+          <Link href="/" className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-slate-600 dark:text-slate-300 hover:underline mb-4">
+            <ArrowLeft size={14} aria-hidden="true" /> Home
           </Link>
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2.5 bg-slate-100 dark:bg-slate-800 rounded-xl">
-              <FileText className="w-5 h-5 text-slate-700 dark:text-slate-300" />
+              <FileText className="w-5 h-5 text-slate-700 dark:text-slate-300" aria-hidden="true" />
             </div>
-            <span className="text-sm font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Legal</span>
+            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Legal</span>
           </div>
           <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3 leading-tight">
             Terms of Service
           </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl leading-relaxed">
+          <p className="text-slate-600 dark:text-slate-300 text-lg max-w-2xl leading-relaxed">
             The rules and guidelines governing your use of the Grid platform.
           </p>
         </div>
       </section>
 
       <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate dark:prose-invert prose-headings:scroll-mt-24">
-        <p className="text-sm text-slate-400 dark:text-slate-500">Last updated: July 27, 2026</p>
+        <p className="text-sm text-slate-600 dark:text-slate-400">Last updated: July 27, 2026</p>
 
         <h2>1. Acceptance of Terms</h2>
         <p>
@@ -168,6 +176,6 @@ export default function TermsPage() {
           If you have questions about these Terms, please contact us at <a href="mailto:legal@Trulay.co">legal@Trulay.co</a> or visit our <Link href="https://github.com/SMSLYCLOUD/smsly-hosting">GitHub repository</Link>.
         </p>
       </div>
-    </main>
+    </div>
   );
 }

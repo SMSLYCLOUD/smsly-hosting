@@ -1,73 +1,36 @@
-'use client';
-
-import { useEffect, useState } from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, BookOpen, Download, RefreshCw, Server, Database, Shield, Key, Terminal, Globe, Wrench, Copy, Check, ChevronRight, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BookOpen, ChevronRight, Download, RefreshCw, Server, Database, Shield, Key, Terminal, Globe, Wrench } from 'lucide-react';
+import { CodeBlock } from '@/components/docs/CodeBlock';
+import { DocsToc } from '@/components/docs/DocsToc';
 
-
-// ────────────────────────────────────────────────────────────────
-// CodeBlock — inline copy button for quick terminal commands
-// ────────────────────────────────────────────────────────────────
-function CodeBlock({ children, lang = 'bash' }: { children: string; lang?: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(children.trim());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-  return (
-    <div className="relative group my-4">
-      <pre className="bg-slate-900 dark:bg-slate-900/80 text-slate-100 p-4 pr-12 rounded-xl overflow-x-auto text-sm leading-relaxed font-mono border border-slate-800 dark:border-slate-700/50">
-        <code>{children.trim()}</code>
-      </pre>
-      <button
-        onClick={copy}
-        className="absolute top-3 right-3 p-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity"
-        aria-label="Copy to clipboard"
-      >
-        {copied ? <Check size={14} /> : <Copy size={14} />}
-      </button>
-    </div>
-  );
-}
+export const metadata: Metadata = {
+  title: 'Installation & Operations Guide',
+  description:
+    'Install, update, configure SSL/DNS, manage Docker services, and troubleshoot self-hosted Trulay Grid servers.',
+  alternates: { canonical: '/docs/install' },
+};
 
 // ────────────────────────────────────────────────────────────────
 // TOC navigation
 // ────────────────────────────────────────────────────────────────
 const tocItems = [
-  { id: 'system-requirements', label: 'System Requirements', icon: Server },
-  { id: 'fresh-installation', label: 'Fresh Installation', icon: Download },
-  { id: 'deployment-modes', label: 'Deployment Modes', icon: Globe },
-  { id: 'accessing-the-dashboard', label: 'Accessing the Dashboard', icon: Terminal },
-  { id: 'domain--ssl-setup', label: 'Domain & SSL Setup', icon: Key },
-  { id: 'common-edge-cases', label: 'Common Edge Cases', icon: Wrench },
-  { id: 'updating-grid', label: 'Updating Grid', icon: RefreshCw },
-  { id: 'managing-services', label: 'Managing Services', icon: Terminal },
-  { id: 'database-operations', label: 'Database Operations', icon: Database },
-  { id: 'troubleshooting', label: 'Troubleshooting', icon: Wrench },
-  { id: 'security-hardening', label: 'Security Hardening', icon: Shield },
+  { id: 'system-requirements', label: 'System Requirements' },
+  { id: 'fresh-installation', label: 'Fresh Installation' },
+  { id: 'deployment-modes', label: 'Deployment Modes' },
+  { id: 'accessing-the-dashboard', label: 'Accessing the Dashboard' },
+  { id: 'domain--ssl-setup', label: 'Domain & SSL Setup' },
+  { id: 'common-edge-cases', label: 'Common Edge Cases' },
+  { id: 'updating-grid', label: 'Updating Grid' },
+  { id: 'managing-services', label: 'Managing Services' },
+  { id: 'database-operations', label: 'Database Operations' },
+  { id: 'troubleshooting', label: 'Troubleshooting' },
+  { id: 'security-hardening', label: 'Security Hardening' },
 ];
 
 export default function InstallGuidePage() {
-  const [activeSection, setActiveSection] = useState('');
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.find(e => e.isIntersecting);
-        if (visible) setActiveSection(visible.target.id);
-      },
-      { rootMargin: '-80px 0px -70% 0px' }
-    );
-    tocItems.forEach(item => {
-      const el = document.getElementById(item.id);
-      if (el) observer.observe(el);
-    });
-    return () => observer.disconnect();
-  }, []);
-
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
+    <div className="bg-white dark:bg-slate-950">
 
 
       {/* Hero */}
@@ -93,40 +56,11 @@ export default function InstallGuidePage() {
 
       <div className="max-w-7xl mx-auto flex gap-8 px-4 py-12">
 
-        {/* ────────────── Sidebar TOC ────────────── */}
-        <aside className="hidden lg:block w-56 flex-shrink-0">
-          <nav className="sticky top-24 space-y-0.5">
-            <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3 px-3">On this page</p>
-            {tocItems.map(item => {
-              const Icon = item.icon;
-              return (
-                <a
-                  key={item.id}
-                  href={`#${item.id}`}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all ${
-                    activeSection === item.id
-                      ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-900'
-                  }`}
-                >
-                  <Icon size={14} className="flex-shrink-0" />
-                  <span className="truncate">{item.label}</span>
-                </a>
-              );
-            })}
-
-            <div className="pt-4 mt-4 border-t border-slate-200 dark:border-slate-800">
-              <a
-                href="https://github.com/SMSLYCLOUD/smsly-hosting/blob/main/INSTALL_GUIDE.md"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 px-3 py-2 text-xs text-slate-500 hover:text-emerald-600 transition-colors"
-              >
-                <ExternalLink size={12} /> View on GitHub
-              </a>
-            </div>
-          </nav>
-        </aside>
+        <DocsToc
+          items={tocItems}
+          accent="emerald"
+          githubHref="https://github.com/SMSLYCLOUD/smsly-hosting/blob/main/INSTALL_GUIDE.md"
+        />
 
         {/* ────────────── Main Content ────────────── */}
         <article className="flex-1 max-w-3xl prose prose-slate dark:prose-invert prose-headings:scroll-mt-24">
@@ -228,7 +162,7 @@ sudo bash /tmp/install.sh`}</CodeBlock>
 
           <div className="not-prose grid md:grid-cols-2 gap-4 my-6">
             <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">IP Mode (Quick Start)</h4>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">IP Mode (Quick Start)</h3>
               <ul className="text-sm text-slate-600 dark:text-slate-400 space-y-1">
                 <li>• Access via <code className="text-xs bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded">http://&lt;IP&gt;</code></li>
                 <li>• No domain required</li>
@@ -238,7 +172,7 @@ sudo bash /tmp/install.sh`}</CodeBlock>
               </ul>
             </div>
             <div className="p-5 rounded-xl border border-emerald-200 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/30">
-              <h4 className="font-bold text-emerald-800 dark:text-emerald-300 mb-2 text-sm">SSL Mode (Production) ✦</h4>
+              <h3 className="font-bold text-emerald-800 dark:text-emerald-300 mb-2 text-sm">SSL Mode (Production) ✦</h3>
               <ul className="text-sm text-slate-600 dark:text-slate-400 space-y-1">
                 <li>• Access via <code className="text-xs bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded">https://your-domain.com</code></li>
                 <li>• Auto Let&apos;s Encrypt SSL via Caddy</li>
@@ -461,7 +395,7 @@ sudo chmod 664 /opt/smsly-hosting/.env`}</CodeBlock>
           <div className="not-prose space-y-4 my-6">
 
             <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">&quot;Your connection is not private&quot; / <code>ERR_CERT_AUTHORITY_INVALID</code></h4>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">&quot;Your connection is not private&quot; / <code>ERR_CERT_AUTHORITY_INVALID</code></h3>
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
                 You accessed <code>https://&lt;IP&gt;</code> in IP mode (no domain). The server has a self-signed certificate on port 443 that redirects to HTTP, but browsers warn before following the redirect.
               </p>
@@ -471,7 +405,7 @@ sudo chmod 664 /opt/smsly-hosting/.env`}</CodeBlock>
             </div>
 
             <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">SSL Certificate Not Issued (HTTPS shows self-signed after domain config)</h4>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">SSL Certificate Not Issued (HTTPS shows self-signed after domain config)</h3>
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
                 This usually means Caddy&apos;s on-demand TLS &quot;ask&quot; endpoint rejected the domain, or DNS hasn&apos;t propagated.
               </p>
@@ -491,7 +425,7 @@ docker exec smsly-hosting-caddy-1 caddy reload --config /etc/caddy/Caddyfile`}</
             </div>
 
             <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Gateway Timeout After Reboot</h4>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Gateway Timeout After Reboot</h3>
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
                 On first boot after a restart, the backend runs database migrations and waits for PostgreSQL to be healthy. This can take 1-3 minutes.
               </p>
@@ -503,7 +437,7 @@ docker exec smsly-hosting-caddy-1 caddy reload --config /etc/caddy/Caddyfile`}</
             </div>
 
             <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Frontend API Calls to HTTP Instead of HTTPS</h4>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Frontend API Calls to HTTP Instead of HTTPS</h3>
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
                 The frontend uses relative API paths (<code>/api/v1/...</code>), so the scheme (HTTP vs HTTPS) matches whatever the browser is using. If you access via <code>http://&lt;IP&gt;</code>, API calls use HTTP. If via <code>https://domain</code>, they use HTTPS.
               </p>
@@ -513,7 +447,7 @@ docker exec smsly-hosting-caddy-1 caddy reload --config /etc/caddy/Caddyfile`}</
             </div>
 
             <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Domain Saved via UI but .env Not Updated</h4>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Domain Saved via UI but .env Not Updated</h3>
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
                 The backend container (user <code>smsly</code>, UID 1000) needs write permission on the host <code>.env</code> file. If the file is owned by root with <code>644</code>, the write fails with <code>PermissionError</code>.
               </p>
@@ -528,7 +462,7 @@ sudo chmod 664 /opt/smsly-hosting/.env`}</CodeBlock>
             </div>
 
             <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">&quot;403 Forbidden&quot; or &quot;CSRF token missing&quot; After Domain Change</h4>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">&quot;403 Forbidden&quot; or &quot;CSRF token missing&quot; After Domain Change</h3>
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
                 The <code>patch_runtime_settings()</code> function should update <code>CSRF_TRUSTED_ORIGINS</code> and <code>CORS_ALLOWED_ORIGINS</code> automatically when you save domain config. If these didn&apos;t update, re-save the domain config via Settings → Domain &amp; SSL.
               </p>
@@ -730,7 +664,7 @@ docker compose -f docker-compose.prod.yml start backend celery celery-beat`}</Co
               <details key={item.q} className="group rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 overflow-hidden">
                 <summary className="flex items-center justify-between p-4 cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">
                   {item.q}
-                  <ChevronRight size={16} className="text-slate-400 group-open:rotate-90 transition-transform" />
+                  <ChevronRight size={16} className="text-slate-400 group-open:rotate-90 transition-transform" aria-hidden="true" />
                 </summary>
                 <div className="px-4 pb-4 text-sm text-slate-600 dark:text-slate-400">{item.a}</div>
               </details>
@@ -841,6 +775,6 @@ Caddy (port 443)
 
         </article>
       </div>
-    </main>
+    </div>
   );
 }

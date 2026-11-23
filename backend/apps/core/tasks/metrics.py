@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
+import random
+import time
 
 logger = logging.getLogger(__name__)
-import logging
-import random
 
 from celery import shared_task
 
@@ -162,18 +162,36 @@ def _simulate_stats(service):  # UNUSED
 def collect_metrics_task() -> None:
     """
     Collect metrics for all active services with running deployments.
-    Tries real Docker stats first, falls back to simulation.
+    Pre-fetches active deployments in a single query and bounds collection
+    with a deadline so old metric pruning always runs inside the task limit.
     """
     now = timezone.now()
-    services = Service.objects.only("id", "cpu_cores", "memory_mb", "owner__id", "name")
-    collected = 0
-
-    for service in services:
-        latest = (
-            Deployment.objects.filter(
-                service=service, status=Deployment.Status.ACTIVE
-            ).order_by('-created_at').first()
+    deadline = time.monotonic() + max(30, TASK_TIME_LIMIT_STANDARD[0] - 20)
+    services = list(
+        Service.objects.select_related("server").only(
+            "id", "cpu_cores", "memory_mb", "owner_id", "name",
+            "alert_config", "active_runtime_id",
+            "server__id", "server__is_lite_agent",
         )
+    )
+    active_by_service: dict = {}
+    for dep in (
+        Deployment.objects.filter(
+            service_id__in=[s.id for s in services],
+            status=Deployment.Status.ACTIVE,
+        )
+        .only("id", "service_id", "container_id", "verified_runtime_id", "created_at")
+        .order_by("service_id", "-created_at")
+    ):
+        if dep.service_id not in active_by_service:
+            active_by_service[dep.service_id] = dep
+
+    collected = 0
+    for service in services:
+        if time.monotonic() >= deadline:
+            logger.warning("collect_metrics_task: time budget reached after %d services; deferring remainder", collected)
+            break
+        latest = active_by_service.get(service.id)
         container_id = getattr(latest, 'container_id', None) if latest else None
 
         stats = _collect_remote_container_stats(service, latest) if latest else None
@@ -240,38 +258,79 @@ def cleanup_build_cache_task(prune_all=False) -> dict:
 
 
 def _check_metric_thresholds(service, stats, now):
-    """Fire resource alerts when metrics breach thresholds."""
+    """Fire resource alerts and persist ResourceAlert rows when metrics breach thresholds."""
     try:
+        alert_cfg = getattr(service, 'alert_config', None) or {}
+        cpu_crit = float(alert_cfg.get('cpu_critical') or 90.0)
+        cpu_warn = float(alert_cfg.get('cpu_warning') or cpu_crit)
+        mem_crit = float(alert_cfg.get('memory_critical') or 90.0)
+        mem_warn = float(alert_cfg.get('memory_warning') or mem_crit)
+        disk_crit = float(alert_cfg.get('disk_critical') or 90.0)
+        disk_warn = float(alert_cfg.get('disk_warning') or disk_crit)
+
         cpu_limit = float(stats.get('cpu_limit') or 1.0)
         cpu_usage = float(stats.get('cpu_usage') or 0.0)
-        cpu = (cpu_usage / cpu_limit * 100.0) if cpu_limit > 0 else 0.0
+        cpu_pct = (cpu_usage / cpu_limit * 100.0) if cpu_limit > 0 else 0.0
+
         mem_mb = float(stats.get('memory_usage') or 0.0)
-        disk_pct = stats.get('disk_percent', 0)
+        mem_limit_mb = float(stats.get('memory_limit') or getattr(service, 'memory_mb', 0) or 0.0)
+        mem_pct = (mem_mb / mem_limit_mb * 100.0) if mem_limit_mb > 0 else (100.0 if mem_mb > 2000 else 0.0)
 
-        alerts = []
-        if cpu > 90:
-            alerts.append(f"CPU at {cpu:.0f}%")
-        if mem_mb > 0 and mem_mb > 2000:
-            alerts.append(f"Memory at {mem_mb:.0f}MB")
-        if disk_pct > 90:
-            alerts.append(f"Disk at {disk_pct:.0f}%")
+        disk_pct = float(stats.get('disk_percent') or 0.0)
 
-        if alerts:
-            from apps.notifications.tasks import notify_health_alert
-            cache_key = f"metrics_alert:{service.id}:{now.strftime('%Y%m%d%H')}"
+        breaches = []  # list of (metric, current_pct, threshold, severity, text)
+        if cpu_pct > cpu_crit:
+            breaches.append(('cpu', cpu_pct, cpu_crit, 'CRITICAL', f"CPU at {cpu_pct:.0f}%"))
+        elif cpu_pct > cpu_warn:
+            breaches.append(('cpu', cpu_pct, cpu_warn, 'WARNING', f"CPU at {cpu_pct:.0f}%"))
+
+        if mem_limit_mb > 0:
+            if mem_pct > mem_crit:
+                breaches.append(('memory', mem_pct, mem_crit, 'CRITICAL', f"Memory at {mem_mb:.0f}MB ({mem_pct:.0f}%)"))
+            elif mem_pct > mem_warn:
+                breaches.append(('memory', mem_pct, mem_warn, 'WARNING', f"Memory at {mem_mb:.0f}MB ({mem_pct:.0f}%)"))
+        elif mem_mb > 2000:
+            breaches.append(('memory', 100.0, 90.0, 'WARNING', f"Memory at {mem_mb:.0f}MB"))
+
+        if disk_pct > disk_crit:
+            breaches.append(('disk', disk_pct, disk_crit, 'CRITICAL', f"Disk at {disk_pct:.0f}%"))
+        elif disk_pct > disk_warn:
+            breaches.append(('disk', disk_pct, disk_warn, 'WARNING', f"Disk at {disk_pct:.0f}%"))
+
+        if breaches:
             from django.core.cache import cache
+            from apps.notifications.models import ResourceAlert
+            from apps.notifications.tasks import notify_health_alert
+
+            cache_key = f"metrics_alert:{service.id}:{now.strftime('%Y%m%d%H')}"
             if cache.get(cache_key):
                 return
             cache.set(cache_key, 1, 3600)  # 1 hour dedup
+
+            for metric_name, cur_val, thresh_val, sev, msg_text in breaches:
+                try:
+                    ResourceAlert.objects.create(
+                        service=service,
+                        severity=sev,
+                        metric=metric_name,
+                        threshold=round(thresh_val, 1),
+                        current_value=round(cur_val, 1),
+                        message=msg_text,
+                    )
+                except Exception as db_exc:
+                    logger.debug("Failed to persist ResourceAlert for %s: %s", service.name, db_exc)
+
+            top = max(breaches, key=lambda b: (1 if b[3] == 'CRITICAL' else 0, b[1]))
+            overall_severity = 'CRITICAL' if any(b[3] == 'CRITICAL' for b in breaches) else 'WARNING'
 
             notify_health_alert.delay(
                 service.owner_id,
                 service.name,
                 'resource',
-                current_value=round(max(cpu, mem_mb), 1),
-                threshold=90.0,
-                severity='WARNING',
-                message='; '.join(alerts),
+                current_value=round(top[1], 1),
+                threshold=round(top[2], 1),
+                severity=overall_severity,
+                message='; '.join(b[4] for b in breaches),
             )
     except Exception as exc:
         logger.debug("Failed to check metric thresholds: %s", exc)

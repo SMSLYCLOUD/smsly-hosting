@@ -133,7 +133,9 @@ def _restart_count_key(service_id: str) -> str:
     return f"health:restart_count:{service_id}"
 
 
-def _health_alert_key(service_id: str) -> str:
+def _health_alert_key(service_id: str, health_status: str = "") -> str:
+    if health_status:
+        return f"health:alert_sent:{service_id}:{health_status}"
     return f"health:alert_sent:{service_id}"
 
 
@@ -145,6 +147,8 @@ def _clear_state(service_id: str, clear_restart: bool = False):
     cache.delete(_container_state_key(service_id))
     cache.delete(_restart_count_key(service_id))
     cache.delete(_health_alert_key(service_id))
+    cache.delete(_health_alert_key(service_id, "unhealthy"))
+    cache.delete(_health_alert_key(service_id, "needs_manual_intervention"))
 
 
 def _normalize_path(path: str) -> str:
@@ -478,20 +482,22 @@ def _check_infrastructure_health():
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         logger.debug("Falco health check skipped: %s", exc)
 
-    # fail2ban
+    # fail2ban (runs on host OS; only probe via CLI when binary exists in namespace)
     f2b_cache_key = "infra:fail2ban:down_count"
     try:
-        result = subprocess.run(
-            ["fail2ban-client", "ping"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if "pong" not in (result.stdout or ""):
-            down_count = (cache.get(f2b_cache_key) or 0) + 1
-            cache.set(f2b_cache_key, down_count, timeout=3600)
-            if down_count <= 3 or down_count % 10 == 0:
-                logger.warning("fail2ban is not responding (detected %d times)", down_count)
-        else:
-            cache.delete(f2b_cache_key)
+        import shutil
+        if shutil.which("fail2ban-client"):
+            result = subprocess.run(
+                ["fail2ban-client", "ping"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if "pong" not in (result.stdout or ""):
+                down_count = (cache.get(f2b_cache_key) or 0) + 1
+                cache.set(f2b_cache_key, down_count, timeout=3600)
+                if down_count <= 3 or down_count % 10 == 0:
+                    logger.warning("fail2ban is not responding (detected %d times)", down_count)
+            else:
+                cache.delete(f2b_cache_key)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         logger.debug("fail2ban health check skipped: %s", exc)
 
@@ -523,12 +529,18 @@ def monitor_health_task(self) -> None:
         soft_budget = max(30, TASK_TIME_LIMIT_QUICK[0] - 20)
         deadline = time.monotonic() + soft_budget
 
-        services = Service.objects.exclude(health_check_path="").only(
-            "id", "name", "health_check_path", "health_check_port", "health_check_interval",
-            "health_check_timeout", "health_check_retries", "auto_restart",
-            "health_status", "internal_port", "public_domain", "public_domain_hidden",
-            "cpu_cores", "memory_mb", "auto_rollback_threshold",
-            "server__id", "server__is_lite_agent", "server__private_ip", "server__verify_tls",
+        services = (
+            Service.objects.exclude(health_check_path="")
+            .select_related("server", "provider")
+            .only(
+                "id", "name", "status", "health_check_path", "health_check_port", "health_check_interval",
+                "health_check_timeout", "health_check_retries", "auto_restart",
+                "health_status", "internal_port", "public_domain", "public_domain_hidden",
+                "cpu_cores", "memory_mb", "auto_rollback_threshold",
+                "sablier_enabled", "active_runtime_id", "readiness_path",
+                "provider__id",
+                "server__id", "server__is_lite_agent", "server__private_ip", "server__verify_tls",
+            )
         )
         checked = 0
         skipped = 0
@@ -598,8 +610,10 @@ def _probe_container_state(container_id: str, service=None, runtime_id: str | No
         exit_code = state.get("ExitCode")
         restart_count = int(state.get("RestartCount") or 0)
         started_at = state.get("StartedAt") or ""
+        health = ((state.get("Health") or {}).get("Status") or "").lower()
         return {
             "status": status,
+            "health": health,
             "exit_code": exit_code,
             "restart_count": restart_count,
             "started_at": started_at,
@@ -707,7 +721,41 @@ def _check_service_health(service: object, Deployment: object) -> None:
     except (TypeError, ValueError):
         user_timeout = 15
     timeout = max(2, min(user_timeout, HEALTH_PER_REQUEST_TIMEOUT_SECONDS))
+
+    def _record_healthy(probe_url: str, latency_ms: float, status_code: int) -> None:
+        cache.delete(_failure_key(service_key))
+        restart_state = cache.get(_restart_key(service_key))
+        if restart_state:
+            logger.info(
+                "%s recovered; clearing restart state (previous attempts: %s)",
+                service.name,
+                restart_state.get("count", 0),
+            )
+            cache.delete(_restart_key(service_key))
+        if service.health_status != "healthy":
+            # Do not overwrite a log-watchdog manual intervention flag
+            # while consecutive log-error bursts are still active.
+            if (
+                service.health_status == "needs_manual_intervention"
+                and cache.get(f"logwatch:flagged:{service.id}")
+            ):
+                return
+            log_event(
+                action="SERVICE_HEALTHY",
+                target=f"Service: {service.name}",
+                metadata={
+                    "service_id": str(service.id),
+                    "url": probe_url,
+                    "latency_ms": latency_ms,
+                    "status_code": status_code,
+                    "previous_status": service.health_status,
+                },
+            )
+            service.health_status = "healthy"
+            service.save(update_fields=["health_status", "updated_at"])
+
     failure_reason = "Health target not reachable"
+    saw_dns_miss = False
     service_deadline = time.monotonic() + HEALTH_PER_SERVICE_BUDGET_SECONDS
 
     for target in targets:
@@ -733,28 +781,7 @@ def _check_service_health(service: object, Deployment: object) -> None:
                 if not ready:
                     failure_reason = ready_reason
                     break
-                cache.delete(_failure_key(service_key))
-                restart_state = cache.get(_restart_key(service_key))
-                if restart_state:
-                    logger.info(
-                        "%s recovered; clearing restart state (previous attempts: %s)",
-                        service.name,
-                        restart_state.get("count", 0),
-                    )
-                    cache.delete(_restart_key(service_key))
-                if service.health_status != "healthy":
-                    log_event(
-                        action="SERVICE_HEALTHY",
-                        target=f"Service: {service.name}",
-                        metadata={
-                            "url": url,
-                            "latency_ms": response.elapsed.total_seconds() * 1000,
-                            "status_code": response.status_code,
-                            "previous_status": service.health_status
-                        }
-                    )
-                    service.health_status = "healthy"
-                    service.save(update_fields=["health_status", "updated_at"])
+                _record_healthy(url, response.elapsed.total_seconds() * 1000, response.status_code)
                 return
             failure_reason = f"{url} returned HTTP {response.status_code}"
         except requests.Timeout:
@@ -762,12 +789,29 @@ def _check_service_health(service: object, Deployment: object) -> None:
         except requests.exceptions.SSLError as exc:
             failure_reason = f"{url} TLS error: {exc}"
         except requests.RequestException as exc:
+            msg = str(exc)
+            if "Failed to resolve" in msg or "NameResolutionError" in msg:
+                saw_dns_miss = True
             failure_reason = f"{url} request failed: {exc}"
+
+    public_domain = (
+        ""
+        if getattr(service, "public_domain_hidden", False)
+        else (getattr(service, "public_domain", None) or "").strip()
+    )
+    if (
+        not public_domain
+        and state == "running"
+        and state_info.get("health") == "healthy"
+        and saw_dns_miss
+    ):
+        _record_healthy(f"docker://{container_id or service.name}", 0.0, 200)
+        return
 
     _handle_failure(service, service_key, failure_reason)
 
 
-def _fetch_container_logs(service) -> str:
+def _fetch_container_logs(service, since_seconds: int | None = None) -> str:
     """Fetch container logs for a service. Returns empty string on failure."""
     try:
         from apps.deployments.services.docker_client import get_docker_client
@@ -798,7 +842,10 @@ def _fetch_container_logs(service) -> str:
             return ""
         client = get_docker_client()
         container = client.containers.get(active.container_id)
-        logs = container.logs(tail=200, stdout=True, stderr=True, timestamps=True)
+        log_kwargs = {"tail": 200, "stdout": True, "stderr": True, "timestamps": True}
+        if since_seconds is not None and since_seconds > 0:
+            log_kwargs["since"] = int(time.time()) - int(since_seconds)
+        logs = container.logs(**log_kwargs)
         return logs.decode("utf-8", errors="replace")
     except Exception:
         return ""
@@ -872,6 +919,7 @@ def _handle_failure(service, service_key: str, reason: str):
             action="SERVICE_UNHEALTHY",
             target=f"Service: {service.name}",
             metadata={
+                "service_id": str(service.id),
                 "reason": reason,
                 "consecutive_failures": current_failures,
                 "threshold": retries,
@@ -962,8 +1010,10 @@ def _dispatch_health_alert(service, health_status: str, reason: str, exit_code=N
     """
     from apps.deployments.models import Deployment
 
-    # Rate-limit: one alert per cooldown window per service.
-    alert_key = _health_alert_key(str(service.id))
+    # Rate-limit: one alert per cooldown window per (service, health_status)
+    # so an escalation from 'unhealthy' to 'needs_manual_intervention' is
+    # never dropped by the initial 'unhealthy' alert's cooldown.
+    alert_key = _health_alert_key(str(service.id), health_status)
     if cache.get(alert_key):
         return
     cache.set(alert_key, True, timeout=HEALTH_ALERT_COOLDOWN_SECONDS)

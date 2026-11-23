@@ -1,5 +1,13 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Zap, Layers, Container, ArrowUpRight, Server } from 'lucide-react';
+
+export const metadata: Metadata = {
+  title: 'Migration Guides',
+  description:
+    'Step-by-step guides for migrating apps, databases, and environment variables from Vercel, Railway, Heroku, and Render to Trulay Grid.',
+  alternates: { canonical: '/docs/migration' },
+};
 
 const platforms = [
     {
@@ -70,28 +78,29 @@ const platforms = [
 
 export default function MigrationPage() {
     return (
-        <main className="min-h-screen bg-white dark:bg-slate-950">
-            <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-amber-50/60 to-white dark:from-amber-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
+        <div className="bg-white dark:bg-slate-950">
+            <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-amber-50/70 to-white dark:from-amber-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
                 <div className="max-w-4xl mx-auto">
-                    <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400 hover:underline mb-6">
-                        <ArrowLeft size={14} /> Back to Docs
+                    <Link href="/docs" className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-amber-700 dark:text-amber-400 hover:underline mb-4">
+                        <ArrowLeft size={14} aria-hidden="true" /> Back to Docs
                     </Link>
                     <div className="flex items-center gap-3 mb-4">
                         <div className="p-2.5 bg-amber-100 dark:bg-amber-900/50 rounded-xl">
-                            <Server className="w-6 h-6 text-amber-700 dark:text-amber-300" />
+                            <Server className="w-6 h-6 text-amber-700 dark:text-amber-300" aria-hidden="true" />
                         </div>
-                        <span className="text-sm font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Guide</span>
+                        <span className="text-sm font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Guide</span>
                     </div>
                     <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-3">
                         Migration Guides
                     </h1>
-                    <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl">
+                    <p className="text-slate-600 dark:text-slate-300 text-lg max-w-2xl">
                         Move your applications from other PaaS platforms to Grid. Same developer experience, your own infrastructure.
                     </p>
                 </div>
             </section>
 
             <div className="max-w-5xl mx-auto px-4 py-16">
+                <h2 className="sr-only">Choose Source Platform</h2>
                 <div className="grid md:grid-cols-2 gap-6">
                     {platforms.map((platform) => {
                         const Icon = platform.icon;
@@ -141,6 +150,6 @@ export default function MigrationPage() {
                     </p>
                 </div>
             </div>
-        </main>
+        </div>
     );
 }

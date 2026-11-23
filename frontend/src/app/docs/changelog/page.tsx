@@ -1,5 +1,12 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, History, Sparkles, Bug, Zap, Shield, Plus } from 'lucide-react';
+
+export const metadata: Metadata = {
+  title: 'Changelog',
+  description: 'Release notes, platform security improvements, and feature history for Trulay Grid.',
+  alternates: { canonical: '/docs/changelog' },
+};
 
 const releases = [
   {
@@ -98,7 +105,7 @@ const changeIcons = {
 
 export default function ChangelogPage() {
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
+    <div className="bg-white dark:bg-slate-950">
       <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-emerald-50/60 to-white dark:from-emerald-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-3xl mx-auto">
           <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400 hover:underline mb-6">
@@ -139,7 +146,7 @@ export default function ChangelogPage() {
                       {release.tag}
                     </span>
                   )}
-                  <span className="text-sm text-slate-400 dark:text-slate-500">{release.date}</span>
+                  <span className="text-sm text-slate-600 dark:text-slate-400">{release.date}</span>
                 </div>
               </div>
 
@@ -171,6 +178,6 @@ export default function ChangelogPage() {
         </div>
 
       </div>
-    </main>
+    </div>
   );
 }

@@ -96,3 +96,6 @@ def _post_deploy_success(deployment: Deployment, service: Service, log_line_func
         # promotion that is otherwise healthy.
         from apps.deployments.tasks.deploy import seed as _seed_mod
         _seed_mod.run_post_promote_seed(deployment, service)
+    with suppress(Exception):
+        from apps.security.tasks import run_post_deploy_dast_task
+        run_post_deploy_dast_task.delay(str(service.id), str(deployment.id))

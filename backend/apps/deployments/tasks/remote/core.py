@@ -390,6 +390,13 @@ def _copy_remote_deployment_fields(deployment, remote_status: dict):
     if update_fields:
         update_fields.append("updated_at")
         deployment.save(update_fields=update_fields)
+        if "vulnerability_report" in update_fields:
+            try:
+                from apps.security.aspm import sync_deployment_trivy_findings
+
+                sync_deployment_trivy_findings(deployment)
+            except Exception as exc:
+                logger.debug("Remote Trivy findings sync skipped: %s", exc)
 
 def _wait_for_remote_app_ready(service, deployment, timeout_s: int = 300) -> bool:
     """Wait until the remote app answers HTTP (consecutive successes).
@@ -615,6 +622,12 @@ def _poll_remote_deployment(
                             )
                         except Exception as exc:
                             logger.debug("Failed to post commit status for verified deploy: %s", exc)
+
+                        try:
+                            from apps.security.tasks import run_post_deploy_dast_task
+                            run_post_deploy_dast_task.delay(str(service.id), str(deployment.id))
+                        except Exception as exc:
+                            logger.debug("Remote post-deploy DAST dispatch skipped: %s", exc)
 
                         append_log(deployment, "Remote deployment completed and VERIFIED successfully.\n")
                         return

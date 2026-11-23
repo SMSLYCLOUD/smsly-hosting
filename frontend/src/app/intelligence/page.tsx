@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import CodeMapView from '@/components/intelligence/CodeMapView';
+import { SecurityCenterView } from '@/components/intelligence/SecurityCenterView';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import {
   aiApi,
@@ -1553,6 +1554,8 @@ export default function IntelligencePage() {
                   </div>
                 </CardContent>
               </Card>
+
+              <SecurityCenterView />
             </TabsContent>
 
             {/* ── Anomalies Tab ──────────────────────────────────────── */}

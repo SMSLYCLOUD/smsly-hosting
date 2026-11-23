@@ -135,7 +135,7 @@ def ai_deployment_review_task(self, deployment_id: str):
                 actor="AI_REVIEWER",
                 action="DIAGNOSIS",
                 target=deployment.service.name,
-                metadata={"diagnosis": diagnosis[:500]}
+                metadata={"service_id": str(deployment.service_id), "diagnosis": diagnosis[:500]}
             )
     except Deployment.DoesNotExist:
         logger.error("Deployment %s not found for AI review", deployment_id)

@@ -49,6 +49,55 @@ def _safe_extract_zip(zip_path: str, destination: str):
                 raise ValueError("Archive contains unsafe file paths")
         zf.extractall(dest_root)
 
+def _run_aspm_and_sbom_for_context(
+    deployment,
+    *,
+    source_dir: str | None,
+    image_ref: str = "",
+    phase: str = "pre_build",
+) -> None:
+    """Enforce ASPM pre-build policy gates and generate CycloneDX v1.5 SBOM for UPLOAD/FUNCTION builds."""
+    try:
+        from apps.security.aspm import generate_sbom, run_aspm_pipeline_scan
+        from apps.security.models import SecurityPolicy
+    except ImportError:
+        return
+
+    if phase == "pre_build":
+        if not source_dir or not os.path.isdir(source_dir):
+            return
+        try:
+            policy = SecurityPolicy.load()
+            if not policy.aspm_enabled:
+                return
+            report = run_aspm_pipeline_scan(deployment=deployment, source_dir=source_dir, persist=True)
+        except Exception as exc:
+            logger.debug("ASPM pre-build scan skipped for %s: %s", deployment.id, exc)
+            return
+        counts = report.get("counts") or {}
+        append_log(
+            deployment,
+            f"🛡️ [ASPM] Secrets={counts.get('secrets', 0)}, "
+            f"IaC={counts.get('iac', 0)}, SAST={counts.get('sast', 0)}\n",
+        )
+        if report.get("blocked"):
+            reasons = "; ".join(report.get("block_reasons") or [])
+            raise RuntimeError(f"ASPM security policy blocked deployment: {reasons}")
+    elif phase == "post_build":
+        try:
+            policy = SecurityPolicy.load()
+            if not policy.sbom_enabled:
+                return
+            art = generate_sbom(deployment=deployment, source_dir=source_dir, image_ref=image_ref)
+            if art:
+                append_log(
+                    deployment,
+                    f"📦 [SBOM/SLSA] CycloneDX v{art.spec_version} generated ({art.package_count} packages).\n",
+                )
+        except Exception as exc:
+            logger.debug("SBOM generation skipped for %s: %s", deployment.id, exc)
+
+
 def _build_function(deployment, service) -> str:
     build_dir = None
     try:
@@ -62,6 +111,7 @@ def _build_function(deployment, service) -> str:
 
         build_dir = tempfile.mkdtemp(prefix=f"func_{deployment.id}_")
         FunctionProvisioner.prepare_context(service, build_dir)
+        _run_aspm_and_sbom_for_context(deployment, source_dir=build_dir, phase="pre_build")
 
         safe_service_name = _docker_safe_segment(service.name, fallback="function")
         deploy_tag = str(deployment.id).replace("-", "")[:8]
@@ -129,6 +179,7 @@ def _build_function(deployment, service) -> str:
                 _remove_ephemeral_builder(eph_builder)
 
         update_stage(deployment, 'Build', 'success')
+        _run_aspm_and_sbom_for_context(deployment, source_dir=build_dir, image_ref=tag, phase="post_build")
         is_local = is_deployment_local(deployment)
         return _push_built_image(deployment, service, tag, is_local=is_local)
 
@@ -243,6 +294,8 @@ def _build_uploaded_source(deployment, service) -> str:
         if len(entries) == 1 and os.path.isdir(entries[0]):
             source_dir = entries[0]
 
+        _run_aspm_and_sbom_for_context(deployment, source_dir=source_dir, phase="pre_build")
+
         safe_service_name = _docker_safe_segment(service.name, fallback="upload")
         deploy_tag = str(deployment.id).replace("-", "")[:8]
         from apps.deployments.services.registry_credentials import (
@@ -347,6 +400,7 @@ def _build_uploaded_source(deployment, service) -> str:
                     _remove_ephemeral_builder(eph_builder)
 
         update_stage(deployment, 'Build', 'success')
+        _run_aspm_and_sbom_for_context(deployment, source_dir=source_dir, image_ref=image_name, phase="post_build")
         is_local = is_deployment_local(deployment)
         return _push_built_image(deployment, service, image_name, is_local=is_local)
 

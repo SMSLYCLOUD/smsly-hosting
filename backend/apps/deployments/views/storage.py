@@ -183,6 +183,15 @@ class VolumeViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not own this service.")
         serializer.save(service=service)
 
+    def perform_destroy(self, instance):
+        try:
+            from apps.core.crypto_daemon import cryptd_client, is_service_encryption_enabled
+            if cryptd_client.is_enabled() and is_service_encryption_enabled(instance.service):
+                cryptd_client.cleanup_volume(instance.name, service_id=str(instance.service_id))
+        except Exception as exc:
+            logger.warning("cryptd encrypted volume cleanup failed for %s: %s", instance.name, exc)
+        super().perform_destroy(instance)
+
     def _resolve_volume_target(self, service):
         """Resolve whether the volume's service runs locally or remotely."""
         latest_deploy = service.deployments.filter(status='ACTIVE').first()

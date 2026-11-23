@@ -67,6 +67,7 @@ class PipelineManager(
             is_docker_type = self.service.deploy_type == 'DOCKER' and self.service.docker_image
             if not is_docker_type:
                 self._clone_repo()
+                self._run_aspm_scan()
                 if self.skip_analysis:
                     # Fast deploy: no repo scan, no Senate LLM call, no AI
                     # resource recommendations. Service-configured env vars
@@ -89,6 +90,7 @@ class PipelineManager(
             self._push_image()
             self._sign_image()
             self._verify_signature()
+            self._generate_sbom_and_provenance()
             log_exhaustive_network_and_routing_diagnostics(self.deployment, self.service)
             if not self.image_name:
                 raise PipelineError("Pipeline completed without producing an image")
@@ -113,6 +115,7 @@ class PipelineManager(
             self._setup()
             self._capture_pre_deploy_snapshot()
             self._clone_repo()
+            self._run_aspm_scan()
             self._run_ai_analysis()
             self._inject_env_vars()
             self._auto_provision_addons()
@@ -163,11 +166,13 @@ class PipelineManager(
             # Re-attach to existing build dir from the analysis phase
             self._setup_for_resume()
             self._capture_pre_deploy_snapshot()
+            self._run_aspm_scan()
 
             self._build_image()
             self._push_image()
             self._sign_image()
             self._verify_signature()
+            self._generate_sbom_and_provenance()
             log_exhaustive_network_and_routing_diagnostics(self.deployment, self.service)
             if not self.image_name:
                 raise PipelineError("Build phase completed without producing an image")

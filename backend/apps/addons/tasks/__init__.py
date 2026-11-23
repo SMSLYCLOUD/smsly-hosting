@@ -13,30 +13,39 @@ from apps.addons.services.maintenance import AddonMaintenanceService
 @shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
 @skip_if_recent("coalesce:addon-health", TASK_TIME_LIMIT_STANDARD[0])
 def addon_health_check_all(self) -> None:
-    """Run health checks on all active addons."""
+    """Run health checks on all active addons with per-addon isolation and alert cooldown."""
     import logging
+    from django.core.cache import cache
+
     _logger = logging.getLogger(__name__)
-    try:
-        for addon in Addon.objects.filter(status='ACTIVE').select_related('service__owner'):
+    for addon in Addon.objects.filter(status='ACTIVE').select_related('service__owner'):
+        try:
             service = AddonMaintenanceService(addon)
-            service.health_check()
-            # Dispatch alerts for unhealthy addons based on metrics
-            try:
-                stats = service.proxy.get_stats()
-                alerts = check_alerts(addon, metrics=stats)
-                for alert in alerts:
-                    from apps.notifications.tasks import dispatch_notification
-                    dispatch_notification.delay(
-                        event_type='addon_alert',
-                        user_id=str(addon.service.owner_id) if addon.service else None,
-                        title=f"Addon Alert: {alert.get('message', 'Unknown')}",
-                        message=f"Addon {addon.name}: {alert.get('message', '')}",
-                    )
-            except Exception:
-                pass  # Alert dispatch is best-effort
-    except Exception as exc:
-        _logger.error("addon_health_check_all failed: %s", exc)
-        raise
+            health_result = service.health_check() or {}
+            stats = health_result.get('details')
+            if not isinstance(stats, dict):
+                try:
+                    stats = service.proxy.get_stats()
+                except Exception as stats_exc:
+                    stats = {'status': 'OFFLINE', 'error': str(stats_exc)}
+            alerts = check_alerts(addon, metrics=stats)
+            owner_id = getattr(getattr(addon, 'service', None), 'owner_id', None)
+            if not owner_id or not alerts:
+                continue
+            for alert in alerts:
+                cooldown_key = f"addon_alert_cooldown:{addon.id}:{alert.get('message', '')[:40]}"
+                if not cache.add(cooldown_key, 1, timeout=1800):
+                    continue
+                from apps.notifications.tasks import dispatch_notification
+                dispatch_notification.delay(
+                    event_type='health_alert',
+                    user_id=owner_id,
+                    title=f"Addon Alert: {alert.get('message', 'Unknown')}",
+                    message=f"Addon {addon.name}: {alert.get('message', '')}",
+                    metadata={'addon_id': str(addon.id), 'addon_name': addon.name, 'severity': alert.get('severity', 'warning')},
+                )
+        except Exception as exc:
+            _logger.warning("addon_health_check_all failed for addon %s: %s", getattr(addon, 'id', '?'), exc)
 
 @shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
 def addon_auto_vacuum(self) -> None:

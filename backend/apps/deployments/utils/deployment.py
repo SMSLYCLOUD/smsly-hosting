@@ -17,28 +17,13 @@ def get_default_env_value(key: str, scan_result: dict, service_name: str) -> tup
     if key_upper in ('JWT_SECRET', 'SESSION_SECRET', 'COOKIE_SECRET', 'CSRF_SECRET', 'SIGNING_KEY', 'HASH_SALT'):
         return secrets.token_urlsafe(48), True
 
-    if key_upper in ('DATABASE_URL', 'DB_URL', 'DB_URI', 'SQLALCHEMY_DATABASE_URI', 'SQLALCHEMY_DATABASE_URL'):
-        scan_result.get('stack', '')
-        deps = scan_result.get('dependencies', [])
-        dep_str = ' '.join(deps) if isinstance(deps, list) else str(deps)
-        platform_db = os.environ.get('DATABASE_URL', 'postgresql://user:password@db:5432/dbname')
-        if 'asyncpg' in dep_str or 'async' in dep_str.lower():
-            if platform_db.startswith('postgresql://'):
-                return platform_db.replace('postgresql://', 'postgresql+asyncpg://', 1), True
-            return platform_db, True
-        return platform_db, True
-
-    if key_upper == 'REDIS_URL':
-        return os.environ.get('REDIS_URL', 'redis://redis:6379/0'), True
-
-    if key_upper in ('CELERY_BROKER_URL', 'BROKER_URL'):
-        return os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/1'), True
-
-    if key_upper in ('CELERY_RESULT_BACKEND', 'RESULT_BACKEND'):
-        return os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379/2'), True
-
-    if key_upper in ('MONGODB_URI', 'MONGO_URI', 'MONGO_URL'):
-        return os.environ.get('MONGODB_URI', 'mongodb://mongo:27017/dbname'), True
+    if key_upper in ('DATABASE_URL', 'DB_URL', 'DB_URI', 'SQLALCHEMY_DATABASE_URI', 'SQLALCHEMY_DATABASE_URL',
+                     'REDIS_URL', 'CELERY_BROKER_URL', 'BROKER_URL',
+                     'CELERY_RESULT_BACKEND', 'RESULT_BACKEND',
+                     'MONGODB_URI', 'MONGO_URI', 'MONGO_URL'):
+        # Never inject control-plane os.environ database/broker credentials into tenant services.
+        # Provisioned addons or explicit user env vars supply service-specific connection URLs.
+        return None, False
 
     if key_upper == 'PORT':
         return '8000', True

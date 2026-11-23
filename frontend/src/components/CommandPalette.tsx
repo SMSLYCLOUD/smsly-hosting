@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
+import { useTheme } from 'next-themes';
 import {
   CommandDialog,
   CommandEmpty,
@@ -14,13 +15,26 @@ import {
 import {
   Home, Layout, Rocket, Sparkles, Brain, Monitor, Gauge, Network,
   GitCompare, Radio, Shield, Activity, Zap, FileCode, ArrowLeftRight,
-  Plug, Settings, FolderKanban, Sun, LogOut, CreditCard,
+  Plug, Settings, FolderKanban, Sun, LogOut, CreditCard, BookOpen,
+  DollarSign, MessageSquare, LogIn, UserPlus,
 } from 'lucide-react';
 import { featureFlags } from '@/lib/featureFlags';
 import { logout as performLogout } from '@/lib/auth';
 import { useAuth } from '@/components/auth-provider';
 
-const navItems = [
+const publicNavItems = [
+  { href: '/', label: 'Home', icon: Home },
+  { href: '/compare', label: 'Compare vs Managed PaaS', icon: GitCompare },
+  { href: '/store', label: 'Templates', icon: FileCode },
+  { href: '/pricing', label: 'Pricing', icon: DollarSign },
+  { href: '/docs', label: 'Documentation', icon: BookOpen },
+  { href: '/docs/install', label: 'Installation Guide', icon: Rocket },
+  { href: '/docs/security', label: 'Security Architecture', icon: Shield },
+  { href: '/status', label: 'System Status', icon: Activity },
+  { href: '/contact', label: 'Contact & Support', icon: MessageSquare },
+];
+
+const authNavItems = [
   { href: '/dashboard', label: 'Dashboard', icon: Home, tier: 'primary' },
   { href: '/projects', label: 'Projects', icon: FolderKanban, tier: 'primary' },
   { href: '/services', label: 'Services', icon: Layout, tier: 'primary' },
@@ -55,19 +69,27 @@ export function CommandPalette() {
   const [open, setOpen] = React.useState(false);
   const router = useRouter();
   const { user, loading } = useAuth();
+  const { resolvedTheme, setTheme } = useTheme();
 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+      if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        if (user && !loading) {
+        if (!loading) {
           setOpen((prev) => !prev);
         }
       }
     };
+    const handleCustomOpen = () => {
+      if (!loading) setOpen(true);
+    };
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [user, loading]);
+    window.addEventListener('smsly:open-command-palette', handleCustomOpen);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('smsly:open-command-palette', handleCustomOpen);
+    };
+  }, [loading]);
 
   const navigate = React.useCallback(
     (href: string) => {
@@ -79,33 +101,25 @@ export function CommandPalette() {
 
   const toggleTheme = React.useCallback(() => {
     setOpen(false);
-    const root = document.documentElement;
-    const current = root.classList.contains('dark') ? 'dark' : 'light';
-    root.classList.toggle('dark', current === 'light');
-    root.classList.toggle('light', current === 'dark');
-    localStorage.setItem('theme', current === 'dark' ? 'light' : 'dark');
-  }, []);
+    setTheme(resolvedTheme === 'dark' ? 'light' : 'dark');
+  }, [resolvedTheme, setTheme]);
 
-  const filteredNav = navItems.filter((item) => !hiddenByFlag.has(item.href));
-
-  if (!user || loading) {
-    return null;
-  }
+  const filteredAuthNav = authNavItems.filter((item) => !hiddenByFlag.has(item.href));
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="Type a command or search..." />
+      <CommandInput placeholder="Type a page or command..." aria-label="Search pages and commands" />
       <CommandList>
         <CommandEmpty>No results found.</CommandEmpty>
 
-        <CommandGroup heading="Navigation">
-          {filteredNav.map((item) => (
+        <CommandGroup heading={user ? 'Dashboard Navigation' : 'Pages & Documentation'}>
+          {(user ? filteredAuthNav : publicNavItems).map((item) => (
             <CommandItem
               key={item.href}
               value={item.label}
               onSelect={() => navigate(item.href)}
             >
-              <item.icon className="mr-2 h-4 w-4" />
+              <item.icon className="mr-2 h-4 w-4" aria-hidden="true" />
               <span>{item.label}</span>
             </CommandItem>
           ))}
@@ -114,24 +128,39 @@ export function CommandPalette() {
         <CommandSeparator />
 
         <CommandGroup heading="Actions">
-          <CommandItem value="theme" onSelect={toggleTheme}>
-            <Sun className="mr-2 h-4 w-4" />
+          <CommandItem value="Toggle Theme" onSelect={toggleTheme}>
+            <Sun className="mr-2 h-4 w-4" aria-hidden="true" />
             <span>Toggle Theme</span>
           </CommandItem>
-          <CommandItem value="billing" onSelect={() => navigate('/settings')}>
-            <CreditCard className="mr-2 h-4 w-4" />
-            <span>Billing &amp; Settings</span>
-          </CommandItem>
-          <CommandItem
-            value="logout"
-            onSelect={() => {
-              setOpen(false);
-              performLogout();
-            }}
-          >
-            <LogOut className="mr-2 h-4 w-4" />
-            <span>Log Out</span>
-          </CommandItem>
+          {user ? (
+            <>
+              <CommandItem value="Billing and Settings" onSelect={() => navigate('/settings')}>
+                <CreditCard className="mr-2 h-4 w-4" aria-hidden="true" />
+                <span>Billing &amp; Settings</span>
+              </CommandItem>
+              <CommandItem
+                value="Log Out"
+                onSelect={() => {
+                  setOpen(false);
+                  performLogout();
+                }}
+              >
+                <LogOut className="mr-2 h-4 w-4" aria-hidden="true" />
+                <span>Log Out</span>
+              </CommandItem>
+            </>
+          ) : (
+            <>
+              <CommandItem value="Sign In" onSelect={() => navigate('/login')}>
+                <LogIn className="mr-2 h-4 w-4" aria-hidden="true" />
+                <span>Sign In</span>
+              </CommandItem>
+              <CommandItem value="Create Account" onSelect={() => navigate('/register')}>
+                <UserPlus className="mr-2 h-4 w-4" aria-hidden="true" />
+                <span>Create Account</span>
+              </CommandItem>
+            </>
+          )}
         </CommandGroup>
       </CommandList>
     </CommandDialog>

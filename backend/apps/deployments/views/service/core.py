@@ -33,10 +33,11 @@ from .ai_router import AIRouterActionsMixin
 from .previews import PreviewActionsMixin
 from .incident import IncidentMixin
 from .meta import MetaActionsMixin
+from .encryption import EncryptionActionsMixin
 from ..files import ServiceFileActionsMixin
 
 
-class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, DomainActionsMixin, EnvVarActionsMixin, FileBrowserActionsMixin, AIRouterActionsMixin, PreviewActionsMixin, IncidentMixin, MetaActionsMixin, ServiceFileActionsMixin, viewsets.ModelViewSet):
+class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, DomainActionsMixin, EnvVarActionsMixin, FileBrowserActionsMixin, AIRouterActionsMixin, PreviewActionsMixin, IncidentMixin, MetaActionsMixin, EncryptionActionsMixin, ServiceFileActionsMixin, viewsets.ModelViewSet):
     """Service viewset composed from domain-specific mixins."""
     """
     Service Management and Nested Resources.
@@ -194,6 +195,9 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
         old_project_id = str(
             serializer.instance.project_id) if serializer.instance else None
+        old_enc_opt_in = bool(
+            getattr(serializer.instance, 'encryption_at_rest_enabled', False)
+        ) if serializer.instance else False
         routing_fields = {
             'public_domain_hidden', 'wildcard_url_enabled', 'node_url_enabled',
             'wildcard_redirect_custom_domain', 'wildcard_internal_only', 'is_public',
@@ -250,6 +254,16 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
         except Exception as exc:
             logger.debug("Project inheritance skipped for %s: %s",
                          service.name, exc)
+
+        # Sync opt-in encryption setting if toggled directly via PATCH /services/{id}/
+        new_enc_opt_in = bool(getattr(service, 'encryption_at_rest_enabled', False))
+        if new_enc_opt_in != old_enc_opt_in:
+            try:
+                from apps.core.crypto_daemon import cryptd_client, register_and_unlock_service
+                if cryptd_client.is_enabled():
+                    register_and_unlock_service(service, unlock_now=new_enc_opt_in)
+            except Exception as exc:
+                logger.warning("Failed to sync cryptd opt-in on PATCH for %s: %s", service.name, exc)
 
 
     def destroy(self, request, *args, **kwargs):

@@ -121,7 +121,8 @@ def main():
     log_dir.mkdir(parents=True, exist_ok=True)
 
     lookback_delta = parse_lookback(LOOKBACK)
-    last_ts_ns = str(int((datetime.now(timezone.utc) - lookback_delta).timestamp() * 1e9))
+    initial_ts_ns = str(int((datetime.now(timezone.utc) - lookback_delta).timestamp() * 1e9))
+    last_ts_by_job = {job: initial_ts_ns for job in JOB_FILE_PREFIXES}
 
     log.info("Starting Loki log bridge → %s", log_dir)
     log.info("Loki URL: %s, poll interval: %ds, lookback: %s", LOKI_URL, POLL_INTERVAL, LOOKBACK)
@@ -130,13 +131,14 @@ def main():
         while True:
             now_ns = str(int(datetime.now(timezone.utc).timestamp() * 1e9))
             for job, prefix in JOB_FILE_PREFIXES.items():
-                logs = query_loki(client, job, last_ts_ns, now_ns)
+                job_last_ts = last_ts_by_job.get(job, initial_ts_ns)
+                logs = query_loki(client, job, job_last_ts, now_ns)
                 if logs:
                     written = write_logs(logs, log_dir, prefix)
-                    # Advance timestamp to the latest log entry
+                    # Advance per-job timestamp to the latest log entry
                     max_ts = max(e["timestamp_ns"] for e in logs)
-                    if int(max_ts) + 1 > int(last_ts_ns):
-                        last_ts_ns = str(int(max_ts) + 1)  # +1 ns to avoid duplicates
+                    if int(max_ts) + 1 > int(job_last_ts):
+                        last_ts_by_job[job] = str(int(max_ts) + 1)  # +1 ns to avoid duplicates
                     log.info("Wrote %d %s log lines from Loki", written, job)
                 else:
                     log.debug("No new %s logs", job)

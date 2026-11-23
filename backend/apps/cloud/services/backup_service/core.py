@@ -375,6 +375,29 @@ class BackupService:
             ) from e
 
     @staticmethod
+    def _attach_cryptd_backup_envelope(metadata: dict, service_id: str, project_id: str) -> None:
+        """Bind backup DEK wrapping to grid-cryptd for opted-in services or control plane."""
+        from apps.core.crypto_daemon import CryptdError, cryptd_client
+
+        raw_enc_key = BackupService._get_encryption_key()
+        key_raw_bytes = BackupService._decode_backup_key(raw_enc_key) if raw_enc_key else b""
+        if not key_raw_bytes:
+            raise BackupEncryptionRequired(
+                "grid-cryptd is active for this encrypted backup, "
+                "but BACKUP_ENCRYPTION_KEY is not configured"
+            )
+        try:
+            metadata['cryptd_wrapped_dek'] = cryptd_client.wrap_backup_dek(
+                key_raw_bytes,
+                service_id=str(service_id),
+                project_id=str(project_id or 'default'),
+            )
+            metadata['cryptd_service_id'] = str(service_id)
+            metadata['cryptd_project_id'] = str(project_id or 'default')
+        except CryptdError as crypt_exc:
+            raise RuntimeError(f"grid-cryptd refused backup DEK wrapping (locked?): {crypt_exc}") from crypt_exc
+
+    @staticmethod
     def _crypto_chunk_size() -> int:
         return _DEFAULT_CRYPTO_CHUNK_SIZE
 
@@ -866,6 +889,20 @@ class BackupService:
             metadata['content_checksum_sha256'] = content_checksum.hexdigest()
 
             filepath = self._maybe_encrypt(filepath)
+            try:
+                from apps.core.crypto_daemon import (
+                    cryptd_client,
+                    is_service_encryption_enabled,
+                )
+                if cryptd_client.is_enabled() and is_service_encryption_enabled(service):
+                    svc_proj_id = str(getattr(service, 'project_id', '') or 'default')
+                    BackupService._attach_cryptd_backup_envelope(
+                        metadata, str(service.id), svc_proj_id
+                    )
+            except (BackupEncryptionRequired, RuntimeError):
+                raise
+            except Exception as crypt_exc:
+                logger.debug("grid-cryptd service backup DEK wrapping skipped: %s", crypt_exc)
 
             # Also compute the encrypted-file checksum for transport
             # integrity (detects corruption in transit / at rest).
@@ -1310,6 +1347,28 @@ class BackupService:
             'remote_backup': True,
             **metadata_enc,
         }
+        if encrypted_path != local_path:
+            try:
+                from apps.core.crypto_daemon import cryptd_client, is_service_encryption_enabled
+                if cryptd_client.is_enabled() and is_service_encryption_enabled(service):
+                    svc_proj_id = str(getattr(service, 'project_id', '') or 'default')
+                    BackupService._attach_cryptd_backup_envelope(
+                        metadata, str(service.id), svc_proj_id
+                    )
+            except (BackupEncryptionRequired, RuntimeError):
+                if os.path.exists(encrypted_path):
+                    os.remove(encrypted_path)
+                backup.status = 'FAILED'
+                backup.error_message = "grid-cryptd refused remote backup DEK wrapping"
+                backup.save(update_fields=['status', 'error_message'])
+                raise
+            except Exception as crypt_exc:
+                logger.debug("grid-cryptd remote backup DEK wrapping skipped: %s", crypt_exc)
+
+            BackupService.stamp_encryption_header_into_metadata(metadata, encrypted_path)
+            with open(encrypted_path + '.meta', 'w', encoding='utf-8') as mf:
+                mf.write(json.dumps(metadata))
+
         backup.metadata = metadata
         backup.save(update_fields=['metadata'])
 
@@ -1590,8 +1649,44 @@ class BackupService:
                     f.write(metadata_json)
                 tar.add(metadata_path, arcname='server_metadata.json')
 
-            backup.file_path = tarball_path
-            backup.size_bytes = os.path.getsize(tarball_path)
+            filepath = tarball_path
+            content_checksum = hashlib.sha256()
+            with open(filepath, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b''):
+                    content_checksum.update(chunk)
+            metadata['content_checksum_sha256'] = content_checksum.hexdigest()
+
+            try:
+                filepath = self._maybe_encrypt(filepath)
+                from apps.core.crypto_daemon import _parse_bool, cryptd_client, is_service_encryption_enabled
+                wrap_control_plane = _parse_bool(os.environ.get('CRYPTD_CONTROL_PLANE_BACKUP_ENCRYPT'), default=False)
+                has_opted_service = any(is_service_encryption_enabled(svc) for svc in services)
+                if filepath.endswith('.enc') and cryptd_client.is_enabled() and (has_opted_service or wrap_control_plane):
+                    BackupService._attach_cryptd_backup_envelope(
+                        metadata,
+                        cryptd_client.CONTROL_PLANE_SERVICE_ID,
+                        cryptd_client.CONTROL_PLANE_PROJECT_ID,
+                    )
+            except Exception:
+                if os.path.exists(tarball_path):
+                    os.remove(tarball_path)
+                if os.path.exists(tarball_path + '.enc'):
+                    os.remove(tarball_path + '.enc')
+                raise
+
+            encrypted_checksum = hashlib.sha256()
+            with open(filepath, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b''):
+                    encrypted_checksum.update(chunk)
+            metadata['checksum_sha256'] = encrypted_checksum.hexdigest()
+            metadata['size_bytes'] = os.path.getsize(filepath)
+            BackupService.stamp_encryption_header_into_metadata(metadata, filepath)
+
+            with open(filepath + '.meta', 'w') as f:
+                f.write(json.dumps(metadata))
+
+            backup.file_path = filepath
+            backup.size_bytes = metadata['size_bytes']
             backup.metadata = metadata
             backup.status = 'COMPLETED'
             backup.completed_at = timezone.now()
@@ -1602,7 +1697,7 @@ class BackupService:
             ])
 
             try:
-                result = _upload_backup_to_cloud(backup, tarball_path, 'server')
+                result = _upload_backup_to_cloud(backup, filepath, 'server')
                 if not result.get('uploaded') and result.get('reason'):
                     from .cloud import _alert_cloud_upload_failed
                     _alert_cloud_upload_failed(backup, result)
@@ -1827,6 +1922,32 @@ class BackupService:
     @staticmethod
     def decrypt_backup(path: str, key: str) -> str:
         BackupService._broadcast_progress(os.path.basename(path), 'decrypting', percent=0, message='Decrypting backup...')
+
+        # Enforce grid-cryptd service/vault lock state on backup restore when the
+        # sidecar carries a cryptd-wrapped DEK envelope.
+        meta_path = path + '.meta'
+        if os.path.exists(meta_path):
+            try:
+                from apps.core.crypto_daemon import cryptd_client
+                with open(meta_path, 'r', encoding='utf-8') as mf:
+                    meta = json.load(mf)
+                wrapped_tok = meta.get('cryptd_wrapped_dek')
+                svc_id = str(meta.get('cryptd_service_id') or '').strip()
+                if wrapped_tok and svc_id and cryptd_client.is_enabled():
+                    proj_id = meta.get('cryptd_project_id') or 'default'
+                    unwrapped_raw = cryptd_client.unwrap_backup_dek(
+                        wrapped_tok,
+                        service_id=svc_id,
+                        project_id=proj_id,
+                    )
+                    if not key and unwrapped_raw:
+                        import base64 as _b64
+                        key = _b64.urlsafe_b64encode(unwrapped_raw).decode('ascii')
+            except json.JSONDecodeError:
+                pass
+            except Exception as exc:
+                raise ValueError(f"Backup locked or refused by grid-cryptd: {exc}") from exc
+
         try:
             return BackupService._decrypt_chunked_backup(path, key)
         except (ValueError, InvalidToken, Exception) as e1:

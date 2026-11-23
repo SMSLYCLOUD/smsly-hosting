@@ -9,7 +9,7 @@ import { TrulayAdBanner } from "@/components/dashboard/TrulayAdBanner";
  */
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="min-h-screen flex flex-col overflow-x-hidden relative">
+    <div className="flex-1 flex flex-col overflow-x-hidden relative">
       {/* Subtle readability glass layer to keep text readable over active SpaceOps background */}
       <div className="fixed inset-0 pointer-events-none bg-background/30 z-0" aria-hidden="true" />
 
@@ -21,6 +21,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           <TrulayAdBanner />
         </div>
       </div>
-    </main>
+    </div>
   );
 }

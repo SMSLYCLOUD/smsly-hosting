@@ -132,18 +132,56 @@ def edge_shield_watchdog(self):
 
     if not findings:
         logger.info("edge_shield_watchdog: clean")
+        try:
+            from apps.security.models import SecurityFinding
+            from apps.security.risk import resolve_stale_findings
+
+            resolve_stale_findings(
+                category=SecurityFinding.Category.EDGE,
+                active_fingerprints=set(),
+                service=None,
+            )
+        except Exception:
+            pass
         return {"status": "ok", "findings": []}
 
     logger.warning("edge_shield_watchdog: %d finding(s): %s", len(findings), findings)
+    try:
+        from apps.security.models import SecurityFinding
+        from apps.security.risk import upsert_finding
+
+        fp = SecurityFinding.build_fingerprint(SecurityFinding.Category.EDGE, "edge_shield", domain)
+        upsert_finding(
+            fingerprint=fp,
+            pillar=SecurityFinding.Pillar.XDR,
+            category=SecurityFinding.Category.EDGE,
+            severity="CRITICAL",
+            title=f"Edge Shield BGP/DNS/RPKI anomaly on `{domain}`",
+            description="; ".join(findings[:6]),
+            remediation="Verify Cloudflare orange-cloud proxy status, DNS A/AAAA records, and RPKI ROA validity for origin prefix.",
+            internet_exposed=True,
+            privileged=True,
+            emit_ocsf=True,
+        )
+    except Exception as exc:
+        logger.debug("edge_shield_watchdog security finding sync skipped: %s", exc)
 
     # Page the platform operators. This check is platform-scoped (no
     # deployment exists), so alert_user_task — which requires a
     # deployment_id — cannot be used here (2026-09-09: TypeError every
-    # 5 min). Fan out to active superusers via the shared dispatcher.
+    # 5 min). Fan out to active superusers via the shared dispatcher,
+    # rate-limited to once per hour for the same finding fingerprint.
     try:
+        import hashlib
         from django.contrib.auth import get_user_model
+        from django.core.cache import cache
 
         from apps.notifications.tasks import dispatch_notification
+
+        fingerprint = hashlib.sha256("\n".join(sorted(findings)).encode("utf-8")).hexdigest()[:16]
+        cooldown_key = f"edge_shield_alert:{domain}:{fingerprint}"
+        if not cache.add(cooldown_key, 1, timeout=3600):
+            return {"status": "warn", "findings": findings, "rate_limited": True}
 
         admins = get_user_model().objects.filter(
             is_superuser=True, is_active=True

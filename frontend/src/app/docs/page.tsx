@@ -1,5 +1,13 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight, ArrowRight, Server, ArrowLeftRight, Network, Brain, Activity, Code, Zap, Github, Shield, History } from 'lucide-react';
+
+export const metadata: Metadata = {
+  title: 'Documentation',
+  description:
+    'Installation guides, REST API, smsly CLI reference, AI autoscaling, security architecture, and migration docs for Trulay Grid.',
+  alternates: { canonical: '/docs' },
+};
 
 const docSections = [
   {
@@ -150,16 +158,16 @@ const docSections = [
 
 export default function DocsPage() {
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
-      <section className="pt-28 pb-14 px-4 bg-gradient-to-b from-emerald-50/60 to-white dark:from-emerald-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
+    <div className="bg-white dark:bg-slate-950">
+      <section className="pt-28 pb-14 px-4 bg-gradient-to-b from-emerald-50/70 to-white dark:from-emerald-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-3xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold tracking-wide uppercase mb-6">
-            <BookOpen size={14} /> Documentation
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs font-semibold tracking-wide uppercase mb-6">
+            <BookOpen size={14} aria-hidden="true" /> Documentation
           </div>
           <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-5 leading-tight">
             Grid Documentation
           </h1>
-          <p className="text-lg md:text-xl text-slate-500 dark:text-slate-400 max-w-xl mx-auto leading-relaxed">
+          <p className="text-lg md:text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto leading-relaxed">
             Everything you need to install, configure, and manage your Grid platform.
           </p>
         </div>
@@ -173,18 +181,18 @@ export default function DocsPage() {
               <Link
                 key={section.href}
                 href={section.href}
-                className={`group flex flex-col p-5 rounded-xl border ${section.border} ${section.bg} hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200`}
+                className={`group flex flex-col p-5 rounded-xl border ${section.border} ${section.bg} hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
               >
                 <div className="flex items-start gap-4">
-                  <div className={`p-2.5 rounded-lg ${section.bg} ${section.color} flex-shrink-0`}>
+                  <div className={`p-2.5 rounded-lg ${section.bg} ${section.color} flex-shrink-0`} aria-hidden="true">
                     <Icon size={20} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className={`text-base font-bold ${section.color} mb-1 flex items-center gap-1.5`}>
+                    <h2 className={`text-base font-bold ${section.color} mb-1 flex items-center gap-1.5`}>
                       {section.title}
-                      <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 -ml-1 transition-all" />
-                    </h3>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                      <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 -ml-1 transition-all" aria-hidden="true" />
+                    </h2>
+                    <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
                       {section.desc}
                     </p>
                   </div>
@@ -196,12 +204,12 @@ export default function DocsPage() {
 
         <div className="mt-16 p-6 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800">
           <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Still have questions?</h2>
-          <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-            Check the <Link href="/docs/install#troubleshooting" className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium">Troubleshooting</Link> section or visit the{' '}
-            <a href="https://github.com/SMSLYCLOUD/smsly-hosting" target="_blank" rel="noopener noreferrer" className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium">GitHub repository</a>.
+          <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+            Check the <Link href="/docs/install#troubleshooting" className="text-emerald-700 dark:text-emerald-400 hover:underline font-medium">Troubleshooting</Link> section or visit the{' '}
+            <a href="https://github.com/SMSLYCLOUD/smsly-hosting" target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 hover:underline font-medium">GitHub repository</a>.
           </p>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

@@ -11,8 +11,15 @@ ADDON_ALERT_RULES = [
 
 def check_alerts(addon: Any, metrics: dict[str, Any]) -> list[dict[str, str]]:
     alerts = []
+    status = str((metrics or {}).get('status') or 'ONLINE').upper()
+    if status in ('OFFLINE', 'FAILED', 'UNHEALTHY', 'ERROR'):
+        alerts.append({
+            'addon': getattr(addon, 'name', str(getattr(addon, 'id', 'addon'))),
+            'severity': 'critical',
+            'message': f"Addon is {status}" + (f": {metrics.get('error')}" if metrics.get('error') else ""),
+        })
     for rule in ADDON_ALERT_RULES:
-        val = metrics.get(rule['metric'])
+        val = (metrics or {}).get(rule['metric'])
         if val is not None and val >= rule['threshold']:
             alerts.append({
                 'addon': addon.name,

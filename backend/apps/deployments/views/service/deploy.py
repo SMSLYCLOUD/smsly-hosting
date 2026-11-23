@@ -321,8 +321,6 @@ class DeployActionsMixin:
             }
             if registry_username:
                 registry_override['username'] = registry_username
-            if registry_password:
-                registry_override['password'] = registry_password
 
         # ── 1. Local deploy ─────────────────────────────────────
         # Allow local deploy even if service is assigned to a remote

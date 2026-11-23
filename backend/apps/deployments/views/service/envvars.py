@@ -43,7 +43,9 @@ class EnvVarActionsMixin:
     @action(detail=True, methods=['get', 'post'], url_path='env_vars')
     def env_vars(self, request, pk=None):
         service = self.get_object()
-        reveal_secrets = not hasattr(getattr(request, 'auth', None), 'prefix')
+        # List and write responses always mask secret values; explicit reveal uses
+        # GET /services/{id}/env_vars/{var_id}/ on an individual secret.
+        reveal_secrets = False
 
         def _is_ciphertext(val: str) -> bool:
             """Detect Fernet ciphertext to prevent storing it as plaintext."""
@@ -263,6 +265,7 @@ class EnvVarActionsMixin:
         except EnvironmentVariable.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
+        reveal_secrets = False
         if request.method.upper() == 'GET':
             reveal_secrets = (
                 request.user.is_superuser

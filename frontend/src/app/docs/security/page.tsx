@@ -1,5 +1,12 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Shield, Lock, Eye, Key, Server, Database, Globe, Check, Activity, FileWarning, Fingerprint, Scan, Container } from 'lucide-react';
+
+export const metadata: Metadata = {
+  title: 'Security Architecture',
+  description: '11 defense-in-depth security layers in Trulay Grid: gVisor/Kata sandboxes, Falco eBPF, SPIRE mTLS, Cosign, Trivy, and audit logging.',
+  alternates: { canonical: '/docs/security' },
+};
 
 const defenseLayers = [
   {
@@ -201,7 +208,7 @@ const authFeatures = [
 
 export default function SecurityPage() {
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
+    <div className="bg-white dark:bg-slate-950">
       <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-emerald-50/60 to-white dark:from-emerald-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-3xl mx-auto">
           <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400 hover:underline mb-6">
@@ -371,6 +378,6 @@ Internal network (Docker, encrypted WireGuard mesh):
         </div>
 
       </div>
-    </main>
+    </div>
   );
 }

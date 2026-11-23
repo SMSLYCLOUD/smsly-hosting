@@ -61,6 +61,7 @@ class SSLMonitorService:
         # Check platform domain
         if config.domain:
             self._check_cert_platform(config.domain)
+        self._needs_caddy_reload = False
 
         # Retry DNS pending domains
         for domain_obj in Domain.objects.filter(
@@ -73,6 +74,9 @@ class SSLMonitorService:
             status__in=[DomainStatus.PENDING, DomainStatus.DNS_PENDING]
         ).select_related('service__owner'):
             self._check_cert_domain_obj(domain_obj)
+
+        if self._needs_caddy_reload and config.domain:
+            self._attempt_renew(config.domain)
 
     def _check_cert_platform(self, domain):
         import socket
@@ -95,8 +99,17 @@ class SSLMonitorService:
 
             days_left = (expires_at - timezone.now()).days
 
-            if days_left < 7:
+            if days_left <= 14:
                 logger.warning(f"SSL Certificate for {domain} expires in {days_left} days.")
+                try:
+                    from django.contrib.auth import get_user_model
+                    User = get_user_model()
+                    for admin in User.objects.filter(is_superuser=True).only("id"):
+                        self._alert(domain, days_left, admin)
+                except Exception:
+                    pass
+            if days_left < 7:
+                self._needs_caddy_reload = True
                 self._attempt_renew(domain)
         except Exception as e:
             logger.warning(f"SSL check failed for platform domain {domain}: {e}")
@@ -132,13 +145,22 @@ class SSLMonitorService:
             domain_obj.status = DomainStatus.ACTIVE
             domain_obj.ssl_active = True
             domain_obj.last_error = None
-            domain_obj.save(update_fields=['expires_at', 'status', 'ssl_active', 'last_error'])
+            domain_obj.ssl_fail_count = 0
+            domain_obj.checked_at = timezone.now()
+            domain_obj.save(update_fields=[
+                'expires_at', 'status', 'ssl_active', 'last_error',
+                'ssl_fail_count', 'checked_at',
+            ])
 
             days_left = (expires_at - timezone.now()).days
 
-            if days_left < 7:
+            if days_left <= 14:
                 self._alert(domain, days_left, owner)
-                self._attempt_renew(domain)
+            if days_left < 7:
+                if hasattr(self, '_needs_caddy_reload'):
+                    self._needs_caddy_reload = True
+                else:
+                    self._attempt_renew(domain)
 
         except Exception as e:
             domain_obj.ssl_active = False
@@ -157,7 +179,12 @@ class SSLMonitorService:
         logger.warning(msg)
         if owner:
             try:
+                from django.core.cache import cache
                 from apps.notifications.tasks import notify_ssl_expiring
+                tier = "urgent" if days <= 7 else "warning"
+                cooldown_key = f"ssl_expiry_alert:{domain}:{owner.id}:{tier}"
+                if not cache.add(cooldown_key, 1, timeout=86400):
+                    return
                 notify_ssl_expiring.delay(owner.id, domain, days)
             except Exception as e:
                 logger.error("Failed to queue SSL expiry notification: %s", e)

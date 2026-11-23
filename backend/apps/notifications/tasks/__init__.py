@@ -61,6 +61,67 @@ CHANNEL_WHATSAPP = 'whatsapp'
 # Max time to wait for external HTTP calls (per channel)
 REQUEST_TIMEOUT = 8  # seconds
 
+_SECRET_METADATA_KEYS = frozenset({
+    'telegram_bot_token',
+    'twilio_auth_token',
+    'whatsapp_webhook_url',
+    'slack_webhook_url',
+    'discord_webhook_url',
+})
+
+
+def _safe_audit_metadata(metadata: dict | None) -> dict:
+    """Return a copy of metadata with sensitive tokens/webhook URLs redacted."""
+    if not metadata:
+        return {}
+    cleaned = {}
+    for k, v in metadata.items():
+        key_lower = str(k).lower()
+        if (
+            key_lower in _SECRET_METADATA_KEYS
+            or key_lower.endswith(('_token', '_secret', '_password', '_webhook_url'))
+        ):
+            if v:
+                cleaned[k] = '[REDACTED]'
+        else:
+            cleaned[k] = v
+    return cleaned
+
+
+def get_platform_smtp_connection():
+    """Resolve SMTP connection and sender address from env/settings or PlatformConfig."""
+    from django.core.mail import get_connection
+    smtp_host = (
+        os.environ.get('SMTP_HOST')
+        or getattr(settings, 'EMAIL_HOST', None)
+    )
+    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@smsly.cloud')
+    connection = None
+
+    try:
+        from apps.deployments.models import PlatformConfig
+        cfg = PlatformConfig.load()
+        if cfg and cfg.smtp_host:
+            smtp_host = cfg.smtp_host
+            if cfg.smtp_from_email:
+                from_email = (
+                    f"{cfg.smtp_from_name} <{cfg.smtp_from_email}>"
+                    if cfg.smtp_from_name
+                    else cfg.smtp_from_email
+                )
+            connection = get_connection(
+                host=cfg.smtp_host,
+                port=int(cfg.smtp_port or 587),
+                username=cfg.smtp_username or None,
+                password=cfg.smtp_password or None,
+                use_tls=bool(cfg.smtp_use_tls),
+                fail_silently=False,
+            )
+    except Exception:
+        pass
+
+    return smtp_host, from_email, connection
+
 # ── HMAC V2 Helper ───────────────────────────────────────────────────────────
 
 def _build_hmac_headers(payload: dict) -> dict:
@@ -101,16 +162,12 @@ def _dispatch_email(user, title: str, message: str, metadata: dict) -> dict:
     # Skip silently when SMTP isn't configured — the default Django SMTP
     # backend is the in-memory console backend (no real host) on a stock
     # install, so the connection error spams the logs every deploy.
-    smtp_host = (
-        os.environ.get('SMTP_HOST')
-        or getattr(settings, 'EMAIL_HOST', None)
-    )
+    smtp_host, from_email, connection = get_platform_smtp_connection()
     if not smtp_host:
-        result['reason'] = 'SMTP not configured (set SMTP_HOST env var to enable)'
+        result['reason'] = 'SMTP not configured (set SMTP_HOST env var or Platform Settings to enable)'
         logger.debug("[notify:email] Skipped for %s — SMTP_HOST unset", user.email)
         return result
 
-    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@smsly.cloud')
     recipient = user.email
     result['recipient'] = recipient
 
@@ -128,6 +185,7 @@ def _dispatch_email(user, title: str, message: str, metadata: dict) -> dict:
             body=message,  # plain-text fallback
             from_email=from_email,
             to=[recipient],
+            connection=connection,
         )
         email.attach_alternative(html_body, "text/html")
         email.send(fail_silently=False)
@@ -220,18 +278,24 @@ def _dispatch_webhook(user, title: str, message: str, metadata: dict, webhook_ur
 
     try:
         if 'slack' in url:
-            send_slack_notification(text, url)
+            ok = send_slack_notification(text, url, user=user)
             result['provider'] = 'slack'
+            if ok is False:
+                raise RuntimeError("Slack webhook delivery rejected or failed")
         elif 'discord' in url:
-            send_discord_notification(text, url)
+            ok = send_discord_notification(text, url, user=user)
             result['provider'] = 'discord'
+            if ok is False:
+                raise RuntimeError("Discord webhook delivery rejected or failed")
         else:
-            # Generic webhook — POST JSON payload.  Validate the URL
+            # Generic webhook — POST JSON payload. Validate the URL
             # against SSRF before making the request.
             from apps.notifications.webhooks import _validate_notification_url
+            from apps.core.validators import validate_ssrf
             try:
-                _validate_notification_url(url)
-            except ValueError as exc:
+                _validate_notification_url(url, allow_generic=True)
+                validate_ssrf(url)
+            except Exception as exc:
                 raise ValueError(f"Webhook URL rejected: {exc}") from exc
 
             payload = {
@@ -241,7 +305,7 @@ def _dispatch_webhook(user, title: str, message: str, metadata: dict, webhook_ur
                 'source': 'smsly',
                 'timestamp': timezone.now().isoformat(),
             }
-            response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+            response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT, allow_redirects=False)
             response.raise_for_status()
             result['provider'] = 'generic'
 
@@ -289,13 +353,17 @@ def _dispatch_whatsapp(user, message: str, metadata: dict) -> dict:
     if not webhook_url:
         return {'channel': CHANNEL_WHATSAPP, 'status': 'skipped', 'reason': 'WhatsApp channel not configured'}
     try:
+        from apps.notifications.webhooks import _validate_notification_url
+        from apps.core.validators import validate_ssrf
+        _validate_notification_url(webhook_url, allow_generic=True)
+        validate_ssrf(webhook_url)
         payload = {'message': message}
         if to_whatsapp:
             payload['to'] = to_whatsapp
-        resp = requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT)
+        resp = requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT, allow_redirects=False)
         resp.raise_for_status()
         return {'channel': CHANNEL_WHATSAPP, 'status': 'delivered'}
-    except requests.RequestException as exc:
+    except Exception as exc:
         return {'channel': CHANNEL_WHATSAPP, 'status': 'failed', 'error': str(exc)}
 
 
@@ -368,6 +436,8 @@ def dispatch_notification(
     metadata['event_type'] = event_type
     started_at = timezone.now().isoformat()
 
+    safe_meta = _safe_audit_metadata(metadata)
+
     # ── Resolve user ──────────────────────────────────────────────────────
     try:
         user = User.objects.get(pk=user_id)
@@ -377,7 +447,7 @@ def dispatch_notification(
             action='notification.dispatch.user_not_found',
             target=f'user:{user_id}',
             actor='system',
-            metadata={**metadata, 'event_type': event_type, 'title': title},
+            metadata={**safe_meta, 'event_type': event_type, 'title': title},
         )
         return {'error': 'user_not_found', 'user_id': user_id}
 
@@ -398,7 +468,7 @@ def dispatch_notification(
         target=f'user:{user_id}',
         actor='system',
         metadata={
-            **metadata,
+            **safe_meta,
             'title': title,
             'channels': channels,
             'started_at': started_at,
@@ -436,7 +506,7 @@ def dispatch_notification(
                 target=f'user:{user_id}',
                 actor='system',
                 metadata={
-                    **metadata,
+                    **safe_meta,
                     'channel': channel,
                     'result': result,
                     'event_type': event_type,
@@ -455,7 +525,7 @@ def dispatch_notification(
         target=f'user:{user_id}',
         actor='system',
         metadata={
-            **metadata,
+            **safe_meta,
             'title': title,
             'channels_attempted': len(results),
             'channels_delivered': len(delivered),
@@ -487,7 +557,7 @@ def dispatch_notification(
                 action='notification.dispatch.max_retries_exceeded',
                 target=f'user:{user_id}',
                 actor='system',
-                metadata={**metadata, 'failed_channels': failed_channels},
+                metadata={**safe_meta, 'failed_channels': failed_channels},
             )
 
     return {
@@ -655,21 +725,31 @@ _RULE_OPERATORS = {
     '!=': operator.ne,
 }
 
-# Metric types backed by ServiceMetric data. 'disk', 'status',
-# 'response_time', and 'error_rate' have no metric source yet.
-_RULE_METRICS_WITH_DATA = {'cpu', 'memory'}
+# Metric types backed by ServiceMetric / Service health data.
+_RULE_METRICS_WITH_DATA = {'cpu', 'memory', 'disk', 'status'}
 
 
-def _rule_metric_value(metric_row, metric_type: str):
-    """Map a ServiceMetric row to the rule's threshold scale (percent)."""
+def _rule_metric_value(metric_row, metric_type: str, service=None):
+    """Map a ServiceMetric row (or Service health_status) to the rule's threshold scale."""
     if metric_type == 'cpu':
-        if float(metric_row.cpu_limit or 0) <= 0:
+        if metric_row is None or float(metric_row.cpu_limit or 0) <= 0:
             return None
         return metric_row.cpu_percent
     if metric_type == 'memory':
-        if float(metric_row.memory_limit or 0) <= 0:
+        if metric_row is None or float(metric_row.memory_limit or 0) <= 0:
             return None
         return metric_row.memory_percent
+    if metric_type == 'disk':
+        if metric_row is None:
+            return None
+        read_b = float(getattr(metric_row, 'disk_read_bytes', 0) or 0)
+        write_b = float(getattr(metric_row, 'disk_write_bytes', 0) or 0)
+        return (read_b + write_b) / (1024 * 1024)
+    if metric_type == 'status':
+        if service is None:
+            return None
+        health = str(getattr(service, 'health_status', 'unknown') or 'unknown').lower()
+        return 1.0 if health == 'healthy' else 0.0
     return None
 
 
@@ -695,9 +775,8 @@ def _dispatch_rule_channel(channel, message: str) -> None:
     """Deliver an alert-rule notification through a NotificationChannel."""
     try:
         if channel.channel_type == 'email':
-            from apps.deployments.models import PlatformConfig
-            config = PlatformConfig.load()
-            if not config.smtp_host or not config.smtp_from_email:
+            smtp_host, from_email, connection = get_platform_smtp_connection()
+            if not smtp_host:
                 logger.warning(
                     "Alert rule channel %s: SMTP not configured; skipping email to %s",
                     channel.id,
@@ -707,9 +786,10 @@ def _dispatch_rule_channel(channel, message: str) -> None:
             send_mail(
                 subject='[SMSLY] Alert Rule Notification',
                 message=message,
-                from_email=f"{config.smtp_from_name} <{config.smtp_from_email}>",
+                from_email=from_email,
                 recipient_list=[channel.target],
                 fail_silently=False,
+                connection=connection,
             )
         elif channel.channel_type in ('slack', 'webhook'):
             from apps.notifications.webhooks import _post_notification
@@ -819,24 +899,34 @@ def evaluate_alert_rules_task() -> dict:
         if row.service_id not in latest_by_service:
             latest_by_service[row.service_id] = row
 
-    if not latest_by_service:
+    has_status_rules = any(r.metric == 'status' for r in rules)
+    if not latest_by_service and not has_status_rules:
         return {'evaluated': 0, 'fired': 0}
 
-    services = {
-        s.id: s
-        for s in Service.objects.filter(id__in=list(latest_by_service.keys())).only('id', 'name', 'owner_id')
-    }
+    if has_status_rules:
+        service_qs = Service.objects.exclude(status__in=('DELETED', 'DELETION_PENDING')).only(
+            'id', 'name', 'owner_id', 'health_status'
+        )
+    else:
+        service_qs = Service.objects.filter(id__in=list(latest_by_service.keys())).only(
+            'id', 'name', 'owner_id', 'health_status'
+        )
+    services = {s.id: s for s in service_qs}
+    if not services:
+        return {'evaluated': 0, 'fired': 0}
 
     fired = 0
     for rule in rules:
         operator_fn = _RULE_OPERATORS.get(rule.operator)
         if operator_fn is None:
             continue
-        for service_id, metric_row in latest_by_service.items():
+        target_ids = list(services.keys()) if rule.metric == 'status' else list(latest_by_service.keys())
+        for service_id in target_ids:
             service = services.get(service_id)
             if service is None:
                 continue
-            value = _rule_metric_value(metric_row, rule.metric)
+            metric_row = latest_by_service.get(service_id)
+            value = _rule_metric_value(metric_row, rule.metric, service=service)
             if value is None:
                 continue
             if operator_fn(value, rule.threshold):
@@ -844,4 +934,4 @@ def evaluate_alert_rules_task() -> dict:
                 fired += 1
 
     logger.info("Alert rule evaluation complete: %d rule(s) fired", fired)
-    return {'evaluated': len(rules) * len(latest_by_service), 'fired': fired}
+    return {'evaluated': len(rules) * len(services), 'fired': fired}

@@ -3,7 +3,7 @@ groups:
     interval: 30s
     rules:
       - alert: BackendDown
-        expr: probe_success{job="smsly-backend"} == 0
+        expr: up{job="smsly-backend"} == 0
         for: 30s
         labels: { severity: critical }
         annotations:
@@ -34,7 +34,7 @@ groups:
           summary: "SSL certificate expiring in {{ $value }} days"
 
       - alert: ContainerRestartLoop
-        expr: rate(container_last_seen{name=~".+"}[5m]) > 0.5
+        expr: changes(container_start_time_seconds{name=~".+"}[5m]) > 2
         for: 2m
         labels: { severity: critical }
         annotations:
@@ -49,7 +49,7 @@ groups:
           description: "Node has not reported health for 5 minutes"
 
       - alert: CrowdsecBanRateHigh
-        expr: rate(crowdsec_active_decisions[15m]) > 10
+        expr: increase(cs_lapi_decisions_total[15m]) > 150 or cs_active_decisions > 500
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -88,7 +88,7 @@ groups:
           description: "High ban count indicates sustained attack — verify SSH/HTTP logs"
 
       - alert: SecurityToolDown
-        expr: up{job=~"(crowdsec|falco|fail2ban)"} == 0
+        expr: up{job="crowdsec"} == 0
         for: 2m
         labels: { severity: critical }
         annotations:

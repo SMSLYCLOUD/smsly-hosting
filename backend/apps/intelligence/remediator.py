@@ -138,7 +138,7 @@ class RemediationEngine:
                         actor="AI_REMEDIATOR",
                         action="SCALE_UP",
                         target=service.name,
-                        metadata={"old_mb": old_mem, "new_mb": service.memory_mb, "reason": "OOM"}
+                        metadata={"service_id": str(service.id), "old_mb": old_mem, "new_mb": service.memory_mb, "reason": "OOM"}
                     )
                     return self._trigger_redeploy(service, fix['message'])
 
@@ -149,7 +149,7 @@ class RemediationEngine:
                         actor="AI_REMEDIATOR",
                         action="SCALE_UP",
                         target=service.name,
-                        metadata={"new_replicas": service.min_replicas, "reason": "TIMEOUT"}
+                        metadata={"service_id": str(service.id), "new_replicas": service.min_replicas, "reason": "TIMEOUT"}
                     )
                     return self._trigger_redeploy(service, fix['message'])
 
@@ -213,7 +213,7 @@ class RemediationEngine:
                                 actor="AI_REMEDIATOR",
                                 action="DIAGNOSE",
                                 target=service.name,
-                                metadata={"diagnosis": response[:200]}
+                                metadata={"service_id": str(service.id), "diagnosis": response[:200]}
                             )
                             return True
                         except Exception as e:
@@ -228,8 +228,21 @@ class RemediationEngine:
                         actor="AI_REMEDIATOR",
                         action="NOTIFY",
                         target=service.name,
-                        metadata={"message": fix['message'], "severity": "CRITICAL"}
+                        metadata={"service_id": str(service.id), "message": fix['message'], "severity": "CRITICAL"}
                     )
+                    if getattr(service, "owner_id", None):
+                        try:
+                            from apps.notifications.tasks import dispatch_notification
+                            if cache.add(f"ai_remediator_notify:{service.id}:{issue_type}", 1, timeout=3600):
+                                dispatch_notification.delay(
+                                    event_type="health_alert",
+                                    user_id=service.owner_id,
+                                    title=f"CRITICAL: {service.name} — {issue_type}",
+                                    message=fix['message'],
+                                    metadata={"service_id": str(service.id), "issue_type": issue_type},
+                                )
+                        except Exception:
+                            pass
                     return True
 
             return False
@@ -248,7 +261,6 @@ class RemediationEngine:
         return service.deployments.filter(
             commit_message__startswith=prefix,
             created_at__gte=cutoff,
-            status__in=self.IN_PROGRESS_STATUSES,
         ).exists()
 
     def _trigger_redeploy(self, service: Service, message: str):

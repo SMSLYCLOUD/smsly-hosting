@@ -560,7 +560,13 @@ class ComposeNetworkingMixin:
                 vols.append(bind_spec)
                 svc_override["volumes"] = vols
 
-    def _write_compose_routing_override(self, main_service: str, project_name: str) -> str:
+    def _write_compose_routing_override(
+        self,
+        main_service: str,
+        project_name: str,
+        cryptd_env: dict[str, str] | None = None,
+        host_gateway: bool = False,
+    ) -> str:
         """
         Write a compose override file with Traefik labels and scoped network.
 
@@ -632,6 +638,11 @@ class ComposeNetworkingMixin:
                 )
             except Exception as exc:
                 logger.debug("Compose gVisor extra_hosts resolution skipped: %s", exc)
+        if host_gateway or (cryptd_env and cryptd_env.get("GRID_CRYPTD_SERVICE_ID")):
+            hosts_list = list(gvisor_extra_hosts or [])
+            if not any(str(entry).startswith("host.docker.internal:") for entry in hosts_list):
+                hosts_list.append("host.docker.internal:host-gateway")
+            gvisor_extra_hosts = hosts_list
 
         # Resolve effective resource limits from service quota (safe fallback 512m / 1.0 CPU).
         svc_obj = getattr(self, "service", None)
@@ -712,12 +723,15 @@ class ComposeNetworkingMixin:
                                     existing_vols.append(vol)
                             override_payload["services"][svc_name]["volumes"] = existing_vols
 
-                        # --- mTLS: Add SPIFFE env vars to every service ---
-                        if mtls_env:
+                        # --- mTLS + grid-cryptd env vars ---
+                        merged_extra_env = dict(mtls_env or {})
+                        if cryptd_env:
+                            merged_extra_env.update(cryptd_env)
+                        if merged_extra_env:
                             existing_env = override_payload["services"][svc_name].get("environment") or {}
                             if isinstance(existing_env, list):
                                 existing_env = dict(e.split("=", 1) for e in existing_env if "=" in e)
-                            existing_env.update(mtls_env)
+                            existing_env.update(merged_extra_env)
                             override_payload["services"][svc_name]["environment"] = existing_env
 
                     # --- mTLS: Inject Envoy sidecar if enabled (fail-closed) ---
@@ -758,6 +772,8 @@ class ComposeNetworkingMixin:
                 "labels": self._compose_traefik_labels(project_name),
                 "networks": [network_name],
             }
+            if cryptd_env:
+                details["environment"] = dict(cryptd_env)
             self._apply_compose_service_hardening(
                 details,
                 compose_runtime,
@@ -772,6 +788,119 @@ class ComposeNetworkingMixin:
         with open(override_path, "w", encoding="utf-8") as handle:
             yaml.safe_dump(override_payload, handle, sort_keys=False)
         return override_path
+
+    def _inject_encrypted_compose_volumes(
+        self,
+        compose_path: str,
+        override_path: str,
+        main_service: str = "",
+    ) -> None:
+        """Provision grid-cryptd encrypted host paths for opted-in Compose volumes post-validation."""
+        svc_obj = getattr(self, "service", None)
+        if svc_obj is None:
+            return
+        from apps.core.crypto_daemon import cryptd_client, is_service_encryption_enabled
+        if not (cryptd_client.is_enabled() and is_service_encryption_enabled(svc_obj)):
+            return
+        if not override_path or not os.path.isfile(override_path):
+            return
+
+        require_vol = os.environ.get("CRYPTD_VOLUME_REQUIRE", "true").strip().lower() not in (
+            "0", "false", "no", "off"
+        )
+        proj_id = str(getattr(svc_obj, "project_id", "") or "default")
+        svc_id = str(getattr(svc_obj, "id", "") or "")
+        svc_prefix = svc_id.replace("-", "")[:8] or "svc"
+
+        user_services: dict = {}
+        if compose_path and os.path.isfile(compose_path):
+            with open(compose_path, "r", encoding="utf-8") as cf:
+                user_doc = yaml.safe_load(cf) or {}
+            if isinstance(user_doc.get("services"), dict):
+                user_services = user_doc["services"]
+
+        with open(override_path, "r", encoding="utf-8") as of:
+            override_doc = yaml.safe_load(of) or {}
+        if not isinstance(override_doc, dict):
+            override_doc = {}
+        override_services = override_doc.setdefault("services", {})
+
+        def _upsert_vol_bind(svc_name: str, host_path: str, target_path: str, mode: str = "rw") -> None:
+            svc_ov = override_services.setdefault(svc_name, {})
+            vols = [
+                v for v in (svc_ov.get("volumes") or [])
+                if not (isinstance(v, str) and len(v.split(":")) >= 2 and v.split(":")[1].strip() == target_path)
+            ]
+            vols.append(f"{host_path}:{target_path}:{mode}")
+            svc_ov["volumes"] = vols
+
+        changed = False
+        # 1. Replace user Compose named volume mounts with per-service cryptd encrypted host mounts
+        for svc_name, svc_cfg in user_services.items():
+            if not isinstance(svc_cfg, dict):
+                continue
+            for entry in (svc_cfg.get("volumes") or []):
+                src, dst, mode = "", "", "rw"
+                if isinstance(entry, str):
+                    parts = entry.split(":")
+                    if len(parts) < 2:
+                        continue
+                    src = parts[0].strip()
+                    dst = parts[1].strip()
+                    if len(parts) >= 3 and parts[2].strip():
+                        mode = parts[2].strip()
+                elif isinstance(entry, dict):
+                    if str(entry.get("type") or "volume").strip().lower() != "volume":
+                        continue
+                    src = str(entry.get("source") or "").strip()
+                    dst = str(entry.get("target") or "").strip()
+                    mode = "ro" if entry.get("read_only") else "rw"
+                if not src or not dst:
+                    continue
+                if src.startswith(("/", "./", "../", "~", "$")):
+                    continue
+                vol_key = re.sub(r"[^a-zA-Z0-9_.-]+", "-", f"cmp-{svc_prefix}-{svc_name}-{src}").strip("-")
+                try:
+                    prov = cryptd_client.provision_volume(vol_key, service_id=svc_id, project_id=proj_id)
+                    host_path = (prov or {}).get("host_path") or ""
+                    if not host_path:
+                        raise RuntimeError(f"Encrypted compose volume {vol_key} returned no host_path")
+                    _upsert_vol_bind(svc_name, host_path, dst, mode)
+                    changed = True
+                except Exception as exc:
+                    if require_vol:
+                        raise BuildError(
+                            f"Refusing unencrypted fallback for opted-in compose volume {src}: {exc}"
+                        ) from exc
+                    logger.warning("Encrypted compose volume provision skipped for %s: %s", vol_key, exc)
+
+        # 2. Attach platform Volume model rows to main_service
+        try:
+            from apps.deployments.models import Volume
+            target_svc = main_service or (next(iter(override_services.keys()), "") if override_services else "")
+            if target_svc:
+                for pvol in Volume.objects.filter(service=svc_obj):
+                    try:
+                        prov = cryptd_client.provision_volume(pvol.name, service_id=svc_id, project_id=proj_id)
+                        host_path = (prov or {}).get("host_path") or ""
+                        if not host_path:
+                            raise RuntimeError(f"Encrypted volume {pvol.name} returned no host_path")
+                        _upsert_vol_bind(target_svc, host_path, pvol.mount_path, "rw")
+                        changed = True
+                    except Exception as exc:
+                        if require_vol:
+                            raise BuildError(
+                                f"Refusing unencrypted fallback for opted-in volume {pvol.name}: {exc}"
+                            ) from exc
+                        logger.warning("Encrypted volume provision skipped for %s: %s", pvol.name, exc)
+        except BuildError:
+            raise
+        except Exception as exc:
+            logger.debug("Compose platform Volume check skipped: %s", exc)
+
+        if changed:
+            with open(override_path, "w", encoding="utf-8") as of:
+                yaml.safe_dump(override_doc, of, sort_keys=False)
 
     def _validate_merged_compose_config(
         self,

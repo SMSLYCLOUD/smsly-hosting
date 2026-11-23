@@ -14,16 +14,16 @@
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
 
-    /* Brand: Emerald (trust) */
-    --primary: 160 84% 39%;            /* #10b981 */
+    /* Brand: Emerald (trust) — >= 4.5:1 AA contrast with white foreground */
+    --primary: 160 84% 26%;            /* #0b7a55 */
     --primary-foreground: 0 0% 100%;
 
-    /* Data: Blue */
-    --secondary: 217 91% 60%;          /* #3b82f6 */
+    /* Data: Blue — >= 4.5:1 AA contrast with white foreground */
+    --secondary: 217 85% 44%;          /* #1158d1 */
     --secondary-foreground: 0 0% 100%;
 
     --muted: 220 14% 96%;
-    --muted-foreground: 220 9% 46%;
+    --muted-foreground: 220 12% 38%;
 
     /* Alert: Amber */
     --accent: 38 92% 50%;              /* #f59e0b */
@@ -299,9 +299,7 @@
   background-position: -1px -1px, -1px -1px, -1px -1px, -1px -1px, 0 0;
 }
 
-/* Keep the shared operational grid visible beneath route-level page bands. */
-.premium-bg main.min-h-screen,
-.premium-bg main.min-h-screen > section,
+/* Keep footer aligned with the shared operational grid without overriding explicit section surfaces. */
 .premium-bg footer {
   background-color: transparent !important;
   background-image: none !important;

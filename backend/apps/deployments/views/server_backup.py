@@ -242,10 +242,19 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         from ..services.backup_service import BackupService, UnknownBackupKeyIdError
         key = BackupService._get_encryption_key()
 
-        # If the file is encrypted, we must decrypt it for the user to download
-        if file_path.endswith('.enc') and key:
+        # If the file is encrypted, we must decrypt it (or check cryptd envelope) for download
+        has_cryptd_meta = False
+        if file_path.endswith('.enc') and not key and os.path.exists(file_path + '.meta'):
             try:
-                decrypted_path = BackupService.decrypt_backup(file_path, key)
+                import json as _json
+                with open(file_path + '.meta', 'r', encoding='utf-8') as _mf:
+                    has_cryptd_meta = bool((_json.load(_mf) or {}).get('cryptd_wrapped_dek'))
+            except Exception:
+                has_cryptd_meta = False
+
+        if file_path.endswith('.enc') and (key or has_cryptd_meta):
+            try:
+                decrypted_path = BackupService.decrypt_backup(file_path, key or '')
 
                 return _open_backup_download_response(
                     request,
@@ -270,6 +279,9 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
+                error_msg = str(e).lower()
+                if 'refused by grid-cryptd' in error_msg or 'backup locked' in error_msg:
+                    return Response({'error': str(e)}, status=status.HTTP_423_LOCKED)
                 return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return _open_backup_download_response(

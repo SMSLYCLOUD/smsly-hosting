@@ -5,6 +5,7 @@
 #   preflight [--backend auto|fscrypt|luks]
 #   provision <vol> [--backend fscrypt|luks] [--uid UID] [--gid GID]  (reads hex DEK on stdin)
 #   unlock    <vol> [--backend fscrypt|luks]                          (reads hex DEK on stdin)
+#   lock      <vol> [--backend fscrypt|luks]
 #   unlock-all                                                        (unlocks all stored volumes)
 #   verify    <vol>
 #   cleanup   <vol> [--backend fscrypt|luks]
@@ -20,7 +21,7 @@
 
 set -euo pipefail
 
-BASE_DIR="${SMSLY_ENCRYPTED_VOLUMES_DIR:-/var/lib/smsly/encrypted-volumes}"
+BASE_DIR="${SMSLY_ENCRYPTED_VOLUMES_DIR:-${SMSLY_ENCRYPTED_VOLUME_DIR:-/var/lib/smsly/encrypted-volumes}}"
 KEYSTORE_DIR="${SMSLY_VOLUME_KEYS_DIR:-/var/lib/smsly/volume-keys}"
 VOLUME_SIZE_MB="${SMSLY_VOLUME_SIZE_MB:-2048}"
 IMAGES_DIR="${BASE_DIR}/images"
@@ -397,10 +398,47 @@ cmd_cleanup() {
     printf '{"ok":true,"cleaned":"%s"}\n' "$vol"
 }
 
+cmd_lock() {
+    local vol="${1:-}"
+    shift || true
+    validate_vol_name "$vol"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --backend) shift 2 ;;
+            *) err "unknown flag: $1"; return 1 ;;
+        esac
+    done
+
+    local img="${IMAGES_DIR}/${vol}.img"
+    local mnt="${MNT_DIR}/${vol}"
+    local enc_dir="${FSCRYPT_DIR}/${vol}"
+    local mapper=""
+    mapper=$(mapper_name_for "$vol")
+
+    if [ -d "$enc_dir" ] && command -v fscrypt >/dev/null 2>&1; then
+        timeout -k 5 30 fscrypt lock "$enc_dir" >/dev/null 2>&1 || true
+    fi
+    if [ -d "$mnt" ] && timeout -k 5 10 mountpoint -q "$mnt"; then
+        timeout -k 5 30 umount "$mnt" || timeout -k 5 15 umount -l "$mnt" || true
+    fi
+    if [ -d "$mnt" ]; then
+        chmod 0000 "$mnt" || true
+    fi
+    if [ -e "/dev/mapper/${mapper}" ] && command -v cryptsetup >/dev/null 2>&1; then
+        timeout -k 5 30 cryptsetup luksClose "$mapper" || true
+    fi
+    if [ ! -d "$enc_dir" ] && [ ! -f "$img" ] && [ ! -d "$mnt" ]; then
+        err "no encrypted volume found for ${vol}"
+        return 1
+    fi
+    printf '{"ok":true,"locked":"%s"}\n' "$vol"
+}
+
 main() {
     local subcmd="${1:-}"
     if [ -z "$subcmd" ]; then
-        err "usage: $0 <preflight|provision|unlock|unlock-all|verify|cleanup> ..."
+        err "usage: $0 <preflight|provision|unlock|lock|unlock-all|verify|cleanup> ..."
         return 1
     fi
     shift
@@ -408,6 +446,7 @@ main() {
         preflight) cmd_preflight "$@" ;;
         provision) cmd_provision "$@" ;;
         unlock) cmd_unlock "$@" ;;
+        lock) cmd_lock "$@" ;;
         unlock-all) cmd_unlock_all "$@" ;;
         verify) cmd_verify "$@" ;;
         cleanup) cmd_cleanup "$@" ;;

@@ -1,20 +1,62 @@
-# Trulay Grid security gap review — 2026-11-19 (Updated)
+# Security Best Practices & Architectural Audit Report
 
-## Scope and evidence
-Full L1–L7 and R4 control-plane remediation across `smsly-hosting`, verified by the `tests/e2e_security/` suite (`181` tests), focused unit/integration suites, and live deployment verification on `trulay-vps` and `aws-full-2`.
+**Last Updated:** 2026-11-23
 
-## 1. Critical: global recovery phrase generation, rotation, and single-use consumption — FIXED
-- `backend/apps/core/views/recovery.py` enforces `POST`-only generation (`405` on `GET`), requires an active superuser with full token management privileges (`CanManageAPITokens`), embeds `created_at` and `expires_at` (`RECOVERY_PHRASE_TTL_DAYS`, default 90 days), consumes and clears `recovery_phrase_hash` atomically under `select_for_update()` upon successful verification (`single_use: True`), provides `POST/DELETE /api/v1/auth/recovery/revoke/`, and records `AuditLog` events.
+## 1. Control-Plane & Deployment Hardening (2026-11-19)
 
-## 2. High: server backup download authorization — FIXED
-- `backend/apps/deployments/views/server_backup.py` requires `IsAdminUser` on `download` and `download_key`; signed query parameters no longer bypass the admin gate, and malformed UUIDs or empty local paths fail closed with `404`.
+1. **Cluster Recovery Phrase Removal**
+   - Removed recovery-phrase cluster adoption and encrypted metadata mirroring.
+   - Server cluster onboarding and control-plane management remain anchored on authenticated user ownership and SSH/WireGuard verification.
 
-## 3. Medium: public route recheck & trusted-proxy client IP / atomic rate limiting — FIXED
-- `backend/apps/deployments/views/route.py` is read-only (does not invoke `reset_restart_state` or `_check_service_health`) and rate-limits atomically via `cache.add`.
-- `backend/apps/core/rate_limiting.py` (`get_trusted_client_ip`, `TrustedIdentMixin`) rejects spoofed `CF-Connecting-IP`, `X-Real-IP`, and `X-Forwarded-For` headers from untrusted public peers, supports CIDR entries in `TRUSTED_PROXY_IPS`, and backs `RateLimitMiddleware`, `node_exchange.py`, `agent_registrar_auth.py`, `health_webhook.py`, and `tunnels/rate_limit.py` (upgraded to atomic `cache.add`/`cache.incr`).
-- HMAC replay nonces in `middleware/security.py`, `agent_registrar_auth.py`, `deployments/views/_helpers.py`, and `health_webhook.py` verify signatures before consuming nonces atomically via `cache.add` (fail-closed on cache errors).
+2. **Server Backup Download Authorization**
+   - Hardened `ServerViewSet.download_backup` (`backend/apps/deployments/views/server.py`) so only superusers or the owning user of the target server can download backup archives, with traversal-safe path validation.
 
-## 4. Medium: merged-Compose and Nixpacks build containment — FIXED
-- `backend/apps/deployments/services/pipeline/compose_networking.py` and `build.py` interpolate `${VAR}` expressions against the merged build environment, reject top-level volume `driver_opts.device` bind escapes, reject external or protected platform networks (`smsly-platform-net`, `smsly-build-net`, `traefik-proxy-net`, `socket-proxy`, `host`), reject `build.network: host`, `build.privileged: true`, `network_mode: container:*`, `cgroup_parent`, and `env_file` path traversal, and enforce effective `mem_limit`, `memswap_limit`, `cpus`, `pids_limit`, `cap_drop: ["ALL"]`, and `no-new-privileges:true` on every Compose service.
-- `backend/apps/cloud/services/builder.py` (`NixpacksBuilder.build_image`), `pipeline/build.py::_build_with_nixpacks`, and `build_nixpacks.py` run builds inside ephemeral resource-capped BuildKit containers on isolated `smsly-build-net` (`icc=false`), block dangerous builder environment overrides (`DOCKER_HOST`, `LD_PRELOAD`, `BUILDX_BUILDER`, etc.), and validate Nixpacks config files against symlink escape and host-escape flags.
+3. **Platform Route Recheck & Rate Limiting**
+   - Scoped `recheck_platform_routes` to staff users or the authenticated user's own services, and enforced a 60-second per-user cache cooldown to prevent synchronous Docker/proxy route-sync abuse.
 
+4. **Compose & Nixpacks Build Containment**
+   - Blocked unsafe host bind mounts, `privileged: true`, host namespace sharing (`network_mode: host`, `pid: host`, `ipc: host`), device mappings, and sensitive cap/security overrides in user-supplied Compose configurations.
+   - Kept Nixpacks build plans inside the repository without passing `--config` flags that older Nixpacks CLIs reject.
+
+---
+
+## 2. Edge WAF & CrowdSec First-Strike Hardening (2026-11-19)
+
+1. **Zero-Tolerance First-Strike CrowdSec Policy**
+   - Configured zero-tolerance first-strike scenarios in `infrastructure/crowdsec/scenarios/smsly-first-strike.yaml` with `infrastructure/crowdsec/profiles.yaml` escalation and Cloudflare edge bouncer sync (`scripts/crowdsec-cloudflare-sync.sh`).
+
+2. **Dual-Engine L7 WAF (Coraza CRS v4 + open-appsec Contextual ML)**
+   - Wired Coraza OWASP Core Rule Set v4 (`http.handlers.waf`) inline in Caddy alongside the `open-appsec` contextual ML sidecar and host-level `crowdsec-firewall-bouncer` (`iptables`/`nftables`).
+
+---
+
+## 3. Service-Scoped Sovereign Encryption-at-Rest (`grid-cryptd`) (2026-11-22)
+
+1. **Opt-In Per-Service Scope (`Service.encryption_at_rest_enabled`)**
+   - Added `Service.encryption_at_rest_enabled` (`BooleanField(default=False)`, migration `backend/apps/deployments/migrations/0255_encryption_opt_in.py`).
+   - Only opted-in services route encrypted volumes, secrets transit, backup DEK wrapping, and Postgres/Redis point-of-contact gates through `grid-cryptd` (`backend/apps/core/crypto_daemon.py`, `backend/apps/deployments/views/service/encryption.py`, `frontend/src/components/settings/EncryptionAtRestCard.tsx`).
+
+2. **Volatile Vault & Kernel/Proxy Enforcement**
+   - Implemented the `cryptd/` Go daemon (`cryptd/cmd/grid-cryptd/main.go`, `cryptd/internal/epoch/manager.go`, `cryptd/internal/crypto/`, `cryptd/internal/volumes/volumes.go`, `cryptd/internal/dbproxy/pg_proxy.go`, `cryptd/internal/dbproxy/redis_proxy.go`, installed via `lib/cryptd.sh`) holding weekly SMKs and per-service HKDF SEKs in `mlock()`'d RAM, cutting active DB/Redis streams and locking volumes on `/v1/vault/lockdown` or `/v1/services/{id}/lock`.
+
+---
+
+## 4. Alert, Monitoring & Incident Pipeline Remediation (2026-11-23)
+
+1. **SSRF, Secret Redaction & Tenant Isolation**
+   - Enforced `validate_webhook_url()` SSRF checks across all notification channels in `backend/apps/notifications/webhooks.py` and `backend/apps/notifications/tasks/__init__.py`.
+   - Added `_safe_audit_metadata()` in `backend/apps/notifications/views/__init__.py` to redact webhook secrets/passwords before writing `AuditLog` entries.
+   - Eliminated cross-tenant substring leaks (`target__icontains=service.name`) and PostgreSQL-only JSON lookups in `backend/apps/deployments/views/service/incident.py`, restricted global infrastructure events to staff/superusers, hardened Grafana anonymous viewer settings, and removed `--privileged` + host-IP exposure on auto-deployed `cAdvisor` and `node_exporter` containers.
+
+2. **Alert Accuracy, Cooldowns & Self-Healing Coverage**
+   - Fixed Prometheus alert expressions in `infrastructure/monitoring/rules/platform.yml`, Alertmanager routing/inhibition in `scripts/alertmanager-entrypoint.sh` and `infrastructure/monitoring/alertmanager.yml`, per-job cursors in `infrastructure/monitoring/loki-log-bridge.py`, `ResourceAlert` persistence in `backend/apps/core/tasks/metrics.py`, offline addon alerting in `backend/apps/addons/services/alerts.py`, and superuser paging across watchdogs.
+
+---
+
+## 5. Aeon-Parity Unified Security Engine (`apps.security` / SMSLY Aegis) (2026-11-23)
+
+1. **AEON CORE & ASPM Pre-Build / Supply-Chain Gates**
+   - Added OCSF v1.1 telemetry normalization (`NormalizedSecurityEvent`), deduplicated Risk-Fusion findings (`SecurityFinding` + Toxic Combinations Attack Paths), MITRE ATT&CK technique tagging, pre-build Secret/IaC/SAST scanners, CycloneDX v1.5 SBOM + SLSA v1.0/in-toto provenance (`SBOMArtifact`), and Trivy CVE finding sync wired into `PipelineManager`, `NixpacksBuilder`, and `log_exhaustive_push_diagnostics`.
+
+2. **CNAPP, XDR, SOAR Containment & Continuous GRC**
+   - Wired automated CSPM/KSPM/CIEM/DSPM/AI-SPM audits, ITDR/UEBA anomaly detection, Threat Intel IoC matching, SSRF-safe post-deploy DAST (`run_post_deploy_dast`), granular SOAR playbooks (`lock_service_cryptd`, `quarantine_service`, `capture_forensics` SHA-256 DFIR bundles, `ban_ip`), AI-SPM prompt injection firewall on `SecurityAiHuntView`, and automated SOC 2 / ISO 27001 / NDPR / PCI-DSS evaluation with `AuditLog` hash-chain cryptographic verification (`backend/apps/security/`).

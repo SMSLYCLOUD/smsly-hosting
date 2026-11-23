@@ -73,8 +73,14 @@ def _get_active_access_log() -> Path | None:
     return None
 
 
+def _offset_file_for_path(log_path: Path) -> Path:
+    import hashlib
+    digest = hashlib.sha256(str(log_path).encode('utf-8')).hexdigest()[:16]
+    return Path(f"/tmp/.traffic_log_offset_{digest}")
+
+
 def _read_offset(log_path: Path) -> int:
-    offset_file = Path(f"/tmp/.traffic_log_offset_{abs(hash(str(log_path)))}")
+    offset_file = _offset_file_for_path(log_path)
     try:
         return int(offset_file.read_text().strip())
     except (FileNotFoundError, ValueError):
@@ -82,7 +88,7 @@ def _read_offset(log_path: Path) -> int:
 
 
 def _write_offset(log_path: Path, pos: int) -> None:
-    offset_file = Path(f"/tmp/.traffic_log_offset_{abs(hash(str(log_path)))}")
+    offset_file = _offset_file_for_path(log_path)
     offset_file.write_text(str(pos))
 
 

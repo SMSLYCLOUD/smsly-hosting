@@ -435,8 +435,19 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     obj.value = val
                     obj.save(update_fields=['value'])
 
-        volumes = [{'name': v.name, 'mount_path': v.mount_path}
+        volumes = [{'name': v.name, 'mount_path': v.mount_path,
+                    'encrypted': bool(getattr(service, 'encryption_at_rest_enabled', False)),
+                    'service_id': str(service.id),
+                    'project_id': str(service.project_id or 'default')}
                    for v in Volume.objects.filter(service=service)]
+
+        # Opt-in grid-cryptd per-service registration, lease activation, and DB/Redis gate routing.
+        from apps.core.crypto_daemon import apply_cryptd_runtime_env
+        try:
+            apply_cryptd_runtime_env(service, env_vars, unlock_now=True)
+        except Exception as exc:
+            append_log(deployment, f"[CRYPTD] Deployment blocked (fail-closed): {exc}\n")
+            raise RuntimeError(f"grid-cryptd refused deploy for opted-in service {service.name}: {exc}") from exc
 
         healthcheck = _build_platform_healthcheck(service, env_vars)
         if not healthcheck:

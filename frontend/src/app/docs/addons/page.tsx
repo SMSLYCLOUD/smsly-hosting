@@ -1,5 +1,13 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, Puzzle, Database, Braces, Globe } from 'lucide-react';
+
+export const metadata: Metadata = {
+  title: 'Managed Addons',
+  description:
+    'Provision PostgreSQL, Redis, MongoDB, Qdrant, and object storage alongside your applications on Trulay Grid.',
+  alternates: { canonical: '/docs/addons' },
+};
 
 const addons = [
   {
@@ -34,22 +42,22 @@ const addons = [
 
 export default function AddonsPage() {
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
-      <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-rose-50/60 to-white dark:from-rose-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
+    <div className="bg-white dark:bg-slate-950">
+      <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-rose-50/70 to-white dark:from-rose-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-3xl mx-auto">
-          <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-rose-600 dark:text-rose-400 hover:underline mb-6">
-            <ArrowLeft size={14} /> Back to Docs
+          <Link href="/docs" className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-rose-700 dark:text-rose-400 hover:underline mb-4">
+            <ArrowLeft size={14} aria-hidden="true" /> Back to Docs
           </Link>
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2.5 bg-rose-100 dark:bg-rose-900/50 rounded-xl">
-              <Puzzle className="w-5 h-5 text-rose-700 dark:text-rose-300" />
+              <Puzzle className="w-5 h-5 text-rose-700 dark:text-rose-300" aria-hidden="true" />
             </div>
-            <span className="text-sm font-semibold text-rose-600 dark:text-rose-400 uppercase tracking-wider">Addons</span>
+            <span className="text-sm font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider">Addons</span>
           </div>
           <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3">
             Addons
           </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl leading-relaxed">
+          <p className="text-slate-600 dark:text-slate-300 text-lg max-w-2xl leading-relaxed">
             Managed infrastructure addons for your services.
           </p>
         </div>
@@ -68,11 +76,11 @@ export default function AddonsPage() {
               <div key={addon.name} className={`p-5 rounded-xl border border-slate-200 dark:border-slate-700/50 ${addon.bg}`}>
                 <div className="flex items-center gap-3 mb-3">
                   <div className={`p-2 rounded-lg ${addon.bg}`}>
-                    <Icon size={18} className={addon.color} />
+                    <Icon size={18} className={addon.color} aria-hidden="true" />
                   </div>
-                  <h3 className={`font-bold text-sm ${addon.color}`}>{addon.name}</h3>
+                  <h2 className={`font-bold text-sm ${addon.color}`}>{addon.name}</h2>
                 </div>
-                <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">{addon.desc}</p>
+                <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">{addon.desc}</p>
               </div>
             );
           })}
@@ -99,6 +107,6 @@ export default function AddonsPage() {
           </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

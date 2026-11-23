@@ -73,6 +73,33 @@ def container_restart_loop_watchdog_task():
             "RESTART-LOOP WATCHDOG: %d container(s) crash-looping: %s",
             len(findings), findings,
         )
+        try:
+            from django.core.cache import cache
+            from apps.deployments.utils import log_event
+            log_event(
+                action="CONTAINER_RESTART_LOOP_DETECTED",
+                target="platform:containers",
+                actor="system",
+                metadata={"count": len(findings), "findings": findings[:20]},
+            )
+            if cache.add("watchdog:restart_loop_alert_cooldown", 1, timeout=3600):
+                from django.contrib.auth import get_user_model
+                from apps.notifications.tasks import dispatch_notification
+                User = get_user_model()
+                summary = ", ".join(
+                    f"{f['container']} ({f['restarts']} restarts, exit={f['last_exit']})"
+                    for f in findings[:10]
+                )
+                for admin in User.objects.filter(is_superuser=True).only("id"):
+                    dispatch_notification.delay(
+                        event_type="health_alert",
+                        user_id=admin.id,
+                        title=f"CRITICAL: {len(findings)} Container(s) in Restart Loop",
+                        message=f"Container restart-loop watchdog detected crash-looping containers: {summary}",
+                        metadata={"findings": findings[:10]},
+                    )
+        except Exception as exc:
+            logger.debug("Restart-loop alert dispatch skipped: %s", exc)
     return {"status": "ok", "findings": findings}
 
 

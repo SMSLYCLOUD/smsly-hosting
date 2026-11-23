@@ -83,17 +83,20 @@ class NotificationChannelViewSet(viewsets.ModelViewSet):
         try:
             if channel.channel_type == 'email':
                 from apps.deployments.models.core import PlatformConfig
+                from apps.notifications.tasks import get_platform_smtp_connection
                 config = PlatformConfig.load()
                 if not config.smtp_host or not config.smtp_from_email:
                     return Response(
                         {'error': 'SMTP is not configured. Set SMTP settings in Platform Settings first.'},
                         status=status.HTTP_400_BAD_REQUEST)
+                _host, from_email, connection = get_platform_smtp_connection()
                 send_mail(
                     subject='[SMSLY] Test Alert Notification',
                     message='This is a test alert notification from your SMSLY platform. If you received this, your email channel is working correctly.',
-                    from_email=f"{config.smtp_from_name} <{config.smtp_from_email}>",
+                    from_email=from_email,
                     recipient_list=[channel.target],
                     fail_silently=False,
+                    connection=connection,
                 )
             elif channel.channel_type in ('slack', 'webhook'):
                 # Route through the same SSRF-guarded webhook path used for
@@ -159,6 +162,8 @@ def test_smtp(request):
             status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        from apps.notifications.tasks import get_platform_smtp_connection
+        _host, from_email, connection = get_platform_smtp_connection()
         send_mail(
             subject='[SMSLY] SMTP Configuration Test',
             message=(
@@ -167,9 +172,10 @@ def test_smtp(request):
                 f'From: {config.smtp_from_name} <{config.smtp_from_email}>\n'
                 f'TLS: {"Enabled" if config.smtp_use_tls else "Disabled"}'
             ),
-            from_email=f"{config.smtp_from_name} <{config.smtp_from_email}>",
+            from_email=from_email,
             recipient_list=[to_email],
             fail_silently=False,
+            connection=connection,
         )
         return Response({'status': 'ok', 'message': f'Test email sent to {to_email}'})
     except Exception as e:

@@ -118,42 +118,48 @@ export function SmslyCrossSell() {
                     initial={reducedMotion ? false : { opacity: 0, y: -6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
-                    className="relative rounded-xl border border-slate-200 dark:border-slate-700 bg-gradient-to-r from-slate-50 to-white dark:from-slate-900 dark:to-slate-950 p-4 pr-10 flex items-center gap-3"
+                    className="relative rounded-xl border border-slate-200 dark:border-slate-700 bg-card p-4 pr-12 flex flex-wrap sm:flex-nowrap items-center gap-3"
                 >
                     <div className={`p-2.5 rounded-lg ${product.bg || 'bg-blue-500/10'}`}>
-                        <Icon className={`w-5 h-5 ${product.color || 'text-blue-500'}`} />
+                        <Icon className={`w-5 h-5 ${product.color || 'text-blue-600 dark:text-blue-400'}`} aria-hidden="true" />
                     </div>
                     <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-slate-900 dark:text-white">{product.title}</p>
                         {product.description && (
-                            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{product.description}</p>
+                            <p className="text-xs text-slate-600 dark:text-slate-400 truncate">{product.description}</p>
                         )}
                     </div>
                     <a
                         href={product.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+                        className="inline-flex items-center gap-1 min-h-[44px] px-2 text-xs font-semibold text-blue-700 dark:text-blue-400 hover:underline whitespace-nowrap"
                     >
-                        {product.cta || 'Learn more'} <ArrowUpRight className="w-3 h-3" />
+                        {product.cta || 'Learn more'} <ArrowUpRight className="w-3 h-3" aria-hidden="true" />
                     </a>
                 </m.div>
             </AnimatePresence>
             {products.length > 1 && (
-                <div className="flex items-center justify-center gap-1.5 mt-2" role="tablist" aria-label="Promotions">
-                    {products.map((p, i) => (
-                        <button
-                            key={p.id}
-                            type="button"
-                            role="tab"
-                            aria-selected={i === currentIndex % products.length}
-                            aria-label={p.title}
-                            onClick={() => setCurrentIndex(i)}
-                            className={`h-1.5 rounded-full transition-all ${
-                                i === currentIndex % products.length ? 'w-5 bg-primary' : 'w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/60'
-                            }`}
-                        />
-                    ))}
+                <div className="flex items-center justify-center gap-2 mt-2" aria-label="Promotion slides">
+                    {products.map((p, i) => {
+                        const isSelected = i === currentIndex % products.length;
+                        return (
+                            <button
+                                key={p.id}
+                                type="button"
+                                aria-current={isSelected ? 'true' : undefined}
+                                aria-label={`Show ${p.title}`}
+                                onClick={() => setCurrentIndex(i)}
+                                className="inline-flex items-center justify-center min-w-[24px] min-h-[24px] p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full"
+                            >
+                                <span
+                                    className={`block h-1.5 rounded-full transition-all ${
+                                        isSelected ? 'w-5 bg-primary' : 'w-1.5 bg-muted-foreground/40 hover:bg-muted-foreground/70'
+                                    }`}
+                                />
+                            </button>
+                        );
+                    })}
                 </div>
             )}
         </div>

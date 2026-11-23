@@ -1,0 +1,37 @@
+[Unit]
+Description=Trulay Grid Cryptographic Controller & DB Point-of-Contact Gate (grid-cryptd)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/smsly/cryptd.env
+ExecStart=/usr/local/bin/grid-cryptd -mode=controller
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=30s
+TimeoutStopSec=15s
+
+# Keep sub-master / per-service keys locked in RAM (never swapped or core-dumped)
+LimitMEMLOCK=infinity
+LimitCORE=0
+CapabilityBoundingSet=CAP_IPC_LOCK CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_IPC_LOCK CAP_NET_BIND_SERVICE
+
+# Filesystem & kernel hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RuntimeDirectory=smsly
+RuntimeDirectoryMode=0750
+StateDirectory=smsly
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes /run/smsly
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -103,8 +103,13 @@ def watch_log_errors_task(self) -> None:
             try:
                 if _deploy_in_flight(str(service.id)):
                     continue
-                errors = count_log_errors(_fetch_container_logs(service))
+                try:
+                    raw_logs = _fetch_container_logs(service, since_seconds=LOGWATCH_INTERVAL_SECONDS)
+                except TypeError:
+                    raw_logs = _fetch_container_logs(service)
+                errors = count_log_errors(raw_logs)
                 key = _counter_key(str(service.id))
+                flagged_key = f"logwatch:flagged:{service.id}"
                 if errors >= LOGWATCH_ERROR_LINES:
                     bad = (cache.get(key) or 0) + 1
                     cache.set(key, bad, timeout=3600)
@@ -113,6 +118,7 @@ def watch_log_errors_task(self) -> None:
                         service.name, errors, bad,
                     )
                     if bad >= LOGWATCH_CONSECUTIVE_WINDOWS and service.health_status != "needs_manual_intervention":
+                        cache.set(flagged_key, True, timeout=3600)
                         service.health_status = "needs_manual_intervention"
                         service.save(update_fields=["health_status", "updated_at"])
                         _dispatch_health_alert(
@@ -124,6 +130,7 @@ def watch_log_errors_task(self) -> None:
                         flagged += 1
                 else:
                     cache.delete(key)
+                    cache.delete(flagged_key)
             except SoftTimeLimitExceeded:
                 logger.warning("Log watchdog: soft time limit hit, stopping run")
                 break

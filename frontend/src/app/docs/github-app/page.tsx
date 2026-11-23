@@ -1,9 +1,16 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Github, Key, Globe, Bell, Shield, Settings } from 'lucide-react';
 
+export const metadata: Metadata = {
+  title: 'GitHub App Setup',
+  description: 'Create and configure a GitHub App for automatic webhooks, PR preview environments, and commit statuses on Trulay Grid.',
+  alternates: { canonical: '/docs/github-app' },
+};
+
 export default function GitHubAppSetupPage() {
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
+    <div className="bg-white dark:bg-slate-950">
       <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-slate-50/60 to-white dark:from-slate-950/60 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-3xl mx-auto">
           <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400 hover:underline mb-6">
@@ -275,6 +282,6 @@ GITHUB_WEBHOOK_SECRET=your-random-secret-here`}</code></pre>
           </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

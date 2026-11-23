@@ -74,6 +74,12 @@ def stop_service(service, actor="system"):
     service.health_status = 'unknown'
     service.save(update_fields=['status', 'health_status', 'updated_at'])
     try:
+        from apps.core.crypto_daemon import cryptd_client, is_service_encryption_enabled
+        if cryptd_client.is_enabled() and is_service_encryption_enabled(service):
+            cryptd_client.lock_service(str(service.id), reason=f"service stopped ({actor})")
+    except Exception as exc:
+        logger.debug("cryptd lock_service skipped on stop for %s: %s", service.id, exc)
+    try:
         from apps.core.services.health_monitor import reset_restart_state
         reset_restart_state(str(service.id))
     except Exception:
@@ -93,6 +99,17 @@ def start_service(service, actor="system"):
     container_id = _active_container_id(service)
     if not container_id:
         return {'ok': False, 'error': 'No active deployment to start.'}
+    try:
+        from apps.core.crypto_daemon import (
+            cryptd_client,
+            is_service_encryption_enabled,
+            register_and_unlock_service,
+        )
+        if cryptd_client.is_enabled() and is_service_encryption_enabled(service):
+            register_and_unlock_service(service, unlock_now=True)
+    except Exception as exc:
+        logger.error("cryptd unlock failed before starting %s: %s", service.name, exc)
+        return {'ok': False, 'error': f'Encryption controller refused start (locked): {exc}'}
     try:
         from apps.deployments.services.container_runtime import ContainerRuntime
         ContainerRuntime().start_container(container_id)
@@ -119,6 +136,17 @@ def restart_service(service, actor="system"):
     container_id = _active_container_id(service)
     if not container_id:
         return {'ok': False, 'error': 'No active deployment to restart.'}
+    try:
+        from apps.core.crypto_daemon import (
+            cryptd_client,
+            is_service_encryption_enabled,
+            register_and_unlock_service,
+        )
+        if cryptd_client.is_enabled() and is_service_encryption_enabled(service):
+            register_and_unlock_service(service, unlock_now=True)
+    except Exception as exc:
+        logger.error("cryptd unlock failed before restarting %s: %s", service.name, exc)
+        return {'ok': False, 'error': f'Encryption controller refused restart (locked): {exc}'}
     try:
         from apps.deployments.services.container_runtime import ContainerRuntime
         ContainerRuntime().restart_container(container_id)

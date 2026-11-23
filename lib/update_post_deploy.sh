@@ -458,6 +458,14 @@ SMSLY_WORKERS_EOF
             smsly_napd_install || true
         fi
     fi
+    # ─── grid-cryptd refresh (binary + opt-in unit, warn-only) ─────────────
+    if [ -f "$INSTALL_DIR/lib/cryptd.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/cryptd.sh" || true
+        if command -v smsly_cryptd_install >/dev/null 2>&1; then
+            smsly_cryptd_install || true
+        fi
+    fi
     if [ -f "$INSTALL_DIR/lib/tiers_sleep.sh" ]; then
         # shellcheck disable=SC1090
         source "$INSTALL_DIR/lib/tiers_sleep.sh" || true

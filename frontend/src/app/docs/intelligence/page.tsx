@@ -1,63 +1,30 @@
-'use client';
-
-import { useEffect, useState } from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, Activity, BookOpen, Code2, Copy, Check, Shield, Wrench, Brain, ListChecks, GitBranch } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Activity, BookOpen, Code2, Shield, Wrench, Brain, ListChecks, GitBranch } from 'lucide-react';
+import { CodeBlock } from '@/components/docs/CodeBlock';
+import { DocsToc } from '@/components/docs/DocsToc';
+
+export const metadata: Metadata = {
+    title: 'Runtime Intelligence Docs',
+    description:
+        'Periodic fleet health scans, statistical anomaly detection, and rule-based auto-remediation in Trulay Grid.',
+    alternates: { canonical: '/docs/intelligence' },
+};
 
 const tocItems = [
-    { id: 'overview', label: 'Overview', icon: BookOpen },
-    { id: 'periodic-tasks', label: 'Periodic Tasks', icon: Activity },
-    { id: 'codemap', label: 'AI Codemap', icon: GitBranch },
-    { id: 'anomaly-detection', label: 'Anomaly Detection', icon: ListChecks },
-    { id: 'self-healing', label: 'Self-Healing', icon: Brain },
-    { id: 'security', label: 'Security', icon: Shield },
-    { id: 'api-reference', label: 'API Reference', icon: Code2 },
-    { id: 'troubleshooting', label: 'Troubleshooting', icon: Wrench },
+    { id: 'overview', label: 'Overview' },
+    { id: 'periodic-tasks', label: 'Periodic Tasks' },
+    { id: 'codemap', label: 'AI Codemap' },
+    { id: 'anomaly-detection', label: 'Anomaly Detection' },
+    { id: 'self-healing', label: 'Self-Healing' },
+    { id: 'security', label: 'Security' },
+    { id: 'api-reference', label: 'API Reference' },
+    { id: 'troubleshooting', label: 'Troubleshooting' },
 ];
 
-function CodeBlock({ children, lang = 'bash' }: { children: string; lang?: string }) {
-    const [copied, setCopied] = useState(false);
-    const copy = () => {
-        navigator.clipboard.writeText(children.trim());
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-    };
-    return (
-        <div className="relative group my-4">
-            <pre className="bg-slate-900 dark:bg-slate-900/80 text-slate-100 p-4 pr-12 rounded-xl overflow-x-auto text-sm leading-relaxed font-mono border border-slate-800 dark:border-slate-700/50">
-                <code>{children.trim()}</code>
-            </pre>
-            <button
-                onClick={copy}
-                className="absolute top-3 right-3 p-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity"
-                aria-label="Copy to clipboard"
-            >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-            </button>
-        </div>
-    );
-}
-
 export default function IntelligenceDocsPage() {
-    const [activeSection, setActiveSection] = useState('');
-
-    useEffect(() => {
-        const observer = new IntersectionObserver(
-            (entries) => {
-                const visible = entries.find(e => e.isIntersecting);
-                if (visible) setActiveSection(visible.target.id);
-            },
-            { rootMargin: '-80px 0px -70% 0px' }
-        );
-        tocItems.forEach(item => {
-            const el = document.getElementById(item.id);
-            if (el) observer.observe(el);
-        });
-        return () => observer.disconnect();
-    }, []);
-
     return (
-        <main className="min-h-screen bg-white dark:bg-slate-950">
+        <div className="bg-white dark:bg-slate-950">
 
             <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-cyan-50/60 to-white dark:from-cyan-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
                 <div className="max-w-3xl mx-auto">
@@ -81,28 +48,7 @@ export default function IntelligenceDocsPage() {
 
             <div className="max-w-7xl mx-auto flex gap-8 px-4 py-12">
 
-                <aside className="hidden lg:block w-56 flex-shrink-0">
-                    <nav className="sticky top-24 space-y-0.5">
-                        <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3 px-3">On this page</p>
-                        {tocItems.map(item => {
-                            const Icon = item.icon;
-                            return (
-                                <a
-                                    key={item.id}
-                                    href={`#${item.id}`}
-                                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all ${
-                                        activeSection === item.id
-                                            ? 'bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 font-semibold'
-                                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-900'
-                                    }`}
-                                >
-                                    <Icon size={14} className="flex-shrink-0" />
-                                    <span className="truncate">{item.label}</span>
-                                </a>
-                            );
-                        })}
-                    </nav>
-                </aside>
+                <DocsToc items={tocItems} accent="cyan" />
 
                 <article className="flex-1 max-w-3xl prose prose-slate dark:prose-invert prose-headings:scroll-mt-24">
 
@@ -307,6 +253,6 @@ export default function IntelligenceDocsPage() {
 
                 </article>
             </div>
-        </main>
+        </div>
     );
 }

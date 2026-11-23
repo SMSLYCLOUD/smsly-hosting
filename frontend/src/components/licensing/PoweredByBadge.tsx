@@ -9,14 +9,15 @@ export function PoweredByBadge() {
   if (isLoading || !isCommunity) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50">
+    <div className="fixed bottom-4 left-4 z-40">
       <a
         href="https://Trulay.co"
         target="_blank"
         rel="noopener noreferrer"
-        className="bg-black/80 text-white px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-sm border border-white/10 hover:bg-black transition-colors flex items-center gap-2 shadow-lg"
+        className="inline-flex items-center gap-2 min-h-[36px] bg-slate-950/90 text-white px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-sm border border-white/15 hover:bg-slate-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
       >
-        <span>⚡ Powered by SMSLY Hosting</span>
+        <span aria-hidden="true">⚡</span>
+        <span>Powered by Trulay Grid</span>
       </a>
     </div>
   );

@@ -142,8 +142,10 @@ def scan_running_containers_logs_task() -> None:
     from apps.deployments.models import Deployment
     from apps.deployments.services.error_resolver import diagnose_runtime_logs
 
+    from apps.deployments.services.docker_client import get_docker_client
+
     try:
-        client = docker.from_env()
+        client = get_docker_client(timeout=15)
     except Exception as exc:
         logger.warning("Docker client unavailable for log scanning: %s", exc)
         return

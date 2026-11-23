@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Github, Chrome, Loader2, GitBranch, Code2 } from "lucide-react";
@@ -20,11 +20,34 @@ export default function RegisterPage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [oauthProviders, setOauthProviders] = useState<Record<string, boolean> | null>(null);
 
   const BACKEND_URL =
     typeof window !== "undefined"
       ? window.location.origin
-      : process.env.NEXT_PUBLIC_API_URL || "https://cloud.Trulay.co";
+      : process.env.NEXT_PUBLIC_API_URL || "https://grid.trulay.co";
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${BACKEND_URL}/api/v1/oauth/providers/`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && data && typeof data === "object") setOauthProviders(data);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [BACKEND_URL]);
+
+  const showProvider = (key: string) =>
+    oauthProviders === null || oauthProviders[key] !== false;
+
+  const hasAnyOauth =
+    showProvider("github") ||
+    showProvider("google") ||
+    showProvider("gitlab") ||
+    showProvider("bitbucket_oauth2");
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,7 +113,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col relative overflow-x-hidden premium-bg">
+    <div className="min-h-[calc(100vh-3.5rem)] flex flex-col relative overflow-x-hidden premium-bg">
       <div className="flex-1 flex items-center justify-center p-4 relative z-10">
         <GridCard className="w-full max-w-md rounded border border-border bg-card">
           <div className="p-6 text-center space-y-2">
@@ -103,48 +126,59 @@ export default function RegisterPage() {
                 className="h-20 w-auto max-w-full rounded object-contain"
               />
             </div>
-            <h2 className="text-2xl font-bold tracking-tight">Create an account</h2>
+            <h1 className="text-2xl font-bold tracking-tight">Create an account</h1>
             <p className="text-sm text-muted-foreground">
               Sign up for Grid to deploy your applications.
             </p>
           </div>
 
           <div className="px-6 pb-6">
-            {/* Social signup buttons with grid separators */}
-            <div className="rounded overflow-hidden border border-border mb-4">
-              <a
-                href={`${BACKEND_URL}/accounts/github/login/`}
-                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
-              >
-                <Github className="h-4 w-4" />
-                Sign up with GitHub
-              </a>
-              <a
-                href={`${BACKEND_URL}/accounts/google/login/`}
-                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
-              >
-                <Chrome className="h-4 w-4" />
-                Sign up with Google
-              </a>
-              <a
-                href={`${BACKEND_URL}/accounts/gitlab/login/`}
-                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border"
-              >
-                <GitBranch className="h-4 w-4 text-orange-500" />
-                Sign up with GitLab
-              </a>
-              <a
-                href={`${BACKEND_URL}/accounts/bitbucket_oauth2/login/`}
-                className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition"
-              >
-                <Code2 className="h-4 w-4 text-blue-500" />
-                Sign up with Bitbucket
-              </a>
-            </div>
+            {hasAnyOauth && (
+              <>
+                <div className="rounded overflow-hidden border border-border mb-4">
+                  {showProvider("github") && (
+                    <a
+                      href={`${BACKEND_URL}/accounts/github/login/`}
+                      className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border last:border-b-0"
+                    >
+                      <Github className="h-4 w-4" aria-hidden="true" />
+                      Sign up with GitHub
+                    </a>
+                  )}
+                  {showProvider("google") && (
+                    <a
+                      href={`${BACKEND_URL}/accounts/google/login/`}
+                      className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border last:border-b-0"
+                    >
+                      <Chrome className="h-4 w-4" aria-hidden="true" />
+                      Sign up with Google
+                    </a>
+                  )}
+                  {showProvider("gitlab") && (
+                    <a
+                      href={`${BACKEND_URL}/accounts/gitlab/login/`}
+                      className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition border-b border-border last:border-b-0"
+                    >
+                      <GitBranch className="h-4 w-4 text-orange-500" aria-hidden="true" />
+                      Sign up with GitLab
+                    </a>
+                  )}
+                  {showProvider("bitbucket_oauth2") && (
+                    <a
+                      href={`${BACKEND_URL}/accounts/bitbucket_oauth2/login/`}
+                      className="flex items-center justify-center gap-2 h-11 px-4 text-sm font-medium hover:bg-muted/50 transition"
+                    >
+                      <Code2 className="h-4 w-4 text-blue-500" aria-hidden="true" />
+                      Sign up with Bitbucket
+                    </a>
+                  )}
+                </div>
 
-            <div className="text-center text-xs uppercase text-muted-foreground mb-4">
-              Or continue with email
-            </div>
+                <div className="text-center text-xs uppercase text-muted-foreground mb-4">
+                  Or continue with email
+                </div>
+              </>
+            )}
 
             <form onSubmit={handleRegister} className="space-y-3">
               <div className="space-y-1.5">
@@ -152,6 +186,7 @@ export default function RegisterPage() {
                 <Input
                   id="username"
                   required
+                  autoComplete="username"
                   value={formData.username}
                   onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                   disabled={isSubmitting}
@@ -163,6 +198,7 @@ export default function RegisterPage() {
                   id="email"
                   type="email"
                   required
+                  autoComplete="email"
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   disabled={isSubmitting}
@@ -174,6 +210,7 @@ export default function RegisterPage() {
                   id="password1"
                   type="password"
                   required
+                  autoComplete="new-password"
                   value={formData.password1}
                   onChange={(e) => setFormData({ ...formData, password1: e.target.value })}
                   disabled={isSubmitting}
@@ -185,6 +222,7 @@ export default function RegisterPage() {
                   id="password2"
                   type="password"
                   required
+                  autoComplete="new-password"
                   value={formData.password2}
                   onChange={(e) => setFormData({ ...formData, password2: e.target.value })}
                   disabled={isSubmitting}
@@ -192,7 +230,7 @@ export default function RegisterPage() {
               </div>
 
               {error && (
-                <div className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 p-3 rounded">
+                <div role="alert" className="text-sm text-red-700 dark:text-red-400 bg-red-500/10 border border-red-500/25 p-3 rounded">
                   {error}
                 </div>
               )}
@@ -204,7 +242,7 @@ export default function RegisterPage() {
               >
                 {isSubmitting ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                     Creating account...
                   </>
                 ) : (
@@ -216,7 +254,7 @@ export default function RegisterPage() {
 
           <div className="px-6 pb-6 text-center text-sm text-muted-foreground">
             Already have an account?&nbsp;
-            <Link href="/login" className="underline hover:text-primary">
+            <Link href="/login" className="underline hover:text-primary py-1">
               Sign in
             </Link>
           </div>

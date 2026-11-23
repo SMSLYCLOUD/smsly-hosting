@@ -45,6 +45,17 @@ class DeploymentSerializer(serializers.ModelSerializer):
             return 'Local Server'
         return None
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        override = data.get('registry_override')
+        if isinstance(override, dict):
+            redacted = dict(override)
+            for secret_key in ('password', 'token', 'secret', 'api_key'):
+                if redacted.get(secret_key):
+                    redacted[secret_key] = '********'
+            data['registry_override'] = redacted
+        return data
+
 
 class DeploymentTimelineSerializer(serializers.ModelSerializer):
     duration_seconds = serializers.FloatField(read_only=True, allow_null=True)

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { SmslyCrossSell } from "@/components/dashboard/SmslyCrossSell";
+import { useAuth } from "@/components/auth-provider";
 
 export const ADS_DISMISSED_KEY = "smsly_ads_dismissed";
 const ADS_EVENT = "smsly-ads-changed";
@@ -18,11 +19,11 @@ function readOptedOut(): boolean {
 
 /**
  * Trulay ad banner — renders the rotating cross-sell promo (SmslyCrossSell).
- * Three levels: admin kill-switch (server, inside SmslyCrossSell) >
- * permanent opt-out (localStorage, Settings → Privacy) > session dismiss
- * (in-memory X button, reappears on next visit).
+ * Only rendered for authenticated sessions to avoid triggering staff-gated
+ * /system/config/ requests on public pages.
  */
 export function TrulayAdBanner() {
+    const { user, loading } = useAuth();
     const [optedOut] = useAdsDismissed();
     const [sessionDismissed, setSessionDismissed] = useState(false);
     const [mounted, setMounted] = useState(false);
@@ -31,7 +32,7 @@ export function TrulayAdBanner() {
         setMounted(true);
     }, []);
 
-    if (!mounted || optedOut || sessionDismissed) return null;
+    if (!mounted || loading || !user || optedOut || sessionDismissed) return null;
 
     return (
         <div className="relative">
@@ -40,9 +41,9 @@ export function TrulayAdBanner() {
                 aria-label="Dismiss ad for this visit"
                 title="Dismiss for this visit (reappears next visit; disable permanently in Settings → Privacy)"
                 onClick={() => setSessionDismissed(true)}
-                className="absolute top-2 right-2 z-10 text-muted-foreground/60 hover:text-foreground transition-colors p-1 rounded-md"
+                className="absolute top-1 right-1 z-10 inline-flex items-center justify-center min-w-[44px] min-h-[44px] text-muted-foreground hover:text-foreground transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-                <X size={14} />
+                <X size={16} aria-hidden="true" />
             </button>
             <SmslyCrossSell />
         </div>

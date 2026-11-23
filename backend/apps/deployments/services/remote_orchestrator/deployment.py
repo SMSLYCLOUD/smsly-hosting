@@ -199,16 +199,50 @@ class DeploymentMixin:
             logger.debug("Remote trigger volume sync skipped: %s", exc)
         # Ship mesh-rewritten addon env overrides as well (belt over the
         # row sync above): env rows apply even if addon-row sync is ever
-        # skipped. Fail-open.
+        # skipped. Fail-open for non-cryptd, fail-closed when cryptd refuses opted-in service.
+        _svc = getattr(deployment, "service", None)
+        _mesh: dict = {}
         try:
             from apps.deployments.services.addon_mesh import rewrite_env_for_mesh
-            _svc = getattr(deployment, "service", None)
             if _svc is not None:
-                _mesh = rewrite_env_for_mesh(_svc)
-                if _mesh:
-                    payload["mesh_env"] = dict(list(_mesh.items())[:200])
+                _mesh = dict(rewrite_env_for_mesh(_svc) or {})
         except Exception as exc:
             logger.debug("Remote trigger mesh env skipped: %s", exc)
+        if _svc is not None:
+            from apps.core.crypto_daemon import (
+                _resolve_mesh_gate_addr,
+                apply_cryptd_remote_runtime_env,
+                cryptd_client,
+                is_service_encryption_enabled,
+                rewrite_gate_url,
+            )
+            if cryptd_client.is_enabled() and is_service_encryption_enabled(_svc):
+                # Seed base DB/Redis URLs from env_vars/mesh before gate rewriting.
+                for ev in _svc.env_vars.all():
+                    k = str(getattr(ev, "key", "") or "").strip()
+                    if k and k not in _mesh:
+                        val = getattr(ev, "value", "") or ""
+                        if isinstance(val, str) and val.startswith("gAAAA") and len(val) > 50:
+                            continue
+                        if k in (
+                            "DATABASE_URL", "DB_URL", "SQLALCHEMY_DATABASE_URL", "SQLALCHEMY_DATABASE_URI",
+                            "DB_HOST", "DB_PORT", "POSTGRES_HOST", "POSTGRES_PORT",
+                            "REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", "CACHE_URL",
+                        ):
+                            _mesh[k] = str(val)
+                apply_cryptd_remote_runtime_env(_svc, _mesh, unlock_now=True)
+                if cryptd_client.is_db_gate_enabled() and payload.get("addons"):
+                    pg_gate = _resolve_mesh_gate_addr("CRYPTD_MESH_PG_GATE_ADDR", "CRYPTD_PG_GATE_ADDR", 15432)
+                    redis_gate = _resolve_mesh_gate_addr("CRYPTD_MESH_REDIS_GATE_ADDR", "CRYPTD_REDIS_GATE_ADDR", 16379)
+                    for arow in payload["addons"]:
+                        curl = str(arow.get("connection_url") or "")
+                        atype = str(arow.get("addon_type") or "").upper()
+                        if pg_gate and atype in ("POSTGRES", "TIMESCALEDB") and curl.startswith("postgres"):
+                            arow["connection_url"] = rewrite_gate_url(curl, pg_gate)
+                        elif redis_gate and atype == "REDIS" and curl.startswith("redis"):
+                            arow["connection_url"] = rewrite_gate_url(curl, redis_gate)
+        if _mesh:
+            payload["mesh_env"] = dict(list(_mesh.items())[:200])
         # Ship mTLS config & pre-register SPIRE entry on Master's trust root
         # before triggering a remote worker deploy so worker sidecars are
         # pre-authorized and never fail-open.

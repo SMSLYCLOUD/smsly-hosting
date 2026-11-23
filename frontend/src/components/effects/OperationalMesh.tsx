@@ -2,18 +2,6 @@
 
 import { useEffect, useRef } from "react";
 
-/**
- * OperationalMesh — Grid-forward enterprise background.
- *
- * The grid is the primary visual element:
- * - Prominent structural grid lines
- * - Intersection nodes at grid crossings
- * - Data pulses traveling along grid lines
- * - Subtle breathing animation on grid intersections
- *
- * Designed for dark operational interfaces.
- */
-
 interface GridNode {
   x: number;
   y: number;
@@ -22,6 +10,7 @@ interface GridNode {
   active: boolean;
   brightness: number;
   targetBrightness: number;
+  decayAt: number;
 }
 
 interface Pulse {
@@ -33,7 +22,6 @@ interface Pulse {
   speed: number;
   axis: "h" | "v";
   color: [number, number, number];
-  cooldown: number;
 }
 
 const GRID_SPACING = 80;
@@ -44,19 +32,15 @@ const GRID_MAJOR_ALPHA = 0.15;
 const NODE_ALPHA = 0.3;
 const NODE_ACTIVE_ALPHA = 0.6;
 const PULSE_SPEED = 0.003;
-const PULSE_COOLDOWN_MIN = 800;
-const PULSE_COOLDOWN_MAX = 4000;
 const MAJOR_LINE_INTERVAL = 4;
 
-// Color palette
 const COLORS = {
-  gridMinor: [30, 41, 59] as [number, number, number],     // slate-800
-  gridMajor: [51, 65, 85] as [number, number, number],     // slate-700
-  node: [100, 116, 139] as [number, number, number],       // slate-500
-  nodeActive: [16, 185, 129] as [number, number, number],  // emerald
-  pulseData: [59, 130, 246] as [number, number, number],   // blue
-  pulseTrust: [16, 185, 129] as [number, number, number],  // emerald
-  intersection: [71, 85, 105] as [number, number, number], // slate-600
+  gridMinor: [30, 41, 59] as [number, number, number],
+  gridMajor: [51, 65, 85] as [number, number, number],
+  node: [100, 116, 139] as [number, number, number],
+  nodeActive: [16, 185, 129] as [number, number, number],
+  pulseData: [59, 130, 246] as [number, number, number],
+  pulseTrust: [16, 185, 129] as [number, number, number],
 };
 
 export function OperationalMesh() {
@@ -68,159 +52,134 @@ export function OperationalMesh() {
     const ctx = c.getContext("2d");
     if (!ctx) return;
 
-    let raf: number;
+    let raf = 0;
+    let width = 0;
+    let height = 0;
     let gridNodes: GridNode[] = [];
     let pulses: Pulse[] = [];
     let gridCols = 0;
     let gridRows = 0;
-    const isReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const resize = () => {
-      c.width = window.innerWidth;
-      c.height = window.innerHeight;
-      init();
-    };
-
-    const init = () => {
-      const W = c.width;
-      const H = c.height;
-      gridCols = Math.ceil(W / GRID_SPACING) + 1;
-      gridRows = Math.ceil(H / GRID_SPACING) + 1;
-
-      // Create grid nodes at intersections
-      gridNodes = [];
-      for (let row = 0; row < gridRows; row++) {
-        for (let col = 0; col < gridCols; col++) {
-          const isMajor = col % MAJOR_LINE_INTERVAL === 0 && row % MAJOR_LINE_INTERVAL === 0;
-          gridNodes.push({
-            x: col * GRID_SPACING,
-            y: row * GRID_SPACING,
-            col,
-            row,
-            active: isMajor && Math.random() > 0.6,
-            brightness: 0,
-            targetBrightness: isMajor ? 0.15 + Math.random() * 0.1 : 0.05,
-          });
-        }
-      }
-
-      // Initialize pulses
-      pulses = [];
-      for (let i = 0; i < 8; i++) {
-        spawnPulse();
-      }
-    };
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let isReducedMotion = mq.matches;
 
     const spawnPulse = () => {
       const isHorizontal = Math.random() > 0.5;
-      const col = Math.floor(Math.random() * gridCols);
-      const row = Math.floor(Math.random() * gridRows);
+      const col = Math.floor(Math.random() * Math.max(1, gridCols));
+      const row = Math.floor(Math.random() * Math.max(1, gridRows));
       const color = Math.random() > 0.7 ? COLORS.pulseTrust : COLORS.pulseData;
 
       if (isHorizontal) {
         const y = row * GRID_SPACING;
         const goRight = Math.random() > 0.5;
         pulses.push({
-          startX: goRight ? -20 : c.width + 20,
+          startX: goRight ? -20 : width + 20,
           startY: y,
-          endX: goRight ? c.width + 20 : -20,
+          endX: goRight ? width + 20 : -20,
           endY: y,
           pos: 0,
           speed: PULSE_SPEED + Math.random() * 0.002,
           axis: "h",
           color,
-          cooldown: 0,
         });
       } else {
         const x = col * GRID_SPACING;
         const goDown = Math.random() > 0.5;
         pulses.push({
           startX: x,
-          startY: goDown ? -20 : c.height + 20,
+          startY: goDown ? -20 : height + 20,
           endX: x,
-          endY: goDown ? c.height + 20 : -20,
+          endY: goDown ? height + 20 : -20,
           pos: 0,
           speed: PULSE_SPEED + Math.random() * 0.002,
           axis: "v",
           color,
-          cooldown: 0,
         });
       }
     };
 
+    const init = () => {
+      gridCols = Math.ceil(width / GRID_SPACING) + 1;
+      gridRows = Math.ceil(height / GRID_SPACING) + 1;
+
+      gridNodes = [];
+      for (let row = 0; row < gridRows; row++) {
+        for (let col = 0; col < gridCols; col++) {
+          const isMajor = col % MAJOR_LINE_INTERVAL === 0 && row % MAJOR_LINE_INTERVAL === 0;
+          const base = isMajor ? 0.15 : 0.05;
+          gridNodes.push({
+            x: col * GRID_SPACING,
+            y: row * GRID_SPACING,
+            col,
+            row,
+            active: isMajor && Math.random() > 0.6,
+            brightness: base,
+            targetBrightness: base,
+            decayAt: 0,
+          });
+        }
+      }
+
+      pulses = [];
+      for (let i = 0; i < 8; i++) {
+        spawnPulse();
+      }
+    };
+
     const drawGrid = () => {
-      const W = c.width;
-      const H = c.height;
       const [mr, mg, mb] = COLORS.gridMinor;
       const [Mzr, Mzg, Mzb] = COLORS.gridMajor;
 
-      // Minor grid lines
       ctx.strokeStyle = `rgba(${mr}, ${mg}, ${mb}, ${GRID_LINE_ALPHA})`;
       ctx.lineWidth = 0.5;
-
-      for (let x = 0; x <= W; x += GRID_SPACING) {
+      for (let x = 0; x <= width; x += GRID_SPACING) {
         if (Math.round(x / GRID_SPACING) % MAJOR_LINE_INTERVAL === 0) continue;
         ctx.beginPath();
         ctx.moveTo(x, 0);
-        ctx.lineTo(x, H);
+        ctx.lineTo(x, height);
         ctx.stroke();
       }
-      for (let y = 0; y <= H; y += GRID_SPACING) {
+      for (let y = 0; y <= height; y += GRID_SPACING) {
         if (Math.round(y / GRID_SPACING) % MAJOR_LINE_INTERVAL === 0) continue;
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.lineTo(W, y);
+        ctx.lineTo(width, y);
         ctx.stroke();
       }
 
-      // Major grid lines
       ctx.strokeStyle = `rgba(${Mzr}, ${Mzg}, ${Mzb}, ${GRID_MAJOR_ALPHA})`;
       ctx.lineWidth = 1;
-
-      for (let x = 0; x <= W; x += GRID_SPACING) {
+      for (let x = 0; x <= width; x += GRID_SPACING) {
         if (Math.round(x / GRID_SPACING) % MAJOR_LINE_INTERVAL !== 0) continue;
         ctx.beginPath();
         ctx.moveTo(x, 0);
-        ctx.lineTo(x, H);
+        ctx.lineTo(x, height);
         ctx.stroke();
       }
-      for (let y = 0; y <= H; y += GRID_SPACING) {
+      for (let y = 0; y <= height; y += GRID_SPACING) {
         if (Math.round(y / GRID_SPACING) % MAJOR_LINE_INTERVAL !== 0) continue;
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.lineTo(W, y);
+        ctx.lineTo(width, y);
         ctx.stroke();
       }
     };
 
-    const drawNodes = () => {
+    const drawNodes = (now: number) => {
       for (const node of gridNodes) {
-        // Smooth brightness transition
-        node.brightness += (node.targetBrightness - node.brightness) * 0.02;
+        if (node.decayAt > 0 && now >= node.decayAt) {
+          node.targetBrightness = node.active ? 0.3 : 0.08;
+          node.decayAt = 0;
+        }
+        node.brightness += (node.targetBrightness - node.brightness) * 0.04;
 
         const isActive = node.active;
         const [nr, ng, nb] = isActive ? COLORS.nodeActive : COLORS.node;
         const alpha = isActive ? NODE_ACTIVE_ALPHA : NODE_ALPHA;
         const radius = isActive ? NODE_ACTIVE_RADIUS : NODE_BASE_RADIUS;
         const finalAlpha = alpha * node.brightness;
-
         if (finalAlpha < 0.01) continue;
 
-        // Intersection glow for major nodes
-        if (isActive && node.brightness > 0.1) {
-          const grad = ctx.createRadialGradient(
-            node.x, node.y, 0,
-            node.x, node.y, GRID_SPACING * 0.4
-          );
-          grad.addColorStop(0, `rgba(${nr}, ${ng}, ${nb}, ${finalAlpha * 0.15})`);
-          grad.addColorStop(1, `rgba(${nr}, ${ng}, ${nb}, 0)`);
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, GRID_SPACING * 0.4, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // Node dot
         ctx.beginPath();
         ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(${nr}, ${ng}, ${nb}, ${finalAlpha})`;
@@ -228,10 +187,9 @@ export function OperationalMesh() {
       }
     };
 
-    const drawPulses = (dt: number) => {
+    const drawPulses = (dt: number, now: number) => {
       for (let i = pulses.length - 1; i >= 0; i--) {
         const pulse = pulses[i];
-
         pulse.pos += pulse.speed * dt * 0.06;
         if (pulse.pos >= 1) {
           pulses.splice(i, 1);
@@ -243,9 +201,7 @@ export function OperationalMesh() {
         const y = pulse.startY + (pulse.endY - pulse.startY) * pulse.pos;
         const [pr, pg, pb] = pulse.color;
 
-        // Pulse trail
-        const trailLength = 0.08;
-        const trailStart = Math.max(0, pulse.pos - trailLength);
+        const trailStart = Math.max(0, pulse.pos - 0.08);
         const tx = pulse.startX + (pulse.endX - pulse.startX) * trailStart;
         const ty = pulse.startY + (pulse.endY - pulse.startY) * trailStart;
 
@@ -260,68 +216,68 @@ export function OperationalMesh() {
         ctx.lineTo(x, y);
         ctx.stroke();
 
-        // Pulse head glow
-        const headGrad = ctx.createRadialGradient(x, y, 0, x, y, 6);
-        headGrad.addColorStop(0, `rgba(${pr}, ${pg}, ${pb}, 0.8)`);
-        headGrad.addColorStop(1, `rgba(${pr}, ${pg}, ${pb}, 0)`);
-        ctx.fillStyle = headGrad;
-        ctx.beginPath();
-        ctx.arc(x, y, 6, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Activate nodes near pulse
         const snapCol = Math.round(x / GRID_SPACING);
         const snapRow = Math.round(y / GRID_SPACING);
         for (const node of gridNodes) {
           if (node.col === snapCol && node.row === snapRow) {
             node.targetBrightness = 0.8;
-            setTimeout(() => { node.targetBrightness = node.active ? 0.3 : 0.1; }, 300);
+            node.decayAt = now + 300;
           }
         }
       }
     };
 
-    const updateBreathing = () => {
-      // Periodically activate random major nodes
-      if (Math.random() > 0.98) {
-        const majorNodes = gridNodes.filter(
-          n => n.col % MAJOR_LINE_INTERVAL === 0 && n.row % MAJOR_LINE_INTERVAL === 0
-        );
-        if (majorNodes.length > 0) {
-          const node = majorNodes[Math.floor(Math.random() * majorNodes.length)];
-          node.active = true;
-          node.targetBrightness = 0.5;
-          setTimeout(() => { node.targetBrightness = 0.15; }, 2000);
-        }
-      }
+    const renderStatic = () => {
+      ctx.clearRect(0, 0, width, height);
+      drawGrid();
+      drawNodes(performance.now());
+    };
+
+    const resize = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = window.innerWidth;
+      height = window.innerHeight;
+      c.width = Math.floor(width * dpr);
+      c.height = Math.floor(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      init();
+      if (isReducedMotion) renderStatic();
     };
 
     let lastTime = performance.now();
-
     const animate = (time: number) => {
+      if (isReducedMotion) return;
       const dt = Math.min(time - lastTime, 50);
       lastTime = time;
 
-      ctx.clearRect(0, 0, c.width, c.height);
-
+      ctx.clearRect(0, 0, width, height);
       drawGrid();
-
-      if (!isReducedMotion) {
-        updateBreathing();
-      }
-
-      drawNodes();
-      drawPulses(dt);
-
+      drawNodes(time);
+      drawPulses(dt, time);
       raf = requestAnimationFrame(animate);
     };
 
+    const onMotionChange = (e: MediaQueryListEvent) => {
+      isReducedMotion = e.matches;
+      cancelAnimationFrame(raf);
+      if (isReducedMotion) {
+        renderStatic();
+      } else {
+        lastTime = performance.now();
+        raf = requestAnimationFrame(animate);
+      }
+    };
+
     resize();
+    if (!isReducedMotion) {
+      raf = requestAnimationFrame(animate);
+    }
     window.addEventListener("resize", resize);
-    raf = requestAnimationFrame(animate);
+    mq.addEventListener("change", onMotionChange);
 
     return () => {
       window.removeEventListener("resize", resize);
+      mq.removeEventListener("change", onMotionChange);
       cancelAnimationFrame(raf);
     };
   }, []);
@@ -329,7 +285,7 @@ export function OperationalMesh() {
   return (
     <canvas
       ref={canvasRef}
-      className="fixed inset-0 pointer-events-none"
+      className="fixed inset-0 w-full h-full pointer-events-none"
       style={{ zIndex: 0 }}
       aria-hidden="true"
     />

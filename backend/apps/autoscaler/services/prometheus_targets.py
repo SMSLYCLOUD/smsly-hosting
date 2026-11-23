@@ -131,8 +131,9 @@ def write_docker_labels_targets() -> None:
             }
         )
 
-    if remote_targets:
-        _write_target_file("docker-labels-remote.json", remote_targets)
+    # Always overwrite remote target files (even when empty) so offline or
+    # removed nodes do not remain in Prometheus file_sd_configs.
+    _write_target_file("docker-labels-remote.json", remote_targets)
 
     # Also generate file_sd targets for remote cAdvisor and Node Exporter
     cadvisor_targets = []
@@ -150,10 +151,8 @@ def write_docker_labels_targets() -> None:
             "labels": {"node": server.name, "host": server.host, "job": "node-exporter"},
         })
 
-    if cadvisor_targets:
-        _write_target_file("cadvisor-remote.json", cadvisor_targets)
-    if node_exporter_targets:
-        _write_target_file("node-exporter-remote.json", node_exporter_targets)
+    _write_target_file("cadvisor-remote.json", cadvisor_targets)
+    _write_target_file("node-exporter-remote.json", node_exporter_targets)
 
     logger.info(
         "Wrote %d local + %d remote docker-labels, %d cadvisor, %d node-exporter targets",
@@ -248,7 +247,7 @@ CADVISOR_PORT = 8080
 NODE_EXPORTER_PORT = 9100
 
 
-def _node_bind_ip(server) -> str:  # UNUSED
+def _node_bind_ip(server) -> str:
     """Return the WireGuard mesh IP if available, else 0.0.0.0."""
     wg = getattr(server, "wg_address", None)
     return wg if wg else "0.0.0.0"
@@ -263,17 +262,29 @@ def deploy_cadvisor_on_node(server, force: bool = False) -> bool:
     )
     try:
         client.connect()
+        if not force:
+            out, _err, _code = client.exec_command(
+                "docker inspect smsly-cadvisor --format='{{.State.Status}}' 2>/dev/null",
+                raise_on_error=False,
+                timeout=SSH_TIMEOUT_QUICK,
+            )
+            if out.strip() == "running":
+                logger.debug("cAdvisor already running on %s", server.name)
+                return True
+        bind_ip = _node_bind_ip(server)
         client.exec_command(
             f"docker rm -f smsly-cadvisor 2>/dev/null; "
             f"docker run -d --name smsly-cadvisor --restart unless-stopped "
             f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
-            f"--privileged "
+            f"--cap-drop=ALL --cap-add=DAC_READ_SEARCH "
             f"-v /:/rootfs:ro -v /var/run/docker.sock:/var/run/docker.sock:ro "
+            f"-v /var/run/containerd/containerd.sock:/var/run/containerd/containerd.sock:ro "
             f"-v /sys:/sys:ro -v /var/lib/docker/:/var/lib/docker:ro "
-            f"-v /dev/disk/:/dev/disk:ro "
-            f"-p {CADVISOR_PORT}:{CADVISOR_PORT} "
+            f"-v /dev/disk/:/dev/disk:ro -v /sys/fs/cgroup:/sys/fs/cgroup:ro "
+            f"-p {bind_ip}:{CADVISOR_PORT}:{CADVISOR_PORT} "
             f"gcr.io/cadvisor/cadvisor:v0.49.1 "
-            f"--containerd=unix:///var/run/containerd/containerd.sock",
+            f"--containerd=unix:///var/run/containerd/containerd.sock "
+            f"--docker_only=true --housekeeping_interval=30s",
             raise_on_error=False,
             timeout=SSH_TIMEOUT_RUN,
         )
@@ -296,12 +307,22 @@ def deploy_node_exporter_on_node(server, force: bool = False) -> bool:
     )
     try:
         client.connect()
+        if not force:
+            out, _err, _code = client.exec_command(
+                "docker inspect smsly-node-exporter --format='{{.State.Status}}' 2>/dev/null",
+                raise_on_error=False,
+                timeout=SSH_TIMEOUT_QUICK,
+            )
+            if out.strip() == "running":
+                logger.debug("Node Exporter already running on %s", server.name)
+                return True
+        bind_ip = _node_bind_ip(server)
         client.exec_command(
             f"docker rm -f smsly-node-exporter 2>/dev/null; "
             f"docker run -d --name smsly-node-exporter --restart unless-stopped "
             f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
             f"-v /proc:/host/proc:ro -v /sys:/host/sys:ro -v /:/rootfs:ro "
-            f"-p {NODE_EXPORTER_PORT}:{NODE_EXPORTER_PORT} "
+            f"-p {bind_ip}:{NODE_EXPORTER_PORT}:{NODE_EXPORTER_PORT} "
             f"prom/node-exporter:v1.6.1 "
             f"--path.procfs=/host/proc --path.rootfs=/rootfs --path.sysfs=/host/sys "
             f"--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",

@@ -28,51 +28,87 @@ def _duration_to_delta(duration: str) -> timedelta:
 
 
 def _db_metrics_fallback(service: Service, duration: str):
+    from django.db.models import Avg, Count, Max
+
     since = timezone.now() - _duration_to_delta(duration)
-    rows = list(
-        ServiceMetric.objects.filter(service=service, timestamp__gte=since)
-        .order_by('timestamp')[:1200]
+    agg = ServiceMetric.objects.filter(service=service, timestamp__gte=since).aggregate(
+        cpu_usage_avg=Avg('cpu_usage'),
+        cpu_usage_max=Max('cpu_usage'),
+        cpu_limit_avg=Avg('cpu_limit'),
+        cpu_limit_max=Max('cpu_limit'),
+        memory_usage_avg=Avg('memory_usage'),
+        memory_usage_max=Max('memory_usage'),
+        memory_limit_avg=Avg('memory_limit'),
+        memory_limit_max=Max('memory_limit'),
+        network_rx_avg=Avg('network_rx_bytes'),
+        network_rx_max=Max('network_rx_bytes'),
+        network_tx_avg=Avg('network_tx_bytes'),
+        network_tx_max=Max('network_tx_bytes'),
+        disk_read_avg=Avg('disk_read_bytes'),
+        disk_read_max=Max('disk_read_bytes'),
+        disk_write_avg=Avg('disk_write_bytes'),
+        disk_write_max=Max('disk_write_bytes'),
+        sample_count=Count('id'),
     )
-    if not rows:
+    sample_count = int((agg or {}).get('sample_count') or 0)
+    if sample_count <= 0:
         return None
 
-    cpu = [
-        {'timestamp': row.timestamp.isoformat(), 'value': round(float(row.cpu_percent), 2)}
-        for row in rows
-    ]
-    memory = [
-        {'timestamp': row.timestamp.isoformat(), 'value': round(float(row.memory_usage), 2)}
-        for row in rows
-    ]
-    network = [
-        {
-            'timestamp': row.timestamp.isoformat(),
-            'value': round(float(row.network_rx_bytes + row.network_tx_bytes) / 1024, 2),
-        }
-        for row in rows
-    ]
-    disk = [
-        {
-            'timestamp': row.timestamp.isoformat(),
-            'value': round(float(row.disk_read_bytes + row.disk_write_bytes) / 1024, 2),
-        }
-        for row in rows
-    ]
+    cpu_usage_avg = float(agg.get('cpu_usage_avg') or 0.0)
+    cpu_usage_max = float(agg.get('cpu_usage_max') or 0.0)
+    cpu_limit_avg = float(agg.get('cpu_limit_avg') or 0.0)
+    cpu_limit_max = float(agg.get('cpu_limit_max') or 0.0)
+    cpu_avg = round((cpu_usage_avg / cpu_limit_avg * 100.0) if cpu_limit_avg > 0 else 0.0, 2)
+    cpu_max = round((cpu_usage_max / cpu_limit_max * 100.0) if cpu_limit_max > 0 else 0.0, 2)
 
-    latest = rows[-1]
+    mem_avg = round(float(agg.get('memory_usage_avg') or 0.0), 2)
+    mem_max = round(float(agg.get('memory_usage_max') or 0.0), 2)
+    mem_lim_avg = float(agg.get('memory_limit_avg') or 0.0)
+    mem_lim_max = round(float(agg.get('memory_limit_max') or 0.0), 2)
+    mem_pct_avg = round((mem_avg / mem_lim_avg * 100.0) if mem_lim_avg > 0 else 0.0, 2)
+    mem_pct_max = round((mem_max / mem_lim_max * 100.0) if mem_lim_max > 0 else 0.0, 2)
+
+    rx_avg_kb = float(agg.get('network_rx_avg') or 0.0) / 1024.0
+    rx_max_kb = round(float(agg.get('network_rx_max') or 0.0) / 1024.0, 2)
+    tx_avg_kb = float(agg.get('network_tx_avg') or 0.0) / 1024.0
+    tx_max_kb = round(float(agg.get('network_tx_max') or 0.0) / 1024.0, 2)
+    net_avg_kb = round(rx_avg_kb + tx_avg_kb, 2)
+    net_max_kb = round(rx_max_kb + tx_max_kb, 2)
+
+    disk_avg_kb = round(
+        (float(agg.get('disk_read_avg') or 0.0) + float(agg.get('disk_write_avg') or 0.0)) / 1024.0,
+        2,
+    )
+    disk_max_kb = round(
+        (float(agg.get('disk_read_max') or 0.0) + float(agg.get('disk_write_max') or 0.0)) / 1024.0,
+        2,
+    )
+    now_iso = timezone.now().isoformat()
+
     return {
-        'cpu': cpu,
-        'memory': memory,
-        'network': network,
-        'disk': disk,
+        'sample_count': sample_count,
+        'cpu_avg': cpu_avg,
+        'cpu_max': cpu_max,
+        'memory_avg_mb': mem_avg,
+        'memory_max_mb': mem_max,
+        'memory_percent_avg': mem_pct_avg,
+        'memory_percent_max': mem_pct_max,
+        'network_avg_kb': net_avg_kb,
+        'network_max_kb': net_max_kb,
+        'disk_avg_kb': disk_avg_kb,
+        'disk_max_kb': disk_max_kb,
+        'cpu': [{'timestamp': now_iso, 'value': cpu_max}],
+        'memory': [{'timestamp': now_iso, 'value': mem_max}],
+        'network': [{'timestamp': now_iso, 'value': net_max_kb}],
+        'disk': [{'timestamp': now_iso, 'value': disk_max_kb}],
         'current': {
-            'cpu_percent': round(float(latest.cpu_percent), 2),
+            'cpu_percent': cpu_max,
             'cpu_limit': round(float(service.cpu_cores or 0), 2),
-            'memory_usage': round(float(latest.memory_usage), 2),
-            'memory_limit': round(float(latest.memory_limit), 2),
-            'memory_percent': round(float(latest.memory_percent), 2),
-            'network_rx_kb': round(float(latest.network_rx_bytes) / 1024, 2),
-            'network_tx_kb': round(float(latest.network_tx_bytes) / 1024, 2),
+            'memory_usage': mem_max,
+            'memory_limit': mem_lim_max,
+            'memory_percent': mem_pct_max,
+            'network_rx_kb': rx_max_kb,
+            'network_tx_kb': tx_max_kb,
         },
         'source': 'db_fallback',
     }

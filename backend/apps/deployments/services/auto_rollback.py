@@ -320,6 +320,7 @@ class AutoRollbackEngine:
                 action='AUTO_ROLLBACK_TRIGGERED',
                 target=f'Service:{service.name}',
                 metadata={
+                    'service_id': str(service.id),
                     'trigger': trigger,
                     'reason_detail': reason_detail,
                     'recent_failure_count': recent_failure_count,
@@ -510,6 +511,7 @@ def monitor_stuck_rollback_heartbeats(self):
                 action='STUCK_ROLLBACK_DETECTED',
                 target=f'Service:{service_name}',
                 metadata={
+                    'service_id': payload.get('service_id', ''),
                     'rollback_id': rollback_id,
                     'trigger': trigger,
                     'queued_at': queued_at,

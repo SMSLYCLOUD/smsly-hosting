@@ -298,6 +298,25 @@ class BuildManager:
             # 2. Build
             dockerfile_path = self.work_dir / \
                 self.service.root_directory.strip("/")
+            try:
+                from apps.security.aspm import run_aspm_pipeline_scan
+                from apps.security.models import SecurityPolicy
+
+                pol = SecurityPolicy.load()
+                if pol.aspm_enabled:
+                    aspm_rep = run_aspm_pipeline_scan(
+                        deployment=self.deployment,
+                        source_dir=str(dockerfile_path),
+                        persist=True,
+                    )
+                    if aspm_rep.get("blocked"):
+                        reasons = "; ".join(aspm_rep.get("block_reasons") or [])
+                        raise RuntimeError(f"ASPM security policy blocked build: {reasons}")
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                logger.debug("ASPM pre-build scan skipped in BuildManager: %s", exc)
+
             self._log(f"Building Docker image from {dockerfile_path}...")
 
             if self.service.build_command:
@@ -354,6 +373,18 @@ class BuildManager:
 
             # 4. Security Scan (Simulated Trivy)
             self._run_security_scan(image_tag)
+            try:
+                from apps.security.aspm import generate_sbom
+                from apps.security.models import SecurityPolicy
+
+                if SecurityPolicy.load().sbom_enabled:
+                    generate_sbom(
+                        deployment=self.deployment,
+                        source_dir=str(dockerfile_path),
+                        image_ref=image_tag,
+                    )
+            except Exception as exc:
+                logger.debug("SBOM generation skipped in BuildManager: %s", exc)
 
             self._log("Build and Push successful.")
             # 5. Cache refresh: drop previous stale cache so the next
@@ -445,32 +476,46 @@ class BuildManager:
                 try:
                     scan_results = json.loads(result.stdout)
                     vulns = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+                    findings_list = []
 
                     for result_item in scan_results.get("Results", []):
                         for vuln in result_item.get("Vulnerabilities", []):
                             severity = vuln.get("Severity", "").lower()
                             if severity in vulns:
                                 vulns[severity] += 1
+                            if len(findings_list) < 50:
+                                findings_list.append({
+                                    "id": vuln.get("VulnerabilityID", "unknown"),
+                                    "severity": severity.upper() or "UNKNOWN",
+                                    "pkg": vuln.get("PkgName", "unknown"),
+                                    "title": str(vuln.get("Title", "") or "")[:100],
+                                })
+
+                    blocking_severities = [s.lower() for s in severities[fail_idx:]]
+                    fail_count = sum(vulns.get(s, 0) for s in blocking_severities)
 
                     self.deployment.vulnerability_report = {
                         "summary": vulns,
+                        "findings": findings_list,
                         "scan_time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "image": image_tag,
                         "fail_on": fail_on,
-                        "passed": False,
+                        "passed": fail_count == 0,
+                        "status": "findings" if sum(vulns.values()) > 0 else "clean",
                     }
                     self.deployment.save(
                         update_fields=['vulnerability_report'])
+                    try:
+                        from apps.security.aspm import sync_deployment_trivy_findings
+                        sync_deployment_trivy_findings(self.deployment)
+                    except Exception:
+                        pass
 
                     self._log(
                         f"Trivy scan: {vulns['critical']} critical, {vulns['high']} high, "
                         f"{vulns['medium']} medium, {vulns['low']} low")
 
-                    blocking_severities = [s.lower() for s in severities[fail_idx:]]
-                    fail_count = sum(vulns.get(s, 0) for s in blocking_severities)
                     if fail_count > 0:
-                        self.deployment.vulnerability_report["passed"] = False
-                        self.deployment.save(update_fields=['vulnerability_report'])
                         # Link AI remediation: Senate verdict + Jules fix PR,
                         # dispatched BEFORE failing closed so remediation is
                         # already in flight when the gate rejects this build.

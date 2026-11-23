@@ -10,12 +10,15 @@ export default function LogoutPage() {
   }, []);
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+    <div
+      role="status"
+      aria-live="polite"
+      className="min-h-[calc(100vh-3.5rem)] flex items-center justify-center"
+    >
       <div className="flex items-center gap-3 text-slate-700 dark:text-slate-200">
-        <Loader2 className="h-5 w-5 animate-spin" />
+        <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
         <span>Signing you out...</span>
       </div>
-    </main>
+    </div>
   );
 }
-

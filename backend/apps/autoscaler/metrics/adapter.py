@@ -148,19 +148,20 @@ class MetricsAdapter:
 
         cpu_percent = self._latest_value(cpu)
         memory_usage = self._latest_value(memory)
-        memory_limit = max(0.0, memory_usage * 1.6)
+        configured_limit = float(getattr(service_ref, 'memory_mb', 0) or 0.0) if not isinstance(service_ref, str) else 0.0
+        memory_limit = configured_limit if configured_limit > 0 else max(0.0, memory_usage * 1.6)
         memory_percent = round(
             (memory_usage / memory_limit) * 100 if memory_limit > 0 else 0.0, 2
         )
-        network_total = self._latest_value(network)
+        network_rx_bps = self._latest_value(network)
 
         return {
             'cpu_percent': round(cpu_percent, 2),
             'memory_usage': round(memory_usage, 2),
             'memory_limit': round(memory_limit, 2),
             'memory_percent': memory_percent,
-            'network_rx_kb': round(network_total * 0.6, 2),
-            'network_tx_kb': round(network_total * 0.4, 2),
+            'network_rx_kb': round(network_rx_bps / 1024.0, 2) if network_rx_bps >= 1024 else round(network_rx_bps * 0.6, 2),
+            'network_tx_kb': round(network_rx_bps * 0.4, 2),
         }
 
     # ------------------------------------------------------------------

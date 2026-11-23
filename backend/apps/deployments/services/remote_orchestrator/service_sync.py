@@ -156,6 +156,7 @@ class ServiceSyncMixin:
             # the sablier wake middleware to node-side routers.
             "sablier_enabled": bool(getattr(service, "sablier_enabled", False)),
             "sablier_session": str(getattr(service, "sablier_session", "") or ""),
+            "encryption_at_rest_enabled": bool(getattr(service, "encryption_at_rest_enabled", False)),
         }
         try:
             from apps.deployments.models.network_scope import ScopedNetwork

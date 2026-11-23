@@ -72,6 +72,11 @@ def _recreate_remote_with_fresh_env(service, dry_run: bool = False) -> dict:
                 overrides.setdefault("SOPS_AGE_PUBLIC_KEY", _pub)
         except Exception:
             pass
+        from apps.core.crypto_daemon import apply_cryptd_remote_runtime_env
+        try:
+            apply_cryptd_remote_runtime_env(service, overrides, unlock_now=not dry_run)
+        except Exception as exc:
+            raise ContainerRefreshError(f"grid-cryptd refused remote apply-env: {exc}") from exc
         ref = (
             (getattr(service, "active_runtime_id", "") or "").strip()
             or (service.name or "").strip()
@@ -174,19 +179,24 @@ def _live_container_env(container) -> dict:
         return {}
 
 
-def _fresh_env(service, live_env=None) -> dict:
+def _fresh_env(service, live_env=None, *, unlock_cryptd: bool = True) -> dict:
     """DB rows overlaid on live container env.
 
     Parity rule (2026-09-12 outage): the live env carries
     pipeline-derived keys (notably PORT) that DB rows alone lack.
     Operator edits in the DB still win — that is the point of apply-env.
     """
+    db_rows = {
+        ev.key: ev.value
+        for ev in service.env_vars.all()
+        if not (isinstance(ev.value, str) and ev.value.startswith("gAAAA") and len(ev.value) > 50)
+    }
     try:
         from .replica_parity import merge_replica_env
-        env_vars = merge_replica_env(live_env or {}, {ev.key: ev.value for ev in service.env_vars.all()})
+        env_vars = merge_replica_env(live_env or {}, db_rows)
     except Exception:
         env_vars = dict(live_env or {})
-        env_vars.update({ev.key: ev.value for ev in service.env_vars.all()})
+        env_vars.update(db_rows)
     try:
         from apps.deployments.services.mtls_integration import get_mtls_env_vars
         env_vars.update(get_mtls_env_vars(service) or {})
@@ -202,6 +212,8 @@ def _fresh_env(service, live_env=None) -> dict:
             env_vars.setdefault("SOPS_AGE_PUBLIC_KEY", _pub)
     except Exception as exc:
         logger.debug("SOPS recipient injection skipped for %s: %s", service.name, exc)
+    from apps.core.crypto_daemon import apply_cryptd_runtime_env
+    apply_cryptd_runtime_env(service, env_vars, unlock_now=unlock_cryptd)
     return env_vars
 
 
@@ -254,6 +266,23 @@ def _container_volumes(container) -> dict:
     return volumes
 
 
+def _live_healthcheck(container) -> dict | None:
+    """Extract Config.Healthcheck normalized for docker-py containers.create()."""
+    hc = ((container.attrs or {}).get("Config", {}) or {}).get("Healthcheck")
+    if not isinstance(hc, dict) or not hc.get("Test"):
+        return None
+    mapping = (
+        ("Test", "test"),
+        ("Interval", "interval"),
+        ("Timeout", "timeout"),
+        ("Retries", "retries"),
+        ("StartPeriod", "start_period"),
+        ("StartInterval", "start_interval"),
+    )
+    out = {dst: hc[src] for src, dst in mapping if src in hc and hc[src] is not None}
+    return out or None
+
+
 def _live_extra_hosts(container) -> list[str]:
     """Return the live container's extra_hosts entries (may be empty)."""
     try:
@@ -293,7 +322,8 @@ def _resolve_gvisor_extra_hosts(service, shared_nets, client, live=None) -> list
             if svc_id:
                 clauses |= Q(service__id=svc_id)
             if project_id:
-                clauses |= Q(service__project__id=project_id, name__endswith="-shared")
+                # Include all active project addons (e.g. sibling RabbitMQ/Redis/DB) so gVisor containers reach them via /etc/hosts
+                clauses |= Q(service__project__id=project_id)
             addon_qs = addon_qs.filter(clauses)
         from apps.addons.services.addon_provisioner import (
             backing_addon_container_name,
@@ -348,7 +378,7 @@ def build_refresh_plan(service, container) -> dict:
     except Exception:
         image = ""
     primary, nets = _container_networks(container)
-    env_vars = _fresh_env(service, _live_container_env(container))
+    env_vars = _fresh_env(service, _live_container_env(container), unlock_cryptd=False)
     try:
         live_runtime = ((container.attrs or {}).get("HostConfig", {}) or {}).get("Runtime") or None
     except Exception:
@@ -470,6 +500,13 @@ def recreate_with_fresh_env(service, container_id=None, dry_run=False,
                 )
                 if hosts:
                     create_kwargs["extra_hosts"] = hosts
+        from apps.core.crypto_daemon import needs_host_gateway
+        if needs_host_gateway(env_vars):
+            hosts_list = list(create_kwargs.get("extra_hosts") or [])
+            if not any(str(h).startswith("host.docker.internal:") for h in hosts_list):
+                hosts_list.append("host.docker.internal:host-gateway")
+            create_kwargs["extra_hosts"] = hosts_list
+        if not force_default_runtime:
             from apps.deployments.services.container_runtime import (
                 ensure_sandbox_resolv_conf,
                 is_sandboxed_runtime,
@@ -493,6 +530,9 @@ def recreate_with_fresh_env(service, container_id=None, dry_run=False,
                             create_kwargs["volumes"] = _vols
                 except Exception as exc:
                     logger.debug("Refresh sandbox resolv.conf mount skipped: %s", exc)
+        live_hc = _live_healthcheck(container)
+        if live_hc:
+            create_kwargs["healthcheck"] = live_hc
         create_kwargs.update(_resource_kwargs(service))
 
         container.stop(timeout=15)

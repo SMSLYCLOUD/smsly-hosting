@@ -878,6 +878,12 @@ services:
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
       APT_CACHE_HOST: http://apt-cacher:3142
       NPM_REGISTRY_URL: http://verdaccio:4873
+      SMSLY_CRYPTD_URL: ${SMSLY_CRYPTD_URL:-}
+      CRYPTD_ENABLED: ${CRYPTD_ENABLED:-}
+      CRYPTD_DB_GATE_ENABLED: ${CRYPTD_DB_GATE_ENABLED:-}
+      CRYPTD_SHARED_SECRET: ${CRYPTD_SHARED_SECRET:-}
+      CRYPTD_PG_GATE_ADDR: ${CRYPTD_PG_GATE_ADDR:-host.docker.internal:15432}
+      CRYPTD_REDIS_GATE_ADDR: ${CRYPTD_REDIS_GATE_ADDR:-host.docker.internal:16379}
     depends_on:
       pgcat:
         condition: service_healthy
@@ -1013,6 +1019,12 @@ services:
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
       APT_CACHE_HOST: http://apt-cacher:3142
       NPM_REGISTRY_URL: http://verdaccio:4873
+      SMSLY_CRYPTD_URL: ${SMSLY_CRYPTD_URL:-}
+      CRYPTD_ENABLED: ${CRYPTD_ENABLED:-}
+      CRYPTD_DB_GATE_ENABLED: ${CRYPTD_DB_GATE_ENABLED:-}
+      CRYPTD_SHARED_SECRET: ${CRYPTD_SHARED_SECRET:-}
+      CRYPTD_PG_GATE_ADDR: ${CRYPTD_PG_GATE_ADDR:-host.docker.internal:15432}
+      CRYPTD_REDIS_GATE_ADDR: ${CRYPTD_REDIS_GATE_ADDR:-host.docker.internal:16379}
     depends_on:
       pgcat:
         condition: service_healthy
@@ -1105,6 +1117,12 @@ services:
       # CELERY_ prefix is required for celery-redbeat to pick it up
       # (see backend/config/settings.py: CELERY_REDBEAT_REDIS_URL)
       CELERY_REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@${REDIS_HOST:-redis-primary}:6379/3
+      SMSLY_CRYPTD_URL: ${SMSLY_CRYPTD_URL:-}
+      CRYPTD_ENABLED: ${CRYPTD_ENABLED:-}
+      CRYPTD_DB_GATE_ENABLED: ${CRYPTD_DB_GATE_ENABLED:-}
+      CRYPTD_SHARED_SECRET: ${CRYPTD_SHARED_SECRET:-}
+      CRYPTD_PG_GATE_ADDR: ${CRYPTD_PG_GATE_ADDR:-host.docker.internal:15432}
+      CRYPTD_REDIS_GATE_ADDR: ${CRYPTD_REDIS_GATE_ADDR:-host.docker.internal:16379}
     depends_on:
       pgcat:
         condition: service_healthy
@@ -1225,6 +1243,12 @@ services:
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+      SMSLY_CRYPTD_URL: ${SMSLY_CRYPTD_URL:-}
+      CRYPTD_ENABLED: ${CRYPTD_ENABLED:-}
+      CRYPTD_DB_GATE_ENABLED: ${CRYPTD_DB_GATE_ENABLED:-}
+      CRYPTD_SHARED_SECRET: ${CRYPTD_SHARED_SECRET:-}
+      CRYPTD_PG_GATE_ADDR: ${CRYPTD_PG_GATE_ADDR:-host.docker.internal:15432}
+      CRYPTD_REDIS_GATE_ADDR: ${CRYPTD_REDIS_GATE_ADDR:-host.docker.internal:16379}
     depends_on:
       pgcat:
         condition: service_healthy
@@ -1316,6 +1340,12 @@ services:
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
       APT_CACHE_HOST: http://apt-cacher:3142
       NPM_REGISTRY_URL: http://verdaccio:4873
+      SMSLY_CRYPTD_URL: ${SMSLY_CRYPTD_URL:-}
+      CRYPTD_ENABLED: ${CRYPTD_ENABLED:-}
+      CRYPTD_DB_GATE_ENABLED: ${CRYPTD_DB_GATE_ENABLED:-}
+      CRYPTD_SHARED_SECRET: ${CRYPTD_SHARED_SECRET:-}
+      CRYPTD_PG_GATE_ADDR: ${CRYPTD_PG_GATE_ADDR:-host.docker.internal:15432}
+      CRYPTD_REDIS_GATE_ADDR: ${CRYPTD_REDIS_GATE_ADDR:-host.docker.internal:16379}
     depends_on:
       pgcat:
         condition: service_healthy
@@ -2188,7 +2218,7 @@ services:
       - --storage.path=/alertmanager
     environment:
       - ALERT_SLACK_WEBHOOK_URL=${ALERT_SLACK_WEBHOOK_URL:-}
-      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-http://127.0.0.1:5001/alerts}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
       - ALERT_SMTP_HOST=${ALERT_SMTP_HOST:-}
       - ALERT_SMTP_PORT=${ALERT_SMTP_PORT:-}
       - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:-}
@@ -2322,6 +2352,9 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON_ENABLED:-true}
       - GF_AUTH_ANONYMOUS_ORG_NAME=${GRAFANA_ANON_ORG:-Main Org.}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=${GRAFANA_ANON_ROLE:-Viewer}
+      - GF_AUTH_ANONYMOUS_HIDE_VERSION=true
+      - GF_USERS_VIEWERS_CAN_EDIT=false
+      - GF_EXPLORE_ENABLED=false
       - GF_SECURITY_ALLOW_EMBEDDING=true
       - GF_SECURITY_COOKIE_SAMESITE=lax
     volumes:

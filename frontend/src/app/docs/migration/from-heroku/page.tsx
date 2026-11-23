@@ -1,9 +1,16 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Container } from 'lucide-react';
 
+export const metadata: Metadata = {
+    title: 'Migrating from Heroku',
+    description: 'Migrate dynos, Heroku Postgres, Redis, and buildpacks to always-on Docker workloads on Trulay Grid.',
+    alternates: { canonical: '/docs/migration/from-heroku' },
+};
+
 export default function FromHerokuPage() {
     return (
-        <main className="min-h-screen bg-white dark:bg-slate-950">
+        <div className="bg-white dark:bg-slate-950">
             <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-purple-50 to-white dark:from-purple-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
                 <div className="max-w-3xl mx-auto">
                     <Link href="/docs/migration" className="inline-flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400 hover:underline mb-4">
@@ -37,9 +44,9 @@ export default function FromHerokuPage() {
                     <table className="w-full text-sm">
                         <thead>
                             <tr className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
-                                <th className="p-3 text-left font-bold text-slate-500 uppercase text-xs">Capability</th>
-                                <th className="p-3 text-left font-bold text-slate-500 uppercase text-xs">Heroku</th>
-                                <th className="p-3 text-left font-bold text-emerald-600 uppercase text-xs bg-emerald-50/50 dark:bg-emerald-900/10">Grid</th>
+                                <th scope="col" className="p-3 text-left font-bold text-slate-700 dark:text-slate-300 uppercase text-xs">Capability</th>
+                                <th scope="col" className="p-3 text-left font-bold text-slate-700 dark:text-slate-300 uppercase text-xs">Heroku</th>
+                                <th scope="col" className="p-3 text-left font-bold text-emerald-700 dark:text-emerald-400 uppercase text-xs bg-emerald-50/50 dark:bg-emerald-900/10">Grid</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -181,6 +188,6 @@ heroku pg:psql --app your-app -c "COPY ... TO STDOUT" | \\
                     </Link>
                 </div>
             </div>
-        </main>
+        </div>
     );
 }

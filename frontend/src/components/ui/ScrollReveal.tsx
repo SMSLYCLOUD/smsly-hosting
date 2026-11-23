@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, ReactNode } from "react";
-import { motion, useInView, Variants } from "framer-motion";
+import { motion, useInView, useReducedMotion, Variants } from "framer-motion";
 
 type AnimationVariant =
   | "fadeUp"
@@ -107,6 +107,11 @@ export function ScrollReveal({
 }: ScrollRevealProps) {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: margin as any });
+  const shouldReduceMotion = useReducedMotion();
+
+  if (shouldReduceMotion) {
+    return <div className={className}>{children}</div>;
+  }
 
   if (variant === "staggerContainer") {
     return (
@@ -145,6 +150,10 @@ export function StaggerChild({
   children: ReactNode;
   className?: string;
 }) {
+  const shouldReduceMotion = useReducedMotion();
+  if (shouldReduceMotion) {
+    return <div className={className}>{children}</div>;
+  }
   return (
     <motion.div
       variants={{
@@ -169,6 +178,10 @@ export function ParallaxReveal({
   className?: string;
   parallaxOffset?: number;
 }) {
+  const shouldReduceMotion = useReducedMotion();
+  if (shouldReduceMotion) {
+    return <div className={className}>{children}</div>;
+  }
   return (
     <motion.div
       initial={{ opacity: 0, y: parallaxOffset, scale: 0.97 }}

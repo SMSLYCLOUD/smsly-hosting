@@ -1,8 +1,5 @@
 import logging
 
-logger = logging.getLogger(__name__)
-import logging
-
 from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
@@ -13,6 +10,8 @@ from apps.deployments.constants import (
 )
 from apps.core.tasks.coalesce import skip_if_recent
 from apps.deployments.services.task_encryption import decrypt_arg
+
+logger = logging.getLogger(__name__)
 
 
 def _bounded_error(exc, limit=2000):
@@ -137,6 +136,7 @@ def check_replication_health_task():
 def _dispatch_replication_alert(mesh, node, *, event_type, lag_bytes=None,
                                 rate_limit_key, rate_limit_seconds):
     """Dispatch a replication notification with per-node rate limiting."""
+    from django.contrib.auth import get_user_model
     from django.core.cache import cache
 
     from apps.deployments.models.servers import ManagedServer
@@ -146,18 +146,29 @@ def _dispatch_replication_alert(mesh, node, *, event_type, lag_bytes=None,
         return  # Already alerted recently
 
     wg_address = node.get('wg_address', '')
-    server = ManagedServer.objects.filter(wg_address=wg_address).first()
-    if not server or not server.owner_id:
+    peer = mesh.peers.filter(wg_address=wg_address).select_related('server').first()
+    server = (peer.server if peer and peer.server else None) or ManagedServer.objects.filter(wg_address=wg_address).first()
+    recipient_ids = []
+    if server and getattr(server, 'owner_id', None):
+        recipient_ids = [server.owner_id]
+    elif getattr(mesh, 'project_id', None) and getattr(mesh.project, 'owner_id', None):
+        recipient_ids = [mesh.project.owner_id]
+    else:
+        recipient_ids = list(
+            get_user_model().objects.filter(is_superuser=True, is_active=True).values_list('id', flat=True)
+        )
+    if not recipient_ids:
         return
 
-    notify_replication_issue.delay(
-        user_id=server.owner_id,
-        event_type=event_type,
-        mesh_name=mesh.name,
-        node_name=node.get('name', wg_address),
-        wg_address=wg_address,
-        lag_bytes=lag_bytes,
-    )
+    for uid in recipient_ids:
+        notify_replication_issue.delay(
+            user_id=uid,
+            event_type=event_type,
+            mesh_name=mesh.name,
+            node_name=node.get('name', wg_address),
+            wg_address=wg_address,
+            lag_bytes=lag_bytes,
+        )
     cache.set(rate_limit_key, "1", timeout=rate_limit_seconds)
 
 

@@ -1018,8 +1018,8 @@ ensure_postgres_archiving() {
 ensure_host_firewall() {
     command -v ufw >/dev/null 2>&1 || { log "ufw not installed — skipping host-firewall check"; return 0; }
     if ufw status 2>/dev/null | head -n 1 | grep -q "Status: active"; then
-        if ufw status 2>/dev/null | grep -qE '8971|8972'; then
-            log "ALERT: UFW active but 8971/8972 have allow rules — edge daemons exposed; remove those rules"
+        if ufw status 2>/dev/null | grep -qE '8971|8972|9105|15432|16379'; then
+            log "ALERT: UFW active but internal daemon port (8971/8972/9105/15432/16379) has allow rules — daemons exposed; remove those rules"
         else
             log "host firewall active (edge daemon ports isolated)"
         fi
@@ -1028,7 +1028,7 @@ ensure_host_firewall() {
     # Do NOT auto-enable from cron: lib/harden_ufw.sh owns the ruleset and
     # a blind enable could lock SSH on a host whose rules were never
     # installed. Alert loudly instead.
-    log "ALERT: UFW is INACTIVE — napd (:8972) and edge-sidecar (:8971) bind 0.0.0.0 and rely on the host firewall. Run: bash lib/harden_ufw.sh or enable UFW with SSH allowed."
+    log "ALERT: UFW is INACTIVE — napd (:8972), edge-sidecar (:8971), and grid-cryptd (:9105) bind 0.0.0.0 and rely on the host firewall. Run: bash lib/harden_ufw.sh or enable UFW with SSH allowed."
 }
 
 # ── 19b. Per-tenant encrypted addon volumes & keystore integrity ───────
@@ -1151,6 +1151,36 @@ ensure_mesh_dns_serving
 ensure_postgres_archiving
 ensure_host_firewall
 ensure_encrypted_volumes_healthy
+
+# ── 19c. Opt-in grid-cryptd daemon & external vault health check ────
+ensure_cryptd_healthy() {
+    local env_file="/etc/smsly/cryptd.env"
+    local enabled="${CRYPTD_ENABLED:-false}"
+    local listen_addr="${CRYPTD_LISTEN_ADDR:-}"
+    if [ -f "$env_file" ]; then
+        if [ -z "${CRYPTD_ENABLED:-}" ]; then
+            enabled=$(grep -E '^CRYPTD_ENABLED=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '\r"' | tr '[:upper:]' '[:lower:]' || echo false)
+        fi
+        if [ -z "$listen_addr" ]; then
+            listen_addr=$(grep -E '^CRYPTD_LISTEN_ADDR=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '\r"' || true)
+        fi
+    fi
+    listen_addr="${listen_addr:-127.0.0.1:9105}"
+    listen_addr="${listen_addr/0.0.0.0:/127.0.0.1:}"
+    if [ "$enabled" != "true" ]; then
+        return 0
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        if ! systemctl is-active --quiet smsly-cryptd; then
+            log "ALERT: CRYPTD_ENABLED=true but smsly-cryptd is inactive — attempting start"
+            timeout 30 systemctl start smsly-cryptd 2>/dev/null || log "ALERT: failed to start smsly-cryptd"
+        fi
+    fi
+    if ! timeout 10 curl -fsS "http://${listen_addr}/health" >/dev/null 2>&1; then
+        log "ALERT: grid-cryptd /health failed or LOCKED on ${listen_addr} (check external vault connectivity)"
+    fi
+}
+ensure_cryptd_healthy
 
 # ── 20. Host /etc/hosts must not hijack customer or platform domains ──
 # 127.0.0.1 mapping of customer/platform domains in /etc/hosts poisons

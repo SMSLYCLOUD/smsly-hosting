@@ -748,6 +748,15 @@ class Service(TimeStampedModel):
         help_text="List of allowed deployment target environments (e.g. ['production', 'staging'])",
     )
 
+    # ── Opt-in Encryption-at-Rest & DB Point-of-Contact Locking ─────────
+    encryption_at_rest_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text=(
+            "Opt in to grid-cryptd per-service encryption at rest (unique weekly SEK), "
+            "encrypted volumes, encrypted backups, and DB/Redis point-of-contact locking."
+        ),
+    )
+
     def __str__(self):
         if not self.slug or self.slug == self.name:
             return str(self.name)

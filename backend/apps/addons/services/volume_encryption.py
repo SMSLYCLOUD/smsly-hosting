@@ -161,10 +161,42 @@ def _crypt_script_path() -> Path:
     return Path("/opt/smsly-hosting/scripts/smsly-volume-crypt.sh")
 
 
-def _daemon_url() -> str:
+def _is_service_cryptd_enabled(addon: Any) -> bool:
+    if addon is None:
+        return False
+    try:
+        from apps.core.crypto_daemon import cryptd_client, is_service_encryption_enabled
+        svc = getattr(addon, "service", None)
+        return bool(
+            svc is not None
+            and is_service_encryption_enabled(svc)
+            and cryptd_client.is_enabled()
+        )
+    except Exception:
+        return False
+
+
+def _existing_wrapped_is_cryptd(addon: Any) -> bool:
+    if addon is None:
+        return False
+    meta = dict(getattr(addon, "provider_metadata", None) or {})
+    ve = dict(meta.get("volume_encryption") or {})
+    return str(ve.get("wrapped_dek") or "").startswith("grid:v1:")
+
+
+def _daemon_url(addon: Any = None, *, allow_existing_cryptd: bool = False) -> str:
     explicit = (os.getenv("SMSLY_VOLUME_DAEMON_URL") or "").strip().rstrip("/")
     if explicit:
         return explicit
+    if _is_service_cryptd_enabled(addon) or (
+        allow_existing_cryptd and _existing_wrapped_is_cryptd(addon)
+    ):
+        try:
+            from apps.core.crypto_daemon import cryptd_client
+            if cryptd_client.is_enabled():
+                return cryptd_client._base_url()
+        except Exception:
+            pass
     if (os.getenv("SMSLY_PROBE_NAPD_VOLUMES") or "").strip().lower() in ("1", "true", "yes"):
         return (os.getenv("NAPD_BASE_URL") or "http://host.docker.internal:8972").strip().rstrip("/")
     return ""
@@ -172,18 +204,27 @@ def _daemon_url() -> str:
 
 def _daemon_headers() -> dict[str, str]:
     secret = (
-        os.getenv("SMSLY_VOLUME_DAEMON_SECRET")
+        os.getenv("CRYPTD_SHARED_SECRET")
+        or os.getenv("SMSLY_VOLUME_DAEMON_SECRET")
         or os.getenv("NAPD_SHARED_SECRET")
         or ""
     ).strip()
     headers = {"Content-Type": "application/json"}
     if secret:
+        headers["X-Cryptd-Secret"] = secret
         headers["X-Napd-Secret"] = secret
     return headers
 
 
-def _daemon_request(path: str, payload: dict | None = None, *, method: str = "POST", timeout: int = 30) -> tuple[int, dict]:
-    base = _daemon_url()
+def _daemon_request(
+    path: str,
+    payload: dict | None = None,
+    *,
+    method: str = "POST",
+    timeout: int = 30,
+    base_url: str | None = None,
+) -> tuple[int, dict]:
+    base = (base_url if base_url is not None else _daemon_url()).strip().rstrip("/")
     if not base:
         raise VolumeEncryptionError("Volume daemon URL not configured")
     url = f"{base}{path}"
@@ -204,12 +245,12 @@ def _daemon_request(path: str, payload: dict | None = None, *, method: str = "PO
         raise VolumeEncryptionError(f"Volume daemon request failed ({path}): {exc}") from exc
 
 
-def _check_daemon_capable() -> tuple[bool, str]:
-    base = _daemon_url()
+def _check_daemon_capable(addon: Any = None) -> tuple[bool, str]:
+    base = _daemon_url(addon)
     if not base:
         return False, "volume daemon URL not configured"
     try:
-        code, body = _daemon_request("/volumes/health", payload=None, method="GET", timeout=3)
+        code, body = _daemon_request("/volumes/health", payload=None, method="GET", timeout=3, base_url=base)
         if code == 200 and body.get("ok", True):
             return True, "daemon available"
         return False, f"volume daemon returned HTTP {code}"
@@ -268,7 +309,7 @@ def _check_luks_capable() -> tuple[bool, str]:
     return True, "luks2 loopback supported"
 
 
-def preflight(backend: str | None = None) -> dict[str, Any]:
+def preflight(backend: str | None = None, *, addon: Any = None) -> dict[str, Any]:
     """Probe available per-tenant volume encryption capabilities without mutating state."""
     target = (backend or get_preferred_backend()).strip().lower()
     if target not in _VALID_BACKENDS:
@@ -281,7 +322,7 @@ def preflight(backend: str | None = None) -> dict[str, Any]:
 
     for cand in order:
         if cand == "daemon":
-            ok, msg = _check_daemon_capable()
+            ok, msg = _check_daemon_capable(addon=addon)
         elif cand == "fscrypt":
             ok, msg = _check_fscrypt_capable()
         elif cand == "luks":
@@ -412,7 +453,7 @@ def prepare_volume(
         _save_addon_volume_metadata(addon, ve_meta)
         return ve_meta
 
-    pf = preflight()
+    pf = preflight(addon=addon)
     if not pf["available"]:
         reason = pf["reason"]
         if policy == "required":
@@ -460,22 +501,40 @@ def prepare_volume(
         _save_addon_volume_metadata(addon, ve_meta)
         return ve_meta
 
-    raw_dek, wrapped_dek, key_id = generate_wrapped_dek()
+    use_cryptd_zero_dek = (
+        backend == "daemon"
+        and _is_service_cryptd_enabled(addon)
+        and not (os.getenv("SMSLY_VOLUME_DAEMON_URL") or "").strip()
+    )
+
+    svc = getattr(addon, "service", None)
+    svc_id = str(getattr(svc, "id", "") or "")
+    proj_id = str(getattr(svc, "project_id", "") or "default")
+
+    raw_dek = b""
+    wrapped_dek = ""
+    key_id = ""
+    if not use_cryptd_zero_dek:
+        raw_dek, wrapped_dek, key_id = generate_wrapped_dek()
     cipher = "aes-256-xts-luks2" if backend == "luks" else "fscrypt-v2-aes-256-xts"
     host_path = ""
     try:
         if backend == "daemon":
+            payload = {
+                "volume_name": volume_name,
+                "service_id": svc_id,
+                "project_id": proj_id,
+                "dek_hex": "" if use_cryptd_zero_dek else raw_dek.hex(),
+                "wrapped_dek": wrapped_dek,
+                "key_id": key_id,
+                "owner_uid": owner_uid,
+                "owner_gid": owner_gid,
+            }
             code, body = _daemon_request(
                 "/volumes/provision",
-                {
-                    "volume_name": volume_name,
-                    "dek_hex": raw_dek.hex(),
-                    "wrapped_dek": wrapped_dek,
-                    "key_id": key_id,
-                    "owner_uid": owner_uid,
-                    "owner_gid": owner_gid,
-                },
+                payload,
                 timeout=120,
+                base_url=_daemon_url(addon),
             )
             if code >= 400 or not body.get("ok", True):
                 raise VolumeEncryptionError(
@@ -483,6 +542,10 @@ def prepare_volume(
                 )
             host_path = str(body.get("host_path") or "")
             cipher = str(body.get("cipher") or cipher)
+            if body.get("wrapped_dek"):
+                wrapped_dek = str(body["wrapped_dek"])
+            if body.get("key_id"):
+                key_id = str(body["key_id"])
         else:
             res = _run_crypt_script(
                 "provision",
@@ -539,6 +602,28 @@ def verify_or_unlock(addon: Any, volume_name: str) -> dict[str, Any]:
 
     wrapped_dek = str(ve.get("wrapped_dek") or "")
     backend = str(ve.get("backend") or "auto")
+    svc = getattr(addon, "service", None)
+    svc_id = str(getattr(svc, "id", "") or "")
+    proj_id = str(getattr(svc, "project_id", "") or "default")
+
+    if backend == "daemon" and wrapped_dek.startswith("grid:v1:"):
+        code, body = _daemon_request(
+            "/volumes/unlock",
+            {
+                "volume_name": volume_name,
+                "service_id": svc_id,
+                "project_id": proj_id,
+                "wrapped_dek": wrapped_dek,
+            },
+            timeout=60,
+            base_url=_daemon_url(addon, allow_existing_cryptd=True),
+        )
+        if code >= 400 or not body.get("ok", True):
+            raise VolumeEncryptionError(
+                f"Failed to verify/unlock volume {volume_name} via grid-cryptd ({code}): {body.get('error', '')}"
+            )
+        return ve
+
     raw_dek = unwrap_dek(wrapped_dek)
 
     if backend == "daemon":
@@ -546,10 +631,13 @@ def verify_or_unlock(addon: Any, volume_name: str) -> dict[str, Any]:
             "/volumes/unlock",
             {
                 "volume_name": volume_name,
+                "service_id": svc_id,
+                "project_id": proj_id,
                 "dek_hex": raw_dek.hex(),
                 "wrapped_dek": wrapped_dek,
             },
             timeout=60,
+            base_url=_daemon_url(addon, allow_existing_cryptd=True),
         )
         if code >= 400 or not body.get("ok", True):
             raise VolumeEncryptionError(
@@ -585,10 +673,13 @@ def cleanup_volume(addon: Any, volume_name: str) -> bool:
 
     try:
         if backend == "daemon":
+            svc = getattr(addon, "service", None)
+            svc_id = str(getattr(svc, "id", "") or "")
             code, body = _daemon_request(
                 "/volumes/cleanup",
-                {"volume_name": volume_name},
+                {"volume_name": volume_name, "service_id": svc_id},
                 timeout=60,
+                base_url=_daemon_url(addon, allow_existing_cryptd=True),
             )
             if code >= 400 or not body.get("ok", True):
                 logger.warning("Daemon cleanup failed for %s: %s", volume_name, body)

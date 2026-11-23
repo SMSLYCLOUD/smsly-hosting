@@ -1,9 +1,16 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Rocket } from 'lucide-react';
 
+export const metadata: Metadata = {
+  title: 'Getting Started',
+  description: 'Connect your Git repository, create a service, and deploy your first application on Trulay Grid.',
+  alternates: { canonical: '/docs/getting-started' },
+};
+
 export default function GettingStartedPage() {
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
+    <div className="bg-white dark:bg-slate-950">
       <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-blue-50/60 to-white dark:from-blue-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-3xl mx-auto">
           <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline mb-6">
@@ -65,6 +72,6 @@ export default function GettingStartedPage() {
           </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

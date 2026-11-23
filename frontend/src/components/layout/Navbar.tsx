@@ -5,81 +5,92 @@ import Link from 'next/link';
 import { featureFlags } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
 import { usePathname, useRouter } from 'next/navigation';
-import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare, Plug, Search, Crown } from 'lucide-react';
+import {
+  Settings, Menu, X, Home, LogOut, Rocket, Sparkles, Monitor, Radio, Brain,
+  Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network,
+  FileCode, ArrowLeftRight, GitCompare, Plug, Search, Crown,
+} from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
 import { NotificationsDropdown } from './NotificationsDropdown';
-import { m, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { api } from '@/lib/api';
 import { logout as performLogout } from '@/lib/auth';
+import { useAuth } from '@/components/auth-provider';
 
 export function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = React.useState(false);
-  const [isScrolled, setIsScrolled] = React.useState(false);
-  const [user, setUser] = React.useState<{email?: string; is_staff?: boolean} | null>(null);
+  const [isStaffVerified, setIsStaffVerified] = React.useState<boolean | null>(null);
+  const { user: authUser } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const userMenuRef = React.useRef<HTMLDivElement>(null);
+  const prefersReducedMotion = useReducedMotion();
 
   React.useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 10);
+    let active = true;
+    if (!authUser) {
+      setIsStaffVerified(null);
+      return;
+    }
+    const baseStaff = Boolean(authUser.is_staff || authUser.is_superuser);
+    if (baseStaff) {
+      setIsStaffVerified(true);
+      return;
+    }
+    api.get('/system/config/')
+      .then(() => {
+        if (active) setIsStaffVerified(true);
+      })
+      .catch(() => {
+        if (active) setIsStaffVerified(false);
+      });
+    return () => {
+      active = false;
     };
-    window.addEventListener('scroll', handleScroll);
+  }, [authUser]);
 
-    // Fetch user via the cookie-authenticated axios instance. A 401
-    // means the user is logged out and we keep the menu in the
-    // anonymous state. There is no client-side token to read.
-    (async () => {
-      try {
-        const userRes = await api.get('/auth/user/');
-        if (!userRes.data) return;
-        const data = userRes.data;
-
-        let isStaff = Boolean(data?.is_staff || data?.is_superuser);
-        if (!isStaff) {
-          try {
-            await api.get('/system/config/');
-            isStaff = true;
-          } catch {
-            isStaff = false;
-          }
-        }
-
-        setUser({
-          email: data?.email || data?.username || 'User',
-          is_staff: isStaff,
-        });
-      } catch {
-        setUser(null);
-      }
-    })();
-
+  React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-        if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
-            setIsUserMenuOpen(false);
-        }
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
-
     return () => {
-        window.removeEventListener('scroll', handleScroll);
-        document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
 
+  React.useEffect(() => {
+    setIsMenuOpen(false);
+    setIsUserMenuOpen(false);
+  }, [pathname]);
+
+  const user = React.useMemo(() => {
+    if (!authUser) return null;
+    return {
+      email: authUser.email || authUser.username || 'User',
+      is_staff: isStaffVerified ?? Boolean(authUser.is_staff || authUser.is_superuser),
+    };
+  }, [authUser, isStaffVerified]);
+
   const handleLogout = () => {
-    setUser(null);
     setIsUserMenuOpen(false);
     performLogout();
   };
 
+  const openSearchPalette = () => {
+    window.dispatchEvent(new CustomEvent('smsly:open-command-palette'));
+  };
+
   const publicLinks = [
     { href: '/#features', label: 'Features' },
+    { href: '/compare', label: 'Compare' },
     { href: '/store', label: 'Templates' },
-    { href: '/marketplace', label: 'Addons' },
+    { href: '/docs/addons', label: 'Addons' },
     { href: '/pricing', label: 'Pricing' },
     { href: '/docs', label: 'Docs' },
     { href: '/status', label: 'Status' },
@@ -88,7 +99,7 @@ export function Navbar() {
   const authLinks: Array<{
     href: string;
     label: string;
-    icon: any;
+    icon: React.ComponentType<{ size?: number; className?: string }>;
     tier: 'primary' | 'secondary' | 'tertiary';
   }> = [
     { href: '/client', label: 'Client Area', icon: Home, tier: 'primary' },
@@ -136,180 +147,200 @@ export function Navbar() {
   const tertiaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'tertiary');
 
   return (
-    <nav
-        className={`sticky top-0 z-50 w-full transition-all duration-300 border-b border-white/5 bg-[#0a0c10] shadow-2xl`}
-    >
+    <header className="sticky top-0 z-50 w-full transition-colors duration-200 border-b border-white/10 bg-[#0a0c10] text-zinc-100">
       <div className="w-full grid h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[2200px] mx-auto">
-
         {/* Logo - Left */}
-        <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-2.5">
-            <div className="rounded-md bg-white p-0.5 shadow-lg shadow-emerald-500/10 group-hover:scale-105 transition-transform">
-                <Image src="/images/mini_logo.png" alt="Grid" width={24} height={28} className="h-7 w-auto object-contain" priority />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-bold text-lg tracking-tight text-white leading-none">Grid</span>
-              {!user && (
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="text-[8px] font-bold text-emerald-500 tracking-[0.15em] uppercase">Secured By</span>
-                  <span className="text-[9px] font-extrabold text-white/70 tracking-[0.05em] uppercase">Trulay</span>
-                </div>
-              )}
-            </div>
+        <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 rounded-md">
+          <div className="rounded-md bg-white p-0.5 group-hover:scale-105 transition-transform">
+            <Image src="/images/mini_logo.png" alt="Trulay Grid" width={24} height={28} className="h-7 w-auto object-contain" priority />
+          </div>
+          <div className="flex flex-col">
+            <span className="font-bold text-lg tracking-tight text-white leading-none">Grid</span>
+            {!user && (
+              <div className="flex items-center gap-1 mt-0.5">
+                <span className="text-[11px] font-semibold text-emerald-400 tracking-wide uppercase leading-none">By Trulay</span>
+              </div>
+            )}
+          </div>
         </Link>
 
         {/* Nav Links - Center */}
-        <nav className="hidden min-w-0 items-center justify-center md:flex md:flex-1">
-            <div
-              className={
-                user
-                  ? "grid w-full max-w-[1180px] grid-cols-7 items-center gap-1 rounded-xl border border-white/5 bg-[#12151c]/60 p-1"
-                  : "flex items-center gap-1 overflow-x-auto"
-              }
-            >
-            {!user && publicLinks.map((link) => {
+        <nav aria-label="Primary navigation" className="hidden min-w-0 items-center justify-center md:flex md:flex-1">
+          <div
+            className={
+              user
+                ? 'grid w-full max-w-[1180px] grid-cols-7 items-center gap-1 rounded-xl border border-white/10 bg-[#12151c]/60 p-1'
+                : 'flex items-center gap-1 overflow-x-auto'
+            }
+          >
+            {!user &&
+              publicLinks.map((link) => {
                 const isActive = pathname === link.href;
                 return (
-                     <Link
-                         key={link.href}
-                         href={link.href}
-                         prefetch={false}
-                         className={`
-                             shrink-0 px-4 py-1.5 rounded-lg text-[13px] font-medium transition-colors
-                             ${isActive
-                                ? 'text-emerald-400 bg-emerald-500/10'
-                                : 'text-zinc-400 hover:text-white hover:bg-white/5'}
-                        `}
-                    >
-                        {link.label}
-                    </Link>
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    prefetch={false}
+                    className={`shrink-0 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                      isActive
+                        ? 'text-emerald-400 bg-emerald-500/10'
+                        : 'text-zinc-300 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    {link.label}
+                  </Link>
                 );
-            })}
-            {user && primaryAuthLinks.map((link) => {
+              })}
+            {user &&
+              primaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
                 return (
-                     <Link
-                         key={link.href}
-                         href={link.href}
-                         prefetch={false}
-                         title={link.label}
-                         className={`
-                             relative flex h-9 min-w-0 items-center justify-center gap-2 rounded-lg px-2 text-[12px] font-semibold tracking-normal transition-all duration-200
-                             ${isActive
-                                ? 'text-white bg-[#1e232d] shadow-[0_0_0_1px_rgba(255,255,255,0.05)] border border-white/10'
-                                : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'}
-                        `}
-                    >
-                        <Icon size={15} className={`shrink-0 ${isActive ? 'text-emerald-400' : 'text-zinc-600'}`} />
-                        <span className="min-w-0 truncate">{link.label}</span>
-                    </Link>
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    prefetch={false}
+                    title={link.label}
+                    className={`relative flex h-9 min-w-0 items-center justify-center gap-2 rounded-lg px-2 text-xs font-semibold tracking-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                      isActive
+                        ? 'text-white bg-[#1e232d] border border-white/10'
+                        : 'text-zinc-300 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Icon size={15} className={`shrink-0 ${isActive ? 'text-emerald-400' : 'text-zinc-400'}`} />
+                    <span className="min-w-0 truncate">{link.label}</span>
+                  </Link>
                 );
-            })}
-            </div>
+              })}
+          </div>
         </nav>
 
         {/* Right Side Buttons (Desktop) */}
         <div className="hidden items-center justify-end space-x-2 md:flex">
           {user && (
-           <Link href="/new" prefetch={false}>
-               <Button size="sm" className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-3 rounded-lg shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95">
-                   Deploy
-               </Button>
-           </Link>
+            <Button
+              size="sm"
+              asChild
+              className="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 rounded-lg"
+            >
+              <Link href="/new" prefetch={false}>
+                Deploy
+              </Link>
+            </Button>
           )}
 
-          <div className="w-px h-6 bg-border mx-2" />
+          <div className="w-px h-6 bg-white/10 mx-1" aria-hidden="true" />
 
           <button
-            onClick={() => {
-              document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }));
-            }}
-            className="flex items-center gap-2 h-9 rounded-lg border border-border bg-white/5 px-3 text-sm text-muted-foreground hover:bg-white/10 transition-colors"
+            type="button"
+            onClick={openSearchPalette}
+            aria-label="Search pages and commands"
+            className="flex items-center gap-2 h-9 rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-zinc-200 hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
           >
-            <Search className="h-4 w-4" />
+            <Search className="h-4 w-4" aria-hidden="true" />
             <span className="hidden lg:inline">Search</span>
-            <kbd className="pointer-events-none hidden select-none rounded border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground lg:inline">
-              <span className="text-xs">&#8984;</span>K
+            <kbd className="pointer-events-none hidden select-none rounded border border-white/15 bg-white/5 px-1.5 py-0.5 font-mono text-[11px] font-medium text-zinc-300 lg:inline">
+              ⌘K
             </kbd>
           </button>
 
+          {user && <NotificationsDropdown />}
           <ModeToggle />
 
           {user ? (
-             <div className="relative" ref={userMenuRef}>
-                <Button
-                    variant="ghost"
-                    className="relative h-9 w-9 rounded-full overflow-hidden border border-border"
-                    onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                    aria-label="User menu"
-                    aria-haspopup="true"
-                    aria-expanded={isUserMenuOpen}
-                    aria-controls="user-menu"
-                >
-                    <div className="w-full h-full bg-muted flex items-center justify-center text-muted-foreground font-semibold">
-                        {user.email?.[0].toUpperCase()}
-                    </div>
-                </Button>
+            <div className="relative" ref={userMenuRef}>
+              <Button
+                variant="ghost"
+                className="relative h-9 w-9 rounded-full overflow-hidden border border-white/15 text-zinc-100 hover:bg-white/10"
+                onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                aria-label="User menu"
+                aria-haspopup="true"
+                aria-expanded={isUserMenuOpen}
+                aria-controls="user-menu"
+              >
+                <span className="w-full h-full bg-zinc-800 flex items-center justify-center text-zinc-100 font-semibold">
+                  {user.email?.[0]?.toUpperCase() || 'U'}
+                </span>
+              </Button>
 
-                <AnimatePresence>
+              <AnimatePresence>
                 {isUserMenuOpen && (
-                    <m.div
-                        id="user-menu"
-                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                        transition={{ duration: 0.1 }}
-                        className="absolute right-0 mt-2 w-56 bg-card border border-border rounded-md shadow-lg py-1 z-50 text-card-foreground"
+                  <m.div
+                    id="user-menu"
+                    initial={prefersReducedMotion ? false : { opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.95 }}
+                    transition={{ duration: 0.1 }}
+                    className="absolute right-0 mt-2 w-56 bg-card border border-border rounded-md shadow-lg py-1 z-50 text-card-foreground"
+                  >
+                    <div className="px-3 py-2 border-b border-border">
+                      <p className="text-sm font-medium">My Account</p>
+                      <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2"
+                      onClick={() => router.push('/settings')}
                     >
-                        <div className="px-3 py-2 border-b border-border">
-                            <p className="text-sm font-medium">My Account</p>
-                            <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                        </div>
-                        <button
-                            className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2"
-                            onClick={() => router.push('/settings')}
-                        >
-                            <Settings size={14} /> Settings
-                        </button>
-                        <button
-                            className="w-full text-left px-3 py-2 text-sm hover:bg-red-500/10 text-red-500 flex items-center gap-2"
-                            onClick={handleLogout}
-                        >
-                            <LogOut size={14} /> Log out
-                        </button>
-                    </m.div>
+                      <Settings size={14} aria-hidden="true" /> Settings
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-red-500/10 text-red-500 flex items-center gap-2"
+                      onClick={handleLogout}
+                    >
+                      <LogOut size={14} aria-hidden="true" /> Log out
+                    </button>
+                  </m.div>
                 )}
-                </AnimatePresence>
-             </div>
+              </AnimatePresence>
+            </div>
           ) : (
-            <Link href="/login" prefetch={false}>
-                <Button variant="ghost" size="sm">Login</Button>
-            </Link>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" asChild className="text-zinc-200 hover:text-white hover:bg-white/10">
+                <Link href="/login" prefetch={false}>
+                  Login
+                </Link>
+              </Button>
+              <Button size="sm" asChild className="bg-emerald-700 hover:bg-emerald-600 text-white font-semibold rounded-lg">
+                <Link href="/register" prefetch={false}>
+                  Get Started
+                </Link>
+              </Button>
+            </div>
           )}
         </div>
 
         {/* Mobile Menu Button */}
-        <div className="flex md:hidden items-center gap-4">
-            <ModeToggle />
-            <button
-                className="text-foreground focus:outline-none p-2 rounded-md hover:bg-muted"
-                onClick={() => setIsMenuOpen(!isMenuOpen)}
-                aria-label={isMenuOpen ? "Close menu" : "Open menu"}
-                aria-expanded={isMenuOpen}
-                aria-controls="mobile-menu"
-            >
-                {isMenuOpen ? <X size={24} /> : <Menu size={24} />}
-            </button>
+        <div className="flex md:hidden items-center justify-end gap-2 col-start-3">
+          <button
+            type="button"
+            onClick={openSearchPalette}
+            aria-label="Search pages and commands"
+            className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-md text-zinc-200 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+          >
+            <Search size={20} aria-hidden="true" />
+          </button>
+          <ModeToggle />
+          <button
+            type="button"
+            className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] text-zinc-100 rounded-md hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            aria-label={isMenuOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={isMenuOpen}
+            aria-controls="mobile-menu"
+          >
+            {isMenuOpen ? <X size={22} aria-hidden="true" /> : <Menu size={22} aria-hidden="true" />}
+          </button>
         </div>
       </div>
 
-      {/* Row 2+3: Infrastructure & Tools ΓÇö single container, divided */}
+      {/* Row 2+3: Infrastructure & Tools — single container, divided */}
       {user && (secondaryAuthLinks.length > 0 || tertiaryAuthLinks.length > 0) && (
-        <div className="hidden md:block border-t border-white/5 bg-[#0a0c10]/80 backdrop-blur-md">
+        <div className="hidden md:block border-t border-white/10 bg-[#0a0c10]/90 backdrop-blur-md">
           <div className="w-full px-4 sm:px-6 lg:px-8 py-1 max-w-[2200px] mx-auto">
-            {/* Infrastructure row */}
-            <div className="flex items-center justify-center gap-1 py-1">
-              <span className="text-[9px] uppercase tracking-[0.2em] text-zinc-600 font-bold mr-4 shrink-0">Infra</span>
+            <nav aria-label="Infrastructure navigation" className="flex items-center justify-center gap-1 py-1">
+              <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-bold mr-4 shrink-0">Infra</span>
               {secondaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
@@ -318,23 +349,21 @@ export function Navbar() {
                     key={link.href}
                     href={link.href}
                     prefetch={false}
-                    className={`shrink-0 px-3 py-1 rounded-md text-[11px] font-semibold transition-colors flex items-center gap-2 ${
+                    className={`shrink-0 px-3 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-2 ${
                       isActive
-                        ? 'bg-emerald-500/10 text-emerald-400'
-                        : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'
+                        ? 'bg-emerald-500/15 text-emerald-400'
+                        : 'text-zinc-300 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    <Icon size={12} className={isActive ? 'text-emerald-500' : 'text-zinc-600'} />
+                    <Icon size={12} className={isActive ? 'text-emerald-400' : 'text-zinc-400'} />
                     {link.label}
                   </Link>
                 );
               })}
-            </div>
-            {/* Subtle divider */}
-            <div className="border-t border-white/5 mx-auto max-w-2xl" />
-            {/* Tools row */}
-            <div className="flex items-center justify-center gap-1 py-1">
-              <span className="text-[9px] uppercase tracking-[0.2em] text-zinc-600 font-bold mr-4 shrink-0">Tools</span>
+            </nav>
+            <div className="border-t border-white/10 mx-auto max-w-2xl" />
+            <nav aria-label="Tools navigation" className="flex items-center justify-center gap-1 py-1">
+              <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-bold mr-4 shrink-0">Tools</span>
               {tertiaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
@@ -343,18 +372,18 @@ export function Navbar() {
                     key={link.href}
                     href={link.href}
                     prefetch={false}
-                    className={`shrink-0 px-3 py-1 rounded-md text-[11px] font-semibold transition-colors flex items-center gap-2 ${
+                    className={`shrink-0 px-3 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-2 ${
                       isActive
-                        ? 'bg-emerald-500/10 text-emerald-400'
-                        : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'
+                        ? 'bg-emerald-500/15 text-emerald-400'
+                        : 'text-zinc-300 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    <Icon size={12} className={isActive ? 'text-emerald-500' : 'text-zinc-600'} />
+                    <Icon size={12} className={isActive ? 'text-emerald-400' : 'text-zinc-400'} />
                     {link.label}
                   </Link>
                 );
               })}
-            </div>
+            </nav>
           </div>
         </div>
       )}
@@ -362,53 +391,86 @@ export function Navbar() {
       {/* Mobile Menu Dropdown */}
       <AnimatePresence>
         {isMenuOpen && (
-            <m.div
-                id="mobile-menu"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="md:hidden bg-background border-b border-border overflow-hidden"
-            >
-                <div className="p-4 space-y-4">
-                    {user && (
-                    <nav className="flex flex-col space-y-2">
-                        {authLinks.map((link) => (
-                             <Link
-                                 key={link.href}
-                                 href={link.href}
-                                 prefetch={false}
-                                 className={`flex items-center gap-3 p-3 rounded-lg font-medium ${
-                                     pathname === link.href ? 'bg-primary/10 text-primary' : 'text-foreground/80 hover:bg-muted'
-                                 }`}
-                                onClick={() => setIsMenuOpen(false)}
-                            >
-                                <link.icon size={20} /> {link.label}
-                            </Link>
-                        ))}
-                    </nav>
-                    )}
-                    <div className="pt-4 border-t border-border flex flex-col gap-3">
-                        {user && (
-                        <Link href="/new" prefetch={false} onClick={() => setIsMenuOpen(false)}>
-                            <Button className="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white font-bold h-11">
-                                Deploy Project
-                            </Button>
-                        </Link>
-                        )}
-                        {user ? (
-                             <Button variant="destructive" className="w-full justify-start" onClick={() => { handleLogout(); setIsMenuOpen(false); }}>
-                                <LogOut className="mr-2 h-4 w-4" /> Log out
-                             </Button>
-                        ) : (
-                            <Link href="/login" prefetch={false} onClick={() => setIsMenuOpen(false)}>
-                                <Button variant="outline" className="w-full">Login</Button>
-                            </Link>
-                        )}
-                    </div>
-                </div>
-            </m.div>
+          <m.div
+            id="mobile-menu"
+            initial={prefersReducedMotion ? false : { opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
+            className="md:hidden bg-[#0a0c10] text-zinc-100 border-b border-white/10 overflow-hidden"
+          >
+            <div className="p-4 space-y-4">
+              {user ? (
+                <nav aria-label="Mobile dashboard navigation" className="flex flex-col space-y-1">
+                  {authLinks.map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      prefetch={false}
+                      className={`flex items-center gap-3 min-h-[44px] px-3 py-2.5 rounded-lg font-medium ${
+                        pathname === link.href ? 'bg-emerald-500/15 text-emerald-400' : 'text-zinc-200 hover:bg-white/5'
+                      }`}
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      <link.icon size={18} /> {link.label}
+                    </Link>
+                  ))}
+                </nav>
+              ) : (
+                <nav aria-label="Mobile public navigation" className="flex flex-col space-y-1">
+                  {publicLinks.map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      prefetch={false}
+                      className={`flex items-center min-h-[44px] px-3 py-2.5 rounded-lg font-medium ${
+                        pathname === link.href ? 'bg-emerald-500/15 text-emerald-400' : 'text-zinc-200 hover:bg-white/5'
+                      }`}
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      {link.label}
+                    </Link>
+                  ))}
+                </nav>
+              )}
+
+              <div className="pt-4 border-t border-white/10 flex flex-col gap-3">
+                {user ? (
+                  <>
+                    <Button asChild className="w-full bg-emerald-700 hover:bg-emerald-600 text-white font-bold h-11">
+                      <Link href="/new" prefetch={false} onClick={() => setIsMenuOpen(false)}>
+                        Deploy Project
+                      </Link>
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      className="w-full justify-start h-11"
+                      onClick={() => {
+                        handleLogout();
+                        setIsMenuOpen(false);
+                      }}
+                    >
+                      <LogOut className="mr-2 h-4 w-4" aria-hidden="true" /> Log out
+                    </Button>
+                  </>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <Button asChild className="w-full bg-emerald-700 hover:bg-emerald-600 text-white font-bold h-11">
+                      <Link href="/register" prefetch={false} onClick={() => setIsMenuOpen(false)}>
+                        Get Started
+                      </Link>
+                    </Button>
+                    <Button variant="outline" asChild className="w-full h-11 border-white/20 text-white hover:bg-white/10">
+                      <Link href="/login" prefetch={false} onClick={() => setIsMenuOpen(false)}>
+                        Login
+                      </Link>
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </m.div>
         )}
       </AnimatePresence>
-    </nav>
+    </header>
   );
 }

@@ -1,169 +1,137 @@
-'use client';
-
-import { useState, useEffect } from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Check, X, Zap, Shield, Users, Building2, ChevronDown, Loader2 } from 'lucide-react';
-import { billingApi, PricingPlan } from '@/lib/api';
+import { Check, Shield, Zap } from 'lucide-react';
+import { PricingFaq } from '@/components/pricing/PricingFaq';
+
+export const metadata: Metadata = {
+  title: 'Pricing',
+  description:
+    'Trulay Grid is 100% free and MIT open source. Self-host unlimited servers, apps, PostgreSQL HA, and WireGuard meshes on your own VPS with zero seat fees.',
+  alternates: { canonical: '/pricing' },
+};
 
 const faqs = [
   {
     q: 'Is Grid really free?',
-    a: 'Yes. Grid is 100% open source and free to use. You deploy it on your own infrastructure — you only pay your cloud provider for the server itself.',
+    a: 'Yes. Grid is MIT open source and free to use. You deploy it on your own infrastructure—you only pay your cloud or VPS provider directly for your servers.',
   },
   {
     q: 'What counts as a "server"?',
-    a: 'A server is any VPS, dedicated server, or cloud instance where you install Grid. There are no limits on how many servers you can manage.',
+    a: 'A server is any VPS, dedicated machine, or cloud VM connected to Grid. There are no artificial caps on the number of nodes you can orchestrate.',
   },
   {
-    q: 'Is there a catch? What about paid plans?',
-    a: 'No catch. Every feature is included for free. We may offer optional managed hosting and enterprise support in the future, but the core platform will always be free and open source.',
+    q: 'Is there a catch or paid feature wall?',
+    a: 'No catch. High availability, WireGuard mesh, AI autoscaling, and addon provisioning are included in the core open-source edition.',
   },
   {
-    q: 'What happens if I exceed my application limit?',
-    a: 'There are no artificial application limits. Deploy as many applications as your server hardware can handle.',
+    q: 'What happens if I exceed an application limit?',
+    a: 'There are no application count or seat limits. Deploy as many applications and databases as your server hardware can handle.',
   },
   {
     q: 'Can I contribute to the project?',
-    a: 'Absolutely! Grid is open source and we welcome contributions. Check out our GitHub repository to get started.',
+    a: 'Yes! Grid is open source under the MIT License and welcomes issues and pull requests in the GitHub repository.',
   },
 ];
 
 export default function PricingPage() {
-  const [plans, setPlans] = useState<PricingPlan[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [billingCycle, setBillingCycle] = useState<'MONTHLY' | 'YEARLY'>('MONTHLY');
-  const [openFaq, setOpenFaq] = useState<number | null>(null);
-
-  useEffect(() => {
-    async function loadPlans() {
-      try {
-        const data = await billingApi.getPlans();
-        setPlans(data);
-      } catch (err) {
-        console.error('Failed to load plans:', err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadPlans();
-  }, []);
-
-  const getIcon = (slug: string) => {
-    if (slug.includes('pro')) return Shield;
-    if (slug.includes('team') || slug.includes('enterprise')) return Users;
-    if (slug.includes('corp')) return Building2;
-    return Zap;
-  };
-
-  const getColor = (slug: string) => {
-    if (slug.includes('pro')) return 'from-emerald-500 to-green-600';
-    if (slug.includes('team')) return 'from-violet-500 to-purple-600';
-    if (slug.includes('enterprise')) return 'from-amber-500 to-orange-600';
-    return 'from-slate-500 to-slate-600';
+  const faqJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: faqs.map((f) => ({
+      '@type': 'Question',
+      name: f.q,
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: f.a,
+      },
+    })),
   };
 
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
+    <div className="bg-slate-50 dark:bg-slate-950">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
+      />
+
       {/* Hero */}
-      <section className="pt-32 pb-12 px-4 text-center">
+      <section className="pt-28 pb-12 px-4 text-center">
         <div className="max-w-4xl mx-auto">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-sm font-medium rounded-full mb-6">
-            <Zap className="w-3.5 h-3.5" />
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-300 text-sm font-semibold rounded-full mb-6">
+            <Zap className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Transparent Open Source</span>
           </div>
           <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 dark:text-white mb-6">
             100% Open Source. 100% Free.
           </h1>
-          <p className="text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-            Grid is a self-hosted control plane. You deploy it on your own hardware, and you keep 100% of the control. No subscriptions, no hidden fees, no &quot;Cloud Tax.&quot;
+          <p className="text-lg md:text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+            Grid is a self-hosted control plane. Deploy it on your own hardware and keep 100% of the control—no subscriptions, no per-seat billing, no cloud tax.
           </p>
         </div>
       </section>
 
-      {/* Pricing Cards */}
-      <section className="pb-24 px-4">
-            <div className="max-w-4xl mx-auto flex justify-center">
-                <div className="relative rounded-2xl p-8 border border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 shadow-xl shadow-emerald-500/10 scale-[1.05] ring-2 ring-emerald-500/20 max-w-lg w-full flex flex-col">
-                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-emerald-600 text-white text-xs font-bold rounded-full uppercase tracking-wider">
-                        Free Forever
-                    </div>
-
-                    <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center mb-6">
-                        <Shield className="w-7 h-7 text-white" />
-                    </div>
-
-                    <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Community Edition</h3>
-                    <div className="mt-2 mb-4">
-                        <span className="text-5xl font-extrabold text-slate-900 dark:text-white">$0</span>
-                        <span className="text-slate-500 dark:text-slate-400 text-sm ml-1">/ forever</span>
-                    </div>
-                    <p className="text-base text-slate-600 dark:text-slate-400 mb-8">
-                        The complete Grid platform, open-sourced and ready for your VPS. Manage unlimited servers, applications, and clusters with zero restrictions.
-                    </p>
-
-                    <Link
-                        href="/register"
-                        className="block w-full text-center py-4 px-6 rounded-xl font-bold text-base bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-600/30 transition-all transform hover:scale-105"
-                    >
-                        Install Grid Now
-                    </Link>
-
-                    <div className="mt-8 pt-8 border-t border-slate-200 dark:border-slate-800">
-                        <ul className="space-y-4">
-                            <li className="flex items-start gap-3 text-base text-slate-700 dark:text-slate-300">
-                                <Check className="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" />
-                                Unlimited Managed Servers
-                            </li>
-                            <li className="flex items-start gap-3 text-base text-slate-700 dark:text-slate-300">
-                                <Check className="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" />
-                                Unlimited Applications & Databases
-                            </li>
-                            <li className="flex items-start gap-3 text-base text-slate-700 dark:text-slate-300">
-                                <Check className="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" />
-                                Multi-Region VPN Mesh
-                            </li>
-                            <li className="flex items-start gap-3 text-base text-slate-700 dark:text-slate-300">
-                                <Check className="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" />
-                                Predictive Autoscaling
-                            </li>
-                            <li className="flex items-start gap-3 text-base text-slate-700 dark:text-slate-300">
-                                <Check className="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" />
-                                AI-Driven Orchestration
-                            </li>
-                        </ul>
-                    </div>
-                </div>
+      {/* Pricing Card */}
+      <section className="pb-20 px-4">
+        <div className="max-w-lg mx-auto">
+          <div className="relative rounded-2xl p-8 border-2 border-emerald-600 dark:border-emerald-500 bg-card flex flex-col">
+            <div className="inline-block self-start px-3 py-1 bg-emerald-700 text-white text-xs font-bold rounded-full uppercase tracking-wider mb-5">
+              Free Forever
             </div>
-      </section>
 
-      {/* FAQ */}
-      <section className="py-24 px-4">
-        <div className="max-w-3xl mx-auto">
-          <h2 className="text-3xl font-extrabold text-center text-slate-900 dark:text-white mb-12">
-            Frequently Asked Questions
-          </h2>
-          <div className="space-y-3">
-            {faqs.map((faq, i) => (
-              <div
-                key={i}
-                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
-              >
-                <button
-                  onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                  className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
-                >
-                  <span className="font-semibold text-slate-900 dark:text-white">{faq.q}</span>
-                  <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${openFaq === i ? 'rotate-180' : ''}`} />
-                </button>
-                {openFaq === i && (
-                  <div className="px-6 pb-4 text-slate-600 dark:text-slate-400">
-                    {faq.a}
-                  </div>
-                )}
+            <div className="flex items-center gap-4 mb-5">
+              <div className="w-12 h-12 rounded-xl bg-emerald-700 flex items-center justify-center shrink-0">
+                <Shield className="w-6 h-6 text-white" aria-hidden="true" />
               </div>
-            ))}
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Open Source Edition</h2>
+                <p className="text-xs text-slate-600 dark:text-slate-400">MIT Licensed</p>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <span className="text-5xl font-extrabold text-slate-900 dark:text-white tabular-nums">$0</span>
+              <span className="text-slate-600 dark:text-slate-400 text-sm ml-1.5">/ forever</span>
+            </div>
+            <p className="text-base text-slate-600 dark:text-slate-300 mb-7">
+              The complete Grid platform ready for your VPS. Manage unlimited servers, applications, and HA databases with zero restrictions.
+            </p>
+
+            <Link
+              href="/register"
+              className="inline-flex items-center justify-center w-full min-h-[48px] py-3.5 px-6 rounded-xl font-bold text-base bg-emerald-700 text-white hover:bg-emerald-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Install Grid Now
+            </Link>
+
+            <div className="mt-8 pt-7 border-t border-border">
+              <ul className="space-y-3.5">
+                {[
+                  'Unlimited Managed Servers',
+                  'Unlimited Applications & Databases',
+                  'Multi-Region WireGuard VPN Mesh',
+                  'Predictive Autoscaling & Self-Healing',
+                  '40+ One-Click Infrastructure Addons',
+                ].map((feature) => (
+                  <li key={feature} className="flex items-start gap-3 text-base text-slate-700 dark:text-slate-300">
+                    <Check className="w-5 h-5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" aria-hidden="true" />
+                    <span>{feature}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         </div>
       </section>
-    </main>
+
+      {/* FAQ */}
+      <section className="py-20 px-4 border-t border-border">
+        <div className="max-w-3xl mx-auto">
+          <h2 className="text-3xl font-extrabold text-center text-slate-900 dark:text-white mb-10">
+            Frequently Asked Questions
+          </h2>
+          <PricingFaq faqs={faqs} />
+        </div>
+      </section>
+    </div>
   );
 }

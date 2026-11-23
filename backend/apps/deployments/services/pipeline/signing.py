@@ -215,6 +215,7 @@ class SigningMixin:
                 # push just published and sign that. Without a digest
                 # the sign is doomed (exit 1); skip loudly instead.
                 sign_ref = self._resolve_digest_ref(self.image_name)
+                self._resolved_digest_ref = sign_ref
                 if not sign_ref:
                     append_log(
                         self.deployment,
@@ -285,6 +286,7 @@ class SigningMixin:
                 return
             else:
                 sign_ref = self._resolve_digest_ref(self.image_name)
+                self._resolved_digest_ref = sign_ref
                 if not sign_ref:
                     append_log(
                         self.deployment,
@@ -440,3 +442,81 @@ class SigningMixin:
         except Exception as e:
             append_log(self.deployment, f"Cosign verification error (non-fatal): {e!s}\n")
             update_stage(self.deployment, 'Verify', 'skipped')
+
+    # ── ASPM PRE-BUILD GATE & CYCLONEDX SBOM / SLSA PROVENANCE ────────
+
+    def _run_aspm_scan(self):
+        """Run ASPM pre-build Secret, IaC, and SAST scan on cloned source."""
+        source_dir = getattr(self, "source_dir", None)
+        if not source_dir or not os.path.isdir(source_dir):
+            return
+        try:
+            from apps.security.aspm import run_aspm_pipeline_scan
+            from apps.security.models import SecurityPolicy
+        except ImportError:
+            return
+
+        update_stage(self.deployment, 'ASPM Scan', 'running')
+        self._check_cancellation('ASPM Scan')
+        try:
+            policy = SecurityPolicy.load()
+            if not policy.aspm_enabled:
+                append_log(self.deployment, "ASPM pre-build scan disabled by SecurityPolicy.\n")
+                update_stage(self.deployment, 'ASPM Scan', 'skipped')
+                return
+            report = run_aspm_pipeline_scan(
+                deployment=self.deployment,
+                source_dir=source_dir,
+                persist=True,
+            )
+        except Exception as exc:
+            logger.debug("ASPM scan non-fatal error: %s", exc)
+            append_log(self.deployment, f"ASPM scan warning (non-fatal): {exc}\n")
+            update_stage(self.deployment, 'ASPM Scan', 'skipped')
+            return
+
+        counts = report.get("counts") or {}
+        append_log(
+            self.deployment,
+            f"🛡️ [ASPM] Secrets={counts.get('secrets', 0)}, "
+            f"IaC={counts.get('iac', 0)}, SAST={counts.get('sast', 0)} "
+            f"(Critical={counts.get('critical', 0)}, High={counts.get('high', 0)})\n",
+        )
+        if report.get("blocked"):
+            from .exceptions import PipelineError
+            reasons = "; ".join(report.get("block_reasons") or [])
+            update_stage(self.deployment, 'ASPM Scan', 'failed')
+            raise PipelineError(f"ASPM security policy blocked deployment: {reasons}")
+        update_stage(self.deployment, 'ASPM Scan', 'success')
+
+    def _generate_sbom_and_provenance(self):
+        """Generate CycloneDX v1.5 SBOM + SLSA v1.0 provenance attestation."""
+        try:
+            from apps.security.aspm import generate_sbom
+            from apps.security.models import SecurityPolicy
+        except ImportError:
+            return
+
+        try:
+            policy = SecurityPolicy.load()
+            if not policy.sbom_enabled:
+                return
+            digest_ref = ""
+            resolved = str(getattr(self, "_resolved_digest_ref", "") or "")
+            if "@sha256:" in resolved:
+                digest_ref = "sha256:" + resolved.split("@sha256:", 1)[1]
+            artifact = generate_sbom(
+                deployment=self.deployment,
+                source_dir=getattr(self, "source_dir", None),
+                image_ref=str(getattr(self, "image_name", "") or ""),
+                image_digest=digest_ref,
+            )
+            if artifact:
+                append_log(
+                    self.deployment,
+                    f"📦 [SBOM/SLSA] CycloneDX v{artifact.spec_version} generated "
+                    f"({artifact.package_count} packages, SLSA v1.0 provenance attached).\n",
+                )
+        except Exception as exc:
+            logger.debug("SBOM/SLSA generation skipped: %s", exc)
+

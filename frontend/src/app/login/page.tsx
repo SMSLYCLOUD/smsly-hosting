@@ -213,9 +213,9 @@ export default function LoginPage() {
           <div className="mx-auto mb-4 flex flex-col items-center gap-2">
             <Image src="/images/logo.png" alt="Grid" width={190} height={78} className="h-20 w-auto max-w-full rounded object-contain" />
           </div>
-          <h2 className="text-2xl font-bold tracking-tight">
+          <h1 className="text-2xl font-bold tracking-tight">
             {showEmailForm ? "Sign in with Email" : "Welcome back"}
-          </h2>
+          </h1>
           <p className="text-sm text-muted-foreground">
             {showEmailForm
               ? "Enter your username or email and password to continue"
@@ -266,6 +266,7 @@ export default function LoginPage() {
           ) : (
             <>
               <button
+                type="button"
                 onClick={() => {
                   setShowEmailForm(false);
                   setNeeds2fa(false);
@@ -274,9 +275,9 @@ export default function LoginPage() {
                   setEnrollmentUri("");
                   setError("");
                 }}
-                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition mb-4"
+                className="flex items-center gap-2 min-h-[44px] text-sm text-muted-foreground hover:text-foreground transition mb-4"
               >
-                <ArrowLeft className="h-4 w-4" />
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
                 Back to options
               </button>
 
@@ -318,7 +319,7 @@ export default function LoginPage() {
                   </div>
 
                   {error && (
-                    <div className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 p-3 rounded">
+                    <div role="alert" className="text-sm text-red-700 dark:text-red-400 bg-red-500/10 border border-red-500/25 p-3 rounded">
                       {error}
                     </div>
                   )}
@@ -345,6 +346,7 @@ export default function LoginPage() {
                     <Input
                       id="username"
                       type="text"
+                      autoComplete="username"
                       placeholder="admin or admin@Trulay.co"
                       required
                       value={formData.username}
@@ -357,7 +359,7 @@ export default function LoginPage() {
                       <Label htmlFor="password">Password</Label>
                       <Link
                         href="/forgot-password"
-                        className="text-xs text-muted-foreground hover:text-primary underline"
+                        className="text-xs text-muted-foreground hover:text-primary underline py-1"
                       >
                         Forgot password?
                       </Link>
@@ -365,6 +367,7 @@ export default function LoginPage() {
                     <Input
                       id="password"
                       type="password"
+                      autoComplete="current-password"
                       required
                       value={formData.password}
                       onChange={(e) => setFormData({ ...formData, password: e.target.value })}
@@ -373,7 +376,7 @@ export default function LoginPage() {
                   </div>
 
                   {error && (
-                    <div className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 p-3 rounded">
+                    <div role="alert" className="text-sm text-red-700 dark:text-red-400 bg-red-500/10 border border-red-500/25 p-3 rounded">
                       {error}
                     </div>
                   )}
@@ -403,10 +406,11 @@ export default function LoginPage() {
                 Or continue with email
               </div>
               <button
+                type="button"
                 onClick={() => setShowEmailForm(true)}
-                className="w-full h-11 rounded bg-primary hover:bg-primary/90 text-primary-foreground font-semibold transition flex items-center justify-center gap-2"
+                className="w-full h-11 rounded bg-primary hover:bg-primary/90 text-primary-foreground font-semibold transition flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <Mail className="h-4 w-4" />
+                <Mail className="h-4 w-4" aria-hidden="true" />
                 Sign in with Email
               </button>
             </div>

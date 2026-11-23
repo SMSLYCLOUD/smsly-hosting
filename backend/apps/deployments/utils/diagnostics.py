@@ -391,6 +391,8 @@ def log_exhaustive_push_diagnostics(deployment, registry_url, image_name):
     try:
         deployment.vulnerability_report = vuln_report
         deployment.save(update_fields=["vulnerability_report"])
+        from apps.security.aspm import sync_deployment_trivy_findings
+        sync_deployment_trivy_findings(deployment)
     except Exception as exc:
         logger.debug("Failed to save vulnerability report: %s", exc)
 

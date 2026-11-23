@@ -57,10 +57,11 @@ def _get_request_timeout() -> float:
     return value
 
 
-def _validate_notification_url(url: str) -> str:
-    """Validate a webhook URL against the notification host allowlist and
-    reject any IP literal (or DNS resolution) that points to loopback,
-    link-local, RFC1918 private, or otherwise reserved ranges.
+def _validate_notification_url(url: str, *, allow_generic: bool = False) -> str:
+    """Validate a webhook URL against the notification host allowlist (unless
+    ``allow_generic=True``) and reject any IP literal (or DNS resolution)
+    that points to loopback, link-local, RFC1918 private, or otherwise
+    reserved ranges.
 
     Returns the lowercased hostname on success. Raises ``ValueError`` on
     any violation. The caller is expected to surface this as a 4xx error
@@ -74,7 +75,7 @@ def _validate_notification_url(url: str) -> str:
     host = (parsed.hostname or '').lower()
     if not host:
         raise ValueError("Notification URL is missing a host.")
-    if host not in _ALLOWED_NOTIFICATION_HOSTS:
+    if not allow_generic and host not in _ALLOWED_NOTIFICATION_HOSTS:
         raise ValueError(
             f"Notification URL host {host!r} is not in the allowlist."
         )
@@ -130,7 +131,10 @@ def _post_notification(url: str, payload: dict, user=None, provider: str = '') -
     validation or transport error so callers can fail open.
     """
     try:
-        _validate_notification_url(url)
+        if provider == 'webhook':
+            _validate_notification_url(url, allow_generic=True)
+        else:
+            _validate_notification_url(url)
     except ValueError as exc:
         logger.warning(
             "Rejected notification URL host=%s reason=%s",
@@ -173,15 +177,15 @@ def _post_notification(url: str, payload: dict, user=None, provider: str = '') -
         return False
 
 
-def send_slack_notification(message: str, webhook_url: str | None = None, user=None):
+def send_slack_notification(message: str, webhook_url: str | None = None, user=None) -> bool:
     """Send a notification to a Slack webhook."""
     url = webhook_url or getattr(settings, 'SLACK_WEBHOOK_URL', None)
     if not url:
-        return
+        return False
 
     body = _truncate_body(str(message))
 
-    _post_notification(
+    return _post_notification(
         url,
         {"text": body},
         user=user,
@@ -189,15 +193,15 @@ def send_slack_notification(message: str, webhook_url: str | None = None, user=N
     )
 
 
-def send_discord_notification(message: str, webhook_url: str | None = None, user=None):
+def send_discord_notification(message: str, webhook_url: str | None = None, user=None) -> bool:
     """Send a notification to a Discord webhook."""
     url = webhook_url or getattr(settings, 'DISCORD_WEBHOOK_URL', None)
     if not url:
-        return
+        return False
 
     body = _truncate_body(str(message))
 
-    _post_notification(
+    return _post_notification(
         url,
         {"content": body},
         user=user,

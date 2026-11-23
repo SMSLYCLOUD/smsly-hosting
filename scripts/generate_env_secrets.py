@@ -48,6 +48,7 @@ SECRET_DEFINITIONS = [
     ("CADDY_ASK_SECRET", 64, "Shared secret for Caddy on_demand_tls ask endpoint"),
     ("EDGE_JWT_SECRET", 64, "Edge JWT signing secret for Traefik forward-auth and Caddy authorize"),
     ("NAPD_SHARED_SECRET", 64, "Shared secret for backend wake calls to napd (infra tier sleep/wake)"),
+    ("CRYPTD_SHARED_SECRET", 64, "Shared secret for backend control/transit calls to grid-cryptd (opt-in encryption at rest)"),
     # Fernet backup key (same format as FIELD_ENCRYPTION_KEY) and the
     # Grafana admin password. These used to live only in installer
     # fallbacks, so the "single source of truth" claim was false and

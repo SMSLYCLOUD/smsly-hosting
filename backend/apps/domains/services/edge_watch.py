@@ -234,7 +234,24 @@ def watch_edge_task_body():
     except Exception:
         pass
     if not report["ok"]:
-        logger.error("Edge watch failing: %s", "; ".join(report["errors"][:5]))
+        err_summary = "; ".join(report["errors"][:5])
+        logger.error("Edge watch failing: %s", err_summary)
+        try:
+            if cache.add("edge:watch:alert_cooldown", 1, timeout=1800):
+                from django.contrib.auth import get_user_model
+                from apps.notifications.tasks import dispatch_notification
+                for admin_id in get_user_model().objects.filter(
+                    is_superuser=True, is_active=True
+                ).values_list("id", flat=True):
+                    dispatch_notification.delay(
+                        event_type="health_alert",
+                        user_id=admin_id,
+                        title="CRITICAL: Platform Edge Unreachable or Drifted",
+                        message=f"Outside-in platform edge watchdog detected errors: {err_summary}",
+                        metadata={"errors": report["errors"][:5], "healed": report["healed"]},
+                    )
+        except Exception:
+            pass
     else:
         logger.info("Edge watch ok")
     return report

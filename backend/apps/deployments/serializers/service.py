@@ -582,6 +582,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'last_scale_at',
             'locked', 'locked_reason', 'restrict_to_creator',
             'allowed_actions', 'restricted_environments',
+            'encryption_at_rest_enabled',
             'env_scan_depth',
             # Internal network (per-service). The platform-wide
             # internal_addresses SerializerMethodField returns the

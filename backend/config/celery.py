@@ -113,6 +113,7 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     import apps.core.tasks.metrics  # noqa: F401  # collect_metrics_task, cleanup_build_cache_task
     import apps.core.tasks.traffic  # noqa: F401  # collect_traefik_logs, resolve_traffic_geolocations
     import apps.core.tasks.alerts  # noqa: F401  # scan_running_containers_logs_task
+    import apps.core.tasks.cryptd  # noqa: F401  # sync_cryptd_leases_task
     # -- All other task modules are auto-discovered via autodiscover_tasks()
     #    which imports {app}.tasks for every INSTALLED_APPS entry. App-level
     #    tasks.py or tasks/__init__.py re-exports from subpackages.
@@ -143,6 +144,10 @@ app.conf.task_routes = {
     'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
     'apps.deployments.tasks.cleanup_orphaned_containers_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.container_restart_loop_watchdog_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.reap_failed_greens_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.orphan_addon_gc_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.reconcile_gvisor_hosts_task': {'queue': 'deploy'},
     'apps.deployments.tasks.edge_shield_watchdog': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stale_ecosystem_plans': {'queue': 'fast'},
     'apps.deployments.tasks.recover_stalled_deployments': {'queue': 'fast'},
@@ -253,6 +258,9 @@ app.conf.task_routes = {
     'apps.intelligence.tasks.detect_anomalies_task': {'queue': 'deploy'},
     'apps.intelligence.tasks.proactive_health_scan_task': {'queue': 'deploy'},
     'apps.intelligence.tasks.daily_intelligence_report_task': {'queue': 'deploy'},
+    'apps.security.tasks.sync_security_telemetry_task': {'queue': 'fast'},
+    'apps.security.tasks.run_cnapp_xdr_audit_task': {'queue': 'deploy'},
+    'apps.security.tasks.run_post_deploy_dast_task': {'queue': 'fast'},
     'apps.intelligence.tasks.ai_deployment_review_task': {'queue': 'deploy'},
     'apps.deployments.tasks.ai.tasks_ai.analyze_failure_task': {'queue': 'deploy'},
     'apps.deployments.tasks.ai.tasks_code_intelligence.deep_scan_and_verify_task': {'queue': 'deploy'},
@@ -908,6 +916,24 @@ app.conf.beat_schedule = {
         'task': 'apps.addons.tasks.addon_auto_vacuum',
         'schedule': crontab(minute=15, hour=3, day_of_week=0),
         'options': {'expires': 86400.0},
+    },
+    # Opt-in grid-cryptd lease renewal & epoch status heartbeat every 15 minutes
+    'sync-cryptd-leases-every-15m': {
+        'task': 'apps.core.tasks.cryptd.sync_cryptd_leases_task',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
+    # AEON CORE / OCSF telemetry normalization & Threat Intel matching every 10 minutes
+    'sync-security-telemetry-every-10m': {
+        'task': 'apps.security.tasks.sync_security_telemetry_task',
+        'schedule': 600.0,
+        'options': {'expires': 600.0, 'queue': 'fast'},
+    },
+    # CNAPP (CSPM/KSPM/CIEM/DSPM/AI-SPM), XDR ITDR & GRC compliance sweep every 30 minutes
+    'run-cnapp-xdr-audit-every-30m': {
+        'task': 'apps.security.tasks.run_cnapp_xdr_audit_task',
+        'schedule': 1800.0,
+        'options': {'expires': 1800.0, 'queue': 'deploy'},
     },
 }
 

@@ -122,12 +122,14 @@ def get_service_env_vars(service_id: str, user_id: str | None = None, user_email
         if user and not user_can_read(user, svc):
             return [{"error": "Permission denied: You do not have read access to this service."}]
 
+        from apps.deployments.serializers.service import _must_mask_env_value
         vars_list = []
         for ev in svc.env_vars.all():
+            masked = _must_mask_env_value(ev.key, ev.value, bool(ev.is_secret))
             vars_list.append({
                 "key": ev.key,
-                "value": "********" if ev.is_secret else ev.value,
-                "is_secret": ev.is_secret,
+                "value": "********" if masked else ev.value,
+                "is_secret": bool(ev.is_secret or masked),
                 "is_locked": ev.is_locked,
                 "source": ev.source
             })

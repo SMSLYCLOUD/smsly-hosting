@@ -6,7 +6,7 @@ CONFIG=/etc/alertmanager/alertmanager.generated.yml
 ENV_LABEL="${ALERT_ENV:-smsly}"
 EMAIL_TO="${ALERT_EMAIL_TO:-}"
 SLACK_WEBHOOK="${ALERT_SLACK_WEBHOOK_URL:-}"
-GENERIC_WEBHOOK="${ALERT_WEBHOOK_URL:-http://127.0.0.1:5001/alerts}"
+GENERIC_WEBHOOK="${ALERT_WEBHOOK_URL:-}"
 
 cat > "$CONFIG" <<HEADEOF
 global:
@@ -57,10 +57,13 @@ if [ -n "$SLACK_WEBHOOK" ]; then
     cat >> "$CONFIG" <<SLACKEOF
     slack_configs:
       - channel: '#alerts'
+        send_resolved: true
         title: '${ENV_LABEL} | {{ .GroupLabels.alertname }}'
         text: '{{ .CommonAnnotations.description }}'
 SLACKEOF
-elif [ -n "$GENERIC_WEBHOOK" ]; then
+fi
+
+if [ -n "$GENERIC_WEBHOOK" ]; then
     cat >> "$CONFIG" <<WEBEOF
     webhook_configs:
       - url: '${GENERIC_WEBHOOK}'
@@ -68,10 +71,11 @@ elif [ -n "$GENERIC_WEBHOOK" ]; then
 WEBEOF
 fi
 
-if [ -n "$EMAIL_TO" ]; then
+if [ -n "$EMAIL_TO" ] && [ -n "${ALERT_SMTP_HOST:-}" ]; then
     cat >> "$CONFIG" <<EMAILEOF
     email_configs:
       - to: '${EMAIL_TO}'
+        send_resolved: true
 EMAILEOF
 fi
 
@@ -84,15 +88,26 @@ if [ -n "$SLACK_WEBHOOK" ]; then
     cat >> "$CONFIG" <<SLACKEOF
     slack_configs:
       - channel: '#alerts-critical'
+        send_resolved: true
         title: 'CRITICAL: {{ .GroupLabels.alertname }}'
         text: '{{ .CommonAnnotations.description }}'
 SLACKEOF
-elif [ -n "$GENERIC_WEBHOOK" ]; then
+fi
+
+if [ -n "$GENERIC_WEBHOOK" ]; then
     cat >> "$CONFIG" <<WEBEOF
     webhook_configs:
       - url: '${GENERIC_WEBHOOK}'
         send_resolved: true
 WEBEOF
+fi
+
+if [ -n "$EMAIL_TO" ] && [ -n "${ALERT_SMTP_HOST:-}" ]; then
+    cat >> "$CONFIG" <<EMAILEOF
+    email_configs:
+      - to: '${EMAIL_TO}'
+        send_resolved: true
+EMAILEOF
 fi
 
 cat >> "$CONFIG" <<RECEOF
@@ -104,10 +119,13 @@ if [ -n "$SLACK_WEBHOOK" ]; then
     cat >> "$CONFIG" <<SLACKEOF
     slack_configs:
       - channel: '#alerts'
+        send_resolved: true
         title: 'WARNING: {{ .GroupLabels.alertname }}'
         text: '{{ .CommonAnnotations.description }}'
 SLACKEOF
-elif [ -n "$GENERIC_WEBHOOK" ]; then
+fi
+
+if [ -n "$GENERIC_WEBHOOK" ]; then
     cat >> "$CONFIG" <<WEBEOF
     webhook_configs:
       - url: '${GENERIC_WEBHOOK}'
@@ -115,14 +133,22 @@ elif [ -n "$GENERIC_WEBHOOK" ]; then
 WEBEOF
 fi
 
+if [ -n "$EMAIL_TO" ] && [ -n "${ALERT_SMTP_HOST:-}" ]; then
+    cat >> "$CONFIG" <<EMAILEOF
+    email_configs:
+      - to: '${EMAIL_TO}'
+        send_resolved: true
+EMAILEOF
+fi
+
 cat >> "$CONFIG" <<'ENDOF'
 
 inhibit_rules:
-  - source_match:
-      severity: 'critical'
-    target_match:
-      severity: 'warning'
-    equal: ['alertname', 'dev', 'instance']
+  - source_matchers:
+      - severity = critical
+    target_matchers:
+      - severity = warning
+    equal: ['instance', 'server', 'datname']
 ENDOF
 
 exec /bin/alertmanager --config.file="$CONFIG" "$@"

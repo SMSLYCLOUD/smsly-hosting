@@ -278,7 +278,7 @@ def _clear_orphaned_runtime_resources() -> dict:
 
     image_prune: dict = {}
     try:
-        image_prune = client.images.prune(filters={"dangling": ["false"], "label!": ["smsly.keep=true"]}) or {}
+        image_prune = client.images.prune(filters={"dangling": ["false"], "until": ["2h"], "label!": ["smsly.keep=true"]}) or {}
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Failed to prune unused images: %s", exc)
         errors.append({"name": "unused-images", "error": str(exc)})
@@ -342,6 +342,15 @@ def delete_service_task(self, service_id: str, force: bool = False):
                 success = force
         else:
             # 2. Local cleanup
+            try:
+                from apps.core.crypto_daemon import cryptd_client, is_service_encryption_enabled
+                if cryptd_client.is_enabled() and is_service_encryption_enabled(service):
+                    cryptd_client.lock_service(str(service.id), reason="service deleted")
+                    for vol in service.volumes.all():
+                        cryptd_client.cleanup_volume(vol.name, service_id=str(service.id))
+            except Exception as crypt_exc:
+                logger.debug("cryptd service/volume cleanup skipped for %s: %s", service.id, crypt_exc)
+
             orchestrator = DeletionOrchestrator()
             success = orchestrator.delete_service_resources(service, force=force)
 

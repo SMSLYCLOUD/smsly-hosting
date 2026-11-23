@@ -75,6 +75,18 @@ def reverify_custom_domains_task(self):
 
         if result.verified:
             verified_ok.append(domain.domain_name)
+            try:
+                from apps.security.models import SecurityFinding
+                from apps.security.risk import resolve_stale_findings
+
+                fp = SecurityFinding.build_fingerprint(
+                    SecurityFinding.Category.EDGE, "domain_demoted", domain.domain_name
+                )
+                SecurityFinding.objects.filter(fingerprint=fp).exclude(
+                    status=SecurityFinding.Status.RESOLVED
+                ).update(status=SecurityFinding.Status.RESOLVED)
+            except Exception:
+                pass
             if (domain.verify_fail_count or 0) != 0 or not domain.verified:
                 was_demoted = not domain.verified
                 domain.verified = True
@@ -155,6 +167,27 @@ def reverify_custom_domains_task(self):
             "verify_fail_count", "updated_at",
         ])
         demoted.append(domain.domain_name)
+        try:
+            from apps.security.models import SecurityFinding
+            from apps.security.risk import upsert_finding
+
+            fp = SecurityFinding.build_fingerprint(
+                SecurityFinding.Category.EDGE, "domain_demoted", domain.domain_name
+            )
+            upsert_finding(
+                fingerprint=fp,
+                pillar=SecurityFinding.Pillar.XDR,
+                category=SecurityFinding.Category.EDGE,
+                severity="HIGH",
+                title=f"Custom domain `{domain.domain_name}` demoted (anti-hijack DNS quorum failure)",
+                description=f"Domain `{domain.domain_name}` failed continuous DNS verification: {result.error or result.actual}",
+                remediation="Restore DNS CNAME/A record pointing to the platform and re-verify the domain.",
+                service=getattr(domain, "service", None),
+                internet_exposed=True,
+                emit_ocsf=True,
+            )
+        except Exception:
+            pass
         logger.warning(
             "reverify: DEMOTED %s (service %s) — %s",
             domain.domain_name,

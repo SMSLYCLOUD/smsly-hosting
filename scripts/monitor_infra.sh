@@ -103,8 +103,8 @@ fi
 
 # ─── Observability stack (separate compose file) ────────────────────────
 OBS_SERVICES=(
-    "loki" "promtail" "prometheus" "docker-labels" "grafana"
-    "cadvisor" "node-exporter"
+    "loki" "promtail" "prometheus" "alertmanager" "docker-labels" "grafana"
+    "cadvisor" "node-exporter" "postgres-exporter-shared" "postgres-exporter-platform"
 )
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -133,13 +133,13 @@ fi
 # 2. Docker Daemon Health (MUST run before container checks)
 # ══════════════════════════════════════════════════════════════════════════
 DOCKER_OK=false
-if docker info ; then
+if timeout 30 docker info >/dev/null 2>&1; then
     DOCKER_OK=true
 else
     log "Alert: Docker daemon is not responding. Attempting restart..."
-    systemctl restart docker || log "Warning: Docker restart attempted — check result above"
+    timeout 120 systemctl restart docker || log "Warning: Docker restart attempted — check result above"
     sleep 5
-    if docker info ; then
+    if timeout 30 docker info >/dev/null 2>&1; then
         log "Docker daemon recovered after restart"
         DOCKER_OK=true
     else
@@ -155,7 +155,7 @@ for svc in "${SYSTEMD_SERVICES[@]}"; do
         state=$(systemctl is-active "$svc"  || echo "unknown")
         if [ "$state" != "active" ]; then
             log "Alert: systemd service $svc is $state. Restarting..."
-            systemctl restart "$svc" || log "Warning: Service $svc restart attempted — check result above"
+            timeout 60 systemctl restart "$svc" || log "Warning: Service $svc restart attempted — check result above"
         fi
     fi
 done
@@ -166,7 +166,7 @@ for tmr in "${SYSTEMD_TIMERS[@]}"; do
         tmr_state=$(systemctl is-active "$tmr"  || echo "unknown")
         if [ "$tmr_state" != "active" ]; then
             log "Alert: systemd timer $tmr is $tmr_state. Restarting..."
-            systemctl restart "$tmr" || log "Warning: Timer $tmr restart attempted — check result above"
+            timeout 60 systemctl restart "$tmr" || log "Warning: Timer $tmr restart attempted — check result above"
         fi
     fi
 done
@@ -179,7 +179,7 @@ if command -v wg ; then
             wg_state=$(systemctl is-active "wg-quick@${iface}.service"  || echo "unknown")
             if [ "$wg_state" != "active" ] && [ "$wg_state" != "unknown" ]; then
                 log "Alert: WireGuard interface $iface service is $wg_state. Restarting..."
-                systemctl restart "wg-quick@${iface}.service" || log "Warning: WireGuard $iface restart attempted — check result above"
+                timeout 60 systemctl restart "wg-quick@${iface}.service" || log "Warning: WireGuard $iface restart attempted — check result above"
             fi
         done
     fi
@@ -218,19 +218,19 @@ check_and_heal() {
     local compose_file=$1
     local service=$2
 
-    container_id=$(docker compose -f "$compose_file" ps -q "$service"  || true)
+    container_id=$(timeout 30 docker compose -f "$compose_file" ps -q "$service"  || true)
 
     if [ -z "$container_id" ]; then
         log "Warning: Container for service '$service' is missing. Attempting to start..."
-        docker compose -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service"
+        timeout 120 docker compose -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service"
         return
     fi
 
-    inspect_data=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id"  || true)
+    inspect_data=$(timeout 30 docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id"  || true)
 
     if [ -z "$inspect_data" ]; then
         log "Warning: Failed to inspect container '$container_id' for service '$service'. Attempting restart..."
-        docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service"
+        timeout 120 docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service"
         return
     fi
 
@@ -243,16 +243,16 @@ check_and_heal() {
         # cannot be restarted; `up -d` starts Created AND restarts
         # Stopped/Exited uniformly.
         log "Alert: Container for service '$service' is not running (status: $status). Starting..."
-        docker compose -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service (not running)"
+        timeout 120 docker compose -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service (not running)"
     elif [ "$health" = "unhealthy" ]; then
         log "Alert: Container for service '$service' is running but UNHEALTHY. Restarting..."
-        docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (unhealthy)"
+        timeout 120 docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (unhealthy)"
     fi
 }
 
 _available_services=""
 if [ -f "$COMPOSE_FILE" ]; then
-    _available_services="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+    _available_services="$(timeout 30 docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
 fi
 
 for service in "${PROD_SERVICES[@]}"; do
@@ -274,7 +274,7 @@ if [ "$AUTOSCALE_ON" != "true" ]; then
 fi
 
 if [ "$IS_AGENT_LITE" != "true" ] && [ -f "$OBS_COMPOSE_FILE" ]; then
-    _obs_available="$(docker compose -f "$OBS_COMPOSE_FILE" config --services 2>/dev/null || true)"
+    _obs_available="$(timeout 30 docker compose -f "$OBS_COMPOSE_FILE" config --services 2>/dev/null || true)"
     for service in "${OBS_SERVICES[@]}"; do
         if [ -n "$_obs_available" ] && ! printf '%s\n' "$_obs_available" | grep -qx "$service"; then
             continue

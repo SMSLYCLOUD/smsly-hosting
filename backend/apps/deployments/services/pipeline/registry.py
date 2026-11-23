@@ -101,12 +101,22 @@ class RegistryMixin:
 
         # 2. ScopedRegistry chain — only walk scope objects (Project/Team/Org).
         #    self.service.owner is a User, not a scope entity, so we only pass project.
-        if not registry_url:
+        if not registry_url or not reg_password:
             scope_obj = self.service.project  # may be None → falls to PlatformConfig
             registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
-            registry_url = (registry_info.get("url") or "").split("://")[-1].rstrip("/")
-            reg_username = reg_username or registry_info.get("username") or ""
-            reg_password = reg_password or registry_info.get("password") or ""
+            scoped_url = (registry_info.get("url") or "").split("://")[-1].rstrip("/")
+            if not registry_url:
+                registry_url = scoped_url
+                reg_username = reg_username or registry_info.get("username") or ""
+                reg_password = reg_password or registry_info.get("password") or ""
+            else:
+                norm_override = registry_url
+                for scheme in ("https://", "http://"):
+                    if norm_override.startswith(scheme):
+                        norm_override = norm_override[len(scheme):]
+                if not scoped_url or norm_override.rstrip("/") == scoped_url:
+                    reg_username = reg_username or registry_info.get("username") or ""
+                    reg_password = reg_password or registry_info.get("password") or ""
 
         # Normalise URL (strip scheme, trailing slash)
         for scheme in ("https://", "http://"):
