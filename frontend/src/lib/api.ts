@@ -3525,6 +3525,15 @@ export interface SecurityStatusData {
     stale: boolean | null;
     recent_error: string;
   };
+  cryptd?: {
+    enabled: boolean;
+    state: string;
+    current_week?: number;
+    key_version?: string;
+    active_leases?: number;
+    opted_services?: number;
+    provider?: string;
+  };
 }
 
 export interface SecurityActivityEvent {
@@ -3666,6 +3675,27 @@ export interface SecurityOverviewData {
   ocsf_events_count: number;
   policy: Record<string, boolean>;
   compliance_frameworks?: Record<string, { controls: number; passed: number; score_pct: number }>;
+  cryptd_status?: {
+    enabled: boolean;
+    state: string;
+    current_week?: number;
+    key_version?: string;
+    provider?: string;
+    opted_services?: number;
+    active_leases?: number;
+  };
+  engines?: {
+    openappsec_enabled: boolean;
+    openappsec_mode: string;
+    crowdsec_enabled: boolean;
+    crowdsec_first_strike: boolean;
+    cf_bouncer_enabled: boolean;
+    coraza_protected_services: number;
+    total_services: number;
+    trivy_enabled: boolean;
+    trivy_severity: string;
+    cosign_enabled: boolean;
+  };
 }
 
 export interface SbomArtifactItem {

@@ -123,7 +123,25 @@ _cf_render_cloudflare_bouncer_config() {
     local action="$3"
     local lapi_key="$4"
     local outfile="$5"
-    cat > "$outfile" <<CFEOF
+    local zones_block=""
+    if command -v curl >/dev/null 2>&1 && [ -n "$token" ] && [ -n "$account" ]; then
+        local _zids=""
+        _zids="$(curl -sS --max-time 8 -H "Authorization: Bearer ${token}" \
+            "https://api.cloudflare.com/client/v4/zones?account.id=${account}&per_page=50" 2>/dev/null \
+            | grep -oE '"id":"[0-9a-f]{32}"' | cut -d'"' -f4 | awk -v acct="$account" '$0 != acct && !seen[$0]++' || true)"
+        if [ -n "$_zids" ]; then
+            zones_block="    zones:"
+            local _zid=""
+            for _zid in $_zids; do
+                zones_block="${zones_block}
+    - zone_id: ${_zid}
+      actions:
+      - ${action}"
+            done
+        fi
+    fi
+    {
+        cat <<CFEOF
 # Managed by lib/harden_crowdsec.sh — DO NOT EDIT (regenerated every run).
 crowdsec_lapi_url: http://smsly-crowdsec:8080/
 crowdsec_lapi_key: ${lapi_key}
@@ -134,9 +152,15 @@ only_include_decisions_from: []
 cloudflare_config:
   accounts:
   - id: ${account}
+CFEOF
+        if [ -n "$zones_block" ]; then
+            printf '%s\n' "$zones_block"
+        fi
+        cat <<CFEOF
     token: ${token}
     ip_list_prefix: crowdsec
     default_action: ${action}
+    total_ip_list_capacity: 10000
   update_frequency: 10s
 daemon: false
 log_mode: stdout
@@ -144,6 +168,7 @@ log_level: info
 prometheus:
   enabled: false
 CFEOF
+    } > "$outfile"
     chmod 600 "$outfile"
 }
 

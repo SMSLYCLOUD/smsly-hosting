@@ -689,19 +689,59 @@ class SecurityStatusView(GenericAPIView):
         if cf_bouncer["running"] or cf_bouncer["enabled"]:
             try:
                 cf_logs = subprocess.run(
-                    ["docker", "logs", "--tail", "30",
+                    ["docker", "logs", "--tail", "40",
                      "smsly-cloudflare-bouncer"],
                     capture_output=True, text=True, timeout=10,
                 )
                 _blob = ((cf_logs.stdout or "")
                          + (cf_logs.stderr or "")).splitlines()
-                for _line in reversed(_blob):
+                # Slice from the latest bouncer startup so old pre-restart errors
+                # are not reported after a token rotation/restart.
+                _last_start_idx = 0
+                for _idx, _l in enumerate(_blob):
+                    if "starting crowdsec-cloudflare-bouncer" in _l.lower():
+                        _last_start_idx = _idx
+                _current_run = _blob[_last_start_idx:]
+                for _line in reversed(_current_run):
                     _low = _line.lower()
                     if "error" in _low or "fatal" in _low:
                         cf_bouncer["recent_error"] = _line.strip()[:220]
                         break
+                if (
+                    cf_bouncer["running"]
+                    and not cf_bouncer["recent_error"]
+                    and any("setup of firewall rules complete" in _l.lower() for _l in _current_run)
+                ):
+                    cf_bouncer["stale"] = False
             except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
                 pass
+
+        # ── grid-cryptd Cryptographic Controller ──────────────────
+        cryptd_info = {
+            "enabled": False,
+            "state": "INACTIVE",
+            "current_week": 0,
+            "key_version": "",
+            "provider": "",
+            "opted_services": 0,
+            "active_leases": 0,
+        }
+        try:
+            from apps.core.crypto_daemon import cryptd_client
+            cryptd_info["enabled"] = bool(cryptd_client.is_enabled())
+            if cryptd_info["enabled"]:
+                _cst = cryptd_client.get_status()
+                if isinstance(_cst, dict):
+                    cryptd_info.update({
+                        "state": str(_cst.get("state") or "ACTIVE"),
+                        "current_week": int(_cst.get("current_week") or 0),
+                        "key_version": str(_cst.get("key_version") or ""),
+                        "provider": str(_cst.get("provider") or ""),
+                        "opted_services": int(_cst.get("opted_services") or 0),
+                        "active_leases": int(_cst.get("active_leases") or 0),
+                    })
+        except Exception as exc:
+            logger.debug("cryptd status fetch skipped: %s", exc)
 
         return Response({
             "container_runtime": container_runtime,
@@ -720,6 +760,7 @@ class SecurityStatusView(GenericAPIView):
             "kernel_hardening": kernel,
             "coraza": coraza,
             "cf_bouncer": cf_bouncer,
+            "cryptd": cryptd_info,
         })
 
 
@@ -1024,29 +1065,98 @@ class SecurityEventsView(GenericAPIView):
                 })
         except Exception as exc:
             logger.debug("open-appsec agent events fetch skipped: %s", exc)
-        if not openappsec_events:
-            try:
-                envoy_proc = subprocess.run(
-                    ["docker", "logs", "--tail", "60", "smsly-appsec-envoy"],
-                    capture_output=True, text=True, timeout=8,
-                )
-                envoy_raw = (envoy_proc.stdout or "") + (envoy_proc.stderr or "")
-                for line in envoy_raw.splitlines():
-                    if any(k in line.lower() for k in ("verdict", "blocked", "drop", "attack", "waf", "threat")):
-                        openappsec_events.append({"message": line.strip()})
-                        activities.append({
-                            "id": _stable_id("oas", line),
-                            "source": "openappsec",
-                            "type": "waf_verdict",
-                            "severity": "HIGH" if ("drop" in line.lower() or "blocked" in line.lower()) else "WARNING",
-                            "title": "open-appsec WAF Security Event",
-                            "details": line.strip()[:200],
-                            "target": "reverse-proxy",
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "raw": {"log": line.strip()},
+        try:
+            envoy_proc = subprocess.run(
+                ["docker", "logs", "--tail", "120", "smsly-appsec-envoy"],
+                capture_output=True, text=True, timeout=8,
+            )
+            envoy_raw = (envoy_proc.stdout or "") + (envoy_proc.stderr or "")
+            _cur_path = ""
+            _cur_host = "localhost"
+            _cur_req_id = ""
+            for line in envoy_raw.splitlines():
+                _low = line.lower()
+                if "inserting headers: key :path, value " in _low:
+                    _cur_path = line.split("value ", 1)[-1].strip()
+                elif "inserting headers: key :authority, value " in _low:
+                    _cur_host = line.split("value ", 1)[-1].strip()
+                elif "inserting headers: key x-request-id, value " in _low:
+                    _cur_req_id = line.split("value ", 1)[-1].strip()
+                elif "got final verict:" in _low or "got final verdict:" in _low:
+                    is_block = "verict: 2" in _low or "verdict: 2" in _low
+                    if is_block or not openappsec_events:
+                        verdict_label = "BLOCKED (HTTP 403 Prevent)" if is_block else "INSPECTED (Allow)"
+                        detail_str = f"Verdict: {verdict_label} • Host: {_cur_host} • Path: {_cur_path or '/'} • ReqID: {_cur_req_id or 'n/a'}"
+                        openappsec_events.append({
+                            "time": datetime.now(timezone.utc).isoformat(),
+                            "name": f"open-appsec Envoy {verdict_label}",
+                            "severity": "high" if is_block else "info",
+                            "service": _cur_host,
+                            "path": _cur_path,
                         })
-            except Exception as exc:
-                logger.debug("open-appsec envoy events fetch skipped: %s", exc)
+                        activities.append({
+                            "id": _stable_id("oas-envoy", f"{line}|{_cur_req_id}|{_cur_path}"),
+                            "source": "openappsec",
+                            "type": "waf_block" if is_block else "waf_verdict",
+                            "severity": "HIGH" if is_block else "INFO",
+                            "title": f"open-appsec ML WAF {verdict_label}",
+                            "details": detail_str[:220],
+                            "target": _cur_host or "reverse-proxy",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "raw": {"log": line.strip(), "host": _cur_host, "path": _cur_path, "request_id": _cur_req_id},
+                        })
+        except Exception as exc:
+            logger.debug("open-appsec envoy events fetch skipped: %s", exc)
+
+        # ── 4b. CrowdSec Cloudflare Edge Bouncer & grid-cryptd Logs ─
+        try:
+            cf_proc = subprocess.run(
+                ["docker", "logs", "--tail", "40", "smsly-cloudflare-bouncer"],
+                capture_output=True, text=True, timeout=6,
+            )
+            cf_lines = ((cf_proc.stdout or "") + (cf_proc.stderr or "")).splitlines()
+            _cf_start = 0
+            for _i, _cl in enumerate(cf_lines):
+                if "starting crowdsec-cloudflare-bouncer" in _cl.lower():
+                    _cf_start = _i
+            for _cl in cf_lines[_cf_start:]:
+                _cl_str = _cl.strip()
+                if not _cl_str:
+                    continue
+                _cl_low = _cl_str.lower()
+                _cf_sev = "HIGH" if ("error" in _cl_low or "fatal" in _cl_low) else "INFO"
+                activities.append({
+                    "id": _stable_id("cf-bouncer", _cl_str),
+                    "source": "crowdsec",
+                    "type": "cf_bouncer",
+                    "severity": _cf_sev,
+                    "title": "Cloudflare Edge Bouncer: Firewall Rules Active" if "setup of firewall rules complete" in _cl_low else "Cloudflare Edge Bouncer Telemetry",
+                    "details": _cl_str[:220],
+                    "target": "cloudflare-edge",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "raw": {"log": _cl_str},
+                })
+        except Exception as exc:
+            logger.debug("Cloudflare bouncer logs fetch skipped: %s", exc)
+
+        try:
+            from apps.core.crypto_daemon import cryptd_client
+            if cryptd_client.is_enabled():
+                _cst = cryptd_client.get_status()
+                if isinstance(_cst, dict):
+                    activities.append({
+                        "id": f"cryptd-week-{_cst.get('current_week', 0)}-{_cst.get('active_leases', 0)}",
+                        "source": "auditd",
+                        "type": "cryptd_status",
+                        "severity": "INFO" if _cst.get("state") == "ACTIVE" else "CRITICAL",
+                        "title": f"grid-cryptd Vault Controller: {_cst.get('state', 'ACTIVE')} (Epoch Week {_cst.get('current_week', 0)})",
+                        "details": f"KeyVersion: {_cst.get('key_version', 'mk-v1')} • Provider: {_cst.get('provider', 'http_vault')} • Active Leases: {_cst.get('active_leases', 0)}/{_cst.get('opted_services', 0)} services",
+                        "target": "grid-cryptd",
+                        "timestamp": str(_cst.get("last_sync_at") or datetime.now(timezone.utc).isoformat()),
+                        "raw": _cst,
+                    })
+        except Exception as exc:
+            logger.debug("grid-cryptd event telemetry skipped: %s", exc)
 
         # Loki {job="fail2ban"} — the durable source. fail2ban-client and
         # /var/log/fail2ban.log only exist on full host installs; inside

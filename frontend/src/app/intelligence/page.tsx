@@ -1192,6 +1192,49 @@ export default function IntelligencePage() {
                     </div>
                   </CardContent>
                 </Card>
+
+                {/* grid-cryptd Vault & Volume Encryption */}
+                <Card className="bg-card border-border">
+                  <CardContent className="p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-semibold text-sm">
+                        <Lock className="w-4 h-4 text-cyan-400" />
+                        <span>grid-cryptd Vault &amp; LUKS2</span>
+                      </div>
+                      <Badge variant="outline" className={cn(
+                        "text-xs px-2 py-0.5",
+                        securityStatus?.cryptd?.enabled && securityStatus?.cryptd?.state === "ACTIVE"
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                          : "bg-zinc-500/10 text-zinc-400"
+                      )}>
+                        {securityStatus?.cryptd?.enabled ? securityStatus.cryptd.state : "Standby"}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Hierarchical MK → weekly SMK → per-service SEK custody with point-of-contact DB/Redis &amp; LUKS2 locking.
+                    </p>
+                    <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-muted-foreground block text-[10px] uppercase">Epoch / Key Version</span>
+                        <span className="font-mono font-medium">
+                          Wk {securityStatus?.cryptd?.current_week ?? 0} ({securityStatus?.cryptd?.key_version || "mk-v1"})
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[10px] uppercase">Active Service Leases</span>
+                        <span className="font-mono font-medium">
+                          {securityStatus?.cryptd?.active_leases ?? 0} / {securityStatus?.cryptd?.opted_services ?? 0} unlocked
+                        </span>
+                      </div>
+                    </div>
+                    <div className="pt-2 flex items-center justify-between">
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                        Provider: {securityStatus?.cryptd?.provider || "http_vault"}
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-mono">mlock2 + zero-on-lock</span>
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
 
               {/* AI Security Threat Posture & Defense Analysis Card */}

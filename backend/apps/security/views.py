@@ -245,6 +245,30 @@ class SecurityOverviewView(GenericAPIView):
         }
         if _is_platform_admin(request.user):
             data["threat_intel"] = match_threat_intel()
+            try:
+                from apps.core.crypto_daemon import cryptd_client
+                from apps.deployments.models.core import PlatformConfig
+                cfg = PlatformConfig.load()
+                cryptd_st: dict[str, Any] = {"enabled": bool(cryptd_client.is_enabled()), "state": "INACTIVE"}
+                if cryptd_st["enabled"]:
+                    raw_st = cryptd_client.get_status()
+                    if isinstance(raw_st, dict):
+                        cryptd_st.update(raw_st)
+                data["cryptd_status"] = cryptd_st
+                data["engines"] = {
+                    "openappsec_enabled": bool(getattr(cfg, "openappsec_enabled", True)),
+                    "openappsec_mode": str(getattr(cfg, "openappsec_mode", "prevent") or "prevent"),
+                    "crowdsec_enabled": bool(getattr(cfg, "enable_crowdsec_waf", True)),
+                    "crowdsec_first_strike": bool(getattr(cfg, "crowdsec_first_strike_enabled", True)),
+                    "cf_bouncer_enabled": bool(getattr(cfg, "crowdsec_cf_enabled", False)),
+                    "coraza_protected_services": waf_svcs,
+                    "total_services": total_svcs,
+                    "trivy_enabled": bool(getattr(cfg, "trivy_enabled", True)),
+                    "trivy_severity": str(getattr(cfg, "trivy_fail_on_severity", "CRITICAL") or "CRITICAL"),
+                    "cosign_enabled": bool(getattr(cfg, "cosign_enabled", True)),
+                }
+            except Exception as exc:
+                logger.debug("Overview engines/cryptd enrichment skipped: %s", exc)
             if ComplianceControlResult.objects.exists():
                 fw_scores: dict[str, dict[str, int]] = {}
                 for row in ComplianceControlResult.objects.all():

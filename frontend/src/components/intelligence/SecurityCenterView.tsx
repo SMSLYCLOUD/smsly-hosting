@@ -52,6 +52,9 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
   const [findings, setFindings] = useState<SecurityFindingItem[]>([]);
   const [sboms, setSboms] = useState<SbomArtifactItem[]>([]);
   const [forensics, setForensics] = useState<ForensicSnapshotItem[]>([]);
+  const [ocsfEvents, setOcsfEvents] = useState<any[]>([]);
+  const [eventSourceFilter, setEventSourceFilter] = useState<string>("ALL");
+  const [expandedOcsfId, setExpandedOcsfId] = useState<string | null>(null);
   const [compliance, setCompliance] = useState<{ frameworks: Record<string, any>; controls: ComplianceControlItem[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -67,7 +70,7 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [ov, fnd, sb, dfir] = await Promise.all([
+      const [ov, fnd, sb, dfir, evts] = await Promise.all([
         securityCenterApi.getOverview(serviceId).catch(() => null),
         securityCenterApi
           .getFindings({
@@ -83,11 +86,19 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
           })
           .catch(() => ({ count: 0, results: [] })),
         securityCenterApi.getForensics(serviceId).catch(() => ({ count: 0, results: [] })),
+        securityCenterApi
+          .getOcsfEvents({
+            ...(serviceId ? { service_id: serviceId } : {}),
+            ...(eventSourceFilter !== "ALL" ? { source: eventSourceFilter.toLowerCase() } : {}),
+            limit: compact ? 20 : 60,
+          })
+          .catch(() => ({ schema: "OCSF-1.1.0", count: 0, results: [] })),
       ]);
       if (ov) setOverview(ov);
       setFindings(fnd.results || []);
       setSboms(sb.results || []);
       setForensics(dfir.results || []);
+      setOcsfEvents(evts.results || []);
 
       if (!compact && ov?.compliance_frameworks !== undefined) {
         const grc = await securityCenterApi.getCompliance().catch(() => null);
@@ -96,7 +107,7 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
     } finally {
       setLoading(false);
     }
-  }, [serviceId, pillarFilter, statusFilter, compact]);
+  }, [serviceId, pillarFilter, statusFilter, eventSourceFilter, compact]);
 
   useEffect(() => {
     loadAll();
@@ -378,6 +389,55 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
                   </Button>
                 );
               })}
+            </div>
+          )}
+
+          {/* Live Defense Engines & grid-cryptd Vault Telemetry Strip */}
+          {!compact && (overview?.engines || overview?.cryptd_status) && (
+            <div className="mt-3 pt-3 border-t border-border/50 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-[11px] font-semibold uppercase text-muted-foreground mr-1">
+                Active Engines:
+              </span>
+              {overview?.engines && (
+                <>
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
+                    open-appsec: {overview.engines.openappsec_enabled ? overview.engines.openappsec_mode.toUpperCase() : "OFF"}
+                  </Badge>
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
+                    Coraza L7 WAF: {overview.engines.coraza_protected_services}/{overview.engines.total_services} Protected
+                  </Badge>
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
+                    CrowdSec IPS: {overview.engines.crowdsec_first_strike ? "FIRST-STRIKE" : "ACTIVE"}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-[10px]",
+                      overview.engines.cf_bouncer_enabled
+                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                        : "bg-zinc-500/10 text-zinc-400"
+                    )}
+                  >
+                    Cloudflare Edge Bouncer: {overview.engines.cf_bouncer_enabled ? "ENFORCING" : "OFF"}
+                  </Badge>
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
+                    Trivy ({overview.engines.trivy_severity}) + Cosign: {overview.engines.trivy_enabled && overview.engines.cosign_enabled ? "ENFORCING" : "PARTIAL"}
+                  </Badge>
+                </>
+              )}
+              {overview?.cryptd_status && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px] font-mono",
+                    overview.cryptd_status.enabled && overview.cryptd_status.state === "ACTIVE"
+                      ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/30"
+                      : "bg-zinc-500/10 text-zinc-400"
+                  )}
+                >
+                  grid-cryptd: {overview.cryptd_status.state} (Wk {overview.cryptd_status.current_week ?? 0} • {overview.cryptd_status.active_leases ?? 0}/{overview.cryptd_status.opted_services ?? 0} leases)
+                </Badge>
+              )}
             </div>
           )}
 
@@ -708,6 +768,86 @@ export const SecurityCenterView = React.memo(function SecurityCenterView({ servi
           </CardContent>
         </Card>
       )}
+
+      {/* OCSF v1.1.0 Normalized Security Log & Telemetry Stream */}
+      <Card className="border-border">
+        <CardHeader className="pb-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Shield className="w-4 h-4 text-emerald-400" />
+              OCSF v1.1.0 Normalized Security Log &amp; Telemetry Stream ({ocsfEvents.length} shown / {overview?.ocsf_events_count ?? ocsfEvents.length} total)
+            </CardTitle>
+            <div className="flex flex-wrap gap-1">
+              {["ALL", "openappsec", "crowdsec", "falco", "fail2ban", "image_cve", "dspm", "secrets", "aspm", "auditd"].map((src) => (
+                <Button
+                  key={src}
+                  size="sm"
+                  variant={eventSourceFilter === src ? "default" : "outline"}
+                  className="h-6 px-2 text-[10px] font-mono"
+                  onClick={() => setEventSourceFilter(src)}
+                >
+                  {src}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {ocsfEvents.length === 0 ? (
+            <div className="text-xs text-muted-foreground py-6 text-center">
+              No normalized OCSF telemetry events matching source filter &ldquo;{eventSourceFilter}&rdquo;.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {ocsfEvents.map((ev) => {
+                const isExp = expandedOcsfId === ev.id;
+                return (
+                  <div key={ev.id} className="p-2.5 rounded-lg border border-border/60 bg-muted/15 text-xs space-y-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="outline" className={cn("text-[10px]", SEV_BADGE[ev.severity] || "")}>
+                          {ev.severity}
+                        </Badge>
+                        <Badge variant="secondary" className="text-[10px] font-mono uppercase">
+                          {ev.source}
+                        </Badge>
+                        {ev.mitre_technique && (
+                          <Badge variant="outline" className="text-[10px] font-mono">
+                            {ev.mitre_technique}
+                          </Badge>
+                        )}
+                        <span className="font-semibold text-foreground">{ev.title}</span>
+                        {ev.target && (
+                          <span className="px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground font-mono text-[10px]">
+                            target: {ev.target}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span>{ev.occurred_at ? new Date(ev.occurred_at).toLocaleString() : ""}</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 px-1.5 text-[10px]"
+                          onClick={() => setExpandedOcsfId(isExp ? null : ev.id)}
+                        >
+                          {isExp ? "Hide OCSF" : "OCSF JSON"}
+                        </Button>
+                      </div>
+                    </div>
+                    {ev.details && <div className="text-[11px] text-muted-foreground font-mono">{ev.details}</div>}
+                    {isExp && (
+                      <pre className="mt-1.5 p-2 rounded bg-black/40 border border-border/40 text-[10px] font-mono text-zinc-300 overflow-x-auto max-h-44">
+                        {JSON.stringify(ev.raw_ocsf || ev, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 });
