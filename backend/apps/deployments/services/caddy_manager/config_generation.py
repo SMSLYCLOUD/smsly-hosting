@@ -49,9 +49,9 @@ CORAZA_SNIPPET = """(coraza_waf) {
             # /api/v1/services/<uuid>/). Scoped strictly to /api/v1/ URIs;
             # tenant blocks also strip X-SMSLY-Remote-Sync inside a route
             # block before Coraza runs.
-            SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync '@streq 1' 'id:1000000,phase:1,deny,status:403,log,t:none,chain'
-                SecRule &REQUEST_HEADERS:X-Gateway-Signature-V2 '@eq 0' 't:none,chain'
-                    SecRule &REQUEST_HEADERS:Authorization '@eq 0' 't:none'
+            SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync "@streq 1" "id:1000000,phase:1,deny,status:403,log,t:none,chain"
+                SecRule &REQUEST_HEADERS:X-Gateway-Signature-V2 "@eq 0" "t:none,chain"
+                    SecRule &REQUEST_HEADERS:Authorization "@eq 0" "t:none"
             SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync "@streq 1" "id:1000001,phase:1,pass,log,t:none,chain"
                 SecRule &REQUEST_HEADERS:X-Gateway-Signature-V2 "@gt 0" "t:none,chain"
                     SecRule REQUEST_URI "@beginsWith /api/v1/" "t:none,t:urlDecodeUni,t:normalizePath,ctl:ruleRemoveById=911100,ctl:ruleRemoveById=920170,ctl:ruleRemoveById=920171"

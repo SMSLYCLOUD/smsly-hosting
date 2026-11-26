@@ -43,6 +43,7 @@ def _record_caddy_reload_failure(error: str) -> None:
         })
         with open(CADDY_RELOAD_FAILED, "w", encoding="utf-8") as handle:
             handle.write(payload)
+        _chown_for_caddy(CADDY_RELOAD_FAILED)
         logger.error("Caddy reload FAILED and was recorded: %s", str(error or "")[:300])
     except Exception as exc:
         logger.debug("Could not write caddy reload-failure marker: %s", exc)
@@ -72,21 +73,29 @@ def read_caddy_reload_failure() -> dict | None:
         return None
 
 
-def _ensure_caddy_dir_writable():
-    """Ensure CADDY_CONFIG_DIR exists and is writable by the current process.
-
-    Self-heals ownership and permissions so that both the backend (root)
-    and the Caddy container (UID 1000) can read/write files.  Called
-    before every file write to prevent the PermissionError that occurs
-    when the caddy container creates files with UID 1000 and the backend
-    later tries to overwrite them.
-    """
-    os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
-    CADDY_GID = int(os.environ.get("CADDY_GID", "1000"))
+def _chown_for_caddy(path: str) -> None:
+    """Ensure Caddy (uid/gid 1000) can read/manage shared config artifacts even when written as root."""
+    if not hasattr(os, "chown"):
+        return
     try:
-        if hasattr(os, "chown"):
-            os.chown(CADDY_CONFIG_DIR, os.getuid(), CADDY_GID)
-        os.chmod(CADDY_CONFIG_DIR, 0o775)
+        if os.geteuid() != 0:
+            return
+        caddy_uid = int(os.environ.get("CADDY_UID", "1000"))
+        caddy_gid = int(os.environ.get("CADDY_GID", "1000"))
+        os.chown(path, caddy_uid, caddy_gid)
+    except (OSError, PermissionError, ValueError):
+        pass
+
+
+def _ensure_caddy_dir_writable():
+    """Ensure CADDY_CONFIG_DIR exists and is writable by both backend and Caddy (UID 1000)."""
+    os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
+    try:
+        _chown_for_caddy(CADDY_CONFIG_DIR)
+        try:
+            os.chmod(CADDY_CONFIG_DIR, 0o2775)
+        except (OSError, PermissionError):
+            os.chmod(CADDY_CONFIG_DIR, 0o775)
     except (OSError, PermissionError) as exc:
         logger.debug("Could not chown/chmod %s: %s", CADDY_CONFIG_DIR, exc)
 
@@ -95,8 +104,7 @@ def _ensure_caddy_dir_writable():
         if os.path.exists(fpath):
             try:
                 os.chmod(fpath, 0o640)
-                if hasattr(os, "chown"):
-                    os.chown(fpath, os.getuid(), CADDY_GID)
+                _chown_for_caddy(fpath)
             except (OSError, PermissionError):
                 try:
                     os.remove(fpath)
@@ -116,6 +124,7 @@ def _safe_write_file(path: str, content: str):
         _ensure_caddy_dir_writable()
         with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640), "w", encoding="utf-8") as handle:
             handle.write(content)
+    _chown_for_caddy(path)
 
 
 def _safe_remove(path: str):
@@ -342,10 +351,12 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         tmp_path = os.path.join(CADDY_CONFIG_DIR, ".Caddyfile.tmp")
         with open(tmp_path, "w", encoding="utf-8") as handle:
             handle.write(content)
+        _chown_for_caddy(tmp_path)
         os.replace(tmp_path, CADDY_FILE_PATH)
+        _chown_for_caddy(CADDY_FILE_PATH)
         try:
-            if (os.stat(CADDY_FILE_PATH).st_mode & 0o777) != 0o640:
-                os.chmod(CADDY_FILE_PATH, 0o640)
+            if (os.stat(CADDY_FILE_PATH).st_mode & 0o777) != 0o664:
+                os.chmod(CADDY_FILE_PATH, 0o664)
         except (OSError, PermissionError) as chmod_exc:
             logger.warning("chmod on %s failed (%s) — continuing", CADDY_FILE_PATH, chmod_exc)
 
@@ -372,6 +383,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         try:
             with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as f:
                 f.write(str(int(__import__("time").time())))
+            _chown_for_caddy(CADDY_RELOAD_FLAG)
             try:
                 os.chmod(CADDY_RELOAD_FLAG, 0o664)
             except (OSError, PermissionError):

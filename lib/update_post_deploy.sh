@@ -560,7 +560,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         # Strip transient egress-mirror :8888 NAT REDIRECT rules before persisting
         # so boot-time iptables-restore does not blackhole :80 before nginx starts;
         # smsly-egress-mirror.service re-installs them after nginx.service is up.
-        local _egress_port="${SMSLY_EGRESS_MIRROR_PORT:-8888}"
+        _egress_port="${SMSLY_EGRESS_MIRROR_PORT:-8888}"
         iptables-save | grep -vE "REDIRECT[[:space:]].*--to-ports?[[:space:]]+${_egress_port}([[:space:]]|\$)" > /etc/iptables/rules.v4 || true
         unset _egress_port
         if [ ! -f /etc/systemd/system/iptables-restore.service ]; then

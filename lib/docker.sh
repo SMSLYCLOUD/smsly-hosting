@@ -979,7 +979,13 @@ safe_refresh_runtime_services() {
     fi
 
     echo -e "${YELLOW}  -> Runtime refresh incomplete. Running one recovery pass...${NC}"
-    recover_runtime_stack || true
+    if ! declare -F recover_runtime_stack >/dev/null 2>&1 && [ -f "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/ops_recovery.sh" ]; then
+        # shellcheck disable=SC1091
+        source "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/ops_recovery.sh" || true
+    fi
+    if declare -F recover_runtime_stack >/dev/null 2>&1; then
+        recover_runtime_stack || true
+    fi
     refresh_runtime_services
 }
 

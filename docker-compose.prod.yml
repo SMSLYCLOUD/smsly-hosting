@@ -1160,7 +1160,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - test -f /app/celerybeat.pid && kill -0 $$(cat /app/celerybeat.pid)
+      - test -f /app/celerybeat.pid && test -d "/proc/$$(tr -d '[:space:]' < /app/celerybeat.pid)"
       # Stretched 60s->120s (2026-09-16): same ping pileup class as the
       # workers above; halves steady healthcheck burn fleet-wide.
       interval: 120s
