@@ -76,6 +76,40 @@ class PerDomainChallengeTests(TestCase):
                                                handle_at + 1) if "reverse_proxy" in block[handle_at:] else 10**9)
         self.assertIn("header_up Host localhost", block)
 
+    def test_www_canonical_redirect_wraps_redir_in_handle_after_challenge(self):
+        from django.contrib.auth.models import User
+        from apps.cloud.models import CloudProvider
+        from apps.deployments.models import Service
+        from apps.domains.models import Domain, DomainStatus
+        user = User.objects.create_user(
+            username="www-chal-owner", email="w@example.com", password="x")
+        provider = CloudProvider.objects.create(
+            name="www-chal-prov",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True)
+        svc = Service.objects.create(
+            name="www-chal-svc", owner=user, provider=provider,
+            public_domain="www-chal-svc.cloud.smsly.cloud")
+        Domain.objects.create(
+            domain_name="example-chal.com", service=svc,
+            status=DomainStatus.DNS_VERIFIED, verified=True)
+        Domain.objects.create(
+            domain_name="www.example-chal.com", service=svc,
+            status=DomainStatus.DNS_VERIFIED, verified=True)
+        caddyfile = generate_caddyfile(SimpleNamespace(
+            domain="cloud.smsly.cloud", use_ssl=True,
+            wildcard_subdomains=False, cloudflare_api_token=""))
+        start = caddyfile.index("www.example-chal.com {")
+        end = caddyfile.index("\n}", start) + 2
+        block = caddyfile[start:end]
+        challenge_handle = "handle /.well-known/smsly-verify/* {"
+        fallback_redir = "    handle {\n        redir https://example-chal.com{uri} 301\n    }"
+        self.assertIn(challenge_handle, block)
+        self.assertIn(fallback_redir, block)
+        self.assertLess(block.index(challenge_handle), block.index(fallback_redir))
+        self.assertNotIn("\n    redir ", block)
+        self.assertNotIn("\n        redir ", block.replace(fallback_redir, ""))
+
 
 class ChallengeGuardTests(SimpleTestCase):
     """The control-plane guard must ignore the path-scoped challenge

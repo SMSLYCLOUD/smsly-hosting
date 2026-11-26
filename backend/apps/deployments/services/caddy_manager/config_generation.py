@@ -1017,7 +1017,9 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                         lines.append("            header_up Host localhost")
                         lines.append("        }")
                         lines.append("    }")
+                        lines.append("    handle {")
                         lines.append(f"        redir https://{_apex}{{uri}} 301")
+                        lines.append("    }")
                         lines.append("}")
                         blocks.append("\n".join(lines))
                         continue
