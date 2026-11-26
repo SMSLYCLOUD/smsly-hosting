@@ -7,10 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import api from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
 import { useToast } from "@/components/ui/use-toast";
 
 export function ProfileTab() {
   const { toast } = useToast();
+  const { isSuperuser } = usePermissions();
   const [saving, setSaving] = useState(false);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -34,10 +36,19 @@ export function ProfileTab() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.patch("/auth/user/", { first_name: firstName, last_name: lastName, email });
+      const payload: Record<string, string> = {
+        first_name: firstName,
+        last_name: lastName,
+      };
+      if (isSuperuser) {
+        payload.email = email;
+      }
+      await api.patch("/auth/user/", payload);
       toast({ title: "Profile saved", description: "Your profile has been updated." });
-    } catch {
-      toast({ title: "Error", description: "Failed to save profile.", variant: "destructive" });
+    } catch (err: any) {
+      const data = err?.response?.data;
+      const msg = (Array.isArray(data?.email) ? data.email[0] : data?.email) || data?.detail || "Failed to save profile.";
+      toast({ title: "Error", description: String(msg), variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -62,7 +73,19 @@ export function ProfileTab() {
         </div>
         <div className="space-y-2">
           <Label>Email</Label>
-          <Input type="email" placeholder="john@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input
+            type="email"
+            placeholder="john@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={!isSuperuser}
+            readOnly={!isSuperuser}
+          />
+          {!isSuperuser && (
+            <p className="text-xs text-muted-foreground">
+              Email is tied to your login identity and cannot be changed directly.
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <Button onClick={handleSave} disabled={saving}>

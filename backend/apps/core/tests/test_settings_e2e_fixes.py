@@ -269,8 +269,8 @@ class SettingsE2EFixesTests(TestCase):
     # ── H-8: AuditLog does not leak same-named services across tenants ──────
 
     def test_h8_audit_log_does_not_collide_on_service_name(self):
-        svc_a = Service.objects.create(name="api", owner=self.user_a)
-        svc_b = Service.objects.create(name="api", owner=self.user_b)
+        svc_a = Service.objects.create(name="api-tenant-a", slug="api-tenant-a", owner=self.user_a)
+        svc_b = Service.objects.create(name="api-tenant-b", slug="api-tenant-b", owner=self.user_b)
 
         AuditLog.objects.create(
             actor=self.user_a.username,
@@ -280,7 +280,7 @@ class SettingsE2EFixesTests(TestCase):
         AuditLog.objects.create(
             actor=self.user_a.username,
             action="SECRET_UPDATED",
-            target=str(svc_a.id),
+            target=f"Service:{svc_a.id}",
         )
         AuditLog.objects.create(
             actor="admin",
@@ -295,8 +295,8 @@ class SettingsE2EFixesTests(TestCase):
         rows = resp.json() if isinstance(resp.json(), list) else resp.json().get("results", [])
         targets = {r.get("target") for r in rows}
         self.assertIn(f"Service:{svc_b.id}", targets)
-        self.assertNotIn("api", targets)
-        self.assertNotIn(str(svc_a.id), targets)
+        self.assertNotIn(svc_a.name, targets)
+        self.assertNotIn(f"Service:{svc_a.id}", targets)
 
     # ── H-9: RegistryCredential SSRF protection ─────────────────────────────
 
@@ -333,17 +333,45 @@ class SettingsE2EFixesTests(TestCase):
         self.assertIs(resp.json().get("extension_available"), False)
         self.assertIn("shared_preload_libraries", resp.json().get("warning", ""))
 
-    # ── M-5: User profile email uniqueness ──────────────────────────────────
+    # ── M-5: User profile email restrictions & superuser uniqueness ─────────
 
     def test_m5_profile_email_uniqueness_enforced(self):
         client = APIClient()
         client.force_authenticate(user=self.user_a)
 
-        resp = client.patch(
+        # Regular user cannot change email directly
+        resp_change = client.patch(
             "/api/v1/auth/user/",
             {"email": "TENANT_B@example.com"},
             format="json",
         )
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp_change.status_code, status.HTTP_400_BAD_REQUEST)
         self.user_a.refresh_from_db()
         self.assertEqual(self.user_a.email, "tenant_a@example.com")
+
+        # Regular user CAN update first_name when email is unchanged
+        resp_same = client.patch(
+            "/api/v1/auth/user/",
+            {"first_name": "Alice", "email": "tenant_a@example.com"},
+            format="json",
+        )
+        self.assertEqual(resp_same.status_code, status.HTTP_200_OK)
+        self.user_a.refresh_from_db()
+        self.assertEqual(self.user_a.first_name, "Alice")
+
+        # Superuser email edit enforces case-insensitive uniqueness
+        client.force_authenticate(user=self.admin_user)
+        resp_dup = client.patch(
+            "/api/v1/auth/user/",
+            {"email": "TENANT_B@example.com"},
+            format="json",
+        )
+        self.assertEqual(resp_dup.status_code, status.HTTP_400_BAD_REQUEST)
+        resp_ok = client.patch(
+            "/api/v1/auth/user/",
+            {"email": "new_super@example.com"},
+            format="json",
+        )
+        self.assertEqual(resp_ok.status_code, status.HTTP_200_OK)
+        self.admin_user.refresh_from_db()
+        self.assertEqual(self.admin_user.email, "new_super@example.com")

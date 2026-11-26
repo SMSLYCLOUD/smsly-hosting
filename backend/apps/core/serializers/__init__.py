@@ -37,6 +37,24 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
 
     class Meta(UserDetailsSerializer.Meta):
         fields = (*UserDetailsSerializer.Meta.fields, 'permissions', 'roles', 'is_staff', 'is_superuser')
+        read_only_fields = ('username', 'email')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user and getattr(user, 'is_authenticated', False) and user.is_superuser and 'email' in self.fields:
+            self.fields['email'].read_only = False
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance is not None and isinstance(getattr(self, 'initial_data', None), dict):
+            if 'email' in self.initial_data and self.fields['email'].read_only:
+                submitted = str(self.initial_data.get('email') or '').strip()
+                current = str(getattr(self.instance, 'email', '') or '').strip()
+                if submitted.lower() != current.lower():
+                    raise serializers.ValidationError({'email': 'Email address cannot be changed directly.'})
+        return attrs
 
     def get_permissions(self, user) -> list[str]:
         return get_user_permissions(user)
