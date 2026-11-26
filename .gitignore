@@ -227,3 +227,15 @@ crowdsec/cloudflare-bouncer.yaml
 
 # Local tooling state (session baselines, file snapshots) - never track.
 .mimosa/
+# Runtime directories, credentials, and installer state (never stash or commit)
+coredns-config/
+backups/
+.update-safe-snapshot
+.pre-update-head
+.git-stash-marker
+.state/
+.credentials
+.recovery_phrase
+.token
+prometheus-targets/*.json
+prometheus-targets/.perm_probe

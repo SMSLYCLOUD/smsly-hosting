@@ -22,7 +22,7 @@ if command -v safe_update_post_verify ; then
         if command -v safe_update_cleanup ; then
             safe_update_cleanup
         fi
-        rm -f "$SNAPSHOT_FILE"  || true
+        rm -f "$SNAPSHOT_FILE" "$INSTALL_DIR/.update-safe-snapshot" "$INSTALL_DIR/.pre-update-head" || true
     else
         echo -e "${RED}  ✗ Post-deploy health checks failed — initiating rollback${NC}"
         safe_update_rollback
@@ -706,6 +706,7 @@ RESTORE_EOF
         unset _verify_image
     fi
 
+    rm -f "$INSTALL_DIR/.update-safe-snapshot" "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}  Debug snapshot:    sudo bash install.sh --debug${NC}"
     echo -e "${YELLOW}  Runtime recovery:  sudo bash install.sh --recover${NC}"

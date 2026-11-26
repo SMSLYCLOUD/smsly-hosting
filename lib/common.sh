@@ -12,36 +12,42 @@ source "$_SCRIPT_DIR/utils.sh"
 
 ensure_local_ignores() {
     local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
-    local gitignore_path="${target_dir}/.gitignore"
+    local ignore_file="${target_dir}/.gitignore"
+    if [ -d "$target_dir/.git/info" ]; then
+        ignore_file="${target_dir}/.git/info/exclude"
+    fi
     if [ -d "$target_dir" ]; then
-        if [ ! -f "$gitignore_path" ]; then
-            touch "$gitignore_path"
+        if [ ! -f "$ignore_file" ]; then
+            touch "$ignore_file"
         fi
         local needs_update=false
-        if ! grep -q "^builds/" "$gitignore_path"; then
-            echo "" >> "$gitignore_path"
-            echo "builds/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^caddy-config/" "$gitignore_path"; then
-            echo "caddy-config/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        # Runtime-generated WAF policy dirs. The agent first-run writes
-        # local_policy.yaml here and the updater stashes --include-untracked:
-        # without these ignores every update sweeps the live policy into a
-        # dead stash and the agent falls back to baked-in defaults
-        # (2026-09-15: conf/ + localconfig/ vanished mid-update).
-        if ! grep -q "^infrastructure/openappsec/conf/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/conf/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^infrastructure/openappsec/localconfig/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/localconfig/" >> "$gitignore_path"
-            needs_update=true
-        fi
+        local _entry=""
+        for _entry in \
+            "builds/" \
+            "caddy-config/" \
+            "coredns-config/" \
+            "traefik-dynamic/" \
+            "backups/" \
+            ".update-backups/" \
+            ".update-safe-snapshot" \
+            ".pre-update-head" \
+            ".git-stash-marker" \
+            ".smsly_install_state*" \
+            ".state/" \
+            ".credentials" \
+            ".recovery_phrase" \
+            ".token" \
+            "prometheus-targets/*.json" \
+            "infrastructure/openappsec/conf/" \
+            "infrastructure/openappsec/localconfig/"
+        do
+            if ! grep -Fqx "$_entry" "$ignore_file" 2>/dev/null; then
+                printf '%s\n' "$_entry" >> "$ignore_file"
+                needs_update=true
+            fi
+        done
         if [ "$needs_update" = "true" ]; then
-            echo -e "${BLUE}  → Added runtime dirs to local .gitignore to prevent Git stash data loss${NC}"
+            echo -e "${BLUE}  → Added runtime dirs to local ignore rules (${ignore_file}) to prevent Git stash data loss${NC}"
         fi
     fi
 }

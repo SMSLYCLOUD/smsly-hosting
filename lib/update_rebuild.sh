@@ -85,6 +85,9 @@
 
      # Ensure shared networks exist (prod stack uses external networks)
      ensure_update_networks
+     if declare -F heal_detached_coredns_volume >/dev/null 2>&1; then
+         heal_detached_coredns_volume || true
+     fi
 
      # Ensure all critical envs are set. The install.sh auto-
      # generates these at first install; on UPDATE, the env
@@ -373,27 +376,30 @@
 
       docker_login
 
+       _build_timeout="${SMSLY_BUILD_TIMEOUT:-1800}"
+       case "$_build_timeout" in ''|*[!0-9]*) _build_timeout=1800 ;; esac
+
        case "$UPDATE_MODE" in
          frontend)
               if [ "$MODE_NODE" = "true" ]; then
                   echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
               else
-                  echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-                  timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend
+                  echo -e "${BLUE}  → Rebuilding frontend container (cached, timeout ${_build_timeout}s)...${NC}"
+                  timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build frontend
                   docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ docker compose stop frontend failed (non-fatal)${NC}"
                   docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ docker compose rm frontend failed (non-fatal)${NC}"
                   docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
               fi
               ;;
          backend)
-            echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
+            echo -e "${BLUE}  → Rebuilding backend containers (cached, timeout ${_build_timeout}s)...${NC}"
             build_svcs="backend celery"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 build_svcs="backend"
             elif [ "$MODE_NODE" = "true" ]; then
                 build_svcs="backend celery celery-deploy celery-fast celery-beat"
             fi
-            timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build $build_svcs
+            timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build $build_svcs
 
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -453,8 +459,8 @@
 
             # 1. Rebuild frontend from cached layers (no --pull, no new base images)
             if [ "$MODE_NODE" != "true" ]; then
-                echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
-                timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend  || {
+                echo -e "${BLUE}  → Rebuilding frontend (cached, timeout ${_build_timeout}s)...${NC}"
+                timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build frontend  || {
                     echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
                     echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
                 }
@@ -521,17 +527,18 @@
             # 2. Skip untagging old PaaS images to prevent zero-downtime gaps on container restarts.
             # Docker compose build will simply overwrite the tag; old images will become dangling and cleaned later.
 
-            # 3. Prune dangling build cache
-            echo -e "${BLUE}    ↳ Pruning build cache...${NC}"
-            docker builder prune -af  || true
-
-            # 4. Ensure shared networks exist (create if missing, don't destroy)
+            # 3. Ensure shared networks exist (create if missing, don't destroy)
             echo -e "${BLUE}    ↳ Ensuring networks exist...${NC}"
             ensure_update_networks
 
-            # 5. Rebuild core images (CACHED unless --no-cache passed manually)
-            echo -e "${BLUE}    ↳ Rebuilding core images...${NC}"
-            timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
+            # 4. Rebuild core images (CACHED; build backend/celery first, then frontend)
+            echo -e "${BLUE}    ↳ Rebuilding core images (timeout ${_build_timeout}s per target)...${NC}"
+            if [ "$MODE_AGENT_LITE" = "true" ] || [ "$MODE_NODE" = "true" ]; then
+                timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
+            else
+                timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build backend celery celery-deploy celery-fast celery-beat
+                timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build frontend
+            fi
 
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop

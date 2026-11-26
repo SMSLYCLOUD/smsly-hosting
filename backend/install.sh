@@ -1262,7 +1262,71 @@ get_redis_service() {
     fi
 }
 
+heal_detached_coredns_volume() {
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local coredns_dir="${install_dir}/coredns-config"
+    local compose_target="${COMPOSE_FILE:-${install_dir}/docker-compose.prod.yml}"
+
+    mkdir -p "$coredns_dir"
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local vol_name=""
+    local healed=false
+    for vol_name in smsly-hosting_coredns_config coredns_config; do
+        docker volume inspect "$vol_name" >/dev/null 2>&1 || continue
+        local mp=""
+        mp=$(docker volume inspect "$vol_name" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        local nlink=""
+        if [ -n "$mp" ] && [ -e "$mp" ]; then
+            nlink=$(stat -c '%h' "$mp" 2>/dev/null || echo 1)
+        else
+            nlink="0"
+        fi
+        if [ "$nlink" = "0" ]; then
+            echo -e "${YELLOW}  ⚠ Detected detached CoreDNS bind volume ($vol_name, nlink=0) — self-healing...${NC}"
+            local preserve_dir="/tmp/smsly-coredns-preserve.$$"
+            mkdir -p "$preserve_dir"
+            if [ -d "$coredns_dir" ]; then
+                cp -a "$coredns_dir/." "$preserve_dir/" 2>/dev/null || true
+            fi
+
+            timeout -k 5 20 docker stop -t 10 smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+            docker rm -f smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+
+            local _st="" _cid=""
+            for _st in created exited dead; do
+                for _cid in $(docker ps -aq --filter "volume=${vol_name}" --filter "status=${_st}" 2>/dev/null || true); do
+                    docker rm -f "$_cid" >/dev/null 2>&1 || true
+                done
+            done
+
+            if [ -n "$mp" ]; then
+                umount "$mp" >/dev/null 2>&1 || umount -l "$mp" >/dev/null 2>&1 || true
+            fi
+            docker volume rm -f "$vol_name" >/dev/null 2>&1 || true
+
+            mkdir -p "$coredns_dir"
+            cp -a "$preserve_dir/." "$coredns_dir/" 2>/dev/null || true
+            rm -rf "$preserve_dir" 2>/dev/null || true
+
+            chown -R 1000:1000 "$coredns_dir" 2>/dev/null || true
+            chmod 2775 "$coredns_dir" 2>/dev/null || true
+            [ -f "$coredns_dir/Corefile" ] && chmod 664 "$coredns_dir/Corefile" 2>/dev/null || true
+            [ -f "$coredns_dir/mesh.hosts" ] && chmod 664 "$coredns_dir/mesh.hosts" 2>/dev/null || true
+            healed=true
+        fi
+    done
+
+    if [ "$healed" = "true" ] && [ -f "$compose_target" ] && ! is_node_mode; then
+        ensure_compose_profiles
+        timeout -k 10 60 docker compose -f "$compose_target" up -d --no-deps coredns >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Healed CoreDNS bind volume and restarted coredns${NC}"
+    fi
+    return 0
+}
+
 ensure_infrastructure_permissions() {
+    heal_detached_coredns_volume || true
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
@@ -2241,36 +2305,42 @@ registry_check_with_fallback() {
 
 ensure_local_ignores() {
     local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
-    local gitignore_path="${target_dir}/.gitignore"
+    local ignore_file="${target_dir}/.gitignore"
+    if [ -d "$target_dir/.git/info" ]; then
+        ignore_file="${target_dir}/.git/info/exclude"
+    fi
     if [ -d "$target_dir" ]; then
-        if [ ! -f "$gitignore_path" ]; then
-            touch "$gitignore_path"
+        if [ ! -f "$ignore_file" ]; then
+            touch "$ignore_file"
         fi
         local needs_update=false
-        if ! grep -q "^builds/" "$gitignore_path"; then
-            echo "" >> "$gitignore_path"
-            echo "builds/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^caddy-config/" "$gitignore_path"; then
-            echo "caddy-config/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        # Runtime-generated WAF policy dirs. The agent first-run writes
-        # local_policy.yaml here and the updater stashes --include-untracked:
-        # without these ignores every update sweeps the live policy into a
-        # dead stash and the agent falls back to baked-in defaults
-        # (2026-09-15: conf/ + localconfig/ vanished mid-update).
-        if ! grep -q "^infrastructure/openappsec/conf/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/conf/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^infrastructure/openappsec/localconfig/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/localconfig/" >> "$gitignore_path"
-            needs_update=true
-        fi
+        local _entry=""
+        for _entry in \
+            "builds/" \
+            "caddy-config/" \
+            "coredns-config/" \
+            "traefik-dynamic/" \
+            "backups/" \
+            ".update-backups/" \
+            ".update-safe-snapshot" \
+            ".pre-update-head" \
+            ".git-stash-marker" \
+            ".smsly_install_state*" \
+            ".state/" \
+            ".credentials" \
+            ".recovery_phrase" \
+            ".token" \
+            "prometheus-targets/*.json" \
+            "infrastructure/openappsec/conf/" \
+            "infrastructure/openappsec/localconfig/"
+        do
+            if ! grep -Fqx "$_entry" "$ignore_file" 2>/dev/null; then
+                printf '%s\n' "$_entry" >> "$ignore_file"
+                needs_update=true
+            fi
+        done
         if [ "$needs_update" = "true" ]; then
-            echo -e "${BLUE}  → Added runtime dirs to local .gitignore to prevent Git stash data loss${NC}"
+            echo -e "${BLUE}  → Added runtime dirs to local ignore rules (${ignore_file}) to prevent Git stash data loss${NC}"
         fi
     fi
 }
@@ -3226,7 +3296,71 @@ get_redis_service() {
     fi
 }
 
+heal_detached_coredns_volume() {
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local coredns_dir="${install_dir}/coredns-config"
+    local compose_target="${COMPOSE_FILE:-${install_dir}/docker-compose.prod.yml}"
+
+    mkdir -p "$coredns_dir"
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local vol_name=""
+    local healed=false
+    for vol_name in smsly-hosting_coredns_config coredns_config; do
+        docker volume inspect "$vol_name" >/dev/null 2>&1 || continue
+        local mp=""
+        mp=$(docker volume inspect "$vol_name" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        local nlink=""
+        if [ -n "$mp" ] && [ -e "$mp" ]; then
+            nlink=$(stat -c '%h' "$mp" 2>/dev/null || echo 1)
+        else
+            nlink="0"
+        fi
+        if [ "$nlink" = "0" ]; then
+            echo -e "${YELLOW}  ⚠ Detected detached CoreDNS bind volume ($vol_name, nlink=0) — self-healing...${NC}"
+            local preserve_dir="/tmp/smsly-coredns-preserve.$$"
+            mkdir -p "$preserve_dir"
+            if [ -d "$coredns_dir" ]; then
+                cp -a "$coredns_dir/." "$preserve_dir/" 2>/dev/null || true
+            fi
+
+            timeout -k 5 20 docker stop -t 10 smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+            docker rm -f smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+
+            local _st="" _cid=""
+            for _st in created exited dead; do
+                for _cid in $(docker ps -aq --filter "volume=${vol_name}" --filter "status=${_st}" 2>/dev/null || true); do
+                    docker rm -f "$_cid" >/dev/null 2>&1 || true
+                done
+            done
+
+            if [ -n "$mp" ]; then
+                umount "$mp" >/dev/null 2>&1 || umount -l "$mp" >/dev/null 2>&1 || true
+            fi
+            docker volume rm -f "$vol_name" >/dev/null 2>&1 || true
+
+            mkdir -p "$coredns_dir"
+            cp -a "$preserve_dir/." "$coredns_dir/" 2>/dev/null || true
+            rm -rf "$preserve_dir" 2>/dev/null || true
+
+            chown -R 1000:1000 "$coredns_dir" 2>/dev/null || true
+            chmod 2775 "$coredns_dir" 2>/dev/null || true
+            [ -f "$coredns_dir/Corefile" ] && chmod 664 "$coredns_dir/Corefile" 2>/dev/null || true
+            [ -f "$coredns_dir/mesh.hosts" ] && chmod 664 "$coredns_dir/mesh.hosts" 2>/dev/null || true
+            healed=true
+        fi
+    done
+
+    if [ "$healed" = "true" ] && [ -f "$compose_target" ] && ! is_node_mode; then
+        ensure_compose_profiles
+        timeout -k 10 60 docker compose -f "$compose_target" up -d --no-deps coredns >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Healed CoreDNS bind volume and restarted coredns${NC}"
+    fi
+    return 0
+}
+
 ensure_infrastructure_permissions() {
+    heal_detached_coredns_volume || true
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
@@ -15235,6 +15369,9 @@ fi
 
      # Ensure shared networks exist (prod stack uses external networks)
      ensure_update_networks
+     if declare -F heal_detached_coredns_volume >/dev/null 2>&1; then
+         heal_detached_coredns_volume || true
+     fi
 
      # Ensure all critical envs are set. The install.sh auto-
      # generates these at first install; on UPDATE, the env
@@ -15523,27 +15660,30 @@ fi
 
       docker_login
 
+       _build_timeout="${SMSLY_BUILD_TIMEOUT:-1800}"
+       case "$_build_timeout" in ''|*[!0-9]*) _build_timeout=1800 ;; esac
+
        case "$UPDATE_MODE" in
          frontend)
               if [ "$MODE_NODE" = "true" ]; then
                   echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
               else
-                  echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-                  timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend
+                  echo -e "${BLUE}  → Rebuilding frontend container (cached, timeout ${_build_timeout}s)...${NC}"
+                  timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build frontend
                   docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ docker compose stop frontend failed (non-fatal)${NC}"
                   docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ docker compose rm frontend failed (non-fatal)${NC}"
                   docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
               fi
               ;;
          backend)
-            echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
+            echo -e "${BLUE}  → Rebuilding backend containers (cached, timeout ${_build_timeout}s)...${NC}"
             build_svcs="backend celery"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 build_svcs="backend"
             elif [ "$MODE_NODE" = "true" ]; then
                 build_svcs="backend celery celery-deploy celery-fast celery-beat"
             fi
-            timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build $build_svcs
+            timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build $build_svcs
 
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -15603,8 +15743,8 @@ fi
 
             # 1. Rebuild frontend from cached layers (no --pull, no new base images)
             if [ "$MODE_NODE" != "true" ]; then
-                echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
-                timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend  || {
+                echo -e "${BLUE}  → Rebuilding frontend (cached, timeout ${_build_timeout}s)...${NC}"
+                timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build frontend  || {
                     echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
                     echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
                 }
@@ -15671,17 +15811,18 @@ fi
             # 2. Skip untagging old PaaS images to prevent zero-downtime gaps on container restarts.
             # Docker compose build will simply overwrite the tag; old images will become dangling and cleaned later.
 
-            # 3. Prune dangling build cache
-            echo -e "${BLUE}    ↳ Pruning build cache...${NC}"
-            docker builder prune -af  || true
-
-            # 4. Ensure shared networks exist (create if missing, don't destroy)
+            # 3. Ensure shared networks exist (create if missing, don't destroy)
             echo -e "${BLUE}    ↳ Ensuring networks exist...${NC}"
             ensure_update_networks
 
-            # 5. Rebuild core images (CACHED unless --no-cache passed manually)
-            echo -e "${BLUE}    ↳ Rebuilding core images...${NC}"
-            timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
+            # 4. Rebuild core images (CACHED; build backend/celery first, then frontend)
+            echo -e "${BLUE}    ↳ Rebuilding core images (timeout ${_build_timeout}s per target)...${NC}"
+            if [ "$MODE_AGENT_LITE" = "true" ] || [ "$MODE_NODE" = "true" ]; then
+                timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
+            else
+                timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build backend celery celery-deploy celery-fast celery-beat
+                timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build frontend
+            fi
 
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
@@ -16000,7 +16141,7 @@ if command -v safe_update_post_verify ; then
         if command -v safe_update_cleanup ; then
             safe_update_cleanup
         fi
-        rm -f "$SNAPSHOT_FILE"  || true
+        rm -f "$SNAPSHOT_FILE" "$INSTALL_DIR/.update-safe-snapshot" "$INSTALL_DIR/.pre-update-head" || true
     else
         echo -e "${RED}  ✗ Post-deploy health checks failed — initiating rollback${NC}"
         safe_update_rollback
@@ -16978,7 +17119,71 @@ get_redis_service() {
     fi
 }
 
+heal_detached_coredns_volume() {
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local coredns_dir="${install_dir}/coredns-config"
+    local compose_target="${COMPOSE_FILE:-${install_dir}/docker-compose.prod.yml}"
+
+    mkdir -p "$coredns_dir"
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local vol_name=""
+    local healed=false
+    for vol_name in smsly-hosting_coredns_config coredns_config; do
+        docker volume inspect "$vol_name" >/dev/null 2>&1 || continue
+        local mp=""
+        mp=$(docker volume inspect "$vol_name" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        local nlink=""
+        if [ -n "$mp" ] && [ -e "$mp" ]; then
+            nlink=$(stat -c '%h' "$mp" 2>/dev/null || echo 1)
+        else
+            nlink="0"
+        fi
+        if [ "$nlink" = "0" ]; then
+            echo -e "${YELLOW}  ⚠ Detected detached CoreDNS bind volume ($vol_name, nlink=0) — self-healing...${NC}"
+            local preserve_dir="/tmp/smsly-coredns-preserve.$$"
+            mkdir -p "$preserve_dir"
+            if [ -d "$coredns_dir" ]; then
+                cp -a "$coredns_dir/." "$preserve_dir/" 2>/dev/null || true
+            fi
+
+            timeout -k 5 20 docker stop -t 10 smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+            docker rm -f smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+
+            local _st="" _cid=""
+            for _st in created exited dead; do
+                for _cid in $(docker ps -aq --filter "volume=${vol_name}" --filter "status=${_st}" 2>/dev/null || true); do
+                    docker rm -f "$_cid" >/dev/null 2>&1 || true
+                done
+            done
+
+            if [ -n "$mp" ]; then
+                umount "$mp" >/dev/null 2>&1 || umount -l "$mp" >/dev/null 2>&1 || true
+            fi
+            docker volume rm -f "$vol_name" >/dev/null 2>&1 || true
+
+            mkdir -p "$coredns_dir"
+            cp -a "$preserve_dir/." "$coredns_dir/" 2>/dev/null || true
+            rm -rf "$preserve_dir" 2>/dev/null || true
+
+            chown -R 1000:1000 "$coredns_dir" 2>/dev/null || true
+            chmod 2775 "$coredns_dir" 2>/dev/null || true
+            [ -f "$coredns_dir/Corefile" ] && chmod 664 "$coredns_dir/Corefile" 2>/dev/null || true
+            [ -f "$coredns_dir/mesh.hosts" ] && chmod 664 "$coredns_dir/mesh.hosts" 2>/dev/null || true
+            healed=true
+        fi
+    done
+
+    if [ "$healed" = "true" ] && [ -f "$compose_target" ] && ! is_node_mode; then
+        ensure_compose_profiles
+        timeout -k 10 60 docker compose -f "$compose_target" up -d --no-deps coredns >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Healed CoreDNS bind volume and restarted coredns${NC}"
+    fi
+    return 0
+}
+
 ensure_infrastructure_permissions() {
+    heal_detached_coredns_volume || true
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
@@ -17957,36 +18162,42 @@ registry_check_with_fallback() {
 
 ensure_local_ignores() {
     local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
-    local gitignore_path="${target_dir}/.gitignore"
+    local ignore_file="${target_dir}/.gitignore"
+    if [ -d "$target_dir/.git/info" ]; then
+        ignore_file="${target_dir}/.git/info/exclude"
+    fi
     if [ -d "$target_dir" ]; then
-        if [ ! -f "$gitignore_path" ]; then
-            touch "$gitignore_path"
+        if [ ! -f "$ignore_file" ]; then
+            touch "$ignore_file"
         fi
         local needs_update=false
-        if ! grep -q "^builds/" "$gitignore_path"; then
-            echo "" >> "$gitignore_path"
-            echo "builds/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^caddy-config/" "$gitignore_path"; then
-            echo "caddy-config/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        # Runtime-generated WAF policy dirs. The agent first-run writes
-        # local_policy.yaml here and the updater stashes --include-untracked:
-        # without these ignores every update sweeps the live policy into a
-        # dead stash and the agent falls back to baked-in defaults
-        # (2026-09-15: conf/ + localconfig/ vanished mid-update).
-        if ! grep -q "^infrastructure/openappsec/conf/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/conf/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^infrastructure/openappsec/localconfig/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/localconfig/" >> "$gitignore_path"
-            needs_update=true
-        fi
+        local _entry=""
+        for _entry in \
+            "builds/" \
+            "caddy-config/" \
+            "coredns-config/" \
+            "traefik-dynamic/" \
+            "backups/" \
+            ".update-backups/" \
+            ".update-safe-snapshot" \
+            ".pre-update-head" \
+            ".git-stash-marker" \
+            ".smsly_install_state*" \
+            ".state/" \
+            ".credentials" \
+            ".recovery_phrase" \
+            ".token" \
+            "prometheus-targets/*.json" \
+            "infrastructure/openappsec/conf/" \
+            "infrastructure/openappsec/localconfig/"
+        do
+            if ! grep -Fqx "$_entry" "$ignore_file" 2>/dev/null; then
+                printf '%s\n' "$_entry" >> "$ignore_file"
+                needs_update=true
+            fi
+        done
         if [ "$needs_update" = "true" ]; then
-            echo -e "${BLUE}  → Added runtime dirs to local .gitignore to prevent Git stash data loss${NC}"
+            echo -e "${BLUE}  → Added runtime dirs to local ignore rules (${ignore_file}) to prevent Git stash data loss${NC}"
         fi
     fi
 }
@@ -20369,7 +20580,71 @@ get_redis_service() {
     fi
 }
 
+heal_detached_coredns_volume() {
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local coredns_dir="${install_dir}/coredns-config"
+    local compose_target="${COMPOSE_FILE:-${install_dir}/docker-compose.prod.yml}"
+
+    mkdir -p "$coredns_dir"
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local vol_name=""
+    local healed=false
+    for vol_name in smsly-hosting_coredns_config coredns_config; do
+        docker volume inspect "$vol_name" >/dev/null 2>&1 || continue
+        local mp=""
+        mp=$(docker volume inspect "$vol_name" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        local nlink=""
+        if [ -n "$mp" ] && [ -e "$mp" ]; then
+            nlink=$(stat -c '%h' "$mp" 2>/dev/null || echo 1)
+        else
+            nlink="0"
+        fi
+        if [ "$nlink" = "0" ]; then
+            echo -e "${YELLOW}  ⚠ Detected detached CoreDNS bind volume ($vol_name, nlink=0) — self-healing...${NC}"
+            local preserve_dir="/tmp/smsly-coredns-preserve.$$"
+            mkdir -p "$preserve_dir"
+            if [ -d "$coredns_dir" ]; then
+                cp -a "$coredns_dir/." "$preserve_dir/" 2>/dev/null || true
+            fi
+
+            timeout -k 5 20 docker stop -t 10 smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+            docker rm -f smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+
+            local _st="" _cid=""
+            for _st in created exited dead; do
+                for _cid in $(docker ps -aq --filter "volume=${vol_name}" --filter "status=${_st}" 2>/dev/null || true); do
+                    docker rm -f "$_cid" >/dev/null 2>&1 || true
+                done
+            done
+
+            if [ -n "$mp" ]; then
+                umount "$mp" >/dev/null 2>&1 || umount -l "$mp" >/dev/null 2>&1 || true
+            fi
+            docker volume rm -f "$vol_name" >/dev/null 2>&1 || true
+
+            mkdir -p "$coredns_dir"
+            cp -a "$preserve_dir/." "$coredns_dir/" 2>/dev/null || true
+            rm -rf "$preserve_dir" 2>/dev/null || true
+
+            chown -R 1000:1000 "$coredns_dir" 2>/dev/null || true
+            chmod 2775 "$coredns_dir" 2>/dev/null || true
+            [ -f "$coredns_dir/Corefile" ] && chmod 664 "$coredns_dir/Corefile" 2>/dev/null || true
+            [ -f "$coredns_dir/mesh.hosts" ] && chmod 664 "$coredns_dir/mesh.hosts" 2>/dev/null || true
+            healed=true
+        fi
+    done
+
+    if [ "$healed" = "true" ] && [ -f "$compose_target" ] && ! is_node_mode; then
+        ensure_compose_profiles
+        timeout -k 10 60 docker compose -f "$compose_target" up -d --no-deps coredns >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Healed CoreDNS bind volume and restarted coredns${NC}"
+    fi
+    return 0
+}
+
 ensure_infrastructure_permissions() {
+    heal_detached_coredns_volume || true
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
@@ -21348,36 +21623,42 @@ registry_check_with_fallback() {
 
 ensure_local_ignores() {
     local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
-    local gitignore_path="${target_dir}/.gitignore"
+    local ignore_file="${target_dir}/.gitignore"
+    if [ -d "$target_dir/.git/info" ]; then
+        ignore_file="${target_dir}/.git/info/exclude"
+    fi
     if [ -d "$target_dir" ]; then
-        if [ ! -f "$gitignore_path" ]; then
-            touch "$gitignore_path"
+        if [ ! -f "$ignore_file" ]; then
+            touch "$ignore_file"
         fi
         local needs_update=false
-        if ! grep -q "^builds/" "$gitignore_path"; then
-            echo "" >> "$gitignore_path"
-            echo "builds/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^caddy-config/" "$gitignore_path"; then
-            echo "caddy-config/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        # Runtime-generated WAF policy dirs. The agent first-run writes
-        # local_policy.yaml here and the updater stashes --include-untracked:
-        # without these ignores every update sweeps the live policy into a
-        # dead stash and the agent falls back to baked-in defaults
-        # (2026-09-15: conf/ + localconfig/ vanished mid-update).
-        if ! grep -q "^infrastructure/openappsec/conf/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/conf/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^infrastructure/openappsec/localconfig/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/localconfig/" >> "$gitignore_path"
-            needs_update=true
-        fi
+        local _entry=""
+        for _entry in \
+            "builds/" \
+            "caddy-config/" \
+            "coredns-config/" \
+            "traefik-dynamic/" \
+            "backups/" \
+            ".update-backups/" \
+            ".update-safe-snapshot" \
+            ".pre-update-head" \
+            ".git-stash-marker" \
+            ".smsly_install_state*" \
+            ".state/" \
+            ".credentials" \
+            ".recovery_phrase" \
+            ".token" \
+            "prometheus-targets/*.json" \
+            "infrastructure/openappsec/conf/" \
+            "infrastructure/openappsec/localconfig/"
+        do
+            if ! grep -Fqx "$_entry" "$ignore_file" 2>/dev/null; then
+                printf '%s\n' "$_entry" >> "$ignore_file"
+                needs_update=true
+            fi
+        done
         if [ "$needs_update" = "true" ]; then
-            echo -e "${BLUE}  → Added runtime dirs to local .gitignore to prevent Git stash data loss${NC}"
+            echo -e "${BLUE}  → Added runtime dirs to local ignore rules (${ignore_file}) to prevent Git stash data loss${NC}"
         fi
     fi
 }
@@ -22618,7 +22899,71 @@ get_redis_service() {
     fi
 }
 
+heal_detached_coredns_volume() {
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local coredns_dir="${install_dir}/coredns-config"
+    local compose_target="${COMPOSE_FILE:-${install_dir}/docker-compose.prod.yml}"
+
+    mkdir -p "$coredns_dir"
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local vol_name=""
+    local healed=false
+    for vol_name in smsly-hosting_coredns_config coredns_config; do
+        docker volume inspect "$vol_name" >/dev/null 2>&1 || continue
+        local mp=""
+        mp=$(docker volume inspect "$vol_name" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        local nlink=""
+        if [ -n "$mp" ] && [ -e "$mp" ]; then
+            nlink=$(stat -c '%h' "$mp" 2>/dev/null || echo 1)
+        else
+            nlink="0"
+        fi
+        if [ "$nlink" = "0" ]; then
+            echo -e "${YELLOW}  ⚠ Detected detached CoreDNS bind volume ($vol_name, nlink=0) — self-healing...${NC}"
+            local preserve_dir="/tmp/smsly-coredns-preserve.$$"
+            mkdir -p "$preserve_dir"
+            if [ -d "$coredns_dir" ]; then
+                cp -a "$coredns_dir/." "$preserve_dir/" 2>/dev/null || true
+            fi
+
+            timeout -k 5 20 docker stop -t 10 smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+            docker rm -f smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+
+            local _st="" _cid=""
+            for _st in created exited dead; do
+                for _cid in $(docker ps -aq --filter "volume=${vol_name}" --filter "status=${_st}" 2>/dev/null || true); do
+                    docker rm -f "$_cid" >/dev/null 2>&1 || true
+                done
+            done
+
+            if [ -n "$mp" ]; then
+                umount "$mp" >/dev/null 2>&1 || umount -l "$mp" >/dev/null 2>&1 || true
+            fi
+            docker volume rm -f "$vol_name" >/dev/null 2>&1 || true
+
+            mkdir -p "$coredns_dir"
+            cp -a "$preserve_dir/." "$coredns_dir/" 2>/dev/null || true
+            rm -rf "$preserve_dir" 2>/dev/null || true
+
+            chown -R 1000:1000 "$coredns_dir" 2>/dev/null || true
+            chmod 2775 "$coredns_dir" 2>/dev/null || true
+            [ -f "$coredns_dir/Corefile" ] && chmod 664 "$coredns_dir/Corefile" 2>/dev/null || true
+            [ -f "$coredns_dir/mesh.hosts" ] && chmod 664 "$coredns_dir/mesh.hosts" 2>/dev/null || true
+            healed=true
+        fi
+    done
+
+    if [ "$healed" = "true" ] && [ -f "$compose_target" ] && ! is_node_mode; then
+        ensure_compose_profiles
+        timeout -k 10 60 docker compose -f "$compose_target" up -d --no-deps coredns >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Healed CoreDNS bind volume and restarted coredns${NC}"
+    fi
+    return 0
+}
+
 ensure_infrastructure_permissions() {
+    heal_detached_coredns_volume || true
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
@@ -23597,36 +23942,42 @@ registry_check_with_fallback() {
 
 ensure_local_ignores() {
     local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
-    local gitignore_path="${target_dir}/.gitignore"
+    local ignore_file="${target_dir}/.gitignore"
+    if [ -d "$target_dir/.git/info" ]; then
+        ignore_file="${target_dir}/.git/info/exclude"
+    fi
     if [ -d "$target_dir" ]; then
-        if [ ! -f "$gitignore_path" ]; then
-            touch "$gitignore_path"
+        if [ ! -f "$ignore_file" ]; then
+            touch "$ignore_file"
         fi
         local needs_update=false
-        if ! grep -q "^builds/" "$gitignore_path"; then
-            echo "" >> "$gitignore_path"
-            echo "builds/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^caddy-config/" "$gitignore_path"; then
-            echo "caddy-config/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        # Runtime-generated WAF policy dirs. The agent first-run writes
-        # local_policy.yaml here and the updater stashes --include-untracked:
-        # without these ignores every update sweeps the live policy into a
-        # dead stash and the agent falls back to baked-in defaults
-        # (2026-09-15: conf/ + localconfig/ vanished mid-update).
-        if ! grep -q "^infrastructure/openappsec/conf/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/conf/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^infrastructure/openappsec/localconfig/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/localconfig/" >> "$gitignore_path"
-            needs_update=true
-        fi
+        local _entry=""
+        for _entry in \
+            "builds/" \
+            "caddy-config/" \
+            "coredns-config/" \
+            "traefik-dynamic/" \
+            "backups/" \
+            ".update-backups/" \
+            ".update-safe-snapshot" \
+            ".pre-update-head" \
+            ".git-stash-marker" \
+            ".smsly_install_state*" \
+            ".state/" \
+            ".credentials" \
+            ".recovery_phrase" \
+            ".token" \
+            "prometheus-targets/*.json" \
+            "infrastructure/openappsec/conf/" \
+            "infrastructure/openappsec/localconfig/"
+        do
+            if ! grep -Fqx "$_entry" "$ignore_file" 2>/dev/null; then
+                printf '%s\n' "$_entry" >> "$ignore_file"
+                needs_update=true
+            fi
+        done
         if [ "$needs_update" = "true" ]; then
-            echo -e "${BLUE}  → Added runtime dirs to local .gitignore to prevent Git stash data loss${NC}"
+            echo -e "${BLUE}  → Added runtime dirs to local ignore rules (${ignore_file}) to prevent Git stash data loss${NC}"
         fi
     fi
 }
@@ -25640,6 +25991,7 @@ RESTORE_EOF
         unset _verify_image
     fi
 
+    rm -f "$INSTALL_DIR/.update-safe-snapshot" "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}  Debug snapshot:    sudo bash install.sh --debug${NC}"
     echo -e "${YELLOW}  Runtime recovery:  sudo bash install.sh --recover${NC}"
@@ -31846,7 +32198,71 @@ get_redis_service() {
     fi
 }
 
+heal_detached_coredns_volume() {
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local coredns_dir="${install_dir}/coredns-config"
+    local compose_target="${COMPOSE_FILE:-${install_dir}/docker-compose.prod.yml}"
+
+    mkdir -p "$coredns_dir"
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local vol_name=""
+    local healed=false
+    for vol_name in smsly-hosting_coredns_config coredns_config; do
+        docker volume inspect "$vol_name" >/dev/null 2>&1 || continue
+        local mp=""
+        mp=$(docker volume inspect "$vol_name" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        local nlink=""
+        if [ -n "$mp" ] && [ -e "$mp" ]; then
+            nlink=$(stat -c '%h' "$mp" 2>/dev/null || echo 1)
+        else
+            nlink="0"
+        fi
+        if [ "$nlink" = "0" ]; then
+            echo -e "${YELLOW}  ⚠ Detected detached CoreDNS bind volume ($vol_name, nlink=0) — self-healing...${NC}"
+            local preserve_dir="/tmp/smsly-coredns-preserve.$$"
+            mkdir -p "$preserve_dir"
+            if [ -d "$coredns_dir" ]; then
+                cp -a "$coredns_dir/." "$preserve_dir/" 2>/dev/null || true
+            fi
+
+            timeout -k 5 20 docker stop -t 10 smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+            docker rm -f smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+
+            local _st="" _cid=""
+            for _st in created exited dead; do
+                for _cid in $(docker ps -aq --filter "volume=${vol_name}" --filter "status=${_st}" 2>/dev/null || true); do
+                    docker rm -f "$_cid" >/dev/null 2>&1 || true
+                done
+            done
+
+            if [ -n "$mp" ]; then
+                umount "$mp" >/dev/null 2>&1 || umount -l "$mp" >/dev/null 2>&1 || true
+            fi
+            docker volume rm -f "$vol_name" >/dev/null 2>&1 || true
+
+            mkdir -p "$coredns_dir"
+            cp -a "$preserve_dir/." "$coredns_dir/" 2>/dev/null || true
+            rm -rf "$preserve_dir" 2>/dev/null || true
+
+            chown -R 1000:1000 "$coredns_dir" 2>/dev/null || true
+            chmod 2775 "$coredns_dir" 2>/dev/null || true
+            [ -f "$coredns_dir/Corefile" ] && chmod 664 "$coredns_dir/Corefile" 2>/dev/null || true
+            [ -f "$coredns_dir/mesh.hosts" ] && chmod 664 "$coredns_dir/mesh.hosts" 2>/dev/null || true
+            healed=true
+        fi
+    done
+
+    if [ "$healed" = "true" ] && [ -f "$compose_target" ] && ! is_node_mode; then
+        ensure_compose_profiles
+        timeout -k 10 60 docker compose -f "$compose_target" up -d --no-deps coredns >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Healed CoreDNS bind volume and restarted coredns${NC}"
+    fi
+    return 0
+}
+
 ensure_infrastructure_permissions() {
+    heal_detached_coredns_volume || true
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
@@ -32825,36 +33241,42 @@ registry_check_with_fallback() {
 
 ensure_local_ignores() {
     local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
-    local gitignore_path="${target_dir}/.gitignore"
+    local ignore_file="${target_dir}/.gitignore"
+    if [ -d "$target_dir/.git/info" ]; then
+        ignore_file="${target_dir}/.git/info/exclude"
+    fi
     if [ -d "$target_dir" ]; then
-        if [ ! -f "$gitignore_path" ]; then
-            touch "$gitignore_path"
+        if [ ! -f "$ignore_file" ]; then
+            touch "$ignore_file"
         fi
         local needs_update=false
-        if ! grep -q "^builds/" "$gitignore_path"; then
-            echo "" >> "$gitignore_path"
-            echo "builds/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^caddy-config/" "$gitignore_path"; then
-            echo "caddy-config/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        # Runtime-generated WAF policy dirs. The agent first-run writes
-        # local_policy.yaml here and the updater stashes --include-untracked:
-        # without these ignores every update sweeps the live policy into a
-        # dead stash and the agent falls back to baked-in defaults
-        # (2026-09-15: conf/ + localconfig/ vanished mid-update).
-        if ! grep -q "^infrastructure/openappsec/conf/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/conf/" >> "$gitignore_path"
-            needs_update=true
-        fi
-        if ! grep -q "^infrastructure/openappsec/localconfig/" "$gitignore_path"; then
-            echo "infrastructure/openappsec/localconfig/" >> "$gitignore_path"
-            needs_update=true
-        fi
+        local _entry=""
+        for _entry in \
+            "builds/" \
+            "caddy-config/" \
+            "coredns-config/" \
+            "traefik-dynamic/" \
+            "backups/" \
+            ".update-backups/" \
+            ".update-safe-snapshot" \
+            ".pre-update-head" \
+            ".git-stash-marker" \
+            ".smsly_install_state*" \
+            ".state/" \
+            ".credentials" \
+            ".recovery_phrase" \
+            ".token" \
+            "prometheus-targets/*.json" \
+            "infrastructure/openappsec/conf/" \
+            "infrastructure/openappsec/localconfig/"
+        do
+            if ! grep -Fqx "$_entry" "$ignore_file" 2>/dev/null; then
+                printf '%s\n' "$_entry" >> "$ignore_file"
+                needs_update=true
+            fi
+        done
         if [ "$needs_update" = "true" ]; then
-            echo -e "${BLUE}  → Added runtime dirs to local .gitignore to prevent Git stash data loss${NC}"
+            echo -e "${BLUE}  → Added runtime dirs to local ignore rules (${ignore_file}) to prevent Git stash data loss${NC}"
         fi
     fi
 }

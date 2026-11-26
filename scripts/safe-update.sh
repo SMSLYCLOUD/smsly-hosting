@@ -122,15 +122,35 @@ safe_update_snapshot() {
     _step "Snapshot + DB Backup"
     cd "$INSTALL_DIR" || { _fail "Cannot cd to $INSTALL_DIR"; return 1; }
     if [ -f "$SNAPSHOT_FILE" ]; then
-        local _snap_mtime="" _now="" _snap_age=""
-        _snap_mtime=$(stat -c %Y "$SNAPSHOT_FILE" 2>/dev/null || stat -f %m "$SNAPSHOT_FILE" 2>/dev/null || echo 0)
+        local _snap_ts="" _snap_epoch="" _snap_prev_hash="" _expected_prev="" _now="" _snap_age=""
+        _snap_epoch=$(grep '^SNAPSHOT_EPOCH=' "$SNAPSHOT_FILE" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d "'\"" | tr -d '[:space:]')
+        if ! [[ "$_snap_epoch" =~ ^[0-9]+$ ]]; then
+            _snap_ts=$(grep '^TIMESTAMP=' "$SNAPSHOT_FILE" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d "'\"" | tr -d '[:space:]')
+            if [ -n "$_snap_ts" ]; then
+                _snap_epoch=$(date -d "$_snap_ts" +%s 2>/dev/null || echo 0)
+            else
+                _snap_epoch=0
+            fi
+        fi
+        _snap_prev_hash=$(grep '^PREV_HASH=' "$SNAPSHOT_FILE" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d "'\"" | tr -d '[:space:]')
+        if [ -n "${SMSLY_PRE_UPDATE_HEAD:-}" ]; then
+            _expected_prev="$SMSLY_PRE_UPDATE_HEAD"
+        else
+            _expected_prev=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+        fi
         _now=$(date +%s)
-        _snap_age=$((_now - _snap_mtime))
-        if [ "$_snap_age" -lt 3600 ] && grep -q '^PREV_HASH=' "$SNAPSHOT_FILE"; then
+        if [[ "$_snap_epoch" =~ ^[0-9]+$ ]] && [ "$_snap_epoch" -gt 0 ]; then
+            _snap_age=$((_now - _snap_epoch))
+        else
+            _snap_age=999999
+        fi
+        if [ "$_snap_age" -ge 0 ] && [ "$_snap_age" -lt 3600 ] && [ -n "$_snap_prev_hash" ] && [ "$_snap_prev_hash" = "$_expected_prev" ]; then
             export SNAPSHOT_FILE BACKUP_DIR
             _ok "Preserving existing fresh snapshot (${_snap_age}s old)"
             return 0
         fi
+        _warn "Discarding stale snapshot (hash=${_snap_prev_hash:0:8}, expected=${_expected_prev:0:8})"
+        rm -f "$SNAPSHOT_FILE" 2>/dev/null || true
     fi
     local _prev_umask
     _prev_umask=$(umask)
@@ -202,6 +222,7 @@ safe_update_snapshot() {
 PREV_HASH=$prev_hash
 PREV_BRANCH=$prev_branch
 TIMESTAMP=$(date -Iseconds)
+SNAPSHOT_EPOCH=$(date +%s)
 BACKUP_FILE=$backup_file
 SNAPEOF
     umask "$_prev_umask"
@@ -387,6 +408,14 @@ safe_update_rollback() {
             _ok "DB restored" || _warn "DB restore failed"
     fi
 
+    # Heal detached coredns bind volume / runtime perms before bringing services back up
+    if declare -F heal_detached_coredns_volume >/dev/null 2>&1; then
+        heal_detached_coredns_volume || true
+    fi
+    if declare -F ensure_infrastructure_permissions >/dev/null 2>&1; then
+        ensure_infrastructure_permissions || true
+    fi
+
     # Restart core services with the restored images (DB is now consistent).
     local _up_svcs=()
     for _s in backend frontend celery celery-worker celery-deploy celery-fast celery-beat pgcat; do
@@ -406,6 +435,7 @@ safe_update_rollback() {
 
     sleep 30
     safe_update_post_verify && _ok "Rollback successful" || _warn "Rollback done, some services unhealthy"
+    rm -f "$SNAPSHOT_FILE" 2>/dev/null || true
     return 0
 }
 

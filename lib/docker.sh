@@ -360,7 +360,71 @@ get_redis_service() {
     fi
 }
 
+heal_detached_coredns_volume() {
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local coredns_dir="${install_dir}/coredns-config"
+    local compose_target="${COMPOSE_FILE:-${install_dir}/docker-compose.prod.yml}"
+
+    mkdir -p "$coredns_dir"
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local vol_name=""
+    local healed=false
+    for vol_name in smsly-hosting_coredns_config coredns_config; do
+        docker volume inspect "$vol_name" >/dev/null 2>&1 || continue
+        local mp=""
+        mp=$(docker volume inspect "$vol_name" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        local nlink=""
+        if [ -n "$mp" ] && [ -e "$mp" ]; then
+            nlink=$(stat -c '%h' "$mp" 2>/dev/null || echo 1)
+        else
+            nlink="0"
+        fi
+        if [ "$nlink" = "0" ]; then
+            echo -e "${YELLOW}  ⚠ Detected detached CoreDNS bind volume ($vol_name, nlink=0) — self-healing...${NC}"
+            local preserve_dir="/tmp/smsly-coredns-preserve.$$"
+            mkdir -p "$preserve_dir"
+            if [ -d "$coredns_dir" ]; then
+                cp -a "$coredns_dir/." "$preserve_dir/" 2>/dev/null || true
+            fi
+
+            timeout -k 5 20 docker stop -t 10 smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+            docker rm -f smsly-hosting-coredns-1 >/dev/null 2>&1 || true
+
+            local _st="" _cid=""
+            for _st in created exited dead; do
+                for _cid in $(docker ps -aq --filter "volume=${vol_name}" --filter "status=${_st}" 2>/dev/null || true); do
+                    docker rm -f "$_cid" >/dev/null 2>&1 || true
+                done
+            done
+
+            if [ -n "$mp" ]; then
+                umount "$mp" >/dev/null 2>&1 || umount -l "$mp" >/dev/null 2>&1 || true
+            fi
+            docker volume rm -f "$vol_name" >/dev/null 2>&1 || true
+
+            mkdir -p "$coredns_dir"
+            cp -a "$preserve_dir/." "$coredns_dir/" 2>/dev/null || true
+            rm -rf "$preserve_dir" 2>/dev/null || true
+
+            chown -R 1000:1000 "$coredns_dir" 2>/dev/null || true
+            chmod 2775 "$coredns_dir" 2>/dev/null || true
+            [ -f "$coredns_dir/Corefile" ] && chmod 664 "$coredns_dir/Corefile" 2>/dev/null || true
+            [ -f "$coredns_dir/mesh.hosts" ] && chmod 664 "$coredns_dir/mesh.hosts" 2>/dev/null || true
+            healed=true
+        fi
+    done
+
+    if [ "$healed" = "true" ] && [ -f "$compose_target" ] && ! is_node_mode; then
+        ensure_compose_profiles
+        timeout -k 10 60 docker compose -f "$compose_target" up -d --no-deps coredns >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Healed CoreDNS bind volume and restarted coredns${NC}"
+    fi
+    return 0
+}
+
 ensure_infrastructure_permissions() {
+    heal_detached_coredns_volume || true
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local coredns_config_dir="/opt/smsly-hosting/coredns-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
