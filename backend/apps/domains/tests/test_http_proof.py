@@ -289,8 +289,9 @@ class HttpProofRedirectTests(SimpleTestCase):
         ok, detail = verify_http_proof(_domain())
         self.assertFalse(ok)
         self.assertEqual(detail, "HTTP 302")
-        shop_calls = [c for c in mock_get.call_args_list if "shop.example.com" in str(c)]
+        shop_calls = [c for c in mock_get.call_args_list if c.args and str(c.args[0]).startswith("http://shop.example.com")]
         self.assertEqual(len(shop_calls), 1)
+        self.assertFalse(any("evil.example.com" in str(c.args[0]) for c in mock_get.call_args_list if c.args))
 
     @mock.patch("apps.domains.verification.resolve_host_ips", return_value={"104.21.34.183"})
     @mock.patch("requests.get")
@@ -299,8 +300,9 @@ class HttpProofRedirectTests(SimpleTestCase):
         ok, detail = verify_http_proof(_domain())
         self.assertFalse(ok)
         self.assertEqual(detail, "HTTP 302")
-        shop_calls = [c for c in mock_get.call_args_list if "shop.example.com" in str(c)]
+        shop_calls = [c for c in mock_get.call_args_list if c.args and str(c.args[0]).startswith("http://shop.example.com")]
         self.assertEqual(len(shop_calls), 1)
+        self.assertFalse(any("/login" in str(c.args[0]) for c in mock_get.call_args_list if c.args))
 
     @mock.patch("apps.domains.verification.resolve_host_ips", return_value={"104.21.34.183"})
     @mock.patch("requests.get")
@@ -311,5 +313,6 @@ class HttpProofRedirectTests(SimpleTestCase):
         ok, detail = verify_http_proof(_domain())
         self.assertFalse(ok)
         self.assertEqual(detail, "HTTP 302")
-        shop_calls = [c for c in mock_get.call_args_list if "shop.example.com" in str(c)]
+        shop_calls = [c for c in mock_get.call_args_list if c.args and str(c.args[0]).startswith("http://shop.example.com")]
         self.assertEqual(len(shop_calls), 1)
+        self.assertFalse(any("169.254.169.254" in str(c.args[0]) for c in mock_get.call_args_list if c.args))
