@@ -12,6 +12,7 @@ from .tls import (
     CADDY_TOKEN_CLEAR_FILE,
     CADDY_TOKEN_FILE,
     _load_cached_token,
+    sanitize_cloudflare_token,
 )
 from .utils import caddy_disabled_mode
 from .validation import validate_service_routes_do_not_hit_control_plane
@@ -165,9 +166,9 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
 
     result = {"ok": False, "message": ""}
 
-    cloudflare_token = (cloudflare_token or "").strip()
+    cloudflare_token = sanitize_cloudflare_token(cloudflare_token)
     if not cloudflare_token and preserve_existing_token:
-        cloudflare_token = _load_cached_token()
+        cloudflare_token = sanitize_cloudflare_token(_load_cached_token())
 
     try:
         route_errors = validate_service_routes_do_not_hit_control_plane(content)

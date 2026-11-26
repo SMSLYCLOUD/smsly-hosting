@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urljoin, urlsplit
 
 import dns.exception
 import dns.resolver
@@ -202,6 +204,38 @@ def verify_http_proof(domain_obj, timeout: float = 10, attempts: int = 3) -> tup
     return False, last_detail
 
 
+def _next_safe_challenge_redirect_url(current_url: str, resp, clean_host: str, token: str) -> str:
+    """Return validated same-host redirect URL for the HTTP challenge path, else ''."""
+    if getattr(resp, "status_code", None) not in (301, 302, 303, 307, 308):
+        return ""
+    headers = getattr(resp, "headers", None)
+    if not isinstance(headers, Mapping):
+        return ""
+    loc = ""
+    for k, v in headers.items():
+        if str(k).lower() == "location":
+            loc = str(v or "").strip()
+            break
+    if not loc:
+        return ""
+    next_url = urljoin(current_url, loc)
+    try:
+        parsed = urlsplit(next_url)
+    except ValueError:
+        return ""
+    if parsed.scheme not in ("http", "https"):
+        return ""
+    if parsed.username or parsed.password:
+        return ""
+    if _clean_hostname(parsed.hostname or "") != clean_host:
+        return ""
+    if parsed.port not in (None, 80, 443):
+        return ""
+    if parsed.path.rstrip("/") != f"/.well-known/smsly-verify/{token}":
+        return ""
+    return next_url
+
+
 def _fetch_http_proof_once(url: str, token: str, timeout: float, host: str = "") -> tuple:
     """One HTTP-proof fetch. Returns (ok, detail, retryable).
 
@@ -227,17 +261,25 @@ def _fetch_http_proof_once(url: str, token: str, timeout: float, host: str = "")
         except OSError:
             pass
 
+    current_url = url
     try:
         import requests
-        resp = requests.get(
-            url,
-            timeout=timeout, allow_redirects=False,
-            headers=headers,
-        )
-        if resp.status_code == 200 and (resp.text or "").strip() == token:
-            return True, "served token over public edge", False
-        if resp.status_code == 404:
-            return False, f"HTTP {resp.status_code}", False
+        for _hop in range(3):
+            resp = requests.get(
+                current_url,
+                timeout=timeout, allow_redirects=False,
+                headers=headers,
+            )
+            if resp.status_code == 200 and (resp.text or "").strip() == token:
+                return True, "served token over public edge", False
+            if resp.status_code == 404:
+                return False, f"HTTP {resp.status_code}", False
+            next_url = _next_safe_challenge_redirect_url(
+                current_url, resp, clean_host, token,
+            )
+            if not next_url or next_url == current_url:
+                break
+            current_url = next_url
     except Exception as exc:
         resp = None
 
@@ -265,6 +307,27 @@ def _fetch_http_proof_once(url: str, token: str, timeout: float, host: str = "")
                     )
                     if resp_ip.status_code == 200 and (resp_ip.text or "").strip() == token:
                         return True, "served token over public edge", False
+                    next_ip_url = _next_safe_challenge_redirect_url(
+                        f"http://{clean_host}/.well-known/smsly-verify/{token}",
+                        resp_ip,
+                        clean_host,
+                        token,
+                    )
+                    if next_ip_url:
+                        parsed_ip_next = urlsplit(next_ip_url)
+                        if parsed_ip_next.scheme == "http":
+                            hop_path = parsed_ip_next.path + (f"?{parsed_ip_next.query}" if parsed_ip_next.query else "")
+                            resp_ip2 = requests.get(
+                                f"http://{pub_ip}{hop_path}",
+                                timeout=timeout,
+                                allow_redirects=False,
+                                headers={
+                                    "Host": clean_host,
+                                    "User-Agent": "smsly-domain-verify/1.0",
+                                },
+                            )
+                            if resp_ip2.status_code == 200 and (resp_ip2.text or "").strip() == token:
+                                return True, "served token over public edge", False
                 except Exception:
                     continue
         except Exception:

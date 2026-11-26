@@ -233,3 +233,77 @@ class ChallengeEndpointTests(TestCase):
         from django.test import Client
         resp = Client().get("/.well-known/smsly-verify/nope-not-real/")
         self.assertEqual(resp.status_code, 404)
+
+    def test_slashless_token_served_without_redirect(self):
+        from django.test import Client
+        resp = Client().get("/.well-known/smsly-verify/tok-abc-123", HTTP_HOST="shop.example.com")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content.decode(), "tok-abc-123")
+
+    def test_x_forwarded_host_used_when_host_rewritten_to_localhost(self):
+        from django.test import Client
+        resp = Client().get(
+            "/.well-known/smsly-verify/tok-abc-123",
+            HTTP_HOST="localhost",
+            HTTP_X_FORWARDED_HOST="shop.example.com",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content.decode(), "tok-abc-123")
+
+
+class HttpProofRedirectTests(SimpleTestCase):
+    @staticmethod
+    def _redir(status=308, location=""):
+        m = mock.MagicMock()
+        m.status_code = status
+        m.text = ""
+        m.headers = {"Location": location}
+        return m
+
+    @mock.patch("requests.get")
+    def test_same_host_http_to_https_redirect_verifies(self, mock_get):
+        mock_get.side_effect = [
+            self._redir(308, "https://shop.example.com/.well-known/smsly-verify/tok-abc-123"),
+            _resp(200, "tok-abc-123"),
+        ]
+        ok, _ = verify_http_proof(_domain())
+        self.assertTrue(ok)
+        self.assertEqual(mock_get.call_count, 2)
+
+    @mock.patch("requests.get")
+    def test_same_host_trailing_slash_redirect_verifies(self, mock_get):
+        mock_get.side_effect = [
+            self._redir(301, "/.well-known/smsly-verify/tok-abc-123/"),
+            _resp(200, "tok-abc-123"),
+        ]
+        ok, _ = verify_http_proof(_domain())
+        self.assertTrue(ok)
+        self.assertEqual(mock_get.call_count, 2)
+
+    @mock.patch("requests.get")
+    def test_cross_host_redirect_rejected(self, mock_get):
+        mock_get.return_value = self._redir(
+            302, "https://evil.example.com/.well-known/smsly-verify/tok-abc-123"
+        )
+        ok, detail = verify_http_proof(_domain())
+        self.assertFalse(ok)
+        self.assertEqual(detail, "HTTP 302")
+        mock_get.assert_called_once()
+
+    @mock.patch("requests.get")
+    def test_non_challenge_path_redirect_rejected(self, mock_get):
+        mock_get.return_value = self._redir(302, "https://shop.example.com/login")
+        ok, detail = verify_http_proof(_domain())
+        self.assertFalse(ok)
+        self.assertEqual(detail, "HTTP 302")
+        mock_get.assert_called_once()
+
+    @mock.patch("requests.get")
+    def test_non_global_ip_redirect_rejected(self, mock_get):
+        mock_get.return_value = self._redir(
+            302, "http://169.254.169.254/.well-known/smsly-verify/tok-abc-123"
+        )
+        ok, detail = verify_http_proof(_domain())
+        self.assertFalse(ok)
+        self.assertEqual(detail, "HTTP 302")
+        mock_get.assert_called_once()

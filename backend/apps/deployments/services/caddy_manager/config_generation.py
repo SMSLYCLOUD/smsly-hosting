@@ -6,7 +6,7 @@ import re
 from apps.domains.utils import normalize_domain
 from django.conf import settings
 
-from .tls import _generate_selfsigned_cert
+from .tls import _generate_selfsigned_cert, sanitize_cloudflare_token
 from .upstream import _remote_upstream_url_for_service, _service_proxy_upstream
 from .utils import _is_ip, _table_exists, is_agent_lite
 
@@ -1267,6 +1267,8 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
                     # fall through to service.server FK check below.
                     latest_local_map.pop(sid, None)
 
+        active_wildcard_redirects = set(_get_wildcard_redirect_map(wildcard_domain).keys())
+
         for service in Service.objects.select_related('server').only(
             "id", "status", "sablier_enabled",
             "public_domain", "custom_domains", "public_domain_hidden",
@@ -1284,7 +1286,6 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
 
             routing_off = getattr(service, "wildcard_url_enabled", True) is False
             private = getattr(service, "is_public", True) is False
-            redirect_flag = getattr(service, "wildcard_redirect_custom_domain", False)
             internal_only = bool(getattr(service, "wildcard_internal_only", False))
 
             # Determine if this service is local:
@@ -1317,7 +1318,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
                 public_domain.endswith(suffix)
                 and not routing_off
                 and not private
-                and not redirect_flag
+                and public_domain not in active_wildcard_redirects
                 and not internal_only
             ):
                 hosts.add(public_domain)
@@ -1705,11 +1706,13 @@ def _get_wildcard_internal_only_upstreams(wildcard_domain: str) -> dict[str, lis
 
 
 def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
-    """Map wildcard public domains to their first custom domain (301 target).
+    """Map wildcard public domains to their first verified custom domain (301 target).
 
     Services with ``wildcard_redirect_custom_domain=True`` and at least one
-    custom domain get their auto-generated wildcard domain permanently
-    redirected instead of proxied.
+    verified custom domain (while publicly routable on their wildcard URL)
+    get their auto-generated wildcard domain permanently redirected instead
+    of proxied. Unverified/pending custom domains never hijack a working
+    wildcard URL into a TLS 525 failure.
     """
     redirects: dict[str, str] = {}
     if not wildcard_domain:
@@ -1717,17 +1720,55 @@ def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
 
     try:
         from apps.deployments.models import Service
+        from apps.domains.models import Domain, DomainStatus
 
         if not _table_exists(Service._meta.db_table):
             return {}
 
+        verified_by_service: dict = {}
+        if _table_exists(Domain._meta.db_table):
+            for sid, raw_dom in Domain.objects.filter(
+                status__in=[
+                    DomainStatus.ACTIVE,
+                    DomainStatus.DNS_VERIFIED,
+                    DomainStatus.SSL_PROVISIONING,
+                ],
+                verified=True,
+            ).values_list("service_id", "domain_name"):
+                raw = str(raw_dom or "").strip()
+                if not raw or sid is None:
+                    continue
+                try:
+                    norm = normalize_domain(raw)
+                except ValueError:
+                    continue
+                if norm:
+                    verified_by_service.setdefault(sid, set()).add(norm)
+
         suffix = f".{wildcard_domain}"
         for service in Service.objects.only(
-            "id", "public_domain", "custom_domains",
+            "id", "status", "sablier_enabled",
+            "public_domain", "custom_domains", "public_domain_hidden",
+            "wildcard_url_enabled", "is_public",
             "wildcard_redirect_custom_domain",
         ).all():
             if not getattr(service, "wildcard_redirect_custom_domain", False):
                 continue
+            if (
+                getattr(service, "is_public", True) is False
+                or getattr(service, "public_domain_hidden", False)
+                or getattr(service, "wildcard_url_enabled", True) is False
+                or (
+                    str(getattr(service, "status", "") or "").upper() == "STOPPED"
+                    and bool(getattr(service, "sablier_enabled", False))
+                )
+            ):
+                continue
+
+            service_verified = verified_by_service.get(service.id, set())
+            if not service_verified:
+                continue
+
             target = ""
             for item in (service.custom_domains or []):
                 value = item.strip() if isinstance(item, str) else ""
@@ -1737,13 +1778,19 @@ def _get_wildcard_redirect_map(wildcard_domain: str) -> dict[str, str]:
                     # Normalize (lowercase, no scheme/path/port): the map
                     # value is interpolated into `redir https://{target}`,
                     # so a raw "https://X/" or "X:8443" would emit a
-                    # broken redirect. First *valid* custom wins.
-                    target = normalize_domain(value)
+                    # broken redirect. First verified *valid* custom wins.
+                    candidate = normalize_domain(value)
                 except ValueError:
                     continue
-                break
+                if candidate in service_verified:
+                    target = candidate
+                    break
             if not target:
                 continue
+            apex_target = _www_apex_redirect_target(target, service_verified)
+            if apex_target:
+                target = apex_target
+
             raw_public = str(service.public_domain or "").strip()
             if not raw_public:
                 continue
@@ -2003,7 +2050,7 @@ def generate_node_caddyfile(node) -> str:
     if not base_domain:
         return ""
 
-    cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+    cloudflare_token = sanitize_cloudflare_token(getattr(config, "cloudflare_api_token", ""))
     node_number = getattr(node, "node_number", None) or 1
     parts = base_domain.split(".")
     if len(parts) > 2:
@@ -2351,13 +2398,7 @@ def generate_caddyfile(config) -> str:
 
     sections = []
     domain = ""
-    cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
-    _FAKE_TOKENS = {
-        "fake", "changeme", "your_cloudflare_api_token", "test", "",
-        "dummy_token_for_testing",
-    }
-    if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
-        cloudflare_token = ""
+    cloudflare_token = sanitize_cloudflare_token(getattr(config, "cloudflare_api_token", ""))
 
     env_domain = os.environ.get("DOMAIN", "").strip()
     effective_domain = config.domain if config.domain else env_domain

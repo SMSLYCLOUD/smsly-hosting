@@ -406,8 +406,9 @@ urlpatterns = [
     # row's per-domain token for ANY host. Caddy's :80 catch-all proxies
     # here with Host rewritten to localhost (ALLOWED_HOSTS stays strict).
     # Unknown tokens 404; no auth by design (same exposure as ACME HTTP-01).
-    path('.well-known/smsly-verify/<str:token>/', domain_challenge,
-         name='domain-challenge'),
+    # Accept both slashless and trailing-slash paths without 301 APPEND_SLASH.
+    re_path(r'^\.well-known/smsly-verify/(?P<token>[^/]+)/?$', domain_challenge,
+            name='domain-challenge'),
     path('', include('django_prometheus.urls')),
 
     # ─── Frontend compatibility aliases (MUST come before the broad

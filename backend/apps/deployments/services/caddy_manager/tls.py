@@ -20,6 +20,33 @@ CADDY_TOKEN_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 # outage (AGENTS.md: no SPOF where Django down breaks all services).
 TLS_ALLOW_LIST_FILE = os.path.join(CADDY_CONFIG_DIR, ".tls-allow-list.json")
 
+_PLACEHOLDER_CF_TOKENS = {
+    "",
+    "fake",
+    "changeme",
+    "your_cloudflare_api_token",
+    "test",
+    "dummy",
+    "dummy_token_for_testing",
+    "dummy-cf-token",
+}
+_PLACEHOLDER_CF_PREFIXES = (
+    "your_",
+    "dummy-",
+    "dummy_",
+    "fake-",
+    "fake_",
+)
+
+
+def sanitize_cloudflare_token(token: str | None) -> str:
+    """Return stripped Cloudflare token, or '' if it is a known placeholder."""
+    cleaned = str(token or "").strip()
+    lowered = cleaned.lower()
+    if lowered in _PLACEHOLDER_CF_TOKENS or lowered.startswith(_PLACEHOLDER_CF_PREFIXES):
+        return ""
+    return cleaned
+
 
 def write_tls_allow_list(domains: list[str]) -> str | None:
     """Atomically write the edge-sidecar TLS allow-list.
@@ -135,15 +162,23 @@ def _read_cached_token_payload() -> dict:
 
 
 def _load_cached_token() -> str:
-    token = (os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    raw_env = (os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    token = sanitize_cloudflare_token(raw_env)
     if token:
         return token
     payload = _read_cached_token_payload()
     if not payload:
         return ""
-    cached_token = (payload.get("token") or "").strip()
+    raw_cached = (payload.get("token") or "").strip()
+    cached_token = sanitize_cloudflare_token(raw_cached)
+    if not cached_token:
+        if raw_cached:
+            logger.warning("Ignoring placeholder Cloudflare token in cache; removing stale cache.")
+            with contextlib.suppress(OSError):
+                os.remove(CADDY_TOKEN_CACHE)
+        return ""
     expires_at = payload.get("expires_at")
-    if not cached_token or not isinstance(expires_at, (int, float)):
+    if not isinstance(expires_at, (int, float)):
         return ""
     now = time.time()
     if now >= expires_at:

@@ -225,13 +225,15 @@ class CloneMixin:
         else:
             validate_ssrf(clean_url, fail_closed_dns=True)
 
-        clone_cmd = [
-            "git", "clone",
+        git_safe_cfg = [
             "-c", "http.followRedirects=false",
             "-c", "protocol.file.allow=never",
             "-c", "protocol.allow=never",
             "-c", "protocol.https.allow=always",
             "-c", "protocol.ssh.allow=always",
+        ]
+        clone_cmd = [
+            "git", *git_safe_cfg, "clone",
             "--branch", branch, "--single-branch", "--", remote_url, str(tmp_path)
         ]
         try:
@@ -244,16 +246,44 @@ class CloneMixin:
                 env=env,
             )
             if target_commit:
-                checkout_cmd = ["git", "checkout", "--", target_commit]
-                subprocess.run(
-                    checkout_cmd,
-                    cwd=str(tmp_path),
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    env=env,
-                )
+                # `--` MUST follow `target_commit` so Git parses `target_commit` as a
+                # tree-ish/commit rather than a working-tree file pathspec.
+                checkout_cmd = ["git", "checkout", "--detach", target_commit, "--"]
+                try:
+                    subprocess.run(
+                        checkout_cmd,
+                        cwd=str(tmp_path),
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        env=env,
+                    )
+                except subprocess.CalledProcessError:
+                    # If target_commit is not in the cloned single-branch history
+                    # (e.g. force-push or detached SHA), fetch that commit from origin.
+                    fetch_cmd = [
+                        "git", *git_safe_cfg,
+                        "fetch", "--depth", "1", "origin", target_commit,
+                    ]
+                    subprocess.run(
+                        fetch_cmd,
+                        cwd=str(tmp_path),
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        env=env,
+                    )
+                    subprocess.run(
+                        ["git", "checkout", "--detach", "FETCH_HEAD", "--"],
+                        cwd=str(tmp_path),
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        env=env,
+                    )
             _sanitize_repo_symlinks(str(tmp_path))
             # Atomically promote tmp_path → build_path
             if build_path.exists():

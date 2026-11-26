@@ -56,6 +56,18 @@ def verify_dns_and_provision_ssl_task(self, domain_id):
             "verify_fail_count",
         ])
 
+        svc = getattr(domain, "service", None)
+        if (
+            svc is not None
+            and getattr(svc, "domain_verified", True) is False
+            and callable(getattr(svc, "save", None))
+        ):
+            try:
+                svc.domain_verified = True
+                svc.save(update_fields=["domain_verified"])
+            except Exception:
+                pass
+
         if old_status not in ROUTABLE_STATUSES:
             logger.info(
                 "DNS verified for %s via %s; triggering Caddy reload",
@@ -100,6 +112,11 @@ def _trigger_caddy_reload():
     result = apply_caddyfile(content, cloudflare_token=cf_token)
     if not result.get("ok"):
         logger.error("Caddy reload triggered by domain verification failed: %s", result.get("message", "unknown error"))
+    try:
+        from apps.deployments.tasks.deploy.caddy import _regenerate_node_caddyfile
+        _regenerate_node_caddyfile(config)
+    except Exception as exc:
+        logger.warning("Node Caddyfile reload triggered by domain verification failed: %s", exc)
 
 
 @shared_task(bind=True, name="apps.domains.tasks.watch_platform_edge_task",

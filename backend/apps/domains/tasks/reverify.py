@@ -56,8 +56,10 @@ def reverify_custom_domains_task(self):
         )
         | Q(
             verified=False,
-            status=DomainStatus.DNS_PENDING,
-            verify_fail_count__gte=3,
+            status__in=[
+                DomainStatus.PENDING,
+                DomainStatus.DNS_PENDING,
+            ],
         )
     ).select_related("service")
 
@@ -87,6 +89,17 @@ def reverify_custom_domains_task(self):
                 ).update(status=SecurityFinding.Status.RESOLVED)
             except Exception:
                 pass
+            svc = getattr(domain, "service", None)
+            if (
+                svc is not None
+                and getattr(svc, "domain_verified", True) is False
+                and callable(getattr(svc, "save", None))
+            ):
+                try:
+                    svc.domain_verified = True
+                    svc.save(update_fields=["domain_verified"])
+                except Exception:
+                    pass
             if (domain.verify_fail_count or 0) != 0 or not domain.verified:
                 was_demoted = not domain.verified
                 domain.verified = True

@@ -1,11 +1,17 @@
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
 
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Service
 from apps.deployments.services.caddy_manager.config_generation import (
+    _get_wildcard_known_hosts,
+    _get_wildcard_redirect_map,
     _www_apex_redirect_target,
 )
 from apps.deployments.services.caddy_manager.validation import (
     validate_wildcard_redirects_authoritative,
 )
+from apps.domains.models import Domain, DomainStatus
 
 
 class WwwApexCanonicalTests(SimpleTestCase):
@@ -63,3 +69,69 @@ class WildcardRedirectShadowTests(SimpleTestCase):
         self.assertEqual(
             validate_wildcard_redirects_authoritative("grid.smsly.cloud {\n}\n"), []
         )
+
+
+class WildcardRedirectVerifiedTargetTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="redir-owner", email="redir@example.com", password="password123"
+        )
+        self.provider = CloudProvider.objects.create(
+            name="redir-prov",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+        self.service = Service.objects.create(
+            name="redir-svc",
+            owner=self.user,
+            provider=self.provider,
+            public_domain="redir-svc.grid.smsly.cloud",
+            custom_domains=["www.example.org", "example.org"],
+            wildcard_redirect_custom_domain=True,
+        )
+
+    def test_unverified_custom_domain_does_not_redirect_and_stays_in_known_hosts(self):
+        Domain.objects.create(
+            domain_name="www.example.org",
+            service=self.service,
+            status=DomainStatus.DNS_PENDING,
+            verified=False,
+        )
+        Domain.objects.create(
+            domain_name="example.org",
+            service=self.service,
+            status=DomainStatus.DNS_PENDING,
+            verified=False,
+        )
+        self.assertEqual(_get_wildcard_redirect_map("grid.smsly.cloud"), {})
+        self.assertIn("redir-svc.grid.smsly.cloud", _get_wildcard_known_hosts("grid.smsly.cloud"))
+
+    def test_verified_custom_domain_redirects_wildcard_and_canonicalizes_www(self):
+        Domain.objects.create(
+            domain_name="www.example.org",
+            service=self.service,
+            status=DomainStatus.DNS_VERIFIED,
+            verified=True,
+        )
+        Domain.objects.create(
+            domain_name="example.org",
+            service=self.service,
+            status=DomainStatus.DNS_VERIFIED,
+            verified=True,
+        )
+        self.assertEqual(
+            _get_wildcard_redirect_map("grid.smsly.cloud"),
+            {"redir-svc.grid.smsly.cloud": "example.org"},
+        )
+        self.assertNotIn("redir-svc.grid.smsly.cloud", _get_wildcard_known_hosts("grid.smsly.cloud"))
+
+    def test_private_service_does_not_emit_wildcard_redirect(self):
+        Domain.objects.create(
+            domain_name="example.org",
+            service=self.service,
+            status=DomainStatus.ACTIVE,
+            verified=True,
+        )
+        self.service.is_public = False
+        self.service.save(update_fields=["is_public"])
+        self.assertEqual(_get_wildcard_redirect_map("grid.smsly.cloud"), {})

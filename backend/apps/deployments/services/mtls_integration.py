@@ -221,25 +221,22 @@ def _spire_volume_names(service) -> tuple[str, str]:
 
 
 def get_mtls_volumes(service=None) -> list:
-    """Get volume mounts for SPIRE socket (and read-only SVIDs for platform).
+    """Get read-only volume mounts for SPIRE socket and SVIDs.
 
     Returns list of (host_volume, container_path, mode) tuples for the
-    service's own trust domain. User/ecosystem workloads mount ONLY the
-    SPIRE agent socket read-only (never shared ``/opt/spire/svids:rw``,
-    which would expose every tenant's SVIDs across containers).
+    service's own trust domain (platform.local or ecosystem.local). Both
+    mounts are strictly read-only ("ro") so workloads can read SVID files
+    referenced by SPIFFE_SVID_* env vars without modifying shared material.
     """
     if service is None:
         return [
             (ECOSYSTEM_SPIRE_SOCKET_HOST_PATH, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
+            (ECOSYSTEM_SPIRE_SVIDS_HOST_PATH, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
         ]
     socket_vol, svids_vol = _spire_volume_names(service)
-    if str(getattr(service, "managed_by", "") or "").upper() == "PLATFORM":
-        return [
-            (socket_vol, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
-            (svids_vol, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
-        ]
     return [
         (socket_vol, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
+        (svids_vol, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
     ]
 
 

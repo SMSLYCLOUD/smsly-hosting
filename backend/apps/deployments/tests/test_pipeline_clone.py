@@ -68,3 +68,67 @@ class PipelineCloneTests(SimpleTestCase):
 
             (source_dir / ".git").mkdir()
             self.assertTrue(PipelineManager._source_tree_available(str(source_dir)))
+
+    def test_target_commit_checkout_places_dashdash_after_revision(self):
+        manager = object.__new__(PipelineManager)
+        manager.secret_values = []
+        sha = "717e2197b28511d9c0bb4748a79f7cb0757ff173"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target_dir = Path(tmp) / "repo"
+            seen_cmds = []
+
+            def fake_run(cmd, **kwargs):
+                seen_cmds.append(list(cmd))
+                return subprocess.CompletedProcess(cmd, 0)
+
+            with patch(
+                "apps.deployments.services.pipeline.clone.subprocess.run",
+                side_effect=fake_run,
+            ):
+                manager._clone_with_github_token(
+                    "https://github.com/SMSLYCLOUD/SMSLY-Marketing-Campaigns",
+                    "main",
+                    None,
+                    str(target_dir),
+                    target_commit=sha,
+                )
+
+            self.assertEqual(len(seen_cmds), 2)
+            self.assertEqual(
+                seen_cmds[1],
+                ["git", "checkout", "--detach", sha, "--"],
+            )
+
+    def test_target_commit_missing_falls_back_to_origin_fetch(self):
+        manager = object.__new__(PipelineManager)
+        manager.secret_values = []
+        sha = "717e2197b28511d9c0bb4748a79f7cb0757ff173"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target_dir = Path(tmp) / "repo"
+            seen_cmds = []
+
+            def fake_run(cmd, **kwargs):
+                seen_cmds.append(list(cmd))
+                if cmd[:3] == ["git", "checkout", "--detach"] and sha in cmd:
+                    raise subprocess.CalledProcessError(1, cmd, stderr="reference is not a tree")
+                return subprocess.CompletedProcess(cmd, 0)
+
+            with patch(
+                "apps.deployments.services.pipeline.clone.subprocess.run",
+                side_effect=fake_run,
+            ):
+                manager._clone_with_github_token(
+                    "https://github.com/SMSLYCLOUD/SMSLY-Marketing-Campaigns",
+                    "main",
+                    None,
+                    str(target_dir),
+                    target_commit=sha,
+                )
+
+            self.assertEqual(len(seen_cmds), 4)
+            self.assertIn("fetch", seen_cmds[2])
+            self.assertIn("protocol.allow=never", seen_cmds[2])
+            self.assertEqual(seen_cmds[2][-2:], ["origin", sha])
+            self.assertEqual(seen_cmds[3], ["git", "checkout", "--detach", "FETCH_HEAD", "--"])

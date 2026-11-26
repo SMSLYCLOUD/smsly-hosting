@@ -121,3 +121,51 @@ class CaddyTokenCacheTtlTests(SimpleTestCase):
             payload["expires_at"],
             1_000_000.0 + caddy_manager.apply.CADDY_TOKEN_CACHE_TTL_SECONDS,
         )
+
+    def test_placeholder_token_is_not_cached_by_apply_caddyfile(self):
+        """Placeholder tokens like dummy-cf-token must never be written to cache."""
+        with patch.object(caddy_manager.apply, "CADDY_CONFIG_DIR", self._tmpdir.name), \
+             patch.object(
+                 caddy_manager.apply, "CADDY_FILE_PATH",
+                 os.path.join(self._tmpdir.name, "Caddyfile"),
+             ), \
+             patch.object(caddy_manager.apply, "CADDY_TOKEN_CACHE", self.cache_path), \
+             patch.object(caddy_manager.apply, "CADDY_TOKEN_FILE", self.token_file), \
+             patch.object(caddy_manager.apply, "CADDY_TOKEN_CLEAR_FILE", self.clear_file), \
+             patch.object(caddy_manager.tls, "CADDY_TOKEN_CACHE", self.cache_path), \
+             patch.object(caddy_manager.apply, "caddy_disabled_mode", return_value=False), \
+             patch.object(caddy_manager.apply, "_last_caddy_reload_ts", 0.0), \
+             patch.object(caddy_manager.apply, "_last_caddy_content_hash", ""), \
+             patch.object(
+                 caddy_manager.apply,
+                 "validate_service_routes_do_not_hit_control_plane",
+                 return_value=[],
+             ), \
+             patch.object(caddy_manager.apply, "subprocess") as mock_subprocess:
+            mock_subprocess.run.return_value.returncode = 0
+            mock_subprocess.run.return_value.stderr = ""
+            result = caddy_manager.apply_caddyfile(
+                "(secure_headers) {\n"
+                "    header X-Content-Type-Options nosniff\n"
+                "}\n"
+                "(coraza_waf) {\n"
+                "}\n"
+                ":80 {\n"
+                "    import secure_headers\n"
+                "    reverse_proxy localhost:8090\n"
+                "}\n",
+                cloudflare_token="dummy-cf-token",
+            )
+
+        self.assertTrue(result.get("ok"), msg=result)
+        self.assertFalse(os.path.exists(self.cache_path))
+
+    def test_placeholder_cached_token_is_ignored_and_evicted(self):
+        """A placeholder token in the cache file is ignored and deleted."""
+        self._write_payload("dummy-cf-token", time.time() + 86400)
+        with patch.object(caddy_manager.tls, "CADDY_TOKEN_CACHE", self.cache_path), \
+             patch.object(caddy_manager.tls, "CADDY_TOKEN_FILE", self.token_file), \
+             patch.object(caddy_manager.tls, "CADDY_TOKEN_CLEAR_FILE", self.clear_file):
+            result = caddy_manager._load_cached_token()
+        self.assertEqual(result, "")
+        self.assertFalse(os.path.exists(self.cache_path))
